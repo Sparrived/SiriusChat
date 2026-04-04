@@ -288,6 +288,50 @@ async def process_item(item):
     pass
 ```
 
+### 性能监控与分析
+
+```python
+from sirius_chat.performance import PerformanceProfiler, Benchmark, MetricsCollector
+
+# 使用上下文管理器追踪执行性能
+async def run_monitored_session():
+    with PerformanceProfiler("session_execution"):
+        # 你的会话逻辑
+        transcript = await engine.run_live_session(config=config, human_turns=human_turns)
+    
+    # 获取性能指标
+    collector = MetricsCollector()
+    stats = collector.get_stats("session_execution")
+    print(f"平均执行时间: {stats['avg_duration_ms']}ms")
+    print(f"内存增长: {stats['avg_memory_delta_kb']}KB")
+
+# 使用装饰器自动追踪函数性能
+from sirius_chat.performance import profile_async
+
+@profile_async
+async def my_expensive_operation():
+    """此函数的执行时间和内存消耗会自动被记录。"""
+    # 执行操作
+    pass
+
+# 基准测试，对比不同实现的性能
+from sirius_chat.performance import Benchmark
+
+def fibonacci(n):
+    return 1 if n <= 1 else fibonacci(n-1) + fibonacci(n-2)
+
+result = Benchmark.run_sync(
+    fibonacci,
+    args=(10,),
+    iterations=100,
+)
+
+print(f"最小时间: {result.min}ms")
+print(f"平均时间: {result.mean}ms")
+print(f"最大时间: {result.max}ms")
+print(f"标准差: {result.stdev}ms")
+```
+
 ## 5. 日志和调试
 
 ### 启用详细日志

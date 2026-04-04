@@ -335,6 +335,88 @@ if entry is not None:
 
 当历史超过预算时，引擎会把旧对话压缩到 `session_summary`，并在后续请求中自动注入该摘要，避免 token 无限制增长。
 
+## 优化与监控
+
+### 配置管理
+
+使用 `ConfigManager` 处理多环境配置：
+
+```python
+from sirius_chat.config_manager import ConfigManager
+from pathlib import Path
+
+# 加载基础配置并应用环境变量替换
+config_mgr = ConfigManager.load_from_json(Path("config/base.json"))
+# 支持 ${VAR_NAME} 占位符，会自动替换为环境变量值
+
+# 也可加载环境特定的配置
+dev_config = ConfigManager.load_from_json(Path("config/dev.json"))
+```
+
+### 缓存优化
+
+使用 `cache/` 模块缓存 LLM 响应，降低成本和延迟：
+
+```python
+from sirius_chat.cache import MemoryCache, generate_cache_key
+
+# 创建内存缓存（LRU + TTL）
+cache = MemoryCache(max_size=1000, ttl=3600)
+
+# 为 LLM 请求生成确定性 key
+key = generate_cache_key(
+    model="gpt-4",
+    prompt="用户问题文本",
+    temperature=0.7,
+)
+
+# 查询和存储
+if await cache.get(key):
+    response = await cache.get(key)
+else:
+    response = await provider.agenerate([...])
+    await cache.set(key, response)
+```
+
+对于分布式场景，可使用 `RedisCache`（需要 Redis 依赖）：
+
+```python
+from sirius_chat.cache import RedisCache
+
+redis_cache = RedisCache(
+    redis_url="redis://localhost:6379/0",
+    ttl=3600,
+)
+```
+
+### 性能监控
+
+监控会话执行性能：
+
+```python
+from sirius_chat.performance import PerformanceProfiler, Benchmark
+
+# 上下文管理器方式
+with PerformanceProfiler("session_execution"):
+    # 执行会话逻辑
+    transcript = await engine.run_live_session(config=config, human_turns=human_turns)
+
+# 装饰器方式
+from sirius_chat.performance import profile_async
+
+@profile_async
+async def my_handler():
+    # 被装饰的函数会自动记录执行时间和内存消耗
+    pass
+
+# 基准测试
+result = Benchmark.run_sync(
+    my_sync_function,
+    iterations=100,
+)
+print(f"平均执行时间: {result.mean}ms")
+```
+
 ## 集成建议
 
 - 对外 Python 调用统一从 `sirius_chat/api/` 导入接口。
