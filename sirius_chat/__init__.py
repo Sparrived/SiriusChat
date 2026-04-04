@@ -59,6 +59,16 @@ from sirius_chat.logging_config import (
     configure_logging,
     get_logger,
 )
+from sirius_chat.providers.middleware import (
+    CircuitBreakerMiddleware,
+    CostMetricsMiddleware,
+    Middleware,
+    MiddlewareChain,
+    MiddlewareContext,
+    RateLimiterMiddleware,
+    RetryMiddleware,
+    TokenBucketRateLimiter,
+)
 from sirius_chat.session_store import SqliteSessionStore
 
 __all__ = [
@@ -90,6 +100,15 @@ __all__ = [
     "MockProvider",
     "OpenAICompatibleProvider",
     "AsyncLLMProvider",
+    # Middleware
+    "Middleware",
+    "MiddlewareChain",
+    "MiddlewareContext",
+    "RateLimiterMiddleware",
+    "TokenBucketRateLimiter",
+    "RetryMiddleware",
+    "CircuitBreakerMiddleware",
+    "CostMetricsMiddleware",
     # Engine
     "AsyncRolePlayEngine",
     # API Functions
