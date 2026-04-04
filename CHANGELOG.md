@@ -5,7 +5,31 @@
 ## [Unreleased]
 
 ### Added
+- **logging_config.py**: 生产级日志系统，支持JSON结构化输出、彩色控制台格式、日志文件循环
+  - JSONFormatter：输出机器可读的JSON日志
+  - ColoredFormatter：ANSI彩色的人类友好日志
+  - configure_logging()：集中配置函数，支持DEBUG/INFO/WARNING/ERROR级别
+- **exceptions.py**: 语义化的异常体系（18个自定义异常类）
+  - 基础：SiriusException（error_code, context, is_retryable）
+  - 分类：ProviderError, TokenError, ParseError, ConfigError, MemoryError
+  - 特性：上下文信息、可重试标记、序列化支持
+- **token_utils.py**: 多语言感知的Token估算工具
+  - estimate_tokens_heuristic()：中英文感知估算（中文1字=1token, 英文4字=1token）
+  - estimate_tokens_with_tiktoken()：可选的精确计数（若安装tiktoken）
+  - estimate_tokens()：智能回退实现（优先tiktoken，降级启发式）
+  - 支持多个模型配置（gpt-4, claude-3, doubao-seed等）
+- **PROJECT_ISSUES.md**: 项目问题与改进方向追踪文档
+  - P0（5项）、P1（4项）、P2（3项）优先级划分
+  - 3个月roadmap与进度矩阵
 - commit-preparation SKILL：commit前检查清单，包括gitignore验证、改动总结、ChangeLog更新与标准格式commit
+
+### Changed
+- **pyproject.toml**: 显式声明可选依赖groups
+  - provider：httpx>=0.24.0, tenacity>=8.0.0
+  - dev：测试、linting、类型检查工具
+  - quality：tiktoken用于精确token估算
+- **__init__.py**: 扩展导出至57个项目，分类组织
+  - 核心模型(10), 会话管理(7), Provider(3), API函数(13), 日志(2), 异常(18)
 
 ### Changed
 

@@ -10,6 +10,21 @@ dependencies = []
 test = [
 	"pytest>=8.0.0",
 ]
+provider = [
+	"httpx>=0.24.0",  # 异步HTTP客户端，用于LLM API调用
+	"tenacity>=8.0.0",  # 重试库，用于提高可靠性
+]
+dev = [
+	"pytest>=8.0.0",
+	"httpx>=0.24.0",
+	"tenacity>=8.0.0",
+	"tiktoken>=0.5.0",  # 可选：精确token估算
+	"ruff>=0.1.0",  # Linter
+	"mypy>=1.0.0",  # 类型检查
+]
+quality = [
+	"tiktoken>=0.5.0",  # 精确token估算库
+]
 
 [project.scripts]
 sirius-chat = "sirius_chat.cli:run"

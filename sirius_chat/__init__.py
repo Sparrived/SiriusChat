@@ -34,13 +34,38 @@ from sirius_chat.api import (
     select_generated_agent_profile,
     summarize_token_usage,
 )
+from sirius_chat.exceptions import (
+    ConfigError,
+    ConflictingMemoryError,
+    ContentValidationError,
+    InvalidConfigError,
+    JSONParseError,
+    MemoryError,
+    MissingConfigError,
+    ParseError,
+    ProviderAuthError,
+    ProviderConnectionError,
+    ProviderError,
+    ProviderResponseError,
+    SiriusException,
+    TokenBudgetExceededError,
+    TokenError,
+    TokenEstimationError,
+    UserNotFoundError,
+)
+from sirius_chat.logging_config import (
+    LogFormat,
+    LogLevel,
+    configure_logging,
+    get_logger,
+)
 from sirius_chat.session_store import SqliteSessionStore
 
 __all__ = [
+    # Core Models
     "Agent",
     "AgentPreset",
     "Message",
-    "MockProvider",
     "Participant",
     "User",
     "UserProfile",
@@ -48,18 +73,26 @@ __all__ = [
     "UserMemoryManager",
     "TokenUsageRecord",
     "TokenUsageBaseline",
+    "SessionConfig",
+    "Transcript",
+    # Constants & Enums
     "GENERATED_AGENTS_FILE_NAME",
+    "LogLevel",
+    "LogFormat",
+    # Session Management
     "GeneratedSessionPreset",
     "RolePlayAnswer",
     "RolePlayQuestion",
     "JsonSessionStore",
     "SqliteSessionStore",
     "JsonPersistentSessionRunner",
-    "AsyncRolePlayEngine",
-    "SessionConfig",
-    "Transcript",
+    # Providers
+    "MockProvider",
     "OpenAICompatibleProvider",
     "AsyncLLMProvider",
+    # Engine
+    "AsyncRolePlayEngine",
+    # API Functions
     "create_async_engine",
     "arun_live_session",
     "find_user_by_channel_uid",
@@ -72,4 +105,25 @@ __all__ = [
     "abuild_roleplay_prompt_from_answers_and_apply",
     "build_token_usage_baseline",
     "summarize_token_usage",
+    # Logging
+    "configure_logging",
+    "get_logger",
+    # Exceptions
+    "SiriusException",
+    "ProviderError",
+    "ProviderConnectionError",
+    "ProviderAuthError",
+    "ProviderResponseError",
+    "TokenError",
+    "TokenBudgetExceededError",
+    "TokenEstimationError",
+    "ParseError",
+    "JSONParseError",
+    "ContentValidationError",
+    "ConfigError",
+    "InvalidConfigError",
+    "MissingConfigError",
+    "MemoryError",
+    "UserNotFoundError",
+    "ConflictingMemoryError",
 ]
