@@ -1,0 +1,220 @@
+{
+  "title": "Sirius Chat API Reference",
+  "version": "1.0.0",
+  "modules": {
+    "engine": {
+      "functions": [
+        {
+          "name": "create_async_engine",
+          "is_async": false,
+          "params": [
+            {
+              "name": "provider",
+              "annotation": "LLMProvider | AsyncLLMProvider",
+              "kind": "positional"
+            }
+          ],
+          "return_type": "AsyncRolePlayEngine",
+          "docstring": "Create an async roleplay engine for non-blocking integration."
+        },
+        {
+          "name": "arun_live_session",
+          "is_async": true,
+          "params": [
+            {
+              "name": "engine",
+              "annotation": "AsyncRolePlayEngine",
+              "kind": "positional"
+            },
+            {
+              "name": "config",
+              "annotation": "SessionConfig",
+              "kind": "positional"
+            },
+            {
+              "name": "human_turns",
+              "annotation": "list[Message]",
+              "kind": "positional"
+            },
+            {
+              "name": "on_message",
+              "annotation": "OnMessage | None",
+              "kind": "positional"
+            },
+            {
+              "name": "transcript",
+              "annotation": "Transcript | None",
+              "kind": "positional"
+            }
+          ],
+          "return_type": "Transcript",
+          "docstring": "Async facade for dynamic live session runs."
+        },
+        {
+          "name": "find_user_by_channel_uid",
+          "is_async": false,
+          "params": [
+            {
+              "name": "transcript",
+              "annotation": "Transcript",
+              "kind": "positional"
+            },
+            {
+              "name": "channel",
+              "annotation": "str",
+              "kind": "keyword-only"
+            },
+            {
+              "name": "uid",
+              "annotation": "str",
+              "kind": "keyword-only"
+            }
+          ],
+          "return_type": "UserMemoryEntry | None",
+          "docstring": "Stable external lookup by channel + uid."
+        }
+      ],
+      "classes": []
+    },
+    "memory": {
+      "functions": [],
+      "classes": []
+    },
+    "models": {
+      "functions": [],
+      "classes": []
+    },
+    "orchestration": {
+      "functions": [
+        {
+          "name": "setup_multimodel_config",
+          "is_async": false,
+          "params": [
+            {
+              "name": "session_config",
+              "annotation": "SessionConfig",
+              "kind": "keyword-only"
+            },
+            {
+              "name": "task_models",
+              "annotation": "dict[str, str]",
+              "kind": "keyword-only"
+            },
+            {
+              "name": "task_budgets",
+              "annotation": "dict[str, int] | None",
+              "kind": "keyword-only"
+            },
+            {
+              "name": "task_temperatures",
+              "annotation": "dict[str, float] | None",
+              "kind": "keyword-only"
+            },
+            {
+              "name": "task_max_tokens",
+              "annotation": "dict[str, int] | None",
+              "kind": "keyword-only"
+            },
+            {
+              "name": "task_retries",
+              "annotation": "dict[str, int] | None",
+              "kind": "keyword-only"
+            },
+            {
+              "name": "max_multimodal_inputs_per_turn",
+              "annotation": "int",
+              "kind": "keyword-only"
+            },
+            {
+              "name": "max_multimodal_value_length",
+              "annotation": "int",
+              "kind": "keyword-only"
+            }
+          ],
+          "return_type": "SessionConfig",
+          "docstring": "在现有会话配置中设置多模型编排。\n\nArgs:\n    session_config: 现有的 SessionConfig 对象\n    task_models: 任务模型映射，例如 {\"memory_extract\": \"model-1\", \"event_extract\": \"model-2\"}\n    task_budgets: 各任务的 token 预算，例如 {\"memory_extract\": 1200, \"event_extract\": 1000}\n    task_temperatures: 各任务的采样温度，例如 {\"memory_extract\": 0.1}\n    task_max_tokens: 各任务的最大 token 数，例如 {\"memory_extract\": 128}\n    task_retries: 各任务的重试次数，例如 {\"memory_extract\": 1}\n    max_multimodal_inputs_per_turn: 每轮最多多模态输入数（默认 4）\n    max_multimodal_value_length: 多模态值最大长度（默认 4096）\n\nReturns:\n    配置完成的 SessionConfig 对象（原对象已修改）\n\nExample:\n    >>> from sirius_chat.api import SessionConfig, setup_multimodel_config\n    >>> session = SessionConfig(...)\n    >>> setup_multimodel_config(\n    ...     session_config=session,\n    ...     task_models={\n    ...         \"memory_extract\": \"doubao-seed-2-0-lite-260215\",\n    ...         \"event_extract\": \"doubao-seed-2-0-lite-260215\",\n    ...     },\n    ...     task_budgets={\n    ...         \"memory_extract\": 1200,\n    ...         \"event_extract\": 1000,\n    ...     },\n    ...     task_temperatures={\n    ...         \"memory_extract\": 0.1,\n    ...         \"event_extract\": 0.1,\n    ...     },\n    ... )"
+        },
+        {
+          "name": "create_multimodel_config",
+          "is_async": false,
+          "params": [
+            {
+              "name": "task_models",
+              "annotation": "dict[str, str]",
+              "kind": "keyword-only"
+            },
+            {
+              "name": "task_budgets",
+              "annotation": "dict[str, int] | None",
+              "kind": "keyword-only"
+            },
+            {
+              "name": "task_temperatures",
+              "annotation": "dict[str, float] | None",
+              "kind": "keyword-only"
+            },
+            {
+              "name": "task_max_tokens",
+              "annotation": "dict[str, int] | None",
+              "kind": "keyword-only"
+            },
+            {
+              "name": "task_retries",
+              "annotation": "dict[str, int] | None",
+              "kind": "keyword-only"
+            },
+            {
+              "name": "max_multimodal_inputs_per_turn",
+              "annotation": "int",
+              "kind": "keyword-only"
+            },
+            {
+              "name": "max_multimodal_value_length",
+              "annotation": "int",
+              "kind": "keyword-only"
+            }
+          ],
+          "return_type": "MultiModelConfig",
+          "docstring": "创建多模型配置对象。\n\n返回 MultiModelConfig 对象，可以用于后续设置或转换为 OrchestrationPolicy。\n\nArgs:\n    task_models: 任务模型映射\n    task_budgets: 任务预算限制\n    task_temperatures: 任务采样温度\n    task_max_tokens: 任务最大 token 数\n    task_retries: 任务重试次数\n    max_multimodal_inputs_per_turn: 最多多模态输入数\n    max_multimodal_value_length: 多模态值最大长度\n\nReturns:\n    MultiModelConfig 对象\n\nExample:\n    >>> from sirius_chat.api import create_multimodel_config\n    >>> mm_config = create_multimodel_config(\n    ...     task_models={\"memory_extract\": \"model-1\"},\n    ...     task_budgets={\"memory_extract\": 1200},\n    ... )\n    >>> orchestration = mm_config.to_orchestration_policy()"
+        }
+      ],
+      "classes": [
+        {
+          "name": "MultiModelConfig",
+          "docstring": "多模型协作配置对象。",
+          "methods": [
+            {
+              "name": "to_orchestration_policy",
+              "is_async": false,
+              "params": [
+                {
+                  "name": "self",
+                  "annotation": null,
+                  "kind": "positional"
+                }
+              ],
+              "return_type": "OrchestrationPolicy",
+              "docstring": "转换为 OrchestrationPolicy 对象。"
+            }
+          ]
+        }
+      ]
+    },
+    "prompting": {
+      "functions": [],
+      "classes": []
+    },
+    "providers": {
+      "functions": [],
+      "classes": []
+    },
+    "session": {
+      "functions": [],
+      "classes": []
+    },
+    "token_usage": {
+      "functions": [],
+      "classes": []
+    }
+  }
+}

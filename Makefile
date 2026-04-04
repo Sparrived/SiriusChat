@@ -1,4 +1,4 @@
-.PHONY: help install install-dev install-test install-all lint format typecheck test test-cov clean pre-commit-install pre-commit-run build dist-check
+.PHONY: help install install-dev install-test install-all lint format typecheck test test-cov clean pre-commit-install pre-commit-run build dist-check docs api-docs
 
 help:
 	@echo "Sirius Chat - Development Commands"
@@ -20,6 +20,9 @@ help:
 	@echo "Testing:"
 	@echo "  make test             Run all tests"
 	@echo "  make test-cov         Run tests with coverage report"
+	@echo ""
+	@echo "Documentation:"
+	@echo "  make api-docs         Generate API documentation (markdown + JSON)"
 	@echo ""
 	@echo "Build & Distribution:"
 	@echo "  make build            Build distribution packages"
@@ -93,3 +96,10 @@ clean:
 	find . -type d -name "dist" -exec rm -rf {} + 2>/dev/null || true
 	find . -type d -name "htmlcov" -exec rm -rf {} + 2>/dev/null || true
 	@echo "Clean completed"
+
+# Documentation targets
+api-docs:
+	@echo "Generating API documentation..."
+	python scripts/generate_api_docs.py markdown docs/api.md
+	python scripts/generate_api_docs.py json docs/api.json
+	@echo "API documentation generated in docs/"
