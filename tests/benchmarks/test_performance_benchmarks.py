@@ -7,7 +7,7 @@ import time
 
 import pytest
 
-from tests.integration.conftest import MockLLMProvider
+from ..integration.conftest import MockLLMProvider
 
 
 class TestPerformanceBenchmarks:

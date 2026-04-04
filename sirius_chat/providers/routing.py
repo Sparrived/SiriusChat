@@ -43,7 +43,6 @@ class ProviderConfig:
     provider_type: str
     api_key: str
     base_url: str
-    model_prefixes: list[str]
     healthcheck_model: str = ""
     enabled: bool = True
 
@@ -85,14 +84,12 @@ class ProviderRegistry:
             if not api_key:
                 continue
             base_url = str(payload.get("base_url", "")).strip()
-            prefixes = [str(item).strip() for item in payload.get("model_prefixes", []) if str(item).strip()]
             healthcheck_model = str(payload.get("healthcheck_model", "")).strip()
             enabled = bool(payload.get("enabled", True))
             results[provider_type] = ProviderConfig(
                 provider_type=provider_type,
                 api_key=api_key,
                 base_url=base_url,
-                model_prefixes=prefixes,
                 healthcheck_model=healthcheck_model,
                 enabled=enabled,
             )
@@ -100,16 +97,16 @@ class ProviderRegistry:
 
     def save(self, providers: dict[str, ProviderConfig]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        payload: dict[str, object] = {"providers": {}}
+        providers_payload: dict[str, dict[str, object]] = {}
         for provider_type, config in providers.items():
-            payload["providers"][provider_type] = {
+            providers_payload[provider_type] = {
                 "type": config.provider_type,
                 "api_key": config.api_key,
                 "base_url": config.base_url,
-                "model_prefixes": config.model_prefixes,
                 "healthcheck_model": config.healthcheck_model,
                 "enabled": config.enabled,
             }
+        payload: dict[str, object] = {"providers": providers_payload}
         tmp = self.path.with_suffix(self.path.suffix + ".tmp")
         tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         tmp.replace(self.path)
@@ -120,7 +117,6 @@ class ProviderRegistry:
         provider_type: str,
         api_key: str,
         base_url: str = "",
-        model_prefixes: list[str] | None = None,
         healthcheck_model: str = "",
     ) -> None:
         provider_key = normalize_provider_type(provider_type)
@@ -129,7 +125,6 @@ class ProviderRegistry:
             provider_type=provider_key,
             api_key=api_key.strip(),
             base_url=base_url.strip(),
-            model_prefixes=list(model_prefixes or []),
             healthcheck_model=healthcheck_model.strip(),
             enabled=True,
         )
@@ -159,14 +154,10 @@ def merge_provider_sources(
         if not provider_type or not api_key:
             continue
         base_url = str(item.get("base_url", "")).strip()
-        model_prefixes = [
-            str(prefix).strip() for prefix in item.get("model_prefixes", []) if str(prefix).strip()
-        ]
         merged[provider_type] = ProviderConfig(
             provider_type=provider_type,
             api_key=api_key,
             base_url=base_url,
-            model_prefixes=model_prefixes,
             healthcheck_model=str(item.get("healthcheck_model", "")).strip(),
             enabled=bool(item.get("enabled", True)),
         )
@@ -179,7 +170,6 @@ def merge_provider_sources(
             provider_type=provider_type,
             api_key=api_key,
             base_url=base_url,
-            model_prefixes=[],
             healthcheck_model=str(provider_config.get("healthcheck_model", "")).strip(),
             enabled=True,
         )
@@ -194,9 +184,8 @@ class AutoRoutingProvider(LLMProvider):
         self._providers = {key: value for key, value in providers.items() if value.enabled}
 
     def _provider_matches_model(self, provider: ProviderConfig, model: str) -> bool:
-        if not provider.model_prefixes:
-            return False
-        return any(model.startswith(prefix) for prefix in provider.model_prefixes)
+        expected = provider.healthcheck_model.strip()
+        return bool(expected) and model.strip() == expected
 
     def _create_provider(self, config: ProviderConfig) -> LLMProvider:
         if config.provider_type in _SILICONFLOW_PROVIDER_TYPES:
@@ -297,7 +286,6 @@ def register_provider_with_validation(
     api_key: str,
     healthcheck_model: str,
     base_url: str = "",
-    model_prefixes: list[str] | None = None,
 ) -> str:
     """Register provider only after support and availability checks pass."""
 
@@ -312,7 +300,6 @@ def register_provider_with_validation(
         provider_type=normalized_provider_type,
         api_key=api_key.strip(),
         base_url=base_url.strip(),
-        model_prefixes=list(model_prefixes or []),
         healthcheck_model=model_name,
         enabled=True,
     )
@@ -323,7 +310,6 @@ def register_provider_with_validation(
         provider_type=normalized_provider_type,
         api_key=config.api_key,
         base_url=config.base_url,
-        model_prefixes=config.model_prefixes,
         healthcheck_model=config.healthcheck_model,
     )
     return normalized_provider_type

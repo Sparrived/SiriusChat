@@ -27,32 +27,32 @@ def _request(model: str) -> GenerationRequest:
 
 def test_provider_registry_supports_add_and_remove(tmp_path: Path) -> None:
     registry = ProviderRegistry(tmp_path)
-    registry.upsert(provider_type="siliconflow", api_key="sf-key", model_prefixes=["Pro/"])
+    registry.upsert(provider_type="siliconflow", api_key="sf-key", healthcheck_model="Pro/zai-org/GLM-4.7")
     providers = registry.load()
 
     assert "siliconflow" in providers
     assert providers["siliconflow"].api_key == "sf-key"
-    assert providers["siliconflow"].model_prefixes == ["Pro/"]
+    assert providers["siliconflow"].healthcheck_model == "Pro/zai-org/GLM-4.7"
 
     removed = registry.remove("siliconflow")
     assert removed is True
     assert registry.load() == {}
 
 
-def test_auto_routing_provider_selects_provider_by_model_prefix() -> None:
+def test_auto_routing_provider_selects_provider_by_exact_model_name() -> None:
     routing = AutoRoutingProvider(
         {
             "siliconflow": ProviderConfig(
                 provider_type="siliconflow",
                 api_key="sf-key",
                 base_url="",
-                model_prefixes=["Pro/", "Qwen/"],
+                healthcheck_model="Pro/zai-org/GLM-4.7",
             ),
             "openai-compatible": ProviderConfig(
                 provider_type="openai-compatible",
                 api_key="openai-key",
                 base_url="",
-                model_prefixes=["gpt-"],
+                healthcheck_model="gpt-4o-mini",
             ),
         }
     )
@@ -71,7 +71,7 @@ def test_auto_routing_provider_falls_back_to_first_enabled_provider() -> None:
                 provider_type="openai-compatible",
                 api_key="openai-key",
                 base_url="",
-                model_prefixes=[],
+                healthcheck_model="",
             ),
         }
     )
@@ -85,7 +85,7 @@ def test_auto_routing_provider_falls_back_to_first_enabled_provider() -> None:
 
 def test_merge_provider_sources_uses_registry_and_config(tmp_path: Path) -> None:
     registry = ProviderRegistry(tmp_path)
-    registry.upsert(provider_type="siliconflow", api_key="sf-registry-key", model_prefixes=["Pro/"])
+    registry.upsert(provider_type="siliconflow", api_key="sf-registry-key", healthcheck_model="Pro/registry")
 
     merged = merge_provider_sources(
         work_path=tmp_path,
@@ -98,13 +98,13 @@ def test_merge_provider_sources_uses_registry_and_config(tmp_path: Path) -> None
             {
                 "type": "siliconflow",
                 "api_key": "sf-config-key",
-                "model_prefixes": ["Qwen/"],
+                "healthcheck_model": "Qwen/Qwen3",
             }
         ],
     )
 
     assert merged["siliconflow"].api_key == "sf-config-key"
-    assert merged["siliconflow"].model_prefixes == ["Qwen/"]
+    assert merged["siliconflow"].healthcheck_model == "Qwen/Qwen3"
     assert merged["openai-compatible"].api_key == "openai-config-key"
 
 
@@ -125,13 +125,13 @@ def test_auto_routing_provider_prefers_ark_for_doubao_model() -> None:
                 provider_type="volcengine-ark",
                 api_key="ark-key",
                 base_url="",
-                model_prefixes=[],
+                healthcheck_model="",
             ),
             "openai-compatible": ProviderConfig(
                 provider_type="openai-compatible",
                 api_key="openai-key",
                 base_url="",
-                model_prefixes=[],
+                healthcheck_model="",
             ),
         }
     )
@@ -172,7 +172,6 @@ def test_run_provider_detection_flow_rejects_unsupported_platform() -> None:
             provider_type="custom-provider",
             api_key="k",
             base_url="",
-            model_prefixes=[],
             healthcheck_model="mock-model",
         )
     }
@@ -191,7 +190,6 @@ def test_run_provider_detection_flow_requires_healthcheck_model() -> None:
             provider_type="openai-compatible",
             api_key="k",
             base_url="",
-            model_prefixes=[],
             healthcheck_model="",
         )
     }
@@ -212,7 +210,6 @@ def test_register_provider_with_validation_persists_healthcheck_model(tmp_path: 
             api_key="test-key",
             healthcheck_model="gpt-4o-mini",
             base_url="https://api.openai.com",
-            model_prefixes=["gpt-"],
         )
 
     assert provider_type == "openai-compatible"

@@ -105,13 +105,11 @@ registry.upsert(
     provider_type="siliconflow",
     api_key="YOUR_SF_KEY",
     healthcheck_model="Pro/zai-org/GLM-4.7B-Instruct",
-    model_prefixes=["Pro/", "Qwen/"],
 )
 registry.upsert(
     provider_type="openai-compatible",
     api_key="YOUR_OPENAI_KEY",
     healthcheck_model="gpt-4o-mini",
-    model_prefixes=["gpt-"],
 )
 
 provider = AutoRoutingProvider(registry.load())
@@ -121,7 +119,7 @@ provider = AutoRoutingProvider(registry.load())
 
 - `/provider platforms`
 - `/provider list`
-- `/provider add <type> <api_key> <healthcheck_model> [base_url] [model_prefixes_csv]`
+- `/provider add <type> <api_key> <healthcheck_model> [base_url]`
 - `/provider remove <type>`
 
 框架内 Provider 检测流程（注册/启动阶段）：

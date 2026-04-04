@@ -91,7 +91,7 @@ def test_load_session_config_accepts_providers_list_without_single_provider(tmp_
                     {
                         "type": "siliconflow",
                         "api_key": "sf-test-key",
-                        "model_prefixes": ["Pro/", "Qwen/"],
+                        "healthcheck_model": "Pro/zai-org/GLM-4.7",
                     },
                     {
                         "type": "openai-compatible",

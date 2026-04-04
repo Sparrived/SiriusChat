@@ -6,7 +6,7 @@ import asyncio
 
 import pytest
 
-from tests.integration.conftest import MockLLMProvider
+from .conftest import MockLLMProvider
 
 
 class TestProviderResilience:

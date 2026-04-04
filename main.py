@@ -369,8 +369,6 @@ def _register_provider_interactively_for_bootstrap(
         input_func=input_func,
         print_func=print_func,
     )
-    prefixes_raw = input_func("请输入 model 前缀（逗号分隔，可留空）：").strip()
-    model_prefixes = _split_csv(prefixes_raw)
 
     registered_type = register_provider_with_validation(
         work_path=work_path,
@@ -378,7 +376,6 @@ def _register_provider_interactively_for_bootstrap(
         api_key=api_key,
         healthcheck_model=healthcheck_model,
         base_url=base_url,
-        model_prefixes=model_prefixes,
     )
     print_func(f"provider 注册并检测通过：{registered_type}")
 
@@ -451,10 +448,6 @@ def _build_provider(
     return AutoRoutingProvider(merged_providers)
 
 
-def _split_csv(raw_value: str) -> list[str]:
-    return [item.strip() for item in raw_value.split(",") if item.strip()]
-
-
 def _handle_provider_command(
     raw_text: str,
     *,
@@ -464,7 +457,7 @@ def _handle_provider_command(
     if not raw_text.startswith(PROVIDER_COMMAND_PREFIX):
         return False, False
 
-    tokens = raw_text.split(maxsplit=6)
+    tokens = raw_text.split(maxsplit=5)
     if len(tokens) == 2 and tokens[1] == "platforms":
         platforms = get_supported_provider_platforms()
         print_func("当前支持的平台：")
@@ -480,11 +473,10 @@ def _handle_provider_command(
             print_func("当前没有已配置 provider。")
             return True, False
         for provider_type, config in providers.items():
-            prefixes = ",".join(config.model_prefixes) if config.model_prefixes else "(未配置)"
             healthcheck_model = config.healthcheck_model or "(未配置)"
             print_func(
                 f"- {provider_type}: base_url={config.base_url or '(默认)'}, "
-                f"healthcheck_model={healthcheck_model}, model_prefixes={prefixes}"
+                f"healthcheck_model={healthcheck_model}"
             )
         return True, False
 
@@ -493,7 +485,6 @@ def _handle_provider_command(
         api_key = tokens[3]
         healthcheck_model = tokens[4]
         base_url = tokens[5] if len(tokens) >= 6 else ""
-        prefixes = _split_csv(tokens[6]) if len(tokens) >= 7 else []
         try:
             registered_type = register_provider_with_validation(
                 work_path=provider_registry.path.parent,
@@ -501,7 +492,6 @@ def _handle_provider_command(
                 api_key=api_key,
                 healthcheck_model=healthcheck_model,
                 base_url=base_url,
-                model_prefixes=prefixes,
             )
         except Exception as exc:
             print_func(f"provider 注册失败：{exc}")
@@ -520,7 +510,7 @@ def _handle_provider_command(
 
     print_func(
         "provider 命令格式：/provider platforms | /provider list | "
-        "/provider add <type> <api_key> <healthcheck_model> [base_url] [model_prefixes_csv] | "
+        "/provider add <type> <api_key> <healthcheck_model> [base_url] | "
         "/provider remove <type>"
     )
     return True, False

@@ -102,7 +102,7 @@ description: "当你需要在不通读全部代码的情况下快速理解 Siriu
 - `cli.py` 是库内薄封装，仅负责调用 `api` 执行单轮会话。
 - `api/` 是统一对外接口文件；外部调用优先使用该文件暴露的 API。
 - Provider 检测流程已下沉到 `providers/routing.py`：配置检查 -> 平台适配检查 -> 可用性检查（依赖 `healthcheck_model`）。
-- Provider 注册命令要求显式提供检测模型：`/provider add <type> <api_key> <healthcheck_model> [base_url] [model_prefixes_csv]`。
+- Provider 注册命令要求显式提供检测模型：`/provider add <type> <api_key> <healthcheck_model> [base_url]`。
 - 提示词流程：`generate_humanized_roleplay_questions` 产出问题，`agenerate_agent_prompts_from_answers`（输入 `agent_name`）生成完整 `GeneratedSessionPreset`；推荐将生成结果作为 agent 资产持久化（`generated_agents.json`），再通过 `select_generated_agent_profile` + `create_session_config_from_selected_agent` 按 key 创建会话配置。
 - 内部实现允许重构；当前未发布阶段若影响外部接口，可直接升级 `api/`，并同步文档与示例。
 - 内部新增能力需同步在 `api/` 提供对外入口。

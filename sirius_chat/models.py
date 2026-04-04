@@ -65,7 +65,7 @@ class AgentPreset:
 
 @dataclass(slots=True)
 class OrchestrationPolicy:
-    enabled: bool = True
+    enabled: bool = False
     task_models: dict[str, str] = field(default_factory=dict)
     task_budgets: dict[str, int] = field(default_factory=dict)
     task_temperatures: dict[str, float] = field(default_factory=dict)

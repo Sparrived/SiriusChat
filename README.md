@@ -77,7 +77,7 @@ python main.py --config examples/session.json --work-path data/session_runtime -
 
 - `/provider platforms` 查看当前版本支持的平台
 - `/provider list` 查看当前已配置 provider
-- `/provider add <type> <api_key> <healthcheck_model> [base_url] [model_prefixes_csv]` 添加或更新 provider（注册时即做可用性检测）
+- `/provider add <type> <api_key> <healthcheck_model> [base_url]` 添加或更新 provider（注册时即做可用性检测）
 - `/provider remove <type>` 删除 provider
 
 provider 配置会持久化到 `<work_path>/provider_keys.json`。
@@ -160,13 +160,13 @@ SiliconFlow 配置示例：
     {
       "type": "siliconflow",
       "api_key": "YOUR_SILICONFLOW_KEY",
-      "model_prefixes": ["Pro/", "Qwen/"]
+      "healthcheck_model": "Pro/zai-org/GLM-4.7"
     },
     {
       "type": "openai-compatible",
       "base_url": "https://api.openai.com",
       "api_key": "YOUR_OPENAI_KEY",
-      "model_prefixes": ["gpt-"]
+      "healthcheck_model": "gpt-4o-mini"
     }
   ],
   "agent": {
@@ -179,7 +179,7 @@ SiliconFlow 配置示例：
 
 路由规则：
 
-- 先按 `model_prefixes` 前缀匹配。
+- 先按 `healthcheck_model` 与请求模型名做精确匹配。
 - 若无匹配，回退到第一个可用 provider。
 - 若没有任何可用 provider，会抛出明确错误提示。
 

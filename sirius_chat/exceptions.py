@@ -291,6 +291,40 @@ class MissingConfigError(ConfigError):
         self.config_key = config_key
 
 
+class OrchestrationConfigError(ConfigError):
+    """多模型协同配置错误"""
+
+    def __init__(
+        self,
+        missing_models: dict[str, list[str]],
+        message: str | None = None,
+    ) -> None:
+        """初始化多模型协同配置错误。
+        
+        Args:
+            missing_models: 缺失的模型配置，映射为 {任务名: [缺失的模型列表]}
+            message: 自定义错误消息
+        """
+        if message is None:
+            tasks_str = ", ".join(missing_models.keys())
+            models_str = ", ".join(m for models in missing_models.values() for m in models)
+            message = (
+                f"多模型协同已启用，但缺少以下模型配置：\n"
+                f"  未配置的任务: {tasks_str}\n"
+                f"  缺失的模型: {models_str}\n"
+                f"请使用 configure_orchestration_models() 函数添加配置。"
+            )
+        
+        context = {"missing_models": missing_models}
+        super().__init__(
+            message,
+            error_code="ORCHESTRATION_CONFIG_ERROR",
+            context=context,
+            is_retryable=False,
+        )
+        self.missing_models = missing_models
+
+
 class MemoryError(SiriusException):
     """记忆管理相关错误"""
 
@@ -349,6 +383,7 @@ __all__ = [
     "ConfigError",
     "InvalidConfigError",
     "MissingConfigError",
+    "OrchestrationConfigError",
     "MemoryError",
     "UserNotFoundError",
     "ConflictingMemoryError",

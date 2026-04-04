@@ -55,6 +55,13 @@ from sirius_chat.api.orchestration import (
     create_multimodel_config,
     setup_multimodel_config,
 )
+from sirius_chat.orchestration_config import (
+    configure_orchestration_models,
+    configure_orchestration_budgets,
+    configure_orchestration_temperatures,
+    configure_orchestration_retries,
+    configure_full_orchestration,
+)
 
 __all__ = [
     "Agent",
@@ -110,4 +117,10 @@ __all__ = [
     "abuild_roleplay_prompt_from_answers_and_apply",
     "build_token_usage_baseline",
     "summarize_token_usage",
+    # 多模型协同配置函数
+    "configure_orchestration_models",
+    "configure_orchestration_budgets",
+    "configure_orchestration_temperatures",
+    "configure_orchestration_retries",
+    "configure_full_orchestration",
 ]

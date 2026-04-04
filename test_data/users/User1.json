@@ -1,0 +1,34 @@
+{
+  "profile": {
+    "user_id": "User1",
+    "name": "User1",
+    "persona": "",
+    "identities": {},
+    "aliases": [],
+    "traits": [],
+    "metadata": {}
+  },
+  "runtime": {
+    "inferred_persona": "",
+    "inferred_traits": [],
+    "preference_tags": [],
+    "recent_messages": [
+      "Hello",
+      "Hello"
+    ],
+    "summary_notes": [
+      "事件摘要：Hello"
+    ],
+    "memory_facts": [
+      {
+        "fact_type": "summary",
+        "value": "事件摘要：Hello",
+        "source": "event_extract",
+        "confidence": 0.65,
+        "observed_at": "2026-04-05T02:46:42"
+      }
+    ],
+    "last_seen_channel": "",
+    "last_seen_uid": ""
+  }
+}

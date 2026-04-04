@@ -9,13 +9,13 @@
       "type": "openai-compatible",
       "base_url": "https://api.openai.com",
       "api_key": "YOUR_MAIN_API_KEY",
-      "model_prefixes": "gpt-"
+      "healthcheck_model": "gpt-4o-mini"
     },
     {
       "type": "siliconflow",
       "base_url": "https://api.siliconflow.cn",
       "api_key": "YOUR_SILICONFLOW_API_KEY",
-      "model_prefixes": "doubao-"
+      "healthcheck_model": "doubao-seed-2-0-lite-260215"
     }
   ],
   "generated_agent_key": "sirius",
