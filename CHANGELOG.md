@@ -21,6 +21,10 @@
 - **PROJECT_ISSUES.md**: 项目问题与改进方向追踪文档
   - P0（5项）、P1（4项）、P2（3项）优先级划分
   - 3个月roadmap与进度矩阵
+- **集成测试框架** (P1-001)：
+  - `tests/integration/`：网络弹性、并发会话、故障转移测试
+  - `tests/benchmarks/`：性能吞吐量、延迟、可扩展性基准测试
+  - `conftest.py`：MockLLMProvider、临时目录、会话配置等通用fixtures
 - commit-preparation SKILL：commit前检查清单，包括gitignore验证、改动总结、ChangeLog更新与标准格式commit
 
 ### Changed
