@@ -376,17 +376,6 @@ else:
     await cache.set(key, response)
 ```
 
-对于分布式场景，可使用 `RedisCache`（需要 Redis 依赖）：
-
-```python
-from sirius_chat.cache import RedisCache
-
-redis_cache = RedisCache(
-    redis_url="redis://localhost:6379/0",
-    ttl=3600,
-)
-```
-
 ### 性能监控
 
 监控会话执行性能：

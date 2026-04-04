@@ -80,7 +80,6 @@ description: "当你需要在不通读全部代码的情况下快速理解 Siriu
 - ✨ **缓存框架** (P2-001)：`cache/` 模块提供可扩展的缓存后端
   - `base.py`：CacheBackend 抽象基类定义标准接口
   - `memory.py`：MemoryCache 内存缓存实现，支持 LRU 和 TTL 过期
-  - `redis.py`：RedisCache 分布式缓存实现 (可选 Redis 依赖)
   - `keygen.py`：有确定性的缓存 key 生成函数
 - ✨ **性能监控** (P2-002)：`performance/` 模块提供性能分析和优化工具
   - `metrics.py`：ExecutionMetrics 和 MetricsCollector 用户执行指标收集

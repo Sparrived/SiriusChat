@@ -36,7 +36,6 @@ sirius_chat/
 ├── cache/                     (P2-001) - 缓存框架
 │   ├── base.py               - CacheBackend 抽象
 │   ├── memory.py             - MemoryCache 内存实现
-│   ├── redis.py              - RedisCache 分布式实现
 │   ├── keygen.py             - 缓存 Key 生成
 │   └── __init__.py           - 导入导出
 ├── performance/              (P2-002) - 性能监控
