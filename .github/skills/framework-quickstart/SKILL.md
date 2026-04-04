@@ -28,20 +28,23 @@ description: "当你需要在不通读全部代码的情况下快速理解 Siriu
 7. `sirius_chat/async_engine/prompts.py` ✨
 8. `sirius_chat/async_engine/utils.py` ✨
 9. `sirius_chat/async_engine/orchestration.py` ✨
-10. `sirius_chat/providers/base.py`
-11. `sirius_chat/providers/middleware/base.py` ✨
-12. `sirius_chat/providers/middleware/rate_limiter.py` ✨
-13. `sirius_chat/providers/middleware/retry.py` ✨
-14. `sirius_chat/providers/middleware/cost_metrics.py` ✨
-15. `sirius_chat/providers/mock.py`
-16. `sirius_chat/providers/openai_compatible.py`
-17. `sirius_chat/providers/siliconflow.py`
-18. `sirius_chat/providers/volcengine_ark.py`
-19. `sirius_chat/providers/routing.py`
-20. `sirius_chat/user_memory.py`
-21. `sirius_chat/cli.py`
-22. `sirius_chat/api/`
-23. `tests/test_engine.py`
+10. `sirius_chat/config_manager.py` ✨ (P1-006 配置管理)
+11. `sirius_chat/providers/base.py`
+12. `sirius_chat/providers/middleware/base.py` ✨
+13. `sirius_chat/providers/middleware/rate_limiter.py` ✨
+14. `sirius_chat/providers/middleware/retry.py` ✨
+15. `sirius_chat/providers/middleware/cost_metrics.py` ✨
+16. `sirius_chat/cache/` ✨ (P2-001 缓存框架)
+17. `sirius_chat/providers/mock.py`
+18. `sirius_chat/providers/openai_compatible.py`
+19. `sirius_chat/providers/siliconflow.py`
+20. `sirius_chat/providers/volcengine_ark.py`
+21. `sirius_chat/providers/routing.py`
+22. `sirius_chat/user_memory.py`
+23. `sirius_chat/performance/` ✨ (P2-002 性能监控)
+24. `sirius_chat/cli.py`
+25. `sirius_chat/api/`
+26. `tests/test_engine.py`
 
 ## 心智模型
 
@@ -70,6 +73,19 @@ description: "当你需要在不通读全部代码的情况下快速理解 Siriu
 - `session_store.py` 提供会话持久化与重启恢复。
 - `Transcript.token_usage_records` 全量归档每次模型调用的 token 消耗信息。
 - 引擎支持自动记忆压缩（`session_summary` + 历史预算）。
+- ✨ **配置管理** (P1-006)：`config_manager.py` 提供多环境配置管理能力
+  - 支持 JSON 配置文件加载（base/dev/test/prod）
+  - 支持环境变量替换（${VAR_NAME} 语法）
+  - ConfigManager 类提供加载、合并、验证等核心功能
+- ✨ **缓存框架** (P2-001)：`cache/` 模块提供可扩展的缓存后端
+  - `base.py`：CacheBackend 抽象基类定义标准接口
+  - `memory.py`：MemoryCache 内存缓存实现，支持 LRU 和 TTL 过期
+  - `redis.py`：RedisCache 分布式缓存实现 (可选 Redis 依赖)
+  - `keygen.py`：有确定性的缓存 key 生成函数
+- ✨ **性能监控** (P2-002)：`performance/` 模块提供性能分析和优化工具
+  - `metrics.py`：ExecutionMetrics 和 MetricsCollector 用户执行指标收集
+  - `profiler.py`：PerformanceProfiler 上下文管理器和 @profile_sync/@profile_async 装饰器
+  - `benchmarks.py`：Benchmark 和 BenchmarkSuite 用于性能基准测试
 - `providers/base.py` 定义 provider 协议。
 - `providers/middleware/` 是 Provider 功能扩展层（✨ 新增 P1-003）：
   - `base.py`：Middleware ABC，支持链式组合
@@ -104,7 +120,9 @@ description: "当你需要在不通读全部代码的情况下快速理解 Siriu
 - 修改主 AI 或多人轮次策略：更新 `sirius_chat/async_engine.py`，并检查 transcript 兼容性。
 - 修改动态参与者或识人记忆逻辑：同步更新 `models.py`、`async_engine.py` 与 `docs/external-usage.md`。
 - 修改会话恢复或压缩策略：同步更新 `session_store.py`、`async_engine.py`、`README.md` 与 `docs/architecture.md`。
-- 修改配置结构：同步更新 `sirius_chat/cli.py`、`README.md` 与 `examples/session.json`。
+- 修改配置结构或环境变量处理：同步更新 `sirius_chat/config_manager.py`、`sirius_chat/cli.py`、`README.md` 与 `examples/session.json`。
+- 修改缓存策略或后端：在 `sirius_chat/cache/` 实现新后端或修改现有接口，并更新 `docs/best-practices.md`。
+- 修改性能监控或基准：更新 `sirius_chat/performance/` 中的指标收集或分析逻辑，添加相应测试。
 - 修改 engine/provider 行为：在 `tests/` 下新增或更新测试。
 - 新增可对外使用功能：在 `sirius_chat/api/` 暴露接口并补充外部调用示例。
 
