@@ -19,6 +19,7 @@ from sirius_chat.async_engine.utils import (
     normalize_multimodal_inputs,
 )
 from sirius_chat.async_engine.prompts import build_system_prompt
+from sirius_chat.exceptions import OrchestrationConfigError
 
 AsyncOnMessage = Callable[[Message], None]
 
@@ -32,6 +33,45 @@ class AsyncRolePlayEngine:
     _TASK_EVENT_EXTRACT = "event_extract"
     _TASK_MEMORY_MANAGER = "memory_manager"
     _SUPPORTED_MULTIMODAL_TYPES = {"image", "video", "audio", "text"}
+
+    def validate_orchestration_config(self, config: SessionConfig) -> None:
+        """验证多模型协同配置的完整性。
+        
+        当多模型协同启用时，检查所有必需的任务是否都配置了模型。
+        如果任何一个必需任务有模型配置，则所有必需任务都必须有配置。
+
+        Args:
+            config: 会话配置
+
+        Raises:
+            OrchestrationConfigError: 如果缺少必需的模型配置
+        """
+        if not config.orchestration.enabled:
+            return  # 未启用多模型协同，无需检查
+
+        # 定义必需任务及其对应的模型配置键
+        task_models = config.orchestration.task_models
+        required_tasks = [
+            self._TASK_MEMORY_EXTRACT,
+            self._TASK_MULTIMODAL_PARSE,
+            self._TASK_EVENT_EXTRACT,
+        ]
+
+        # 检查是否有任何任务被配置
+        configured_tasks = [task for task in required_tasks if task_models.get(task)]
+        
+        # 如果没有任何任务被配置，无需检查（可以不使用多模型协同）
+        if not configured_tasks:
+            return
+
+        # 如果至少有一个任务被配置，则所有任务都必须被配置
+        missing_models: dict[str, list[str]] = {}
+        for task in required_tasks:
+            if not task_models.get(task):
+                missing_models[task] = [task]
+
+        if missing_models:
+            raise OrchestrationConfigError(missing_models)
 
     def _prepare_transcript(self, config: SessionConfig, transcript: Transcript | None) -> Transcript:
         if transcript is not None:
@@ -545,8 +585,18 @@ class AsyncRolePlayEngine:
             actor_id=config.agent.name,
         )
         
-        # 如果启用了提示词驱动的分割，识别分割标记并拆分消息
+        # 清理：移除模型响应中可能的 speaker 前缀（防止重复前缀化）
+        # 如果响应以 "[{speaker_name}] " 开头，移除之
         speaker = str(config.agent.metadata.get("alias", "")).strip() or config.agent.name
+        speaker_prefix_patterns = [
+            f"[{speaker}] ",  # 当前配置的 speaker
+        ]
+        # 也检查是否有其他常见的前缀格式
+        for pattern in speaker_prefix_patterns:
+            if content.startswith(pattern):
+                content = content[len(pattern):]
+                break
+        
         last_message: Message | None = None
         
         if config.orchestration.enable_prompt_driven_splitting:
@@ -687,6 +737,9 @@ class AsyncRolePlayEngine:
         on_message: AsyncOnMessage | None = None,
         transcript: Transcript | None = None,
     ) -> Transcript:
+        # 验证多模型协同配置
+        self.validate_orchestration_config(config)
+        
         _ = on_message
         return self._prepare_transcript(config, transcript)
 
@@ -697,6 +750,9 @@ class AsyncRolePlayEngine:
         on_message: AsyncOnMessage | None = None,
         transcript: Transcript | None = None,
     ) -> Transcript:
+        # 验证多模型协同配置
+        self.validate_orchestration_config(config)
+        
         transcript = self._prepare_transcript(config, transcript)
         file_store = UserMemoryFileStore(config.work_path)
         event_file_store = EventMemoryFileStore(config.work_path)
