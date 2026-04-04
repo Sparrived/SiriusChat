@@ -24,27 +24,36 @@ description: "当你需要在不通读全部代码的情况下快速理解 Siriu
 3. `README.md`
 4. `docs/orchestration-policy.md`
 5. `sirius_chat/models.py`
-6. `sirius_chat/async_engine.py`
-7. `sirius_chat/providers/base.py`
-8. `sirius_chat/providers/middleware/base.py` ✨
-9. `sirius_chat/providers/middleware/rate_limiter.py` ✨
-10. `sirius_chat/providers/middleware/retry.py` ✨
-11. `sirius_chat/providers/middleware/cost_metrics.py` ✨
-12. `sirius_chat/providers/mock.py`
-13. `sirius_chat/providers/openai_compatible.py`
-14. `sirius_chat/providers/siliconflow.py`
-15. `sirius_chat/providers/volcengine_ark.py`
-16. `sirius_chat/providers/routing.py`
-17. `sirius_chat/user_memory.py`
-18. `sirius_chat/cli.py`
-19. `sirius_chat/api/`
-20. `tests/test_engine.py`
+6. `sirius_chat/async_engine/core.py` ✨ (P0-003 重构)
+7. `sirius_chat/async_engine/prompts.py` ✨
+8. `sirius_chat/async_engine/utils.py` ✨
+9. `sirius_chat/async_engine/orchestration.py` ✨
+10. `sirius_chat/providers/base.py`
+11. `sirius_chat/providers/middleware/base.py` ✨
+12. `sirius_chat/providers/middleware/rate_limiter.py` ✨
+13. `sirius_chat/providers/middleware/retry.py` ✨
+14. `sirius_chat/providers/middleware/cost_metrics.py` ✨
+15. `sirius_chat/providers/mock.py`
+16. `sirius_chat/providers/openai_compatible.py`
+17. `sirius_chat/providers/siliconflow.py`
+18. `sirius_chat/providers/volcengine_ark.py`
+19. `sirius_chat/providers/routing.py`
+20. `sirius_chat/user_memory.py`
+21. `sirius_chat/cli.py`
+22. `sirius_chat/api/`
+23. `tests/test_engine.py`
 
 ## 心智模型
 
 - `models.py` 定义数据契约（多人用户 + 单 AI 主助手）。
 - `OrchestrationPolicy` 用于任务路由与预算控制，**现已默认启用**（`enabled=True`），支持 `memory_extract`、`event_extract`、`multimodal_parse`、`memory_manager` 等任务的模型配置与预算限制。若需回退单模型模式，设置 `enabled=False`。同时支持提示词驱动的内容分割（`enable_prompt_driven_splitting=True`）。✨ `memory_manager` 是新增的可选 LLM 任务，用于汇聚、去重、标注、冲突检测记忆。
-- `async_engine.py` 是核心实现，适合嵌入 asyncio 应用。系统提示词生成时自动包含安全约束，防止 AI 主动泄露系统提示词。
+- ✨ **async_engine 包重构** (P0-003)：将 924 行单文件分解为多个职责明确的模块
+  - `async_engine/core.py`：核心 AsyncRolePlayEngine 类，保持公开 API 不变
+  - `async_engine/prompts.py`：系统提示词构建（整合 agent 身份、时间、用户记忆、编排指令）
+  - `async_engine/utils.py`：工具函数（token 估算、JSON 提取、多模态输入规范化等）
+  - `async_engine/orchestration.py`：任务编排配置和管理（TaskConfig、任务常量、系统提示模板）
+  - 模块分解后每个文件 < 200 行，关注点明确，可独立测试和维护
+- `async_engine.py` 的核心实现已迁移到 `async_engine/core.py`，旧导入位置仍然可用（向后兼容）。系统提示词生成时自动包含安全约束，防止 AI 主动泄露系统提示词。
 - `run_live_session` 支持动态参与者与识人记忆。
 - `user_memory.py` 负责用户身份识别（user_id/aliases/identities）与结构化用户记忆。
 - 用户记忆分为 `profile`（初始化字段）与 `runtime`（运行时可变字段）。
