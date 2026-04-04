@@ -27,6 +27,8 @@ class TestPerformanceBenchmarks:
             call_count += 1
         
         elapsed = time.time() - start
+        # 避免除以零
+        elapsed = max(elapsed, 0.001)
         throughput = call_count / elapsed
         
         assert throughput > 50  # 至少每秒50次
@@ -48,6 +50,8 @@ class TestPerformanceBenchmarks:
         await batch_calls(50)
         elapsed = time.time() - start
         
+        # 避免除以零，使用最小值约束
+        elapsed = max(elapsed, 0.001)  # 至少 1ms
         throughput = 50 / elapsed
         assert throughput > 20
         assert provider.call_count == 50

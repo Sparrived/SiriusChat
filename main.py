@@ -33,6 +33,12 @@ from sirius_chat.api import (
     register_provider_with_validation,
     run_provider_detection_flow,
 )
+from sirius_chat.cli_diagnostics import (
+    EnvironmentDiagnostics,
+    generate_default_config,
+    run_preflight_check,
+)
+from sirius_chat.logging_config import configure_logging, get_logger
 
 InputFunc = Callable[[str], str]
 PrintFunc = Callable[[str], None]
@@ -67,6 +73,18 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         "--no-resume",
         action="store_true",
         help="禁用自动恢复，始终从新会话开始",
+    )
+    parser.add_argument(
+        "--init-config",
+        type=str,
+        default="",
+        help="生成默认配置文件（指定输出路径）",
+    )
+    parser.add_argument(
+        "--check-config",
+        type=str,
+        default="",
+        help="检查配置文件（指定配置路径）",
     )
     return parser
 
@@ -782,7 +800,41 @@ def main(
     parser = _build_arg_parser()
     args = parser.parse_args(argv if argv is not None else sys.argv[1:])
 
-    config_path, work_path = _resolve_runtime_paths(args, input_func, print_func)
+    # 配置日志系统
+    configure_logging(level="INFO", format_type="console")
+    logger = get_logger(__name__)
+
+    # 处理特殊命令：--init-config
+    if args.init_config:
+        try:
+            output_path = Path(args.init_config)
+            generate_default_config(output_path)
+            print_func(f"默认配置文件已生成: {output_path}")
+            return 0
+        except Exception as e:
+            print_func(f"生成配置文件失败: {e}")
+            logger.error(f"Failed to generate config: {e}", exc_info=True)
+            return 1
+
+    # 处理特殊命令：--check-config
+    if args.check_config:
+        try:
+            config_path = Path(args.check_config)
+            work_path = Path(args.work_path or REPO_ROOT / "data")
+            ran = run_preflight_check(config_path, work_path, print_func=print_func)
+            return 0 if ran else 1
+        except Exception as e:
+            print_func(f"配置检查失败: {e}")
+            logger.error(f"Failed to check config: {e}", exc_info=True)
+            return 1
+
+    try:
+        config_path, work_path = _resolve_runtime_paths(args, input_func, print_func)
+    except Exception as e:
+        logger.error(f"Failed to resolve paths: {e}", exc_info=True)
+        print_func(f"路径解析失败: {e}")
+        return 1
+    
     work_path.mkdir(parents=True, exist_ok=True)
 
     _persist_last_config_path(config_path, print_func)
@@ -794,6 +846,7 @@ def main(
             print_func=print_func,
         )
     except ValueError as exc:
+        logger.error(f"Failed to load SessionConfig: {exc}", exc_info=True)
         print_func(f"加载 SessionConfig 失败：{exc}")
         should_bootstrap = input_func("是否现在初始化首个 generated agent？[Y/n] ").strip().lower()
         if should_bootstrap not in {"", "y", "yes"}:
@@ -806,6 +859,7 @@ def main(
                 print_func=print_func,
             )
         except Exception as provider_exc:
+            logger.error(f"Provider detection failed: {provider_exc}", exc_info=True)
             print_func(f"Provider 检测流程失败：{provider_exc}")
             should_register = input_func("是否现在注册 provider 并重新检测？[Y/n] ").strip().lower()
             if should_register not in {"", "y", "yes"}:
@@ -822,6 +876,7 @@ def main(
                     print_func=print_func,
                 )
             except Exception as register_exc:
+                logger.error(f"Provider registration failed: {register_exc}", exc_info=True)
                 print_func(f"Provider 注册或检测失败：{register_exc}")
                 return 1
 
@@ -839,39 +894,53 @@ def main(
                 print_func=print_func,
             )
         except Exception as bootstrap_exc:
+            logger.error(f"Bootstrap failed: {bootstrap_exc}", exc_info=True)
             print_func(f"初始化首个 generated agent 失败：{bootstrap_exc}")
             return 1
-    primary_user = _bootstrap_primary_user(
-        work_path=work_path,
-        input_func=input_func,
-        print_func=print_func,
-    )
-    provider_registry = ProviderRegistry(work_path)
-    provider = _build_provider(provider_config, providers_config, work_path, provider_factory)
-    engine = AsyncRolePlayEngine(provider=provider)
-    state_store = _create_session_store(work_path=work_path, store_kind=args.store)
-    should_resume = (not args.no_resume) and state_store.exists()
-    transcript = state_store.load() if should_resume else None
+    except Exception as e:
+        logger.error(f"Unexpected error loading session: {e}", exc_info=True)
+        print_func(f"加载会话配置时发生未预期的错误：{e}")
+        return 1
+    
+    try:
+        primary_user = _bootstrap_primary_user(
+            work_path=work_path,
+            input_func=input_func,
+            print_func=print_func,
+        )
+        provider_registry = ProviderRegistry(work_path)
+        provider = _build_provider(provider_config, providers_config, work_path, provider_factory)
+        engine = AsyncRolePlayEngine(provider=provider)
+        state_store = _create_session_store(work_path=work_path, store_kind=args.store)
+        should_resume = (not args.no_resume) and state_store.exists()
+        transcript = state_store.load() if should_resume else None
 
-    transcript = run_interactive_session(
-        session_config,
-        primary_user,
-        engine,
-        state_store,
-        work_path,
-        provider_registry,
-        lambda: _build_provider(provider_config, providers_config, work_path, provider_factory),
-        transcript,
-        input_func=input_func,
-        print_func=print_func,
-    )
+        transcript = run_interactive_session(
+            session_config,
+            primary_user,
+            engine,
+            state_store,
+            work_path,
+            provider_registry,
+            lambda: _build_provider(provider_config, providers_config, work_path, provider_factory),
+            transcript,
+            input_func=input_func,
+            print_func=print_func,
+        )
 
-    output_path = Path(args.output) if args.output else work_path / "transcript.json"
-    if not output_path.is_absolute():
-        output_path = work_path / output_path
-    _write_transcript_output(transcript, output_path)
+        output_path = Path(args.output) if args.output else work_path / "transcript.json"
+        if not output_path.is_absolute():
+            output_path = work_path / output_path
+        _write_transcript_output(transcript, output_path)
 
-    return 0
+        return 0
+    except KeyboardInterrupt:
+        print_func("\n会话已中断。")
+        return 0
+    except Exception as e:
+        logger.error(f"Unexpected error in session: {e}", exc_info=True)
+        print_func(f"会话执行过程中发生错误：{e}")
+        return 1
 
 
 if __name__ == "__main__":

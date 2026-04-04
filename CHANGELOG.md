@@ -18,6 +18,10 @@
   - estimate_tokens_with_tiktoken()：可选的精确计数（若安装tiktoken）
   - estimate_tokens()：智能回退实现（优先tiktoken，降级启发式）
   - 支持多个模型配置（gpt-4, claude-3, doubao-seed等）
+- **cli_diagnostics.py** (P0-005): CLI 诊断和环境检查工具
+  - EnvironmentDiagnostics：Python版本、工作目录、配置文件、Provider配置检查
+  - run_preflight_check()：启动前全面检查，给出详细建议
+  - generate_default_config()：生成默认配置文件模板
 - **PROJECT_ISSUES.md**: 项目问题与改进方向追踪文档
   - P0（5项）、P1（4项）、P2（3项）优先级划分
   - 3个月roadmap与进度矩阵
@@ -34,6 +38,12 @@
   - quality：tiktoken用于精确token估算
 - **__init__.py**: 扩展导出至57个项目，分类组织
   - 核心模型(10), 会话管理(7), Provider(3), API函数(13), 日志(2), 异常(18)
+- **main.py** (P0-005): 改进CLI错误处理和诊断
+  - 添加 --init-config 命令生成默认配置
+  - 添加 --check-config 命令进行环境检查
+  - 整合日志系统用于审计和调试
+  - 改进异常捕获和错误消息详细度
+  - 添加 KeyboardInterrupt 处理
 
 ### Changed
 
