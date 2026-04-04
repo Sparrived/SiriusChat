@@ -1,0 +1,329 @@
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass
+from pathlib import Path
+
+from sirius_chat.providers.base import GenerationRequest, LLMProvider
+from sirius_chat.providers.openai_compatible import OpenAICompatibleProvider
+from sirius_chat.providers.siliconflow import SiliconFlowProvider
+from sirius_chat.providers.volcengine_ark import VolcengineArkProvider
+
+PROVIDER_KEYS_FILE = "provider_keys.json"
+
+_OPENAI_PROVIDER_TYPES = {"openai", "openai-compatible"}
+_SILICONFLOW_PROVIDER_TYPES = {"siliconflow"}
+_VOLCENGINE_ARK_PROVIDER_TYPES = {"volcengine-ark", "ark"}
+
+_SUPPORTED_PROVIDER_PLATFORMS: dict[str, dict[str, str]] = {
+    "openai-compatible": {
+        "default_base_url": "https://api.openai.com",
+        "notes": "OpenAI-compatible chat completions endpoint",
+    },
+    "siliconflow": {
+        "default_base_url": "https://api.siliconflow.cn",
+        "notes": "SiliconFlow OpenAI-compatible endpoint",
+    },
+    "volcengine-ark": {
+        "default_base_url": "https://ark.cn-beijing.volces.com/api/v3",
+        "notes": "Volcengine Ark chat completions endpoint",
+    },
+}
+
+_PROVIDER_HEALTHCHECK_SYSTEM_PROMPT = "你是可用性检查助手，请简短回复 ok。"
+_PROVIDER_HEALTHCHECK_USER_MESSAGE = "ping"
+
+
+def get_supported_provider_platforms() -> dict[str, dict[str, str]]:
+    return dict(_SUPPORTED_PROVIDER_PLATFORMS)
+
+
+@dataclass(slots=True)
+class ProviderConfig:
+    provider_type: str
+    api_key: str
+    base_url: str
+    model_prefixes: list[str]
+    healthcheck_model: str = ""
+    enabled: bool = True
+
+
+def normalize_provider_type(provider_type: str) -> str:
+    normalized = provider_type.strip().lower()
+    if normalized == "openai":
+        return "openai-compatible"
+    if normalized == "ark":
+        return "volcengine-ark"
+    return normalized
+
+
+def ensure_provider_platform_supported(provider_type: str) -> str:
+    normalized = normalize_provider_type(provider_type)
+    if normalized not in _SUPPORTED_PROVIDER_PLATFORMS:
+        raise RuntimeError(f"provider 平台未适配：{provider_type}")
+    return normalized
+
+
+class ProviderRegistry:
+    """Store provider credentials and routing hints under work_path."""
+
+    def __init__(self, work_path: Path) -> None:
+        self.path = work_path / PROVIDER_KEYS_FILE
+
+    def load(self) -> dict[str, ProviderConfig]:
+        if not self.path.exists():
+            return {}
+
+        raw = json.loads(self.path.read_text(encoding="utf-8"))
+        providers = raw.get("providers", {})
+        results: dict[str, ProviderConfig] = {}
+        for provider_name, payload in providers.items():
+            if not isinstance(payload, dict):
+                continue
+            provider_type = str(payload.get("type", provider_name)).strip().lower()
+            api_key = str(payload.get("api_key", "")).strip()
+            if not api_key:
+                continue
+            base_url = str(payload.get("base_url", "")).strip()
+            prefixes = [str(item).strip() for item in payload.get("model_prefixes", []) if str(item).strip()]
+            healthcheck_model = str(payload.get("healthcheck_model", "")).strip()
+            enabled = bool(payload.get("enabled", True))
+            results[provider_type] = ProviderConfig(
+                provider_type=provider_type,
+                api_key=api_key,
+                base_url=base_url,
+                model_prefixes=prefixes,
+                healthcheck_model=healthcheck_model,
+                enabled=enabled,
+            )
+        return results
+
+    def save(self, providers: dict[str, ProviderConfig]) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        payload: dict[str, object] = {"providers": {}}
+        for provider_type, config in providers.items():
+            payload["providers"][provider_type] = {
+                "type": config.provider_type,
+                "api_key": config.api_key,
+                "base_url": config.base_url,
+                "model_prefixes": config.model_prefixes,
+                "healthcheck_model": config.healthcheck_model,
+                "enabled": config.enabled,
+            }
+        tmp = self.path.with_suffix(self.path.suffix + ".tmp")
+        tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp.replace(self.path)
+
+    def upsert(
+        self,
+        *,
+        provider_type: str,
+        api_key: str,
+        base_url: str = "",
+        model_prefixes: list[str] | None = None,
+        healthcheck_model: str = "",
+    ) -> None:
+        provider_key = normalize_provider_type(provider_type)
+        providers = self.load()
+        providers[provider_key] = ProviderConfig(
+            provider_type=provider_key,
+            api_key=api_key.strip(),
+            base_url=base_url.strip(),
+            model_prefixes=list(model_prefixes or []),
+            healthcheck_model=healthcheck_model.strip(),
+            enabled=True,
+        )
+        self.save(providers)
+
+    def remove(self, provider_type: str) -> bool:
+        provider_key = provider_type.strip().lower()
+        providers = self.load()
+        if provider_key not in providers:
+            return False
+        providers.pop(provider_key)
+        self.save(providers)
+        return True
+
+
+def merge_provider_sources(
+    *,
+    work_path: Path,
+    provider_config: dict[str, str],
+    providers_config: list[dict[str, object]],
+) -> dict[str, ProviderConfig]:
+    merged = ProviderRegistry(work_path).load()
+
+    for item in providers_config:
+        provider_type = str(item.get("type", "")).strip().lower()
+        api_key = str(item.get("api_key", "")).strip()
+        if not provider_type or not api_key:
+            continue
+        base_url = str(item.get("base_url", "")).strip()
+        model_prefixes = [
+            str(prefix).strip() for prefix in item.get("model_prefixes", []) if str(prefix).strip()
+        ]
+        merged[provider_type] = ProviderConfig(
+            provider_type=provider_type,
+            api_key=api_key,
+            base_url=base_url,
+            model_prefixes=model_prefixes,
+            healthcheck_model=str(item.get("healthcheck_model", "")).strip(),
+            enabled=bool(item.get("enabled", True)),
+        )
+
+    provider_type = str(provider_config.get("type", "")).strip().lower()
+    api_key = str(provider_config.get("api_key", "")).strip()
+    if provider_type and api_key:
+        base_url = str(provider_config.get("base_url", "")).strip()
+        merged[provider_type] = ProviderConfig(
+            provider_type=provider_type,
+            api_key=api_key,
+            base_url=base_url,
+            model_prefixes=[],
+            healthcheck_model=str(provider_config.get("healthcheck_model", "")).strip(),
+            enabled=True,
+        )
+
+    return merged
+
+
+class AutoRoutingProvider(LLMProvider):
+    """Choose a configured provider automatically on each generation request."""
+
+    def __init__(self, providers: dict[str, ProviderConfig]) -> None:
+        self._providers = {key: value for key, value in providers.items() if value.enabled}
+
+    def _provider_matches_model(self, provider: ProviderConfig, model: str) -> bool:
+        if not provider.model_prefixes:
+            return False
+        return any(model.startswith(prefix) for prefix in provider.model_prefixes)
+
+    def _create_provider(self, config: ProviderConfig) -> LLMProvider:
+        if config.provider_type in _SILICONFLOW_PROVIDER_TYPES:
+            return SiliconFlowProvider(api_key=config.api_key, base_url=config.base_url or "https://api.siliconflow.cn")
+        if config.provider_type in _VOLCENGINE_ARK_PROVIDER_TYPES:
+            return VolcengineArkProvider(
+                api_key=config.api_key,
+                base_url=config.base_url or "https://ark.cn-beijing.volces.com/api/v3",
+            )
+        if config.provider_type in _OPENAI_PROVIDER_TYPES:
+            return OpenAICompatibleProvider(api_key=config.api_key, base_url=config.base_url or "https://api.openai.com")
+        raise RuntimeError(f"Unsupported provider type: {config.provider_type}")
+
+    def _pick_provider(self, model: str) -> ProviderConfig:
+        if not self._providers:
+            raise RuntimeError("No provider configured. Please add at least one provider API key.")
+
+        for provider in self._providers.values():
+            if self._provider_matches_model(provider, model):
+                return provider
+
+        # Heuristic fallback for common model namespaces.
+        if "/" in model and any(key in self._providers for key in _SILICONFLOW_PROVIDER_TYPES):
+            return self._providers["siliconflow"]
+        if model.startswith("doubao-") and any(key in self._providers for key in _VOLCENGINE_ARK_PROVIDER_TYPES):
+            # Doubao models are commonly served by Volcengine Ark endpoints.
+            return self._providers["volcengine-ark"] if "volcengine-ark" in self._providers else self._providers["ark"]
+
+        return next(iter(self._providers.values()))
+
+    def generate(self, request: GenerationRequest) -> str:
+        selected = self._pick_provider(request.model)
+        provider = self._create_provider(selected)
+        return provider.generate(request)
+
+
+def probe_provider_availability(
+    *,
+    provider: LLMProvider,
+    model_name: str,
+) -> None:
+    """Run a minimal generation request to verify provider connectivity and credentials."""
+
+    content = provider.generate(
+        GenerationRequest(
+            model=model_name,
+            system_prompt=_PROVIDER_HEALTHCHECK_SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": _PROVIDER_HEALTHCHECK_USER_MESSAGE}],
+            temperature=0.0,
+            max_tokens=8,
+        )
+    )
+    if not content.strip():
+        raise RuntimeError("provider healthcheck returned empty content")
+
+
+def _create_provider_from_config(config: ProviderConfig) -> LLMProvider:
+    provider_type = ensure_provider_platform_supported(config.provider_type)
+    if provider_type in _SILICONFLOW_PROVIDER_TYPES:
+        return SiliconFlowProvider(api_key=config.api_key, base_url=config.base_url or "https://api.siliconflow.cn")
+    if provider_type in _VOLCENGINE_ARK_PROVIDER_TYPES:
+        return VolcengineArkProvider(
+            api_key=config.api_key,
+            base_url=config.base_url or "https://ark.cn-beijing.volces.com/api/v3",
+        )
+    return OpenAICompatibleProvider(api_key=config.api_key, base_url=config.base_url or "https://api.openai.com")
+
+
+def run_provider_detection_flow(
+    *,
+    providers: dict[str, ProviderConfig],
+) -> None:
+    """Framework-level provider checks.
+
+    1) Ensure provider platform/API config exists.
+    2) Ensure platform is supported by current framework.
+    3) Ensure provider is available using the registered healthcheck model.
+    """
+
+    if not providers:
+        raise RuntimeError("未检测到已配置 provider（需包含平台与 API Key）")
+
+    for provider_type, config in providers.items():
+        ensure_provider_platform_supported(provider_type)
+        if not config.api_key.strip():
+            raise RuntimeError(f"provider 缺少 API Key：{provider_type}")
+        if not config.healthcheck_model.strip():
+            raise RuntimeError(f"provider 缺少 healthcheck_model：{provider_type}")
+
+        provider = _create_provider_from_config(config)
+        probe_provider_availability(provider=provider, model_name=config.healthcheck_model)
+
+
+def register_provider_with_validation(
+    *,
+    work_path: Path,
+    provider_type: str,
+    api_key: str,
+    healthcheck_model: str,
+    base_url: str = "",
+    model_prefixes: list[str] | None = None,
+) -> str:
+    """Register provider only after support and availability checks pass."""
+
+    normalized_provider_type = ensure_provider_platform_supported(provider_type)
+    model_name = healthcheck_model.strip()
+    if not model_name:
+        raise RuntimeError("注册 provider 需要提供 healthcheck_model")
+    if not api_key.strip():
+        raise RuntimeError("注册 provider 需要提供 API Key")
+
+    config = ProviderConfig(
+        provider_type=normalized_provider_type,
+        api_key=api_key.strip(),
+        base_url=base_url.strip(),
+        model_prefixes=list(model_prefixes or []),
+        healthcheck_model=model_name,
+        enabled=True,
+    )
+    provider = _create_provider_from_config(config)
+    probe_provider_availability(provider=provider, model_name=model_name)
+
+    ProviderRegistry(work_path).upsert(
+        provider_type=normalized_provider_type,
+        api_key=config.api_key,
+        base_url=config.base_url,
+        model_prefixes=config.model_prefixes,
+        healthcheck_model=config.healthcheck_model,
+    )
+    return normalized_provider_type

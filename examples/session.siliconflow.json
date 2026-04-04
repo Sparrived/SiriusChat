@@ -1,0 +1,9 @@
+﻿{
+  "provider": {
+    "type": "siliconflow",
+    "api_key": "YOUR_API_KEY_FROM_CLOUD_SILICONFLOW_CN"
+  },
+  "generated_agent_key": "main_agent"
+}
+
+

@@ -1,0 +1,23 @@
+{
+  "agent": {
+    "name": "Assistant",
+    "persona": "A helpful AI assistant that provides clear, segmented responses.",
+    "model": "mock",
+    "temperature": 0.7,
+    "max_tokens": 1024,
+    "metadata": {}
+  },
+  "global_system_prompt": "You are a helpful assistant. When answering questions that require multiple points or sections, structure your response accordingly.",
+  "participants": [
+    {
+      "name": "User",
+      "user_id": "user_001"
+    }
+  ],
+  "orchestration": {
+    "enabled": true,
+    "enable_prompt_driven_splitting": true,
+    "split_marker": "[MSG_BREAK]"
+  },
+  "work_path": "./data"
+}

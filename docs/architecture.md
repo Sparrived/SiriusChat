@@ -1,0 +1,187 @@
+﻿# Sirius Chat 架构说明
+
+## 目标
+
+Sirius Chat 是一个面向“多人用户与单 AI 主助手”交互的核心框架，可用于：
+
+- CLI 脚本调用
+- Python 应用内嵌调用
+- 需要 transcript 输出的外部编排器
+
+项目愿景：打造具备真实情感表达与用户陪伴能力的核心引擎，在提供问题解决能力的同时提供情绪价值。
+
+## 设计原则
+
+- Provider 抽象优先：engine 逻辑不依赖单一 LLM 厂商。
+- 编排可复现：人类参与者按轮次顺序发言，由同一个主 AI 统一回应。
+- 契约显式化：通过 dataclass 定义输入配置与输出 transcript。
+- 传输层可扩展：provider 实现可自由选择 HTTP 技术栈。
+- 用户状态连续性：引擎需在运行时主动维护用户偏好、情绪线索与最近语境。
+
+## 模块边界
+
+- `sirius_chat/providers/openai_compatible.py`
+  - 面向 `/v1/chat/completions` 风格 API 的具体实现。
+- `sirius_chat/providers/siliconflow.py`
+  - SiliconFlow 专用适配（仍走 OpenAI 兼容协议），默认基地址 `https://api.siliconflow.cn`。
+- `sirius_chat/providers/volcengine_ark.py`
+  - 火山方舟专用适配，默认基地址 `https://ark.cn-beijing.volces.com/api/v3`。
+- `sirius_chat/providers/routing.py`
+  - provider key 注册表（`provider_keys.json`）、支持平台清单、自动路由 provider（按模型前缀匹配）与框架级 Provider 检测流程。
+- `sirius_chat/providers/mock.py`
+  - 测试与本地演练使用的确定性 provider。
+- `sirius_chat/session_runner.py`
+  - 上层封装：自动维护主用户档案与会话持久化，降低调用方心智负担。
+  - token 消耗分析：提供会话级 baseline 与按 actor/task/model 聚合函数。
+- `sirius_chat/user_memory.py`
+  - 用户识别与记忆管理（`UserProfile`、`UserRuntimeState`、`UserMemoryManager`、别名索引与跨环境 identity 索引）。
+  - 事件记忆管理（`EventMemoryManager`），支持提及内容的事件命中评分（高置信/弱命中/新增）与落盘。
+  - 统一对外接口层（外部程序调用入口与函数式 facade）。
+- `main.py`
+  - 仓库级测试/业务入口（用于验证与演练 sirius_chat 库能力）。
+  - 承载主用户档案、provider 管理与持续会话流程。
+- `sirius_chat/cli.py`
+  - 库内薄封装 CLI，仅负责调用 `api` 执行单轮会话。
+- 当前未发布阶段，若内部变更影响外部调用，可直接升级 `api/` 并同步文档与示例。
+- 任何新增可用能力，必须同步在 `api/` 暴露对外接口。
+- 异步场景优先使用 `AsyncRolePlayEngine` 或 `api/` 的异步 facade。
+## 执行流程
+
+1. 从 JSON 或应用代码加载会话配置。
+
+1. 执行 Provider 检测流程：配置检查（平台名/API）-> 平台适配检查 -> 可用性检查（`healthcheck_model`）。
+1. 用 endpoint 与凭据初始化 provider。
+1. 从 `SessionConfig.preset` 读取唯一主 AI 的完整预设（`agent + global_system_prompt`）。
+
+1. 调用 `AsyncRolePlayEngine.run_live_session` 启动会话。
+
+可选前置步骤：
+
+- 调用 `generate_humanized_roleplay_questions` 生成问题清单；
+- 收集回答后调用 `agenerate_agent_prompts_from_answers`（输入 `agent_name`）构建完整 `GeneratedSessionPreset`；
+- 或直接用 `abuild_roleplay_prompt_from_answers_and_apply` 一步写入 `SessionConfig`。
+- 若采用 agent-first 流程，可通过 `select_generated_agent_profile(work_path, agent_key)` 选择已生成资产，再调用 `create_session_config_from_selected_agent(...)` 创建会话配置。
+
+1. 对每条群聊 user 消息，执行：追加 user 发言、调用同一主 AI、追加 assistant 回复。
+
+若开启 `orchestration.enabled`，则按配置执行多个辅助 LLM 任务进行记忆汇聚与多模态处理，再调用主模型回复。
+
+**辅助任务** (all optional, enable via config):
+- `memory_extract`：LLM 提取用户身份、偏好、特征（confidence: 0.8）
+- `event_extract`：LLM 提取事件结构化要素（confidence: 0.65）
+- `multimodal_parse`：LLM 解析多模态输入为文本证据（confidence: 0.75）
+- `memory_manager`：LLM 汇聚、去重、标注、冲突检测（confidence: 0.9+）✨ 新增
+
+**记忆改造** (Phase 1 完成):
+- ✗ 删除：启发式正则提取（高误率，已舍弃）
+- ✓ 新增：`MemoryFact.memory_category` 分类（identity/preference/emotion/event/custom）
+- ✓ 新增：`MemoryFact.validated` 验证标记
+- ✓ 新增：`MemoryFact.conflict_with` 冲突记忆列表
+- ✓ 新增：结构化系统提示呈现（按类别分组，带置信度）
+每次模型调用后，写入 token 使用记录到 `Transcript.token_usage_records`。
+
+1. 返回 transcript 供展示或存储。
+
+动态群聊模式（`run_live_session`）补充：
+
+- 允许参与者在运行时首次出现（不要求预先出现在 `participants`）。
+- 外部可通过 `User`（`user_id/name/aliases/traits`）显式注册用户。
+- 外部可通过 `User` 中的 `identities`（如 `qq/wechat` 外部 ID）实现跨环境同人识别。
+- 对每位参与者维护结构化 `user_memory`：
+  - `profile`：初始化档案字段（如 `name/persona/traits/identities`）。
+  - `runtime.memory_facts`：结构化分类记忆，包含 fact_type、value、source、confidence、observed_at、memory_category、validated、conflict_with。
+  - `runtime.recent_messages`、`runtime.inferred_persona`、`runtime.inferred_traits`、`runtime.preference_tags`。
+- `Transcript.find_user_by_channel_uid(channel, uid)` 提供按渠道+外部 UID 的直接定位能力。
+- 每次调用主 AI 时自动注入“参与者记忆”上下文，增强识人与连续性。
+- 引擎会在每次用户发言后主动更新 runtime 记忆（偏好标签、推断画像、摘要笔记），提升拟人化对话能力。
+- 摘要写入采用统一去重入口：语义相同的普通摘要/事件摘要/多模态摘要不会重复污染 `summary_notes`，并会同步形成可追溯事实记录。
+- 引擎会在每次用户发言后执行事件命中分析：
+  - 先提取关键词、角色槽位、时间线索、实体、情绪标签；
+  - 再按加权评分匹配历史事件；
+  - 根据阈值输出高置信命中、弱命中或新增事件，并注入一条系统事件说明到上下文。
+- 事件记忆持久化路径：`work_path/events/events.json`。
+
+记忆压缩与预算控制补充：
+
+- 引擎根据 `history_max_messages` 与 `history_max_chars` 执行自动压缩。
+- 被压缩的历史会进入 `session_summary`，用于后续提示词补偿。
+- 通过 `JsonSessionStore` 可在重启后恢复 transcript、participant_memories 与摘要。
+
+## 记忆质量评估与智能遗忘（Phase 2）
+
+### 记忆质量评估
+
+系统提供离线评估工具，对所有用户的记忆进行质量分析：
+
+**核心指标**：
+- **年龄评分 (recency_score)**：根据记忆年龄划分活跃度等级
+  - 0-7 天：0.9-1.0（高度活跃）
+  - 7-30 天：0.6-0.9（中等活跃）
+  - 30-90 天：0.2-0.6（低度活跃）
+  - >90 天：0.0-0.2（接近遗忘）
+- **综合质量评分 (quality_score)**：置信度(50%) + 活跃度(30%) + 验证状态(15%) 加权计算，冲突时额外减30%
+- **行为一致性评分**：按记忆分类（identity/preference/emotion/event）分别计算，整体评分为四类加权平均
+
+**评估命令示例**：
+```bash
+# 分析所有用户的记忆质量，输出报告
+python -m sirius_chat.memory_quality_tools work_path --action analyze --output-report report.json --verbose
+```
+
+### 智能遗忘
+
+**衰退机制**：基于时间表自动降低陈旧记忆的置信度
+- 7 天：保留 95% 置信度
+- 30 天：保留 85% 置信度
+- 60 天：保留 70% 置信度
+- 90 天：保留 50% 置信度
+- 180 天：保留 20% 置信度
+- 冲突记忆加速衰退：额外乘以 0.7
+
+**自动清理**：满足以下条件之一的记忆会被清理
+- 极低置信度(<0.2) 且陈旧(>30天)
+- 存在冲突 且 低置信度(<0.4) 且 极旧(>90天)
+- 质量评分(<0.2) 且陈旧(>60天)
+
+**管理命令示例**：
+```bash
+# 完整流程：分析 + 应用衰退 + 清理低质量记忆
+python -m sirius_chat.memory_quality_tools work_path --action all
+
+# 仅清理质量评分<0.3 的记忆
+python -m sirius_chat.memory_quality_tools work_path --action cleanup --min-quality 0.3
+
+# 应用衰退表，更新所有记忆
+python -m sirius_chat.memory_quality_tools work_path --action decay
+```
+
+**集成到主引擎**：
+- 通过 `UserMemoryManager.apply_scheduled_decay()` 在会话周期内执行衰退。
+- 通过 `UserMemoryManager.cleanup_expired_memories(min_quality)` 定期清理低质量记忆。
+
+## 扩展点
+
+- 在 `sirius_chat/providers/` 下新增实现 `LLMProvider` 的 provider。
+- 在 provider 调用前增加安全层（审核、token 预算、重试）。
+- 引入除 round-robin 外的人类发言调度策略（优先级、权重等）。
+- 增加 transcript 的持久化存储能力。
+
+## 已知限制
+
+- 当前 provider 实现默认假设 OpenAI 兼容 JSON 响应结构。
+- SiliconFlow 适配使用 OpenAI 兼容接口，默认请求路径为 `/v1/chat/completions`。
+- 自动路由基于模型名前缀与可用 provider；复杂策略（负载均衡/健康检查）暂未内置。
+- 任务级编排当前包含 `memory_extract`、`multimodal_parse`、`event_extract` 与 `memory_manager`，并使用 token 预算控制。
+- 任务级编排支持任务重试与多模态输入限流裁剪（按 `OrchestrationPolicy` 配置）。
+- API Key 目前直接来自配置；生产环境建议改为环境注入。
+- 当前每轮传入完整上下文；长会话需考虑裁剪或摘要压缩。
+
+编排策略详情见：`docs/orchestration-policy.md`。
+
+## 相关技能
+
+- 框架速读：`.github/skills/framework-quickstart/SKILL.md`
+- 外部接入：`.github/skills/external-integration/SKILL.md`
+- 技能同步约束：`.github/skills/skill-sync-enforcer/SKILL.md`
+
+

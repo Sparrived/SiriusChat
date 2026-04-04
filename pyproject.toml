@@ -1,0 +1,26 @@
+[project]
+name = "sirius-chat"
+version = "0.1.0"
+description = "面向多人角色扮演对话的 LLM 框架（兼容 OpenAI 风格 Provider）"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = []
+
+[project.optional-dependencies]
+test = [
+	"pytest>=8.0.0",
+]
+
+[project.scripts]
+sirius-chat = "sirius_chat.cli:run"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["sirius_chat*"]

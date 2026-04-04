@@ -1,0 +1,78 @@
+﻿import asyncio
+from pathlib import Path
+
+from sirius_chat.api import (
+    Agent,
+    AgentPreset,
+    Message,
+    SessionConfig,
+    arun_live_session,
+    create_async_engine,
+    find_user_by_channel_uid,
+    probe_provider_availability,
+)
+from sirius_chat.providers.mock import MockProvider
+
+
+def test_public_api_live_session_and_identity_lookup() -> None:
+    async def _run() -> None:
+        provider = MockProvider(responses=["ok"])
+        engine = create_async_engine(provider)
+
+        config = SessionConfig(
+            work_path=Path("data/tests/public_api"),
+            preset=AgentPreset(
+                agent=Agent(name="主助手", persona="test", model="mock-model"),
+                global_system_prompt="测试系统提示词",
+            ),
+        )
+
+        transcript = await arun_live_session(
+            engine=engine,
+            config=config,
+            human_turns=[
+                Message(
+                    role="user",
+                    speaker="微信昵称",
+                    content="hello",
+                    channel="wechat",
+                    channel_user_id="wx_1",
+                )
+            ],
+        )
+
+        entry = find_user_by_channel_uid(transcript, channel="wechat", uid="wx_1")
+        assert entry is not None
+        assert entry.profile.user_id == "微信昵称"
+
+    asyncio.run(_run())
+
+
+def test_public_api_async_facade() -> None:
+    async def _run() -> None:
+        provider = MockProvider(responses=["ok-async"])
+        engine = create_async_engine(provider)
+
+        config = SessionConfig(
+            work_path=Path("data/tests/public_api_async"),
+            preset=AgentPreset(
+                agent=Agent(name="主助手", persona="test", model="mock-model"),
+                global_system_prompt="测试系统提示词",
+            ),
+        )
+
+        transcript = await arun_live_session(
+            engine=engine,
+            config=config,
+            human_turns=[Message(role="user", speaker="小王", content="hello")],
+        )
+        assert transcript.messages[-1].content == "ok-async"
+
+    asyncio.run(_run())
+
+
+def test_public_api_exposes_provider_probe() -> None:
+    assert callable(probe_provider_availability)
+
+
+

@@ -1,0 +1,58 @@
+from __future__ import annotations
+
+import json
+from urllib import error, request as urllib_request
+
+from sirius_chat.providers.base import GenerationRequest, LLMProvider
+
+
+class OpenAICompatibleProvider(LLMProvider):
+    """OpenAI-compatible provider backed by /v1/chat/completions."""
+
+    def __init__(self, *, base_url: str, api_key: str, timeout_seconds: int = 30) -> None:
+        self._base_url = base_url.rstrip("/")
+        self._api_key = api_key
+        self._timeout_seconds = timeout_seconds
+
+    def generate(self, request: GenerationRequest) -> str:
+        url = f"{self._base_url}/v1/chat/completions"
+        payload = {
+            "model": request.model,
+            "temperature": request.temperature,
+            "max_tokens": request.max_tokens,
+            "messages": [
+                {"role": "system", "content": request.system_prompt},
+                *request.messages,
+            ],
+        }
+
+        body = json.dumps(payload).encode("utf-8")
+        req = urllib_request.Request(
+            url=url,
+            data=body,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self._api_key}",
+            },
+            method="POST",
+        )
+
+        try:
+            with urllib_request.urlopen(req, timeout=self._timeout_seconds) as response:
+                raw = response.read().decode("utf-8")
+        except error.HTTPError as exc:
+            details = exc.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"Provider HTTP error {exc.code}: {details}") from exc
+        except error.URLError as exc:
+            raise RuntimeError(f"Provider network error: {exc.reason}") from exc
+
+        data = json.loads(raw)
+        choices = data.get("choices", [])
+        if not choices:
+            raise RuntimeError("Provider response has no choices.")
+
+        message = choices[0].get("message", {})
+        content = message.get("content")
+        if not isinstance(content, str) or not content.strip():
+            raise RuntimeError("Provider response has empty content.")
+        return content.strip()

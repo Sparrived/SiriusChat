@@ -1,0 +1,55 @@
+{
+  "provider": {
+    "type": "openai-compatible",
+    "base_url": "https://api.openai.com",
+    "api_key": "YOUR_MAIN_API_KEY"
+  },
+  "providers": [
+    {
+      "type": "openai-compatible",
+      "base_url": "https://api.openai.com",
+      "api_key": "YOUR_MAIN_API_KEY",
+      "model_prefixes": "gpt-"
+    },
+    {
+      "type": "siliconflow",
+      "base_url": "https://api.siliconflow.cn",
+      "api_key": "YOUR_SILICONFLOW_API_KEY",
+      "model_prefixes": "doubao-"
+    }
+  ],
+  "generated_agent_key": "sirius",
+  "history_max_messages": 24,
+  "history_max_chars": 6000,
+  "enable_auto_compression": true,
+  "orchestration": {
+    "enabled": true,
+    "task_models": {
+      "memory_extract": "doubao-seed-2-0-lite-260215",
+      "event_extract": "doubao-seed-2-0-lite-260215",
+      "multimodal_parse": "gpt-4-vision"
+    },
+    "task_budgets": {
+      "memory_extract": 1200,
+      "event_extract": 1000,
+      "multimodal_parse": 2000
+    },
+    "task_temperatures": {
+      "memory_extract": 0.1,
+      "event_extract": 0.1,
+      "multimodal_parse": 0.3
+    },
+    "task_max_tokens": {
+      "memory_extract": 128,
+      "event_extract": 192,
+      "multimodal_parse": 256
+    },
+    "task_retries": {
+      "memory_extract": 1,
+      "event_extract": 1,
+      "multimodal_parse": 1
+    },
+    "max_multimodal_inputs_per_turn": 4,
+    "max_multimodal_value_length": 4096
+  }
+}
