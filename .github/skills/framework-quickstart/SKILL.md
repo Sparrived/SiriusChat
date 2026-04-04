@@ -26,15 +26,19 @@ description: "当你需要在不通读全部代码的情况下快速理解 Siriu
 5. `sirius_chat/models.py`
 6. `sirius_chat/async_engine.py`
 7. `sirius_chat/providers/base.py`
-8. `sirius_chat/providers/mock.py`
-9. `sirius_chat/providers/openai_compatible.py`
-10. `sirius_chat/providers/siliconflow.py`
-11. `sirius_chat/providers/volcengine_ark.py`
-12. `sirius_chat/providers/routing.py`
-13. `sirius_chat/user_memory.py`
-14. `sirius_chat/cli.py`
-15. `sirius_chat/api/`
-16. `tests/test_engine.py`
+8. `sirius_chat/providers/middleware/base.py` ✨
+9. `sirius_chat/providers/middleware/rate_limiter.py` ✨
+10. `sirius_chat/providers/middleware/retry.py` ✨
+11. `sirius_chat/providers/middleware/cost_metrics.py` ✨
+12. `sirius_chat/providers/mock.py`
+13. `sirius_chat/providers/openai_compatible.py`
+14. `sirius_chat/providers/siliconflow.py`
+15. `sirius_chat/providers/volcengine_ark.py`
+16. `sirius_chat/providers/routing.py`
+17. `sirius_chat/user_memory.py`
+18. `sirius_chat/cli.py`
+19. `sirius_chat/api/`
+20. `tests/test_engine.py`
 
 ## 心智模型
 
@@ -58,6 +62,12 @@ description: "当你需要在不通读全部代码的情况下快速理解 Siriu
 - `Transcript.token_usage_records` 全量归档每次模型调用的 token 消耗信息。
 - 引擎支持自动记忆压缩（`session_summary` + 历史预算）。
 - `providers/base.py` 定义 provider 协议。
+- `providers/middleware/` 是 Provider 功能扩展层（✨ 新增 P1-003）：
+  - `base.py`：Middleware ABC，支持链式组合
+  - `rate_limiter.py`：固定窗口和令牌桶速率限制
+  - `retry.py`：指数退避重试和断路器保护
+  - `cost_metrics.py`：成本计量和追踪
+  - 中间件通过 MiddlewareChain 串联，可透明地为任意 provider 添加流控、重试、监控等功能
 - `providers/mock.py` 提供可复现的本地测试能力。
 - `providers/*` 实现具体的 LLM 后端。
 - `roleplay_prompting.py` 提供自动问题清单、回答提取式提示词生成、人格持久化与人格选择能力。
@@ -72,6 +82,12 @@ description: "当你需要在不通读全部代码的情况下快速理解 Siriu
 - 内部实现允许重构；当前未发布阶段若影响外部接口，可直接升级 `api/`，并同步文档与示例。
 - 内部新增能力需同步在 `api/` 提供对外入口。
 - `main.py` 是仓库级测试/业务入口，承载主用户档案初始化、provider 管理命令与持续会话流程。
+- ✨ **开发工具链** (P1-004)：
+  - `.github/workflows/ci.yml`：GitHub Actions 多版本 Python 自动化测试与代码质量检查
+  - `.pre-commit-config.yaml`：预提交钩子 (black, isort, flake8, mypy, bandit 等)
+  - `scripts/ci_check.py`：本地/CI 检查脚本
+  - `scripts/setup_dev_env.py`：开发环境自动化初始化
+  - `Makefile`：便捷开发命令集
 
 ## 修改路由指南
 
