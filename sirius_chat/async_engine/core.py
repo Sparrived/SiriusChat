@@ -108,28 +108,6 @@ class AsyncRolePlayEngine:
 
     @staticmethod
     def _extract_json_payload(raw: str) -> dict[str, object] | None:
-        try:
-            data = json.loads(raw)
-            if isinstance(data, dict):
-                return data
-        except json.JSONDecodeError:
-            pass
-
-        start = raw.find("{")
-        end = raw.rfind("}")
-        if start == -1 or end == -1 or end <= start:
-            return None
-        snippet = raw[start : end + 1]
-        try:
-            data = json.loads(snippet)
-        except json.JSONDecodeError:
-            return None
-        if not isinstance(data, dict):
-            return None
-        return data
-
-    @staticmethod
-    def _extract_json_payload(raw: str) -> dict[str, object] | None:
         """Extract JSON from raw text. Delegates to utils module."""
         return extract_json_payload(raw)
 

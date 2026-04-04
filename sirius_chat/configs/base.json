@@ -1,0 +1,32 @@
+{
+  "work_path": "./sirius_data",
+  "global_system_prompt": "你是一个有帮助、诚实且无害的 AI 助手。",
+  "agent": {
+    "name": "SiriusAI",
+    "persona": "热心、专业的 AI 助手",
+    "model": "default-model",
+    "temperature": 0.7,
+    "max_tokens": 512,
+    "metadata": {}
+  },
+  "history_max_messages": 24,
+  "history_max_chars": 6000,
+  "max_recent_participant_messages": 5,
+  "enable_auto_compression": true,
+  "orchestration": {
+    "enabled": true,
+    "task_models": {},
+    "task_budgets": {},
+    "task_temperatures": {},
+    "task_max_tokens": {},
+    "task_retries": {},
+    "max_multimodal_inputs_per_turn": 4,
+    "max_multimodal_value_length": 4096,
+    "enable_prompt_driven_splitting": true,
+    "split_marker": "[MSG_BREAK]",
+    "memory_manager_model": "",
+    "memory_manager_budget": 1500,
+    "memory_manager_temperature": 0.3,
+    "memory_manager_max_tokens": 512
+  }
+}
