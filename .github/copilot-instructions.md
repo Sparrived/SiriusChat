@@ -29,6 +29,7 @@
   - `docs/external-usage.md`（若外部调用方式变化）
   - `README.md`（若用法变化）
 - 若涉及会话持久化/重启恢复或记忆压缩策略，必须同步检查 `sirius_chat/session_store.py` 相关用法文档与示例。
+- **事件系统 LLM 验证**：事件记忆采用两级验证：快速路径（关键词匹配）和 LLM 验证路径。新事件默认为 pending (verified=False)，当积累足够消息数（默认 min_mentions=3）后，应定期调用 `finalize_pending_events()` 用 LLM 验证并充实事件信息。详见 `docs/architecture.md` 的"事件记忆系统"部分。
 - CLI 与 API 启用时必须显式提供 `work_path`，所有持久化文件都应从该路径派生。
 - 会话模型约束：一个 engine 会话只对应一个主 AI（`SessionConfig.agent`），`participants` 表示人类参与者。
 - AI 指令保持简洁，优先链接文档，避免复制大段说明。

@@ -625,6 +625,8 @@ class EventMemoryEntry:
     hit_count: int = 0
     created_at: str = ""
     updated_at: str = ""
+    verified: bool = False  # Whether this event has been LLM-verified
+    mention_count: int = 0  # Number of related mentions accumulated
 
 
 @dataclass(slots=True)
@@ -850,6 +852,7 @@ class EventMemoryManager:
             entry.created_at = now_text
         entry.updated_at = now_text
         entry.hit_count += 1
+        entry.mention_count += 1
 
     def absorb_mention(
         self,
@@ -908,9 +911,159 @@ class EventMemoryManager:
             "candidates": [item[1].event_id for item in scored[:3]],
         }
 
-    def top_events(self, limit: int = 5) -> list[EventMemoryEntry]:
-        values = sorted(self.entries, key=lambda item: (item.updated_at, item.hit_count), reverse=True)
+    def top_events(self, limit: int = 5, include_pending: bool = False) -> list[EventMemoryEntry]:
+        """Get top events.
+        
+        Args:
+            limit: Maximum number of events to return
+            include_pending: If False (default), only return verified events.
+                           If True, include pending events with mention_count >= 2.
+        
+        Returns:
+            List of top events sorted by recency and hit count
+        """
+        if include_pending:
+            # Include both verified and recent pending events
+            filtered = [
+                e for e in self.entries
+                if e.verified or e.mention_count >= 2
+            ]
+        else:
+            # Only include verified events
+            filtered = [e for e in self.entries if e.verified]
+        
+        values = sorted(filtered, key=lambda item: (item.updated_at, item.hit_count), reverse=True)
         return values[:limit]
+
+    async def finalize_pending_events(
+        self,
+        provider_async: Any,  # AsyncLLMProvider
+        model_name: str,
+        min_mentions: int = 3,
+    ) -> dict[str, Any]:
+        """Verify pending events using LLM.
+        
+        Args:
+            provider_async: AsyncLLMProvider to call for LLM verification
+            model_name: Model to use for verification
+            min_mentions: Minimum mention count to qualify for verification
+            
+        Returns:
+            Dictionary with:
+            - verified_count: Number of newly verified events
+            - rejected_count: Number of rejected events
+            - pending_count: Number of remaining pending events
+        """
+        from sirius_chat.providers.base import GenerationRequest
+        
+        # Find pending events that meet the threshold
+        pending = [e for e in self.entries if not e.verified and e.mention_count >= min_mentions]
+        
+        verified_count = 0
+        rejected_count = 0
+        
+        for entry in pending:
+            # Prepare verification prompt
+            prompt = f"""Analyze this potential event from a conversation and determine if it should be recorded.
+
+Event summary: {entry.summary}
+Related keywords: {", ".join(entry.keywords) if entry.keywords else "none"}
+Role mentions: {", ".join(entry.role_slots) if entry.role_slots else "none"}
+Evidence samples ({len(entry.evidence_samples)} mentions):
+{chr(10).join(f"- {s}" for s in entry.evidence_samples)}
+
+Based on this analysis, answer:
+1. Should this event be recorded? (yes/no)
+2. If yes, provide an improved summary (1-2 sentences)
+3. If yes, provide 5-10 key terms related to this event
+4. If yes, what people/roles are involved? (e.g., manager, peer, client)
+5. If yes, any time indicators? (e.g., yesterday, this week, next month)
+6. If yes, any emotions expressed? (e.g., anxiety, positive mood)
+
+Format your answer as JSON:
+{{
+  "record": "yes" or "no",
+  "reason": "brief reason",
+  "summary": "improved summary if yes",
+  "keywords": ["keyword1", "keyword2", ...],
+  "role_slots": ["manager", "peer", ...],
+  "time_hints": ["yesterday", ...],
+  "emotion_tags": ["anxiety", ...]
+}}"""
+
+            request = GenerationRequest(
+                model=model_name,
+                system_prompt="You are an expert at analyzing conversations and extracting meaningful events.",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.5,
+                max_tokens=512,
+            )
+            
+            try:
+                response = await provider_async.generate_async(request)
+                
+                # Parse JSON response
+                import json
+                # Extract JSON from response (might be wrapped in markdown code blocks)
+                json_str = response
+                if "```" in response:
+                    json_str = response.split("```")[1]
+                    if json_str.startswith("json"):
+                        json_str = json_str[4:]
+                
+                result = json.loads(json_str.strip())
+                
+                if result.get("record", "").lower() == "yes":
+                    # Update event based on LLM feedback
+                    entry.verified = True
+                    summary = result.get("summary", "").strip()
+                    if summary:
+                        entry.summary = summary
+                    
+                    # Merge LLM-extracted features
+                    if "keywords" in result:
+                        entry.keywords = self._merge_unique(
+                            entry.keywords,
+                            result.get("keywords", []),
+                            20
+                        )
+                    if "role_slots" in result:
+                        entry.role_slots = self._merge_unique(
+                            entry.role_slots,
+                            result.get("role_slots", []),
+                            12
+                        )
+                    if "time_hints" in result:
+                        entry.time_hints = self._merge_unique(
+                            entry.time_hints,
+                            result.get("time_hints", []),
+                            12
+                        )
+                    if "emotion_tags" in result:
+                        entry.emotion_tags = self._merge_unique(
+                            entry.emotion_tags,
+                            result.get("emotion_tags", []),
+                            12
+                        )
+                    
+                    entry.updated_at = datetime.now().isoformat(timespec="seconds")
+                    verified_count += 1
+                else:
+                    # Remove event if LLM says not worth recording
+                    self.entries.remove(entry)
+                    rejected_count += 1
+                    
+            except Exception as e:
+                # Log error but continue with other events
+                logger.warning(f"Error verifying event {entry.event_id}: {e}")
+        
+        pending_after = [e for e in self.entries if not e.verified and e.mention_count >= min_mentions]
+        
+        return {
+            "verified_count": verified_count,
+            "rejected_count": rejected_count,
+            "pending_count": len(pending_after),
+        }
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -927,6 +1080,8 @@ class EventMemoryManager:
                     "hit_count": item.hit_count,
                     "created_at": item.created_at,
                     "updated_at": item.updated_at,
+                    "verified": item.verified,
+                    "mention_count": item.mention_count,
                 }
                 for item in self.entries
             ]
@@ -958,6 +1113,8 @@ class EventMemoryManager:
                     hit_count=int(item.get("hit_count", 0)),
                     created_at=str(item.get("created_at", "")),
                     updated_at=str(item.get("updated_at", "")),
+                    verified=bool(item.get("verified", False)),
+                    mention_count=int(item.get("mention_count", 0)),
                 )
             )
         return manager
