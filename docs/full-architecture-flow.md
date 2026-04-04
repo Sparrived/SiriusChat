@@ -61,6 +61,7 @@ flowchart LR
       SessionRunner[session_runner.py]
       Routing[providers/routing.py]
       ProviderBase[providers/base.py]
+      Middleware[providers/middleware/] ✨
       ProviderImpl[providers/*]
     end
 
@@ -93,6 +94,7 @@ flowchart LR
 | `sirius_chat/session_store.py` | `Transcript` | JSON/SQLite 持久化状态文件 |
 | `sirius_chat/session_runner.py` | `SessionConfig`、Provider、主用户输入 | 自动持久化会话循环、主用户档案维护 |
 | `sirius_chat/providers/base.py` | `GenerationRequest` | Provider 协议（同步/异步生成契约） |
+| `sirius_chat/providers/middleware/` ✨ | `GenerationRequest`、中间件链配置 | 透明的 Provider 功能扩展（流控、重试、成本计量） |
 | `sirius_chat/providers/routing.py` | provider 配置、模型名 | 目标 Provider 选择结果、`provider_keys.json` |
 | `sirius_chat/providers/openai_compatible.py` | `GenerationRequest` | 模型文本回复 |
 | `sirius_chat/providers/siliconflow.py` | `GenerationRequest` | 模型文本回复 |
