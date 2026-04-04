@@ -28,13 +28,15 @@
 | P1-003 | Provider 中间件系统 | 2024-Q1 |
 | P1-004 | CI/CD 自动化流程 | 2024-Q1 |
 
-## 进行中 🔄
-
 ### P0 级
 
-| 问题 | 标题 | 预计工期 | 备注 |
-|-----|-----|--------|------|
-| P0-003 | async_engine.py 大型代码重构 | 12-16小时 | 拆分847行单一文件，提升可维护性 |
+| 问题 | 标题 | 完成日期 |
+|-----|-----|--------|
+| P0-003 | async_engine.py 大型代码重构 | 2026-04-05 |
+
+## 进行中 🔄
+
+（暂无）
 
 ## 待办 ⏳
 
@@ -68,12 +70,23 @@
 ## 进度矩阵
 
 ```
-完成率: 8/13 = 61.5%
+完成率: 9/13 = 69.2%
 
-Week 1 (2024-Q1):   ✅✅✅✅✅✅✅✅ P0×4 + P1×4 (完成)
-Week 2 (planning):  🔄P0-003 (重构)
-Week 3-4:           ⏳P1-005 → P1-006 (后补)
-Month 2:            ⏳P2-001 → P2-004 (优化)
+✅ 完成:
+  - P0×5 (Logging, Exceptions, Dependencies, Diagnostics, Refactoring)
+  - P1×4 (Integration Testing, Token Utils, Middleware, CI/CD)
+
+⏳ 待办:
+  - P1-005: API 文档 (4-6h) - 优先级 1
+  - P1-006: 配置框架 (4-6h) - 优先级 2
+  - P2×4:  缓存/性能/文档/i18n
+
+Timeline:
+  Week 1:  ✅ Infrastructure + Testing (P0-001~P0-005, P1-001~P1-004)
+  Week 2:  ✅ async_engine Refactoring (P0-003)
+  Week 3:  ⏳ API Documentation (P1-005)
+  Week 4:  ⏳ Configuration Framework (P1-006)
+  Month 2: ⏳ Performance & Optimization (P2-001~P2-004)
 ```
 
 ## 相关文档
