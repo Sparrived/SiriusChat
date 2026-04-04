@@ -22,6 +22,13 @@
   - EnvironmentDiagnostics：Python版本、工作目录、配置文件、Provider配置检查
   - run_preflight_check()：启动前全面检查，给出详细建议
   - generate_default_config()：生成默认配置文件模板
+- **Provider 中间件系统** (P1-003)：可组合的Provider功能框架
+  - `sirius_chat/providers/middleware/base.py`：Middleware ABC、MiddlewareContext、MiddlewareChain
+  - `sirius_chat/providers/middleware/rate_limiter.py`：RateLimiterMiddleware（固定窗口）、TokenBucketRateLimiter（令牌桶算法）
+  - `sirius_chat/providers/middleware/retry.py`：RetryMiddleware（指数退避）、CircuitBreakerMiddleware（故障转移）
+  - `sirius_chat/providers/middleware/cost_metrics.py`：CostMetricsMiddleware（成本计量与追踪）
+  - 支持链式添加中间件，支持异步请求/响应处理
+  - 13项新测试（8个单元测试 + 5个集成测试）
 - **PROJECT_ISSUES.md**: 项目问题与改进方向追踪文档
   - P0（5项）、P1（4项）、P2（3项）优先级划分
   - 3个月roadmap与进度矩阵
