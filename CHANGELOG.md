@@ -29,7 +29,20 @@
   - `sirius_chat/providers/middleware/cost_metrics.py`：CostMetricsMiddleware（成本计量与追踪）
   - 支持链式添加中间件，支持异步请求/响应处理
   - 13项新测试（8个单元测试 + 5个集成测试）
+- **CI/CD 自动化系统** (P1-004)：完整的持续集成/部署流程
+  - `.github/workflows/ci.yml`：GitHub Actions 工作流，支持多版本 Python (3.10, 3.11, 3.12) 测试、代码质量检查、安全扫描、构建验证
+  - `.pre-commit-config.yaml`：预提交钩子配置（black, isort, flake8, mypy, bandit, yamllint 等）
+  - `scripts/ci_check.py`：本地/CI 代码质量检查脚本（格式、lint、类型、测试、覆盖率）
+  - `scripts/setup_dev_env.py`：开发环境自动初始化脚本
+  - `Makefile`：便捷的开发命令集（format, lint, typecheck, test, build 等）
 - **PROJECT_ISSUES.md**: 项目问题与改进方向追踪文档
+  - P0（5项）、P1（4项）、P2（4项）优先级划分
+  - 3个月 roadmap 与进度矩阵
+- **集成测试框架** (P1-001)：
+  - `tests/integration/`：网络弹性、并发会话、故障转移测试
+  - `tests/benchmarks/`：性能吞吐量、延迟、可扩展性基准测试
+  - `conftest.py`：MockLLMProvider、临时目录、会话配置等通用fixtures
+- commit-preparation SKILL：commit前检查清单，包括gitignore验证、改动总结、ChangeLog更新与标准格式commit
   - P0（5项）、P1（4项）、P2（3项）优先级划分
   - 3个月roadmap与进度矩阵
 - **集成测试框架** (P1-001)：

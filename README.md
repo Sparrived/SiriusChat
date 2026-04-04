@@ -396,5 +396,124 @@ pytest tests/test_engine.py -q
 - 外部接入技能：`.github/skills/external-integration/SKILL.md`
 - 代码变更同步约束技能：`.github/skills/skill-sync-enforcer/SKILL.md`
 
+## 开发指南
+
+### 环境初始化
+
+推荐使用自动化脚本初始化开发环境：
+
+```bash
+python scripts/setup_dev_env.py
+```
+
+该脚本会：
+1. 安装所有开发依赖
+2. 安装 pre-commit 钩子
+3. 运行初始测试验证环境
+
+或手动安装：
+
+```bash
+# 安装开发依赖
+pip install -e .[dev,test]
+
+# 安装 pre-commit 钩子
+pre-commit install
+```
+
+### 代码质量检查
+
+使用 Makefile 简化常见任务：
+
+```bash
+make help              # 查看所有命令
+make format            # 格式化代码（black + isort）
+make lint              # 运行 linters（pylint + flake8）
+make typecheck         # 类型检查（mypy）
+make test              # 运行所有测试
+make test-cov          # 生成覆盖率报告
+make pre-commit-run    # 运行所有 pre-commit 钩子
+```
+
+或直接使用 CI 检查脚本：
+
+```bash
+python scripts/ci_check.py
+```
+
+### 代码标准
+
+- **语言**：Python 3.12+
+- **代码风格**：[Black](https://black.readthedocs.io/) (line-length=100)
+- **Import 排序**：[isort](https://pycqa.github.io/isort/)
+- **类型检查**：[mypy](http://mypy-lang.org/) (strict)
+- **Linting**：[pylint](https://pylint.pycqa.org/) + [flake8](https://flake8.pycqa.org/)
+- **安全检查**：[bandit](https://bandit.readthedocs.io/)
+
+### Git 工作流
+
+遵循 [Conventional Commits](https://www.conventionalcommits.org/) 规范：
+
+```
+feat(module):     新功能
+fix(module):      问题修复
+docs(file):       文档更新
+refactor(module): 代码重构（不改变功能）
+perf(module):     性能优化
+test(file):       测试添加/修改
+```
+
+示例：
+```bash
+git commit -m "feat(middleware): add rate limiter middleware"
+git commit -m "fix(engine): handle async timeout correctly"
+git commit -m "docs(README): update development guide"
+```
+
+Pre-commit 钩子会自动：
+- 格式化代码
+- 检查导入顺序
+- 运行基本的 linters
+- 验证 YAML/JSON 文件
+
+### CI/CD 流程
+
+在 GitHub 上自动运行（`.github/workflows/ci.yml`）：
+
+**On Push / Pull Request:**
+1. ✓ 多版本测试 (Python 3.10, 3.11, 3.12)
+2. ✓ 单元测试 + 覆盖率报告
+3. ✓ 代码质量检查 (pylint, black, isort, mypy, flake8)
+4. ✓ 安全扫描 (bandit)
+5. ✓ 构建验证 (wheel + sdist)
+
+## 贡献约定
+
+1. Fork 项目
+2. 创建特性分支：`git checkout -b feat/your-feature`
+3. 编写代码并添加测试
+4. 运行本地质量检查：`make lint test typecheck`
+5. 提交 PR，自动 CI 会验证
+
+关键约束：
+- **零回归**：所有新代码不能破坏现有测试
+- **测试覆盖**：新增代码需要对应的单元测试和集成测试
+- **类型注解**：所有公开接口必须包含类型注解
+- **文档同步**：如果修改接口或架构，需要同步以下文档：
+  - `docs/architecture.md`
+  - `CHANGELOG.md`
+  - `.github/skills/` 中的相关 SKILL 文件
+
+## 项目进度
+
+详见 [PROJECT_ISSUES.md](PROJECT_ISSUES.md)：
+
+| 优先级 | 总数 | 完成 | 进度 |
+|------|-----|-----|-----|
+| P0 (系统) | 5 | 4 | 80% ✅ |
+| P1 (重要) | 4 | 4 | 100% ✅ |
+| P2 (优化) | 4 | 0 | 0% ⏳ |
+
+当前正在进行：P0-003 (async_engine 重构)
 
 

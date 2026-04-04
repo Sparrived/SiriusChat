@@ -9,6 +9,8 @@ dependencies = []
 [project.optional-dependencies]
 test = [
 	"pytest>=8.0.0",
+	"pytest-asyncio>=0.21.0",
+	"pytest-cov>=4.0.0",
 ]
 provider = [
 	"httpx>=0.24.0",  # 异步HTTP客户端，用于LLM API调用
@@ -16,11 +18,20 @@ provider = [
 ]
 dev = [
 	"pytest>=8.0.0",
+	"pytest-asyncio>=0.21.0",
+	"pytest-cov>=4.0.0",
 	"httpx>=0.24.0",
 	"tenacity>=8.0.0",
 	"tiktoken>=0.5.0",  # 可选：精确token估算
-	"ruff>=0.1.0",  # Linter
+	"black>=23.0.0",  # 代码格式化
+	"isort>=5.13.0",  # Import排序
+	"flake8>=6.0.0",  # Linter
+	"pylint>=3.0.0",  # 代码分析
 	"mypy>=1.0.0",  # 类型检查
+	"bandit>=1.7.0",  # 安全检查
+	"pre-commit>=3.0.0",  # Git钩子
+	"build>=0.10.0",  # 构建工具
+	"twine>=4.0.0",  # 包上传
 ]
 quality = [
 	"tiktoken>=0.5.0",  # 精确token估算库
