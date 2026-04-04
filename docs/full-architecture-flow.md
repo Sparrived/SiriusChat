@@ -63,6 +63,9 @@ flowchart LR
       ProviderBase[providers/base.py]
       Middleware[providers/middleware/] ✨
       ProviderImpl[providers/*]
+      ConfigMgr[config_manager.py] ✨
+      Cache[cache/] ✨
+      Perf[performance/] ✨
     end
 
     Main --> PublicAPI
@@ -100,6 +103,9 @@ flowchart LR
 | `sirius_chat/providers/siliconflow.py` | `GenerationRequest` | 模型文本回复 |
 | `sirius_chat/providers/volcengine_ark.py` | `GenerationRequest` | 模型文本回复 |
 | `sirius_chat/providers/mock.py` | `GenerationRequest` | 可预测测试回复 |
+| `sirius_chat/config_manager.py` ✨ (P1-006) | JSON 配置文件、环境变量 | `SessionConfig` 对象、合并后的配置字典 |
+| `sirius_chat/cache/` ✨ (P2-001) | 缓存 key、模型响应值 | 缓存命中/未命中、LRU 淘汰、TTL 过期管理 |
+| `sirius_chat/performance/` ✨ (P2-002) | 代码块/函数调用记录、基准参数 | 执行指标（时间、内存）、性能统计聚合、基准对比结果 |
 
 ## 4. 关键运行产物说明
 
