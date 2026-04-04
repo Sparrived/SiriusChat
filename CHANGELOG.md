@@ -28,6 +28,24 @@
   - `sirius_chat/providers/middleware/retry.py`：RetryMiddleware（指数退避）、CircuitBreakerMiddleware（故障转移）
   - `sirius_chat/providers/middleware/cost_metrics.py`：CostMetricsMiddleware（成本计量与追踪）
   - 支持链式添加中间件，支持异步请求/响应处理
+- **async_engine 包重构** (P0-003 Phase 1-2)：将单个 async_engine.py 模块分解为多模块包
+  - `sirius_chat/async_engine/core.py`：核心 AsyncRolePlayEngine 类，保持公开 API 不变
+  - `sirius_chat/async_engine/utils.py` (120+ 行)：工具函数模块
+    * build_event_hit_system_note()：事件记忆命中提示生成
+    * record_task_stat()：任务统计记录
+    * estimate_tokens()：Token 计算 (cheap heuristic)
+    * extract_json_payload()：JSON 有效载荷提取
+    * normalize_multimodal_inputs()：多模态输入规范化和验证
+  - `sirius_chat/async_engine/prompts.py` (90+ 行)：系统提示构建
+    * build_system_prompt()：生成完整系统提示，整合agent身份、用户记忆、时间上下文
+  - `sirius_chat/async_engine/orchestration.py` (90+ 行)：任务编排配置和管理
+    * 任务常量定义 (TASK_MEMORY_EXTRACT, TASK_MULTIMODAL_PARSE 等)
+    * TaskConfig dataclass：任务配置管理
+    * get_task_config()：从 SessionConfig 提取任务配置
+    * get_system_prompt_for_task()：获取任务系统提示
+
+### Changed
+
   - 13项新测试（8个单元测试 + 5个集成测试）
 - **CI/CD 自动化系统** (P1-004)：完整的持续集成/部署流程
   - `.github/workflows/ci.yml`：GitHub Actions 工作流，支持多版本 Python (3.10, 3.11, 3.12) 测试、代码质量检查、安全扫描、构建验证
