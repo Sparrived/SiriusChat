@@ -100,15 +100,17 @@ sirius-chat --config examples/session.json --work-path data/session_runtime
 
 ## 配置示例
 
-可使用如下 JSON：
+v1.0 统一使用 `providers` 列表格式（必需）：
 
 ```json
 {
-  "provider": {
-    "type": "openai-compatible",
-    "base_url": "https://api.openai.com",
-    "api_key": "YOUR_API_KEY"
-  },
+  "providers": [
+    {
+      "type": "openai-compatible",
+      "base_url": "https://api.openai.com",
+      "api_key": "YOUR_API_KEY"
+    }
+  ],
   "generated_agent_key": "main_agent",
   "history_max_messages": 24,
   "history_max_chars": 6000,
@@ -121,10 +123,12 @@ SiliconFlow 配置示例：
 
 ```json
 {
-  "provider": {
-    "type": "siliconflow",
-    "api_key": "YOUR_API_KEY_FROM_CLOUD_SILICONFLOW_CN"
-  },
+  "providers": [
+    {
+      "type": "siliconflow",
+      "api_key": "YOUR_API_KEY_FROM_CLOUD_SILICONFLOW_CN"
+    }
+  ],
   "generated_agent_key": "main_agent"
 }
 ```
@@ -133,18 +137,22 @@ SiliconFlow 配置示例：
 
 ```json
 {
-  "provider": {
-    "type": "volcengine-ark",
-    "api_key": "YOUR_ARK_API_KEY"
-  },
+  "providers": [
+    {
+      "type": "volcengine-ark",
+      "api_key": "YOUR_ARK_API_KEY"
+    }
+  ],
   "generated_agent_key": "main_agent"
 }
 ```
 
 说明：
 
-- `provider.type` 设为 `volcengine-ark`（或 `ark`）时，默认使用 `https://ark.cn-beijing.volces.com/api/v3`。
+- v1.0 强制使用 `providers` 列表格式；不支持向后兼容的 `provider` 单字段。
+- `provider.type` 为 `volcengine-ark`（或 `ark`）时，默认使用 `https://ark.cn-beijing.volces.com/api/v3`。
 - 接口路径遵循方舟文档中的 `POST /api/v3/chat/completions`。
+- 多 Provider 配置时支持按 `healthcheck_model` 自动路由。
 
 说明：
 

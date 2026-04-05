@@ -1,12 +1,11 @@
 {
-  "agent": {
-    "name": "Assistant",
-    "persona": "A helpful AI assistant that provides clear, segmented responses.",
-    "model": "mock",
-    "temperature": 0.7,
-    "max_tokens": 1024,
-    "metadata": {}
-  },
+  "generated_agent_key": "sirius",
+  "providers": [
+    {
+      "type": "mock",
+      "model": "mock"
+    }
+  ],
   "global_system_prompt": "You are a helpful assistant. When answering questions that require multiple points or sections, structure your response accordingly.",
   "participants": [
     {

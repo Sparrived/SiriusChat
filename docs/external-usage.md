@@ -148,13 +148,11 @@ provider = VolcengineArkProvider(
 
 #### Provider 统一配置体系
 
-Sirius Chat 支持三层 Provider 配置，优先级由高到低为：
+#### Provider 统一配置体系（v1.0）
 
-1. **会话配置层**：Session JSON 中的 `providers` 字段（推荐）
-2. **持久化层**：`<work_path>/provider_keys.json`（CLI交互式添加）
-3. **向后兼容层**：`provider` 字段（已废弃，自动转换为 `providers`）
+Sirius Chat v1.0 统一采用单一 `providers` 列表格式：
 
-**推荐做法**：在 Session JSON 中统一使用 `providers` 字段（数组格式）
+**Session JSON 中的 `providers` 字段**（必需，数组格式）
 
 ```json
 {
@@ -170,7 +168,7 @@ Sirius Chat 支持三层 Provider 配置，优先级由高到低为：
 }
 ```
 
-多 Provider 配置时，可指定每个 provider 的 healthcheck_model，框架会自动按模型路由：
+**多 Provider 自动路由**：在 `providers` 列表中指定多个 provider，框架通过 `healthcheck_model` 自动路由：
 
 ```json
 {
@@ -188,114 +186,16 @@ Sirius Chat 支持三层 Provider 配置，优先级由高到低为：
   ],
   "orchestration": {
     "task_models": {
-      "memory_extract": "doubao-seed-2-0-lite-260215"  # 会自动路由到SiliconFlow
+      "memory_extract": "doubao-seed-2-0-lite-260215"  # 自动路由至 SiliconFlow
     }
   }
 }
 ```
 
-**三层配置的合并规则**：
-
-1. 框架启动时，先从 `<work_path>/provider_keys.json` 加载持久化的 providers
-2. 再加载 Session JSON 中的 `providers` 字段，覆盖相同类型的预配置
-3. 若 `provider` 字段存在（向后兼容），将其转换加入 `providers`
-
-### 多 provider 自动路由
-
-若希望按模型自动路由 provider，可使用 `ProviderRegistry + AutoRoutingProvider`：
-
-```python
-from pathlib import Path
-
-from sirius_chat.api import AutoRoutingProvider, ProviderRegistry
-
-work_path = Path("data/session_runtime")
-registry = ProviderRegistry(work_path)
-registry.upsert(
-    provider_type="siliconflow",
-    api_key="YOUR_SF_KEY",
-    healthcheck_model="Pro/zai-org/GLM-4.7B-Instruct",
-)
-registry.upsert(
-    provider_type="openai-compatible",
-    api_key="YOUR_OPENAI_KEY",
-    healthcheck_model="gpt-4o-mini",
-)
-
-provider = AutoRoutingProvider(registry.load())
-```
-
-也可通过 CLI 交互命令管理（`sirius-chat` 与 `python main.py` 均可）：
-
-- `/provider platforms`
-- `/provider list`
-- `/provider add <type> <api_key> <healthcheck_model> [base_url]`
-- `/provider remove <type>`
-
-框架内 Provider 检测流程（注册/启动阶段）：
-
-1. 检查是否存在已配置平台信息（平台名 + API Key）。
-2. 检查平台是否属于已适配清单（不允许自定义 provider 类型）。
-3. 使用注册时提供的 `healthcheck_model` 发起最小请求验证可用性。
-
-#### ProviderRegistry API 参考
-
-`ProviderRegistry` 用于运行时管理多个 LLM provider，支持健康检查与自动路由。
-
-**核心方法**：
-
-```python
-registry = ProviderRegistry(work_path)
-
-# 注册或更新provider
-registry.upsert(
-    provider_type: str,           # "openai-compatible" | "siliconflow" | "volcengine-ark"
-    api_key: str,                 # 平台API密钥
-    healthcheck_model: str,       # 用于验证可用性的模型（如 "gpt-4o-mini"）
-    base_url: str = None,         # 可选，自定义基地址（会自动规范化）
-    name: str = None,             # 可选，provider昵称
-)
-
-# 加载所有已配置provider
-providers: dict = registry.load()  # 返回 {provider_type: provider_instance}
-
-# 获取 AutoRoutingProvider 用于自动路由
-auto_router = AutoRoutingProvider(registry.load())
-```
-
-**说明**：
-- `healthcheck_model` 在 `upsert` 时会自动发送最小请求验证 provider 可用性
-- 若检测失败，会记录警告但不抛异常（provider 可后续重试）
-- 按注册顺序建立优先级；可通过 `/provider list` 查看当前注册状态
-
-#### ProviderConfig 数据模型
-
-当手动构造 `ProviderConfig` 时，支持以下字段：
-
-| 字段 | 类型 | 说明 | 示例 |
-|------|------|------|------|
-| `api_key` | str | 平台API密钥（必需） | `sk-...` |
-| `base_url` | str | 自定义基地址（可选） | `https://api.custom.com` |
-| `name` | str | provider昵称（可选） | `"my-openai"` |
-| `healthcheck_model` | str | 用于检测可用性的模型 | `"gpt-4o-mini"` |
-
-**使用示例**：
-
-```python
-from sirius_chat.api import ProviderConfig, OpenAICompatibleProvider
-
-config = ProviderConfig(
-    api_key="sk-...",
-    base_url="https://api.openai.com",
-    name="openai-prod",
-    healthcheck_model="gpt-4o-mini",
-)
-
-provider = OpenAICompatibleProvider(
-    api_key=config.api_key,
-    base_url=config.base_url,
-)
-```
+**持久化密钥管理**：
+- `merge_provider_sources(work_path, providers_config)` 自动从 `<work_path>/provider_keys.json` 加载持久化的 API 密钥
+- 配置项中 `api_key` 字段支持值为环境变量名，自动从 `provider_keys.json` 中解析实际密钥
+- 不存在向后兼容转换逻辑；v1.0 强制使用 `providers` 列表格式
 
 ### 异步程序嵌入（推荐）
 
