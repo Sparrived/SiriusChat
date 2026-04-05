@@ -68,14 +68,13 @@ def test_generated_prompt_is_used_by_engine() -> None:
 
 def test_generate_humanized_roleplay_questions_covers_persona_dimensions() -> None:
     questions = generate_humanized_roleplay_questions()
-    assert len(questions) >= 10
+    assert len(questions) >= 8  # 精简到8个核心问题
     joined = "\n".join(item.question for item in questions)
-    assert "性格" in joined
-    assert "日常" in joined
-    assert "情绪" in joined
+    assert "性格" in joined or "特质" in joined
+    assert "聊天" in joined or "语言" in joined
+    assert "情绪" in joined or "压力" in joined
     assert "冲突" in joined
-    assert "聊天" in joined
-    assert "接话" in joined
+    assert "价值" in joined or "看重" in joined
 
 
 def test_abuild_roleplay_prompt_from_answers_and_apply_one_step() -> None:
@@ -125,7 +124,8 @@ def test_agenerate_agent_prompts_from_answers_includes_agent_name() -> None:
             answers=[RolePlayAnswer(question="风格", answer="先倾听，再行动")],
         )
         payload = provider.requests[0].messages[0]["content"]
-        assert "agent_name=阿星" in payload
+        assert "name=阿星" in payload  # 改为检查新的格式
+        assert "【Agent 基础配置】" in payload  # 验证新增的配置信息部分
         assert prompts.agent.persona == "冷静执行派"
         assert "阿星" in prompts.global_system_prompt
         assert prompts.agent.temperature == 0.5
