@@ -44,14 +44,15 @@ jobs:
       
       - name: Check distribution
         run: |
-          twine check dist/*.whl dist/*.tar.gz
+          find dist -type f \( -name "*.whl" -o -name "*.tar.gz" \) -exec twine check {} +
       
       - name: Generate hashes for release
         id: hash
         run: |
-          cd dist && sha256sum *.whl *.tar.gz > hashes.txt && cat hashes.txt
+          mkdir -p hashes_dir
+          cd dist && sha256sum *.whl *.tar.gz > ../hashes_dir/hashes.txt && cat ../hashes_dir/hashes.txt
           echo "hashes<<EOF" >> $GITHUB_OUTPUT
-          cat hashes.txt >> $GITHUB_OUTPUT
+          cat ../hashes_dir/hashes.txt >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
       
       - name: Upload artifacts
