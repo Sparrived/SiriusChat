@@ -41,6 +41,15 @@ class AsyncRolePlayEngine:
     _TASK_EVENT_EXTRACT = "event_extract"
     _TASK_MEMORY_MANAGER = "memory_manager"
     _SUPPORTED_MULTIMODAL_TYPES = {"image", "video", "audio", "text"}
+    _MEMORY_METADATA_LINE_PATTERNS = (
+        re.compile(
+            r"^\s*置信度\s*[：:]\s*\d+(?:\.\d+)?%\s*\|\s*类型\s*[：:]\s*[^|]+\|\s*来源\s*[：:]\s*[^|]+\|\s*时间\s*[：:]\s*[^|]+\|\s*内容\s*[：:]\s*.+$"
+        ),
+        re.compile(
+            r"^\s*confidence\s*:\s*\d+(?:\.\d+)?%\s*\|\s*type\s*:\s*[^|]+\|\s*source\s*:\s*[^|]+\|\s*time\s*:\s*[^|]+\|\s*content\s*:\s*.+$",
+            re.IGNORECASE,
+        ),
+    )
     
     # 所有需要模型支持的必需任务
     _REQUIRED_TASKS = [
@@ -646,6 +655,40 @@ class AsyncRolePlayEngine:
         # 默认返回配置的主模型
         return config.agent.model
 
+    @classmethod
+    def _is_internal_memory_metadata_line(cls, line: str) -> bool:
+        stripped = line.strip()
+        if not stripped:
+            return False
+
+        for pattern in cls._MEMORY_METADATA_LINE_PATTERNS:
+            if pattern.match(stripped):
+                return True
+
+        return (
+            "|" in stripped
+            and "置信度" in stripped
+            and "类型" in stripped
+            and "来源" in stripped
+            and "时间" in stripped
+            and "内容" in stripped
+        )
+
+    def _sanitize_assistant_content(self, content: str) -> str:
+        if not content:
+            return content
+
+        cleaned_lines: list[str] = []
+        for line in content.splitlines():
+            if self._is_internal_memory_metadata_line(line):
+                continue
+            cleaned_lines.append(line)
+
+        cleaned = "\n".join(cleaned_lines).strip()
+        if cleaned:
+            return cleaned
+        return "收到。"
+
     async def _generate_assistant_message(self, config: SessionConfig, transcript: Transcript) -> Message:
         if config.enable_auto_compression:
             transcript.compress_for_budget(
@@ -683,6 +726,8 @@ class AsyncRolePlayEngine:
             if content.startswith(pattern):
                 content = content[len(pattern):]
                 break
+
+        content = self._sanitize_assistant_content(content)
         
         last_message: Message | None = None
         

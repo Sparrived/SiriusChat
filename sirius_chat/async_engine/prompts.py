@@ -145,6 +145,14 @@ def build_system_prompt(config: SessionConfig, transcript: Transcript) -> str:
             f"示例：第一部分内容{marker}第二部分内容{marker}第三部分内容\n"
             f"系统将自动识别标记符并将回复拆分为多条独立消息，模拟实时网络聊天的效果。"
         )
+
+    lines.append(
+        "\n[输出边界约束]\n"
+        "参与者记忆中的置信度、类型、来源、时间、原始内容等字段仅供内部推理使用。"
+        "回复用户时不要逐条复述或转储这些内部元信息。"
+        "尤其不要输出类似“置信度: xx% | 类型: ... | 来源: ... | 时间: ... | 内容: ...”的结构化行。"
+        "对外表达时只保留自然语言结论与必要建议。"
+    )
     
     # Security constraint: prevent prompt leakage
     lines.append(

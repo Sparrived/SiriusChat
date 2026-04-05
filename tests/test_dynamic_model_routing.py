@@ -250,3 +250,56 @@ async def test_generate_assistant_message_uses_dynamic_model():
     
     assert result.role == "assistant"
     assert result.speaker == "Assistant"
+
+
+@pytest.mark.asyncio
+async def test_generate_assistant_message_strips_internal_memory_metadata_lines():
+    provider = MockProvider(
+        responses=[
+            "置信度: 30.0% | 类型: 临时 | 来源: qq_group_728196560 | 时间: 2026-04-06 03:41:31 | 内容: 用户问候\"早上好\"。\n早上好，今天想聊点什么？"
+        ]
+    )
+    engine = AsyncRolePlayEngine(provider)
+
+    agent = Agent(
+        name="Assistant",
+        persona="helpful",
+        model="gpt-4o-mini",
+    )
+    preset = AgentPreset(
+        agent=agent,
+        global_system_prompt="You are helpful.",
+    )
+    config = SessionConfig(preset=preset, work_path="./data")
+
+    transcript = Transcript()
+    transcript.add(Message(role="system", content=config.global_system_prompt))
+    transcript.add(Message(role="user", content="hi", speaker="User"))
+
+    result = await engine._generate_assistant_message(config, transcript)
+
+    assert "置信度:" not in result.content
+    assert "类型:" not in result.content
+    assert "来源:" not in result.content
+    assert "时间:" not in result.content
+    assert "内容:" not in result.content
+    assert "早上好，今天想聊点什么？" in result.content
+
+
+def test_build_system_prompt_contains_output_boundary_constraint():
+    provider = MockProvider()
+    engine = AsyncRolePlayEngine(provider)
+
+    config = SessionConfig(
+        preset=AgentPreset(
+            agent=Agent(name="Assistant", persona="helpful", model="gpt-4o-mini"),
+            global_system_prompt="You are helpful.",
+        ),
+        work_path="./data",
+    )
+    transcript = Transcript()
+
+    prompt = engine._build_system_prompt(config, transcript)
+
+    assert "[输出边界约束]" in prompt
+    assert "不要逐条复述或转储这些内部元信息" in prompt
