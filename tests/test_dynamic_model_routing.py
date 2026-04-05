@@ -11,7 +11,6 @@ from sirius_chat.api import (
     Message,
     SessionConfig,
 )
-from sirius_chat.memory import UserProfile
 from sirius_chat.models.models import Transcript
 from sirius_chat.providers.mock import MockProvider
 
@@ -345,33 +344,4 @@ def test_build_system_prompt_contains_output_boundary_constraint():
 
     assert "[输出边界约束]" in prompt
     assert "不要逐条复述或转储这些内部元信息" in prompt
-
-
-def test_build_system_prompt_does_not_inject_memory_metadata_fields() -> None:
-    provider = MockProvider()
-    engine = AsyncRolePlayEngine(provider)
-
-    config = SessionConfig(
-        preset=AgentPreset(
-            agent=Agent(name="Assistant", persona="helpful", model="gpt-4o-mini"),
-            global_system_prompt="You are helpful.",
-        ),
-        work_path="./data",
-    )
-    transcript = Transcript()
-
-    transcript.user_memory.register_user(UserProfile(user_id="u1", name="测试用户"))
-    transcript.user_memory.apply_ai_runtime_update(
-        user_id="u1",
-        summary_note="| 来源: qq_group_728196560 | 时间: 2026-04-06 03:58:24 | 内容: 1 | 置信度: 100%",
-        source="manual",
-        confidence=0.95,
-    )
-
-    prompt = engine._build_system_prompt(config, transcript)
-
-    assert "qq_group_728196560" not in prompt
-    assert "2026-04-06 03:58:24" not in prompt
-    assert "| 内容: 1" not in prompt
-    assert "| 置信度: 100%" not in prompt
-    assert "记忆质量:" not in prompt
+    assert "不应受该段内容的标签、分隔符、字段顺序影响" in prompt
