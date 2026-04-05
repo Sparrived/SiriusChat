@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 import json
 import logging
 import math
@@ -15,6 +15,7 @@ from sirius_chat.user_memory import (
     EventMemoryFileStore,
     EventMemoryManager,
     UserMemoryFileStore,
+    EVENT_DEDUP_WINDOW_MINUTES,
 )
 from sirius_chat.async_engine.utils import (
     build_event_hit_system_note,
@@ -738,13 +739,40 @@ class AsyncRolePlayEngine:
                 confidence=0.75,
             )
 
-        extracted_event_features = await self._run_event_extract_task(
-            config=config,
-            transcript=transcript,
-            participant=participant,
-            content=content,
-            task_token_usage=task_token_usage,
-        )
+        # ============================================================================
+        # A1方案: 时间窗口去重 - 防止短时间内重复调用event_extract
+        # ============================================================================
+        user_memory_entry = transcript.user_memory.entries.get(participant.user_id)
+        should_process_event = True
+        
+        if user_memory_entry is not None:
+            last_processed = user_memory_entry.runtime.last_event_processed_at
+            if last_processed is not None:
+                # 计算距离上次处理的时间（分钟）
+                time_since_last = (datetime.now(timezone.utc) - last_processed).total_seconds() / 60
+                
+                # 如果在去重窗口内，则跳过事件处理
+                if time_since_last < EVENT_DEDUP_WINDOW_MINUTES:
+                    should_process_event = False
+                    logger.info(
+                        f"[去重] 用户{participant.name}在{time_since_last:.1f}分钟内重复消息，跳过事件处理"
+                    )
+
+        # 根据去重结果决定是否执行event_extract
+        if should_process_event:
+            extracted_event_features = await self._run_event_extract_task(
+                config=config,
+                transcript=transcript,
+                participant=participant,
+                content=content,
+                task_token_usage=task_token_usage,
+            )
+            # 更新最后处理时间戳
+            if user_memory_entry is not None:
+                user_memory_entry.runtime.last_event_processed_at = datetime.now(timezone.utc)
+        else:
+            # 去重模式：不调用event_extract，但仍然保存消息到内存
+            extracted_event_features = None
         hit_payload = event_store.absorb_mention(
             content=content,
             known_entities=known_entities,
@@ -757,7 +785,7 @@ class AsyncRolePlayEngine:
             )
         )
         event_entry = hit_payload.get("entry")
-        if event_entry is not None:
+        if event_entry is not None and extracted_event_features is not None:
             summary = str(getattr(event_entry, "summary", "")).strip()
             if summary:
                 transcript.user_memory.apply_ai_runtime_update(

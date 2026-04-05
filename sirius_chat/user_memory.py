@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 import json
 import logging
 from pathlib import Path
@@ -9,6 +9,58 @@ import re
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+# ============================================================================
+# 性能优化常数
+# ============================================================================
+
+# C1: Memory Facts 上限管理
+MAX_MEMORY_FACTS = 50  # 单用户最多保留的memory facts数量
+
+# A1: 时间窗口去重（分钟）
+EVENT_DEDUP_WINDOW_MINUTES = 5
+
+# ============================================================================
+# B: 特征分类体系（Trait Taxonomy）
+# ============================================================================
+
+TRAIT_TAXONOMY: dict[str, dict[str, Any]] = {
+    "Technical": {
+        "keywords": [
+            "编程", "代码", "技术", "实现", "开发", "coding", "programming",
+            "technical", "python", "javascript", "java", "c++", "软件", "算法"
+        ],
+        "priority": 1,
+    },
+    "Learning": {
+        "keywords": [
+            "学习", "注意力", "机制", "知识", "求知", "学", "learning",
+            "neural", "深度", "理解", "探索", "研究"
+        ],
+        "priority": 2,
+    },
+    "Social": {
+        "keywords": [
+            "团队", "领导", "管理", "交流", "社交", "team", "leadership",
+            "social", "collaboration", "合作", "讨论", "沟通"
+        ],
+        "priority": 3,
+    },
+    "Creative": {
+        "keywords": [
+            "绘画", "创作", "视觉", "艺术", "creative", "art", "drawing",
+            "设计", "创意", "图像"
+        ],
+        "priority": 4,
+    },
+    "Professional": {
+        "keywords": [
+            "项目", "测试", "高效", "质量", "工作", "professional", "project",
+            "开发", "交付", "维护", "部署", "工程"
+        ],
+        "priority": 5,
+    },
+}
 
 
 @dataclass(slots=True)
@@ -55,6 +107,8 @@ class UserRuntimeState:
     observed_roles: set[str] = field(default_factory=set)
     observed_emotions: set[str] = field(default_factory=set)
     observed_entities: set[str] = field(default_factory=set)
+    # A1: 时间窗口去重 - 记录上次处理事件的时间
+    last_event_processed_at: datetime | None = None
 
 
 @dataclass(slots=True)
@@ -113,6 +167,32 @@ class UserMemoryManager:
             entry.runtime.summary_notes = entry.runtime.summary_notes[-max_notes:]
         return True
 
+    def _normalize_trait(self, trait: str) -> str:
+        """B方案：将特征规范化为分类标签或保留原样。
+        
+        如果特征属于已定义的分类（通过关键词匹配），则返回分类标签。
+        否则返回原始特征，避免过度规范化。
+        """
+        if not trait or not isinstance(trait, str):
+            return ""
+        
+        trait_stripped = trait.strip().lower()
+        if not trait_stripped:
+            return ""
+        
+        # 检查是否已经是一个分类标签
+        if trait in TRAIT_TAXONOMY:
+            return trait
+        
+        # 检查是否属于某个分类的关键词
+        for category, info in TRAIT_TAXONOMY.items():
+            keywords = info.get("keywords", [])
+            # 精确匹配或包含匹配都可以
+            if any(kw.lower() in trait_stripped or trait_stripped in kw.lower() for kw in keywords):
+                return category
+        
+        return trait  # 无法分类，保留原样
+
     def add_memory_fact(
         self,
         *,
@@ -122,16 +202,35 @@ class UserMemoryManager:
         source: str,
         confidence: float,
         observed_at: str | None = None,
-        max_facts: int = 64,
+        max_facts: int | None = None,
     ) -> None:
+        """添加内存事实，支持特征规范化和智能上限管理。
+        
+        C1方案：当超过max_facts时，删除confidence最低的facts而非简单的FIFO。
+        B方案：对某些fact_type自动应用特征规范化。
+        """
         entry = self.entries.get(user_id)
         if entry is None:
             return
+        
+        # 使用全局常数作为默认上限
+        if max_facts is None:
+            max_facts = MAX_MEMORY_FACTS
+        
         text = value.strip()
         if not text:
             return
+        
+        # B方案: 规范化特征
+        if fact_type in ("trait", "inferred_trait", "preference_tag"):
+            normalized_trait = self._normalize_trait(text)
+            if normalized_trait:
+                text = normalized_trait
+        
         timestamp = observed_at or self._now_iso()
         normalized = self._normalize_summary_note(text)
+        
+        # 检查是否已存在相同的fact，如果存在则更新confidence
         for item in entry.runtime.memory_facts:
             if item.fact_type != fact_type:
                 continue
@@ -142,6 +241,8 @@ class UserMemoryManager:
                 item.source = source
                 item.observed_at = timestamp
             return
+        
+        # 添加新fact
         entry.runtime.memory_facts.append(
             MemoryFact(
                 fact_type=fact_type,
@@ -151,8 +252,18 @@ class UserMemoryManager:
                 observed_at=timestamp,
             )
         )
+        
+        # C1方案: 智能清理 - 当超过上限时，删除confidence最低的
         if len(entry.runtime.memory_facts) > max_facts:
-            entry.runtime.memory_facts = entry.runtime.memory_facts[-max_facts:]
+            # 按confidence升序排序
+            sorted_facts = sorted(
+                entry.runtime.memory_facts,
+                key=lambda f: f.confidence
+            )
+            # 计算要删除的数量（删除最低的10%，至少删除1个）
+            num_to_delete = max(1, len(entry.runtime.memory_facts) // 10)
+            # 保留top 90%的facts
+            entry.runtime.memory_facts = sorted_facts[num_to_delete:]
 
     def register_user(self, profile: UserProfile) -> None:
         if not profile.user_id:
@@ -433,6 +544,7 @@ class UserMemoryManager:
             )
             
             # 特征提升：检测领导相关角色
+            # 注意：inferred_traits的添加不经过规范化，保持原始特征名
             leadership_roles = {"管理者", "leader", "manager", "经理", "主管", "团队",
                               "lead", "主导", "负责人", "项目经理", "项目主管"}
             if any(role in leadership_roles for role in clean_roles):
@@ -575,6 +687,12 @@ class UserMemoryManager:
                         "observed_roles": list(entry.runtime.observed_roles),
                         "observed_emotions": list(entry.runtime.observed_emotions),
                         "observed_entities": list(entry.runtime.observed_entities),
+                        # A1: 序列化时间戳
+                        "last_event_processed_at": (
+                            entry.runtime.last_event_processed_at.isoformat()
+                            if entry.runtime.last_event_processed_at is not None
+                            else None
+                        ),
                     },
                 }
                 for user_id, entry in self.entries.items()
@@ -633,6 +751,12 @@ class UserMemoryManager:
                     observed_roles=set(runtime_data.get("observed_roles", [])),
                     observed_emotions=set(runtime_data.get("observed_emotions", [])),
                     observed_entities=set(runtime_data.get("observed_entities", [])),
+                    # A1: 反序列化时间戳
+                    last_event_processed_at=(
+                        datetime.fromisoformat(runtime_data["last_event_processed_at"])
+                        if runtime_data.get("last_event_processed_at")
+                        else None
+                    ),
                 ),
             )
             runtime = manager.entries[user_id].runtime
