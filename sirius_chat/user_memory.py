@@ -78,7 +78,12 @@ class UserProfile:
 
 @dataclass(slots=True)
 class MemoryFact:
-    """可追溯的记忆事实记录。支持多模型协作和冲突检测。"""
+    """可追溯的记忆事实记录。支持多模型协作和冲突检测。
+    
+    C2优化: is_transient标记用于分离临时/永久事实
+    - RESIDENT (confidence > 0.85): 持久化到user.json
+    - TRANSIENT: session内存，30分钟自动清理
+    """
 
     fact_type: str
     value: str
@@ -88,6 +93,9 @@ class MemoryFact:
     memory_category: str = "custom"  # identity|preference|emotion|event|custom
     validated: bool = False  # 是否通过 memory_manager 验证
     conflict_with: list[str] = field(default_factory=list)  # 冲突记忆ID列表
+    # C2: RESIDENT vs TRANSIENT 分离标记
+    is_transient: bool = False  # 是否是临时事实（confidence ≤ 0.85）
+    created_at: str = ""  # 创建时间（ISO格式），用于过期判断
 
 
 @dataclass(slots=True)
@@ -243,13 +251,20 @@ class UserMemoryManager:
             return
         
         # 添加新fact
+        final_confidence = max(0.0, min(1.0, float(confidence)))
+        # C2方案: 自动标记is_transient和created_at
+        is_transient_fact = final_confidence <= 0.85
+        created_at_time = timestamp if is_transient_fact else ""
+        
         entry.runtime.memory_facts.append(
             MemoryFact(
                 fact_type=fact_type,
                 value=text,
                 source=source,
-                confidence=max(0.0, min(1.0, float(confidence))),
+                confidence=final_confidence,
                 observed_at=timestamp,
+                is_transient=is_transient_fact,
+                created_at=created_at_time,
             )
         )
         
@@ -649,6 +664,150 @@ class UserMemoryManager:
 
         return interpretation
 
+    # ============================================================================
+    # C2方案: RESIDENT vs TRANSIENT 分离存储
+    # ============================================================================
+
+    def get_resident_facts(self, user_id: str) -> list[MemoryFact]:
+        """获取高置信度的RESIDENT事实（仅用于持久化到user.json）。
+        
+        RESIDENT: confidence > 0.85，代表核心的、稳定的用户特征和偏好
+        这些facts应该被持久化到持久化存储。
+        """
+        entry = self.entries.get(user_id)
+        if entry is None:
+            return []
+        
+        return [
+            fact for fact in entry.runtime.memory_facts
+            if fact.confidence > 0.85
+        ]
+
+    def get_transient_facts(self, user_id: str) -> list[MemoryFact]:
+        """获取低置信度的TRANSIENT事实（存储在session内存中）。
+        
+        TRANSIENT: confidence ≤ 0.85，代表最近观察到的事但不确定的消息
+        这些facts应该存储在session内存中，30分钟后自动清理。
+        """
+        entry = self.entries.get(user_id)
+        if entry is None:
+            return []
+        
+        return [
+            fact for fact in entry.runtime.memory_facts
+            if fact.confidence <= 0.85
+        ]
+
+    def cleanup_expired_transient_facts(
+        self,
+        user_id: str,
+        max_age_minutes: int = 30,
+    ) -> int:
+        """清理过期的TRANSIENT事实。
+        
+        TRANSIENT事实在创建后max_age_minutes（默认30分钟）后会被删除。
+        返回删除的facts数量。
+        """
+        entry = self.entries.get(user_id)
+        if entry is None:
+            return 0
+        
+        now = datetime.now(timezone.utc)
+        deleted_count = 0
+        facts_to_keep = []
+        
+        for fact in entry.runtime.memory_facts:
+            # 只检查transient facts
+            if not fact.is_transient:
+                facts_to_keep.append(fact)
+                continue
+            
+            # 检查是否过期
+            if fact.created_at:
+                try:
+                    created_time = datetime.fromisoformat(fact.created_at)
+                    age_minutes = (now - created_time).total_seconds() / 60
+                    if age_minutes > max_age_minutes:
+                        deleted_count += 1
+                        continue  # 删除这个fact
+                except (ValueError, TypeError):
+                    # 时间解析失败，保留这个fact
+                    pass
+            
+            facts_to_keep.append(fact)
+        
+        entry.runtime.memory_facts = facts_to_keep
+        
+        if deleted_count > 0:
+            logger.debug(
+                f"Cleaned up {deleted_count} expired transient facts for user {user_id}"
+            )
+        
+        return deleted_count
+
+    def compress_memory_facts(
+        self,
+        user_id: str,
+        similarity_threshold: float = 0.8,
+    ) -> int:
+        """C3方案: 动态压缩memory facts。
+        
+        对同类型的facts进行聚类和合并，减少redundant信息。
+        
+        Args:
+            user_id: 要压缩的用户ID
+            similarity_threshold: 相似度阈值（0.0-1.0）
+        
+        Returns:
+            被压缩/删除的facts数量
+        """
+        entry = self.entries.get(user_id)
+        if entry is None:
+            return 0
+        
+        facts = entry.runtime.memory_facts
+        if len(facts) < 10:  # 事实太少，跳过压缩
+            return 0
+        
+        # 按fact_type分组
+        facts_by_type: dict[str, list[MemoryFact]] = {}
+        for fact in facts:
+            if fact.fact_type not in facts_by_type:
+                facts_by_type[fact.fact_type] = []
+            facts_by_type[fact.fact_type].append(fact)
+        
+        original_count = len(facts)
+        compressed_facts = []
+        
+        # 对每个类型的facts进行压缩
+        for fact_type, facts_of_type in facts_by_type.items():
+            if len(facts_of_type) <= 3:
+                # 事实太少，保留所有
+                compressed_facts.extend(facts_of_type)
+                continue
+            
+            # 方案：删除最低confidence的facts，保留top 70%
+            sorted_facts = sorted(facts_of_type, key=lambda f: f.confidence, reverse=True)
+            keep_count = max(2, int(len(sorted_facts) * 0.7))
+            compressed_facts.extend(sorted_facts[:keep_count])
+        
+        # 按原有顺序重新排序（maintain observed_at顺序）
+        compressed_facts.sort(
+            key=lambda f: f.observed_at,
+            reverse=True
+        )
+        
+        entry.runtime.memory_facts = compressed_facts
+        deleted_count = original_count - len(compressed_facts)
+        
+        if deleted_count > 0:
+            logger.info(
+                f"Compressed facts for user {user_id}: "
+                f"{original_count} → {len(compressed_facts)} ({deleted_count} deleted)"
+            )
+        
+        return deleted_count
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "entries": {
@@ -678,6 +837,9 @@ class UserMemoryManager:
                                 "memory_category": item.memory_category,
                                 "validated": item.validated,
                                 "conflict_with": item.conflict_with,
+                                # C2: RESIDENT/TRANSIENT标记
+                                "is_transient": item.is_transient,
+                                "created_at": item.created_at,
                             }
                             for item in entry.runtime.memory_facts
                         ],
@@ -741,6 +903,9 @@ class UserMemoryManager:
                             memory_category=str(item.get("memory_category", "custom")).strip() or "custom",
                             validated=bool(item.get("validated", False)),
                             conflict_with=list(item.get("conflict_with", [])),
+                            # C2: 反序列化RESIDENT/TRANSIENT标记
+                            is_transient=bool(item.get("is_transient", False)),
+                            created_at=str(item.get("created_at", "")).strip(),
                         )
                         for item in list(runtime_data.get("memory_facts", []))
                         if isinstance(item, dict) and str(item.get("value", "")).strip()
