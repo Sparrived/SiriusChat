@@ -3,11 +3,38 @@
 from __future__ import annotations
 
 from datetime import datetime
+import re
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from sirius_chat.config import SessionConfig
     from sirius_chat.models import Transcript
+
+
+_MEMORY_METADATA_CN_LABEL_PATTERNS = (
+    re.compile(r"置信度\s*[：:]"),
+    re.compile(r"类型\s*[：:]"),
+    re.compile(r"来源\s*[：:]"),
+    re.compile(r"时间\s*[：:]"),
+    re.compile(r"内容\s*[：:]"),
+)
+_MEMORY_METADATA_EN_LABEL_PATTERNS = (
+    re.compile(r"confidence\s*:", re.IGNORECASE),
+    re.compile(r"type\s*:", re.IGNORECASE),
+    re.compile(r"source\s*:", re.IGNORECASE),
+    re.compile(r"time\s*:", re.IGNORECASE),
+    re.compile(r"content\s*:", re.IGNORECASE),
+)
+
+
+def _looks_like_internal_memory_metadata(text: str) -> bool:
+    stripped = text.strip()
+    if not stripped or "|" not in stripped:
+        return False
+
+    cn_hits = sum(1 for p in _MEMORY_METADATA_CN_LABEL_PATTERNS if p.search(stripped))
+    en_hits = sum(1 for p in _MEMORY_METADATA_EN_LABEL_PATTERNS if p.search(stripped))
+    return cn_hits >= 2 or en_hits >= 2
 
 
 def build_system_prompt(config: SessionConfig, transcript: Transcript) -> str:
@@ -35,7 +62,7 @@ def build_system_prompt(config: SessionConfig, transcript: Transcript) -> str:
         lines.append("参与者记忆:")
         for user_id in transcript.user_memory.entries.keys():
             # Use the new rich summary query method
-            summary = transcript.user_memory.get_rich_user_summary(user_id, include_transient=True)
+            summary = transcript.user_memory.get_rich_user_summary(user_id, include_transient=False)
             if not summary:
                 continue
             
@@ -84,29 +111,12 @@ def build_system_prompt(config: SessionConfig, transcript: Transcript) -> str:
                         value = fact_info.get("value", "")
                         if not value:
                             continue
-                        
-                        # Build fact display with confidence and context
-                        confidence = fact_info.get("confidence", 0.5)
-                        conf_label = ""
-                        if confidence < 0.6:
-                            conf_label = " [低可信]"
-                        elif confidence < 0.8:
-                            conf_label = " [中可信]"
-                        
-                        # Add context info if available
-                        time_desc = fact_info.get("time_desc", "")
-                        channel = fact_info.get("channel", "")
-                        topic = fact_info.get("topic", "")
-                        context_parts = []
-                        if time_desc:
-                            context_parts.append(f"时: {time_desc}")
-                        if channel:
-                            context_parts.append(f"渠: {channel}")
-                        if topic:
-                            context_parts.append(f"题: {topic}")
-                        
-                        context_suffix = f" ({', '.join(context_parts)})" if context_parts else ""
-                        fact_strs.append(f"{value}{conf_label}{context_suffix}")
+
+                        value_text = str(value).strip()
+                        if _looks_like_internal_memory_metadata(value_text):
+                            continue
+
+                        fact_strs.append(value_text)
                     
                     if fact_strs:
                         lines.append(f"      {display_name}: {' / '.join(fact_strs)}")
@@ -122,18 +132,6 @@ def build_system_prompt(config: SessionConfig, transcript: Transcript) -> str:
             if entities:
                 entities_str = "、".join(entities[:10])
                 lines.append(f"    已知实体/对象: {entities_str}")
-            
-            # Show confidence distribution
-            confidence_stats = summary.get("confidence_stats", {})
-            if confidence_stats:
-                resident_count = confidence_stats.get("resident_count", 0)
-                transient_count = confidence_stats.get("transient_count", 0)
-                avg_conf = confidence_stats.get("avg_confidence", 0.0)
-                if resident_count or transient_count:
-                    lines.append(
-                        f"    记忆质量: {resident_count}个高置信 + {transient_count}个临时 | "
-                        f"平均置信度: {avg_conf:.1%}"
-                    )
     
     # Add prompt-driven splitting instructions if enabled
     if config.orchestration.enable_prompt_driven_splitting:
