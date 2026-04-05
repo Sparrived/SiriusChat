@@ -4,6 +4,28 @@
 
 ## [Unreleased]
 
+## [0.5.4] - 2026-04-06
+
+### Added
+- **日志基础信息增强**
+  - 在模型调用 INFO 日志中新增 `调用目的`、`预计输入Token`、`预计总Token上限`
+  - 引入统一估算函数 `estimate_generation_request_input_tokens()` 用于请求输入 token 粗估
+
+### Changed
+- **GenerationRequest 扩展**
+  - 新增 `purpose` 字段（默认 `chat_main`），支持多场景调用意图标识
+  - 已在核心调用链路补充 purpose：
+    - `chat_main`
+    - `memory_extract` / `multimodal_parse` / `event_extract` / `memory_manager`
+    - `roleplay_prompt_generation`
+    - `event_memory_verification`
+    - `provider_healthcheck`
+
+### Test Results
+- 278 个测试通过 ✅
+- 1 个测试被跳过
+- 0 个测试失败 ✅
+
 ## [0.5.3] - 2026-04-06
 
 ### Fixed
