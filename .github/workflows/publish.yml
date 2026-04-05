@@ -44,12 +44,12 @@ jobs:
       
       - name: Check distribution
         run: |
-          twine check dist/*
+          twine check dist/*.whl dist/*.tar.gz
       
       - name: Generate hashes for release
         id: hash
         run: |
-          cd dist && sha256sum * | sed 's/ / /g' > hashes.txt && cat hashes.txt
+          cd dist && sha256sum *.whl *.tar.gz > hashes.txt && cat hashes.txt
           echo "hashes<<EOF" >> $GITHUB_OUTPUT
           cat hashes.txt >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
