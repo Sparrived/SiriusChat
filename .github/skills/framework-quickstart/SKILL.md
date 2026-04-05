@@ -69,6 +69,16 @@ description: "当你需要在不通读全部代码的情况下快速理解 Siriu
 - 系统提示中的记忆呈现改为结构化格式，按类别分组，透明展示置信度。
 - 引擎在每轮用户发言后执行事件命中分析（高置信命中/弱命中/新增），并把事件说明注入 system 消息。
 - 事件记忆会持久化到 `work_path/events/events.json`，用于跨会话事件连续性。
+- ✨ **事件系统与用户记忆系统的双向适配**（方案C）：
+  - 每条事件的特征（emotion_tags、keywords、role_slots、entities）自动转化为结构化用户记忆事实
+    * `emotion_tags` → `emotional_pattern` 事实（信度 base - 0.05）
+    * `keywords` → `user_interest` 事实（信度 base - 0.10）
+    * `role_slots` → `social_context` 事实 + 自动特征提升，如检测领导角色 → 推断 `leadership_tendency`
+  - 基于用户历史调整事件理解（`interpret_event_with_user_context()`）
+    * 计算四维对齐度：keyword_alignment, role_alignment, emotion_alignment, entity_alignment
+    * 动态信度调整：`adjusted_confidence = 0.65 + avg_alignment × 0.3`，范围 [0.5, 1.0]
+    * 推荐处理类别：high_confidence (avg>0.6) | normal | low_relevance (avg<0.2) | pending (新用户)
+  - 实现真正的**双向观测**：事件不再被单向消费，而是成为用户理解的重要信号源
 - `Transcript.find_user_by_channel_uid(channel, uid)` 支持按渠道+外部 UID 直接定位用户。
 - `session_store.py` 提供会话持久化与重启恢复。
 - `Transcript.token_usage_records` 全量归档每次模型调用的 token 消耗信息。

@@ -19,8 +19,11 @@ flowchart TD
     E --> F[写入消息\nTranscript.messages]
     F --> G[识人与记忆更新\nUserMemoryManager]
     G --> G2[事件命中评分\nEventMemoryManager]
+    
+    G2 --> G3[✨ 事件→用户映射\napply_event_insights\n+ interpret_event_with_user_context]
+    G3 --> G4[事件特征转化为用户事实\nemotional_pattern/user_interest\n/social_context + 特征提升]
 
-    G --> H{orchestration.enabled?}
+    G4 --> H{orchestration.enabled?}
     H -- 是 --> I[memory_extract 任务\n可选模型/预算/重试]
     H -- 是 --> J[multimodal_parse 任务\n多模态证据提取]
     H -- 否 --> K[直接主模型回复]
