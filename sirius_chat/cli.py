@@ -16,6 +16,7 @@ from sirius_chat.api import (
     create_async_engine,
     merge_provider_sources,
 )
+from sirius_chat.logging_config import configure_logging, get_logger
 
 InputFunc = Callable[[str], str]
 PrintFunc = Callable[[str], None]
@@ -145,9 +146,19 @@ def main(
 ) -> int:
     args = _build_arg_parser().parse_args(argv)
 
+    # 配置日志系统 - 同时输出到控制台和日志文件
     config_path = Path(args.config)
     work_path = Path(args.work_path) if args.work_path else (Path.cwd() / "data")
     work_path.mkdir(parents=True, exist_ok=True)
+    
+    log_dir = work_path / "logs"
+    configure_logging(
+        level="INFO",
+        format_type="console",
+        log_file=log_dir / "sirius_chat.log",
+        enable_file_rotation=True,  # 每日轮换，保留7个备份
+    )
+    logger = get_logger(__name__)
 
     try:
         session_config, provider_config, providers_config = _load_session_config(config_path, work_path)

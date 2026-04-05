@@ -790,8 +790,14 @@ def main(
     parser = _build_arg_parser()
     args = parser.parse_args(argv if argv is not None else sys.argv[1:])
 
-    # 配置日志系统
-    configure_logging(level="INFO", format_type="console")
+    # 配置日志系统 - 同时输出到控制台和日志文件
+    log_dir = REPO_ROOT / "logs"
+    configure_logging(
+        level="INFO",
+        format_type="console",
+        log_file=log_dir / "sirius_chat.log",
+        enable_file_rotation=True,  # 每日轮换，保留7个备份
+    )
     logger = get_logger(__name__)
 
     # 处理特殊命令：--init-config

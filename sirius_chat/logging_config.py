@@ -77,6 +77,30 @@ class JSONFormatter(logging.Formatter):
         return json.dumps(log_data, ensure_ascii=False)
 
 
+class FlushingFileHandler(logging.FileHandler):
+    """实时刷新的文件处理器 - 每条日志立即写入硬盘"""
+
+    def emit(self, record: logging.LogRecord) -> None:
+        """发射日志记录后立即刷新"""
+        try:
+            super().emit(record)
+            self.flush()  # 立即刷新到磁盘
+        except Exception:
+            self.handleError(record)
+
+
+class FlushingTimedRotatingFileHandler(logging.handlers.TimedRotatingFileHandler):
+    """实时刷新的定时轮换文件处理器"""
+
+    def emit(self, record: logging.LogRecord) -> None:
+        """发射日志记录后立即刷新"""
+        try:
+            super().emit(record)
+            self.flush()  # 立即刷新到磁盘
+        except Exception:
+            self.handleError(record)
+
+
 class ColoredFormatter(logging.Formatter):
     """带颜色的Console格式化器，提高可读性"""
 
@@ -170,8 +194,8 @@ def configure_logging(
         log_path.parent.mkdir(parents=True, exist_ok=True)
 
         if enable_file_rotation:
-            # 每日轮换，保留7个备份
-            file_handler = logging.handlers.TimedRotatingFileHandler(
+            # 每日轮换，保留7个备份，实时刷新
+            file_handler = FlushingTimedRotatingFileHandler(
                 log_path,
                 when="midnight",
                 interval=1,
@@ -179,7 +203,8 @@ def configure_logging(
                 encoding="utf-8",
             )
         else:
-            file_handler = logging.FileHandler(log_path, encoding="utf-8")
+            # 实时刷新的文件处理器
+            file_handler = FlushingFileHandler(log_path, encoding="utf-8")
 
         file_handler.setLevel(getattr(logging, level))
         file_handler.setFormatter(JSONFormatter() if format_type == "json" else ColoredFormatter())
