@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import logging.handlers
+import shutil
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -99,6 +100,31 @@ class FlushingTimedRotatingFileHandler(logging.handlers.TimedRotatingFileHandler
             self.flush()  # 立即刷新到磁盘
         except Exception:
             self.handleError(record)
+
+
+def _archive_old_logs(log_file: Path) -> None:
+    """
+    将已存在的日志文件归档到 archive 目录下
+    
+    Args:
+        log_file: 日志文件路径
+    """
+    if not log_file.exists():
+        return
+    
+    # 创建归档目录
+    archive_dir = log_file.parent / "archive"
+    archive_dir.mkdir(parents=True, exist_ok=True)
+    
+    # 使用时间戳为旧日志重命名，避免冲突
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    archive_file = archive_dir / f"{log_file.stem}_{timestamp}{log_file.suffix}"
+    
+    try:
+        shutil.move(str(log_file), str(archive_file))
+    except Exception:
+        # 如果移动失败（如权限问题），忽略错误，继续创建新日志
+        pass
 
 
 class ColoredFormatter(logging.Formatter):
@@ -192,6 +218,9 @@ def configure_logging(
     if log_file:
         log_path = Path(log_file)
         log_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        # 将旧日志归档
+        _archive_old_logs(log_path)
 
         if enable_file_rotation:
             # 每日轮换，保留7个备份，实时刷新
