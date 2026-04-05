@@ -11,6 +11,7 @@ from sirius_chat.api import (
     find_user_by_channel_uid,
     probe_provider_availability,
 )
+from sirius_chat.models import OrchestrationPolicy
 from sirius_chat.providers.mock import MockProvider
 
 
@@ -58,6 +59,14 @@ def test_public_api_async_facade() -> None:
             preset=AgentPreset(
                 agent=Agent(name="主助手", persona="test", model="mock-model"),
                 global_system_prompt="测试系统提示词",
+            ),
+            orchestration=OrchestrationPolicy(
+                unified_model="mock-model",
+                task_enabled={
+                    "memory_extract": False,
+                    "multimodal_parse": False,
+                    "event_extract": False,
+                }
             ),
         )
 

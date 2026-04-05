@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 from sirius_chat.api import Agent, AgentPreset, JsonPersistentSessionRunner, Participant, SessionConfig
+from sirius_chat.models import OrchestrationPolicy
 from sirius_chat.providers.mock import MockProvider
 from sirius_chat.session_store import SqliteSessionStore
 
@@ -16,6 +17,14 @@ def test_json_persistent_session_runner_auto_persistence_and_reset(tmp_path: Pat
             preset=AgentPreset(
                 agent=Agent(name="主助手", persona="runner-test", model="mock-model"),
                 global_system_prompt="测试系统提示词",
+            ),
+            orchestration=OrchestrationPolicy(
+                unified_model="mock-model",
+                task_enabled={
+                    "memory_extract": False,
+                    "multimodal_parse": False,
+                    "event_extract": False,
+                }
             ),
         )
         runner = JsonPersistentSessionRunner(
@@ -70,6 +79,14 @@ def test_json_persistent_session_runner_reuses_saved_profile(tmp_path: Path) -> 
                 agent=Agent(name="主助手", persona="runner-test", model="mock-model"),
                 global_system_prompt="测试系统提示词",
             ),
+            orchestration=OrchestrationPolicy(
+                unified_model="mock-model",
+                task_enabled={
+                    "memory_extract": False,
+                    "multimodal_parse": False,
+                    "event_extract": False,
+                }
+            ),
         )
         runner = JsonPersistentSessionRunner(config=config, provider=MockProvider(responses=["ok"]))
         await runner.initialize(resume=False)
@@ -87,6 +104,14 @@ def test_json_persistent_session_runner_supports_sqlite_store(tmp_path: Path) ->
             preset=AgentPreset(
                 agent=Agent(name="主助手", persona="runner-test", model="mock-model"),
                 global_system_prompt="测试系统提示词",
+            ),
+            orchestration=OrchestrationPolicy(
+                unified_model="mock-model",
+                task_enabled={
+                    "memory_extract": False,
+                    "multimodal_parse": False,
+                    "event_extract": False,
+                }
             ),
         )
         runner = JsonPersistentSessionRunner(

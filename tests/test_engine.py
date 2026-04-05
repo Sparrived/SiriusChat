@@ -1,7 +1,7 @@
 ﻿import asyncio
 
 from sirius_chat.async_engine import AsyncRolePlayEngine
-from sirius_chat.models import Agent, AgentPreset, Message, SessionConfig
+from sirius_chat.models import Agent, AgentPreset, Message, SessionConfig, OrchestrationPolicy
 from sirius_chat.providers.mock import MockProvider
 from sirius_chat.session_store import JsonSessionStore
 from pathlib import Path
@@ -24,6 +24,14 @@ def test_roleplay_engine_multi_human_single_ai_transcript() -> None:
             preset=AgentPreset(
                 agent=Agent(name="主助手", persona="负责整合观点", model="mock-model"),
                 global_system_prompt="测试系统提示词",
+            ),
+            orchestration=OrchestrationPolicy(
+                unified_model="mock-model",
+                task_enabled={
+                    "memory_extract": False,
+                    "multimodal_parse": False,
+                    "event_extract": False,
+                }
             ),
         )
 
@@ -68,6 +76,14 @@ def test_run_live_session_supports_dynamic_participants_and_memory() -> None:
                 agent=Agent(name="主助手", persona="持续记忆每位参与者偏好", model="mock-model"),
                 global_system_prompt="测试系统提示词",
             ),
+            orchestration=OrchestrationPolicy(
+                unified_model="mock-model",
+                task_enabled={
+                    "memory_extract": False,
+                    "multimodal_parse": False,
+                    "event_extract": False,
+                }
+            ),
         )
         human_turns = [
             Message(role="user", speaker="王PM", content="我是产品经理，偏好快速试点。"),
@@ -100,6 +116,14 @@ def test_transcript_can_resume_after_persist_and_reboot(tmp_path) -> None:
             preset=AgentPreset(
                 agent=Agent(name="主助手", persona="可恢复会话", model="mock-model"),
                 global_system_prompt="测试系统提示词",
+            ),
+            orchestration=OrchestrationPolicy(
+                unified_model="mock-model",
+                task_enabled={
+                    "memory_extract": False,
+                    "multimodal_parse": False,
+                    "event_extract": False,
+                }
             ),
         )
         store = JsonSessionStore(config.work_path)
@@ -166,6 +190,14 @@ def test_cross_environment_identity_mapping_resolves_same_user() -> None:
             preset=AgentPreset(
                 agent=Agent(name="主助手", persona="识别同一用户", model="mock-model"),
                 global_system_prompt="测试系统提示词",
+            ),
+            orchestration=OrchestrationPolicy(
+                unified_model="mock-model",
+                task_enabled={
+                    "memory_extract": False,
+                    "multimodal_parse": False,
+                    "event_extract": False,
+                }
             ),
         )
 

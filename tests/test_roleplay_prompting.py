@@ -17,6 +17,7 @@ from sirius_chat.api import (
     persist_generated_agent_profile,
     select_generated_agent_profile,
 )
+from sirius_chat.models import OrchestrationPolicy
 from sirius_chat.providers.mock import MockProvider
 
 
@@ -34,6 +35,14 @@ def test_generated_prompt_is_used_by_engine() -> None:
             preset=AgentPreset(
                 agent=Agent(name="主助手", persona="测试", model="mock-model"),
                 global_system_prompt="测试系统提示词",
+            ),
+            orchestration=OrchestrationPolicy(
+                unified_model="mock-model",
+                task_enabled={
+                    "memory_extract": False,
+                    "multimodal_parse": False,
+                    "event_extract": False,
+                }
             ),
         )
 

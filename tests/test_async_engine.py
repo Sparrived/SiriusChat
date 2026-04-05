@@ -25,6 +25,14 @@ def test_async_engine_runs_live_session() -> None:
                 agent=Agent(name="主助手", persona="异步测试", model="mock-model"),
                 global_system_prompt="测试系统提示词",
             ),
+            orchestration=OrchestrationPolicy(
+                unified_model="mock-model",
+                task_enabled={
+                    "memory_extract": False,
+                    "multimodal_parse": False,
+                    "event_extract": False,
+                }
+            ),
         )
 
         transcript = await engine.run_live_session(
