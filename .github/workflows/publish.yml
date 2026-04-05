@@ -57,6 +57,9 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     
+    permissions:
+      id-token: write
+    
     environment:
       name: pypi
       url: https://pypi.org/p/sirius-chat
@@ -70,14 +73,15 @@ jobs:
       
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          password: ${{ secrets.PYPI_API_TOKEN }}
 
   publish-to-testpypi:
     name: Publish to TestPyPI
     if: github.event_name == 'workflow_dispatch' && github.event.inputs.target_repo == 'testpypi'
     needs: build
     runs-on: ubuntu-latest
+    
+    permissions:
+      id-token: write
     
     environment:
       name: testpypi
@@ -94,13 +98,16 @@ jobs:
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           repository-url: https://test.pypi.org/legacy/
-          password: ${{ secrets.TEST_PYPI_API_TOKEN }}
 
   github-release:
     name: Sign release with sigstore
     if: github.event_name == 'release'
     needs: build
     runs-on: ubuntu-latest
+    
+    permissions:
+      contents: write
+      id-token: write
     
     steps:
       - name: Download artifacts
