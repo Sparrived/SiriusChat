@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 from collections import deque
 from dataclasses import dataclass, field
@@ -22,19 +23,18 @@ class MockProvider(LLMProvider):
     def generate(self, request: GenerationRequest) -> str:
         # 基础调用日志（INFO）
         msg_count = len(request.messages)
-        system_preview = request.system_prompt[:200] if request.system_prompt else "(无系统提示)"
-        user_msg_preview = ""
-        if request.messages:
-            user_content = request.messages[-1].get("content", "")[:150]
-            user_msg_preview = f" | 用户消息: {user_content}"
 
         logger.info(
             f"[模型调用] mock-{request.model} | 温度: {request.temperature}, Token上限: {request.max_tokens} "
             f"| 消息数: {msg_count}"
         )
+        debug_input = {
+            "system_prompt": request.system_prompt,
+            "messages": request.messages,
+        }
         logger.debug(
-            f"[模型调用详情] mock-{request.model} | 用户消息: {user_msg_preview or '(无)'}\n"
-            f"  系统提示: {system_preview}"
+            f"[模型调用详情] mock-{request.model} | 完整输入:\n"
+            f"{json.dumps(debug_input, ensure_ascii=False, indent=2)}"
         )
         
         self.requests.append(request)
@@ -54,13 +54,12 @@ class MockProvider(LLMProvider):
                 "emotion_tags": ["情绪"]
             }"""
             logger.info(f"[模型调用成功] mock-{request.model} | 字数: {len(response)}")
-            logger.debug(f"[模型输出] mock-{request.model} | 响应内容: 事件验证JSON")
+            logger.debug(f"[模型输出] mock-{request.model} | 响应内容:\n{response}")
             return response
         if self._queue:
             response = self._queue.popleft()
-            content_preview = response[:200]
             logger.info(f"[模型调用成功] mock-{request.model} | 字数: {len(response)}")
-            logger.debug(f"[模型输出] mock-{request.model} | 响应内容: {content_preview}")
+            logger.debug(f"[模型输出] mock-{request.model} | 响应内容:\n{response}")
             return response
         logger.warning(f"[模型调用] mock-{request.model} | 无配置响应")
         return "[mock] no configured response"
