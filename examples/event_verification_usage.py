@@ -13,7 +13,8 @@ while ensuring meaningful events are properly captured and enriched.
 import asyncio
 from pathlib import Path
 
-from sirius_chat.user_memory import UserProfile, EventMemoryManager, EventMemoryFileStore
+from sirius_chat.user_memory import UserProfile
+from sirius_chat.event_memory import EventMemoryManager, EventMemoryFileStore
 from sirius_chat.providers.base import GenerationRequest
 
 
