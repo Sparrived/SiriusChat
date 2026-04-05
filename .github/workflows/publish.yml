@@ -1,8 +1,9 @@
 name: Publish to PyPI
 
 on:
-  release:
-    types: [published]
+  push:
+    tags:
+      - 'v*'
   workflow_dispatch:
     inputs:
       target_repo:
@@ -52,7 +53,7 @@ jobs:
 
   publish-to-pypi:
     name: Publish to PyPI
-    if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && github.event.inputs.target_repo == 'pypi')
+    if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || (github.event_name == 'workflow_dispatch' && github.event.inputs.target_repo == 'pypi')
     needs: build
     runs-on: ubuntu-latest
     
@@ -102,8 +103,8 @@ jobs:
           password: ${{ secrets.TEST_PYPI_API_TOKEN }}
 
   github-release:
-    name: Sign release with sigstore
-    if: github.event_name == 'release'
+    name: Create release with signatures
+    if: false  # 暂时禁用，tag push 时无 release context
     needs: build
     runs-on: ubuntu-latest
     
