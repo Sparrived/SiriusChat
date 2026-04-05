@@ -60,10 +60,6 @@ jobs:
     permissions:
       contents: read
     
-    environment:
-      name: pypi
-      url: https://pypi.org/p/sirius-chat
-    
     steps:
       - name: Download artifacts
         uses: actions/download-artifact@v4
@@ -84,10 +80,6 @@ jobs:
     
     permissions:
       contents: read
-    
-    environment:
-      name: testpypi
-      url: https://test.pypi.org/p/sirius-chat
     
     steps:
       - name: Download artifacts
