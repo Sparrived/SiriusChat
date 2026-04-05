@@ -117,6 +117,12 @@ def build_system_prompt(config: SessionConfig, transcript: Transcript) -> str:
                 channels_str = "、".join(channels)
                 lines.append(f"    已知渠道: {channels_str}")
             
+            # Show observed entities from events
+            entities = summary.get("observed_entities", [])
+            if entities:
+                entities_str = "、".join(entities[:10])
+                lines.append(f"    已知实体/对象: {entities_str}")
+            
             # Show confidence distribution
             confidence_stats = summary.get("confidence_stats", {})
             if confidence_stats:

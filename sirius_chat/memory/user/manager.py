@@ -634,6 +634,7 @@ class UserMemoryManager:
             "facts_by_type": facts_by_type,
             "identities": {channel: uid for channel, uid in profile.identities.items()},
             "channels": list(observed_channels),
+            "observed_entities": list(runtime.observed_entities)[:10],  # Top 10 entities
             "confidence_stats": {
                 "resident_count": len(resident_facts),
                 "transient_count": len(transient_facts) if include_transient else 0,
