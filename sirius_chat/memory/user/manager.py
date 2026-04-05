@@ -276,10 +276,19 @@ class UserMemoryManager:
             entry.runtime.last_seen_uid = channel_user_id
         
         # Heuristic: When first seeing a user, add initial summary note from their message
-        # This ensures summary_notes is populated even if memory_extract task is disabled
+        # This ensures summary_notes and memory_facts are populated even if memory_extract task is disabled
         if is_new_user and content.strip():
             clean_content = content.strip()[:100]  # Truncate if too long
-            self._append_summary_note(entry=entry, note=clean_content, max_notes=8)
+            appended = self._append_summary_note(entry=entry, note=clean_content, max_notes=8)
+            # Also create memory fact to match the summary note
+            if appended:
+                self.add_memory_fact(
+                    user_id=profile.user_id,
+                    fact_type="summary",
+                    value=clean_content,
+                    source="heuristic",
+                    confidence=0.3,  # Low confidence for heuristic extraction
+                )
 
     def apply_ai_runtime_update(
         self,
