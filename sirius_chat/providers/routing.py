@@ -143,11 +143,18 @@ class ProviderRegistry:
 def merge_provider_sources(
     *,
     work_path: Path,
-    provider_config: dict[str, str],
     providers_config: list[dict[str, object]],
 ) -> dict[str, ProviderConfig]:
+    """Merge providers from multiple sources with priority order.
+    
+    Priority (high to low):
+    1. Session JSON: providers field
+    2. Persistent: <work_path>/provider_keys.json
+    """
+    # 第一步：加载持久化providers（provider_keys.json）
     merged = ProviderRegistry(work_path).load()
 
+    # 第二步：用Session JSON中的providers覆盖持久化配置
     for item in providers_config:
         provider_type = str(item.get("type", "")).strip().lower()
         api_key = str(item.get("api_key", "")).strip()
@@ -160,18 +167,6 @@ def merge_provider_sources(
             base_url=base_url,
             healthcheck_model=str(item.get("healthcheck_model", "")).strip(),
             enabled=bool(item.get("enabled", True)),
-        )
-
-    provider_type = str(provider_config.get("type", "")).strip().lower()
-    api_key = str(provider_config.get("api_key", "")).strip()
-    if provider_type and api_key:
-        base_url = str(provider_config.get("base_url", "")).strip()
-        merged[provider_type] = ProviderConfig(
-            provider_type=provider_type,
-            api_key=api_key,
-            base_url=base_url,
-            healthcheck_model=str(provider_config.get("healthcheck_model", "")).strip(),
-            enabled=True,
         )
 
     return merged

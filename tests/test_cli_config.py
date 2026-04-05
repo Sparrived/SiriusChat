@@ -48,12 +48,13 @@ def test_load_session_config_parses_required_fields(tmp_path) -> None:
     work_path = tmp_path / "work"
     _write_generated_agents(work_path)
 
-    session, provider, providers = _load_session_config(config_path, work_path)
+    session, providers = _load_session_config(config_path, work_path)
 
     assert session.work_path == work_path
     assert session.agent.name == "主助手"
-    assert provider["base_url"].startswith("https://")
-    assert providers == []
+    assert len(providers) == 1
+    assert providers[0]["type"] == "openai-compatible"
+    assert providers[0]["api_key"] == "test-key"
 
 
 def test_load_session_config_supports_siliconflow_defaults(tmp_path) -> None:
@@ -74,12 +75,12 @@ def test_load_session_config_supports_siliconflow_defaults(tmp_path) -> None:
 
     work_path = tmp_path / "work"
     _write_generated_agents(work_path)
-    session, provider, providers = _load_session_config(config_path, work_path)
+    session, providers = _load_session_config(config_path, work_path)
 
     assert session.work_path == work_path
-    assert provider["type"] == "siliconflow"
-    assert provider["base_url"] == "https://api.siliconflow.cn"
-    assert providers == []
+    assert len(providers) == 1
+    assert providers[0]["type"] == "siliconflow"
+    assert providers[0]["api_key"] == "sf-test-key"
 
 
 def test_load_session_config_accepts_providers_list_without_single_provider(tmp_path) -> None:
@@ -107,11 +108,13 @@ def test_load_session_config_accepts_providers_list_without_single_provider(tmp_
 
     work_path = tmp_path / "work"
     _write_generated_agents(work_path)
-    _, provider, providers = _load_session_config(config_path, work_path)
+    session, providers = _load_session_config(config_path, work_path)
 
-    assert provider["type"] == "siliconflow"
-    assert provider["api_key"] == "sf-test-key"
     assert len(providers) == 2
+    assert providers[0]["type"] == "siliconflow"
+    assert providers[0]["api_key"] == "sf-test-key"
+    assert providers[1]["type"] == "openai-compatible"
+    assert providers[1]["api_key"] == "openai-test-key"
 
 
 def test_load_session_config_parses_orchestration_policy(tmp_path) -> None:
@@ -139,7 +142,7 @@ def test_load_session_config_parses_orchestration_policy(tmp_path) -> None:
 
     work_path = tmp_path / "work"
     _write_generated_agents(work_path)
-    session, _, _ = _load_session_config(config_path, work_path)
+    session, _ = _load_session_config(config_path, work_path)
 
     # 验证多模型协同已配置
     assert session.orchestration.unified_model or session.orchestration.task_models

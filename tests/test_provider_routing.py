@@ -89,16 +89,16 @@ def test_merge_provider_sources_uses_registry_and_config(tmp_path: Path) -> None
 
     merged = merge_provider_sources(
         work_path=tmp_path,
-        provider_config={
-            "type": "openai-compatible",
-            "api_key": "openai-config-key",
-            "base_url": "https://api.openai.com",
-        },
         providers_config=[
             {
                 "type": "siliconflow",
                 "api_key": "sf-config-key",
                 "healthcheck_model": "Qwen/Qwen3",
+            },
+            {
+                "type": "openai-compatible",
+                "api_key": "openai-config-key",
+                "base_url": "https://api.openai.com",
             }
         ],
     )

@@ -101,31 +101,13 @@ def _load_session_config(config_path: Path, work_path: Path) -> tuple[SessionCon
         provider_obj = dict(raw.get("provider", {}))
         if provider_obj and "api_key" in provider_obj:
             providers_config = [provider_obj]
-    
-    # 从providers列表中提取第一个作为primary provider（用于简单情况）
-    provider_config = {}
-    if providers_config and isinstance(providers_config[0], dict):
-        provider_config = dict(providers_config[0])
 
-    provider_type = str(provider_config.get("type", "openai-compatible")).strip().lower()
-    if provider_type == "siliconflow":
-        base_url = str(provider_config.get("base_url", "https://api.siliconflow.cn"))
-    elif provider_type in {"volcengine-ark", "ark"}:
-        base_url = str(provider_config.get("base_url", "https://ark.cn-beijing.volces.com/api/v3"))
-    else:
-        base_url = str(provider_config.get("base_url", "https://api.openai.com"))
-
-    return session, {
-        "type": provider_type,
-        "base_url": base_url,
-        "api_key": str(provider_config.get("api_key", "")).strip(),
-    }, providers_config
+    return session, providers_config
 
 
-def _build_engine(work_path: Path, provider_config: dict[str, str], providers_config: list[dict[str, object]]) -> AsyncRolePlayEngine:
+def _build_engine(work_path: Path, providers_config: list[dict[str, object]]) -> AsyncRolePlayEngine:
     merged = merge_provider_sources(
         work_path=work_path,
-        provider_config=provider_config,
         providers_config=providers_config,
     )
     provider = AutoRoutingProvider(merged)
@@ -174,12 +156,12 @@ def main(
     logger = get_logger(__name__)
 
     try:
-        session_config, provider_config, providers_config = _load_session_config(config_path, work_path)
+        session_config, providers_config = _load_session_config(config_path, work_path)
     except ValueError as exc:
         print_func(f"加载 SessionConfig 失败：{exc}")
         print_func("请先通过提示词生成器生成并保存 agent 资产（generated_agents.json），再启动会话。")
         return 1
-    engine = _build_engine(work_path, provider_config, providers_config)
+    engine = _build_engine(work_path, providers_config)
 
     user_text = args.message.strip() if args.message else input_func("你> ").strip()
     if not user_text:

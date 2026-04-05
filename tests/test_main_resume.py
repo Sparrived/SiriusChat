@@ -38,8 +38,7 @@ def test_main_auto_resumes_by_default(monkeypatch, tmp_path) -> None:
                     global_system_prompt="测试系统提示词",
                 ),
             ),
-            {"type": "openai-compatible", "base_url": "https://api.openai.com", "api_key": "k"},
-            [],
+            [{"type": "openai-compatible", "base_url": "https://api.openai.com", "api_key": "k"}],
         ),
     )
     monkeypatch.setattr(
@@ -83,8 +82,7 @@ def test_main_no_resume_disables_auto_resume(monkeypatch, tmp_path) -> None:
                     global_system_prompt="测试系统提示词",
                 ),
             ),
-            {"type": "openai-compatible", "base_url": "https://api.openai.com", "api_key": "k"},
-            [],
+            [{"type": "openai-compatible", "base_url": "https://api.openai.com", "api_key": "k"}],
         ),
     )
     monkeypatch.setattr(

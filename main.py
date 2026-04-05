@@ -89,7 +89,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _load_session_config(config_path: Path, work_path: Path) -> tuple[SessionConfig, dict[str, str], list[dict[str, object]]]:
+def _load_session_config(config_path: Path, work_path: Path) -> tuple[SessionConfig, list[dict[str, object]]]:
     raw = json.loads(config_path.read_text(encoding="utf-8-sig"))
 
     if "agent" in raw or "global_system_prompt" in raw:
@@ -156,24 +156,8 @@ def _load_session_config(config_path: Path, work_path: Path) -> tuple[SessionCon
         provider_obj = dict(raw.get("provider", {}))
         if provider_obj and "api_key" in provider_obj:
             providers_config = [provider_obj]
-    
-    # 从providers列表中提取第一个作为primary provider（用于简单情况）
-    provider_config = {}
-    if providers_config and isinstance(providers_config[0], dict):
-        provider_config = dict(providers_config[0])
 
-    provider_type = str(provider_config.get("type", "openai-compatible")).strip().lower()
-    if provider_type == "siliconflow":
-        base_url = str(provider_config.get("base_url", "https://api.siliconflow.cn"))
-    elif provider_type in {"volcengine-ark", "ark"}:
-        base_url = str(provider_config.get("base_url", "https://ark.cn-beijing.volces.com/api/v3"))
-    else:
-        base_url = str(provider_config.get("base_url", "https://api.openai.com"))
-    return session, {
-        "type": provider_type,
-        "base_url": base_url,
-        "api_key": str(provider_config.get("api_key", "")).strip(),
-    }, providers_config
+    return session, providers_config
 
 
 def _setup_multimodel_orchestration(
@@ -237,10 +221,14 @@ def _setup_multimodel_orchestration(
     )
 
 
-def _load_provider_config_from_config_file(config_path: Path) -> tuple[dict[str, str], list[dict[str, object]]]:
+def _load_providers_config_from_config_file(config_path: Path) -> list[dict[str, object]]:
+    """加载 Session JSON 中的 providers 配置。
+    
+    支持向后兼容：如果 JSON 包含 provider（单个对象），会自动转换为 providers 列表。
+    """
     raw = json.loads(config_path.read_text(encoding="utf-8-sig"))
     
-    # 统一使用 providers 字段（list format）
+    # 优先使用 providers 字段（list format）
     providers_config = list(raw.get("providers", []))
     
     # 向后兼容：若传入 provider 单个对象，则转换为 providers list
@@ -249,24 +237,7 @@ def _load_provider_config_from_config_file(config_path: Path) -> tuple[dict[str,
         if provider_obj and "api_key" in provider_obj:
             providers_config = [provider_obj]
     
-    # 从providers列表中提取第一个作为primary provider（用于简单情况）
-    provider_config = {}
-    if providers_config and isinstance(providers_config[0], dict):
-        provider_config = dict(providers_config[0])
-
-    provider_type = str(provider_config.get("type", "openai-compatible")).strip().lower()
-    if provider_type == "siliconflow":
-        base_url = str(provider_config.get("base_url", "https://api.siliconflow.cn"))
-    elif provider_type in {"volcengine-ark", "ark"}:
-        base_url = str(provider_config.get("base_url", "https://ark.cn-beijing.volces.com/api/v3"))
-    else:
-        base_url = str(provider_config.get("base_url", "https://api.openai.com"))
-
-    return {
-        "type": provider_type,
-        "base_url": base_url,
-        "api_key": str(provider_config.get("api_key", "")).strip(),
-    }, providers_config
+    return providers_config
 
 
 def _save_generated_agent_key_to_config(config_path: Path, generated_agent_key: str) -> None:
@@ -301,8 +272,8 @@ def _bootstrap_first_generated_agent(
     )
     agent_key_raw = input_func("请输入 generated_agent_key（留空默认同 Agent 名称）：").strip() or agent_name
 
-    provider_config, providers_config = _load_provider_config_from_config_file(config_path)
-    provider = _build_provider(provider_config, providers_config, work_path, provider_factory)
+    providers_config = _load_providers_config_from_config_file(config_path)
+    provider = _build_provider(providers_config, work_path, provider_factory)
 
     questions = generate_humanized_roleplay_questions()
     answers: list[RolePlayAnswer] = []
@@ -360,10 +331,9 @@ def _run_framework_provider_detection(
         merged = registry_providers
         print_func("Provider 检测来源：provider_keys.json（已注册 provider）")
     else:
-        provider_config, providers_config = _load_provider_config_from_config_file(config_path)
+        providers_config = _load_providers_config_from_config_file(config_path)
         merged = merge_provider_sources(
             work_path=work_path,
-            provider_config=provider_config,
             providers_config=providers_config,
         )
         print_func("Provider 检测来源：配置文件（provider/providers）")
@@ -457,16 +427,17 @@ def _parse_user_turn(raw_text: str) -> Message:
 
 
 def _build_provider(
-    provider_config: dict[str, str],
     providers_config: list[dict[str, object]],
     work_path: Path,
     provider_factory: ProviderFactory | None,
 ) -> LLMProvider:
     if provider_factory is not None:
-        return provider_factory(provider_config)
+        # For custom factory, use first provider if available
+        if providers_config and isinstance(providers_config[0], dict):
+            return provider_factory(providers_config[0])
+        return provider_factory({})
     merged_providers = merge_provider_sources(
         work_path=work_path,
-        provider_config=provider_config,
         providers_config=providers_config,
     )
     return AutoRoutingProvider(merged_providers)
@@ -573,16 +544,23 @@ def _serialize_session_bundle(
     *,
     generated_agent_key: str,
     session_config: SessionConfig,
-    provider_config: dict[str, str],
     providers_config: list[dict[str, object]],
 ) -> dict[str, object]:
+    # 从 providers_config 列表中构建向后兼容的 provider 字段（取第一个）
+    provider: dict[str, str | object] = {
+        "type": "openai-compatible",
+        "base_url": "",
+        "api_key": "",
+    }
+    if providers_config and isinstance(providers_config[0], dict):
+        first_provider = providers_config[0]
+        provider["type"] = first_provider.get("type", "openai-compatible")
+        provider["base_url"] = first_provider.get("base_url", "")
+        provider["api_key"] = first_provider.get("api_key", "")
+    
     payload: dict[str, object] = {
         "generated_agent_key": generated_agent_key,
-        "provider": {
-            "type": provider_config.get("type", "openai-compatible"),
-            "base_url": provider_config.get("base_url", ""),
-            "api_key": provider_config.get("api_key", ""),
-        },
+        "provider": provider,
         "providers": providers_config,
         "history_max_messages": session_config.history_max_messages,
         "history_max_chars": session_config.history_max_chars,
@@ -614,20 +592,20 @@ def _load_or_persist_session_bundle(
     config_path: Path,
     work_path: Path,
     print_func: PrintFunc,
-) -> tuple[SessionConfig, dict[str, str], list[dict[str, object]]]:
+) -> tuple[SessionConfig, list[dict[str, object]]]:
     persisted_path = work_path / PERSISTED_SESSION_CONFIG_FILE_NAME
     if persisted_path.exists():
         try:
-            session_config, provider_config, providers_config = _load_session_config(persisted_path, work_path)
+            session_config, providers_config = _load_session_config(persisted_path, work_path)
             print_func(f"已优先加载持久化 SessionConfig：{persisted_path}")
-            return session_config, provider_config, providers_config
+            return session_config, providers_config
         except ValueError as exc:
             message = str(exc)
             if "manual agent/global_system_prompt is not allowed" not in message:
                 raise
             print_func("检测到旧版持久化 SessionConfig 格式，正在自动重建为 generated_agent_key 结构。")
 
-    session_config, provider_config, providers_config = _load_session_config(config_path, work_path)
+    session_config, providers_config = _load_session_config(config_path, work_path)
     generated_agent_key = _load_generated_agent_key_from_config_file(config_path)
     try:
         _atomic_write_json(
@@ -635,13 +613,12 @@ def _load_or_persist_session_bundle(
             _serialize_session_bundle(
                 generated_agent_key=generated_agent_key,
                 session_config=session_config,
-                provider_config=provider_config,
                 providers_config=providers_config,
             ),
         )
     except OSError as exc:
         print_func(f"写入持久化 SessionConfig 失败：{exc}")
-    return session_config, provider_config, providers_config
+    return session_config, providers_config
 
 
 def _prompt_non_empty(*, prompt: str, input_func: InputFunc, print_func: PrintFunc) -> str:
@@ -866,7 +843,7 @@ def main(
     _persist_last_config_path(config_path, print_func)
 
     try:
-        session_config, provider_config, providers_config = _load_or_persist_session_bundle(
+        session_config, providers_config = _load_or_persist_session_bundle(
             config_path=config_path,
             work_path=work_path,
             print_func=print_func,
@@ -914,7 +891,7 @@ def main(
                 input_func=input_func,
                 print_func=print_func,
             )
-            session_config, provider_config, providers_config = _load_or_persist_session_bundle(
+            session_config, providers_config = _load_or_persist_session_bundle(
                 config_path=config_path,
                 work_path=work_path,
                 print_func=print_func,
@@ -935,7 +912,7 @@ def main(
             print_func=print_func,
         )
         provider_registry = ProviderRegistry(work_path)
-        provider = _build_provider(provider_config, providers_config, work_path, provider_factory)
+        provider = _build_provider(providers_config, work_path, provider_factory)
         engine = AsyncRolePlayEngine(provider=provider)
         state_store = _create_session_store(work_path=work_path, store_kind=args.store)
         should_resume = (not args.no_resume) and state_store.exists()
@@ -948,7 +925,7 @@ def main(
             state_store,
             work_path,
             provider_registry,
-            lambda: _build_provider(provider_config, providers_config, work_path, provider_factory),
+            lambda: _build_provider(providers_config, work_path, provider_factory),
             transcript,
             input_func=input_func,
             print_func=print_func,

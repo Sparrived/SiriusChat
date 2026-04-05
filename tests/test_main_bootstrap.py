@@ -12,16 +12,15 @@ def test_probe_provider_before_bootstrap_raises_when_unavailable(monkeypatch, tm
 
     monkeypatch.setattr(
         main_module,
-        "_load_provider_config_from_config_file",
-        lambda _config_path: (
+        "_load_providers_config_from_config_file",
+        lambda _config_path: [
             {
                 "type": "openai-compatible",
                 "api_key": "k",
                 "base_url": "https://api.openai.com",
                 "healthcheck_model": "mock-model",
             },
-            [],
-        ),
+        ],
     )
 
     def _raise_detection(**_kwargs) -> None:  # noqa: ANN003
@@ -43,8 +42,10 @@ def test_bootstrap_first_generated_agent_does_not_probe_provider(monkeypatch, tm
 
     monkeypatch.setattr(
         main_module,
-        "_load_provider_config_from_config_file",
-        lambda _config_path: ({"type": "openai-compatible", "api_key": "k", "base_url": "https://api.openai.com"}, []),
+        "_load_providers_config_from_config_file",
+        lambda _config_path: [
+            {"type": "openai-compatible", "api_key": "k", "base_url": "https://api.openai.com"}
+        ],
     )
     monkeypatch.setattr(main_module, "_build_provider", lambda *_a, **_k: object())
 
@@ -92,16 +93,15 @@ def test_run_framework_provider_detection_prefers_registry_over_stale_config(mon
 
     monkeypatch.setattr(
         main_module,
-        "_load_provider_config_from_config_file",
-        lambda _config_path: (
+        "_load_providers_config_from_config_file",
+        lambda _config_path: [
             {
                 "type": "openai-compatible",
                 "api_key": "openai-key",
                 "base_url": "https://api.openai.com",
                 "healthcheck_model": "",
             },
-            [],
-        ),
+        ],
     )
 
     calls: list[dict[str, object]] = []
@@ -154,7 +154,7 @@ def test_load_or_persist_session_bundle_loads_generated_key_persisted(monkeypatc
     config_path = tmp_path / "config.json"
     config_path.write_text("{}", encoding="utf-8")
 
-    session, provider, providers = main_module._load_or_persist_session_bundle(
+    session, providers = main_module._load_or_persist_session_bundle(
         config_path=config_path,
         work_path=tmp_path,
         print_func=lambda _msg: None,
@@ -162,8 +162,8 @@ def test_load_or_persist_session_bundle_loads_generated_key_persisted(monkeypatc
 
     assert session.agent.name == "主助手"
     assert session.global_system_prompt == "测试系统提示词"
-    assert provider["type"] == "openai-compatible"
-    assert providers == []
+    assert len(providers) == 1
+    assert providers[0]["type"] == "openai-compatible"
 
 
 def test_load_or_persist_session_bundle_uses_load_session_config_for_persisted(monkeypatch, tmp_path) -> None:
@@ -183,21 +183,20 @@ def test_load_or_persist_session_bundle_uses_load_session_config_for_persisted(m
                     global_system_prompt="测试系统提示词",
                 ),
             ),
-            {"type": "openai-compatible", "base_url": "https://api.openai.com", "api_key": "k"},
-            [],
+            [{"type": "openai-compatible", "base_url": "https://api.openai.com", "api_key": "k"}],
         )
 
     monkeypatch.setattr(main_module, "_load_session_config", _fake_load_session)
 
-    session, provider, providers = main_module._load_or_persist_session_bundle(
+    session, providers = main_module._load_or_persist_session_bundle(
         config_path=config_path,
         work_path=tmp_path,
         print_func=lambda _msg: None,
     )
 
     assert session.agent.name == "主助手"
-    assert provider["type"] == "openai-compatible"
-    assert providers == []
+    assert len(providers) == 1
+    assert providers[0]["type"] == "openai-compatible"
 
 
 def test_load_or_persist_session_bundle_rebuilds_legacy_persisted(monkeypatch, tmp_path) -> None:
@@ -221,8 +220,7 @@ def test_load_or_persist_session_bundle_rebuilds_legacy_persisted(monkeypatch, t
         assert work_path == tmp_path
         return (
             session_from_config,
-            {"type": "openai-compatible", "base_url": "https://api.openai.com", "api_key": "k"},
-            [],
+            [{"type": "openai-compatible", "base_url": "https://api.openai.com", "api_key": "k"}],
         )
 
     writes: list[dict[str, object]] = []
@@ -235,14 +233,14 @@ def test_load_or_persist_session_bundle_rebuilds_legacy_persisted(monkeypatch, t
     monkeypatch.setattr(main_module, "_load_generated_agent_key_from_config_file", lambda _p: "main_agent")
     monkeypatch.setattr(main_module, "_atomic_write_json", _fake_atomic_write)
 
-    session, provider, providers = main_module._load_or_persist_session_bundle(
+    session, providers = main_module._load_or_persist_session_bundle(
         config_path=config_path,
         work_path=tmp_path,
         print_func=lambda _msg: None,
     )
 
     assert session is session_from_config
-    assert provider["type"] == "openai-compatible"
-    assert providers == []
+    assert len(providers) == 1
+    assert providers[0]["type"] == "openai-compatible"
     assert len(writes) == 1
     assert writes[0]["generated_agent_key"] == "main_agent"
