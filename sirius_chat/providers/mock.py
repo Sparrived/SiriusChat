@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import logging
 from collections import deque
 from dataclasses import dataclass, field
 
 from sirius_chat.providers.base import GenerationRequest, LLMProvider
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -17,6 +20,7 @@ class MockProvider(LLMProvider):
         self.requests: list[GenerationRequest] = []
 
     def generate(self, request: GenerationRequest) -> str:
+        logger.info(f"[模型调用] mock-{request.model} | 温度: {request.temperature}, Token上限: {request.max_tokens}")
         self.requests.append(request)
         # 检测事件验证请求并返回有效的 JSON
         is_event_verification = (
@@ -24,7 +28,7 @@ class MockProvider(LLMProvider):
             "分析这段对话中的潜在事件" in str(request.messages)
         )
         if is_event_verification:
-            return """{
+            response = """{
                 "record": "是",
                 "reason": "测试事件",
                 "summary": "测试事件摘要",
@@ -33,6 +37,11 @@ class MockProvider(LLMProvider):
                 "time_hints": ["时间"],
                 "emotion_tags": ["情绪"]
             }"""
+            logger.info(f"[模型调用成功] mock-{request.model} | 事件验证响应")
+            return response
         if self._queue:
-            return self._queue.popleft()
+            response = self._queue.popleft()
+            logger.info(f"[模型调用成功] mock-{request.model} | 回复长度: {len(response)}")
+            return response
+        logger.warning(f"[模型调用] mock-{request.model} | 无配置响应")
         return "[mock] no configured response"

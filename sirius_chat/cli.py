@@ -16,7 +16,7 @@ from sirius_chat.api import (
     create_async_engine,
     merge_provider_sources,
 )
-from sirius_chat.logging_config import configure_logging, get_logger
+from sirius_chat.logging_config import configure_logging, setup_log_archival, get_logger
 
 InputFunc = Callable[[str], str]
 PrintFunc = Callable[[str], None]
@@ -152,11 +152,17 @@ def main(
     work_path.mkdir(parents=True, exist_ok=True)
     
     log_dir = work_path / "logs"
+    
+    # 先清理旧日志（在处理器创建前）
+    setup_log_archival(log_dir / "sirius_chat.log")
+    
+    # 配置日志处理器（包括模型调用的专用日志）
     configure_logging(
         level="INFO",
         format_type="console",
         log_file=log_dir / "sirius_chat.log",
         enable_file_rotation=True,  # 每日轮换，保留7个备份
+        model_calls_log_file=log_dir / "model_calls.log",  # 模型调用的专用日志
     )
     logger = get_logger(__name__)
 

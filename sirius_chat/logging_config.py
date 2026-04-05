@@ -105,6 +105,7 @@ class FlushingTimedRotatingFileHandler(logging.handlers.TimedRotatingFileHandler
 def _archive_old_logs(log_file: Path) -> None:
     """
     将已存在的日志文件归档到 archive 目录下
+    需在日志处理器创建前调用，确保文件未被锁定
     
     Args:
         log_file: 日志文件路径
@@ -121,10 +122,27 @@ def _archive_old_logs(log_file: Path) -> None:
     archive_file = archive_dir / f"{log_file.stem}_{timestamp}{log_file.suffix}"
     
     try:
-        shutil.move(str(log_file), str(archive_file))
+        # 先复制，再删除原文件（比直接移动更安全）
+        shutil.copy2(str(log_file), str(archive_file))
+        log_file.unlink()
     except Exception:
-        # 如果移动失败（如权限问题），忽略错误，继续创建新日志
+        # 如果失败（如权限问题），忽略错误，继续创建新日志
         pass
+
+
+def setup_log_archival(log_file: Path) -> None:
+    """
+    在应用启动时调用，在创建日志处理器之前执行
+    将旧日志文件归档
+    
+    Args:
+        log_file: 主日志文件路径
+    """
+    # 确保日志文件的父目录存在
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+    
+    # 执行归档
+    _archive_old_logs(log_file)
 
 
 class ColoredFormatter(logging.Formatter):
@@ -171,6 +189,7 @@ def configure_logging(
     format_type: LogFormat = "console",
     log_file: Path | str | None = None,
     enable_file_rotation: bool = False,
+    model_calls_log_file: Path | str | None = None,
 ) -> None:
     """
     配置全局日志系统
@@ -180,6 +199,7 @@ def configure_logging(
         format_type: 输出格式，可选值：console/json
         log_file: 可选的日志文件路径（若指定则同时输出到文件）
         enable_file_rotation: 是否启用日志文件循环（每日轮换）
+        model_calls_log_file: 可选的模型调用日志文件路径（独立的专用日志）
 
     Example:
         ```python
@@ -191,7 +211,8 @@ def configure_logging(
             level="INFO",
             format_type="json",
             log_file="logs/app.log",
-            enable_file_rotation=True
+            enable_file_rotation=True,
+            model_calls_log_file="logs/model_calls.log"
         )
         ```
     """
@@ -214,13 +235,10 @@ def configure_logging(
 
     root_logger.addHandler(console_handler)
 
-    # 文件处理器（可选）
+    # 主日志文件处理器（可选）
     if log_file:
         log_path = Path(log_file)
         log_path.parent.mkdir(parents=True, exist_ok=True)
-        
-        # 将旧日志归档
-        _archive_old_logs(log_path)
 
         if enable_file_rotation:
             # 每日轮换，保留7个备份，实时刷新
@@ -239,6 +257,21 @@ def configure_logging(
         file_handler.setFormatter(JSONFormatter() if format_type == "json" else ColoredFormatter())
         root_logger.addHandler(file_handler)
 
+    # 模型调用日志处理器（可选，专用日志文件）
+    if model_calls_log_file:
+        model_log_path = Path(model_calls_log_file)
+        model_log_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # 为模型调用日志创建独立的处理器
+        model_handler = FlushingFileHandler(model_log_path, encoding="utf-8")
+        model_handler.setLevel(getattr(logging, "INFO"))
+        model_handler.setFormatter(JSONFormatter() if format_type == "json" else ColoredFormatter())
+        
+        # 只处理 provider 相关的日志
+        model_logger = logging.getLogger("sirius_chat.providers")
+        model_logger.addHandler(model_handler)
+        model_logger.setLevel(getattr(logging, "INFO"))
+
 
 def get_logger(name: str) -> logging.Logger:
     """获取指定名称的logger实例"""
@@ -248,6 +281,7 @@ def get_logger(name: str) -> logging.Logger:
 # 便捷导出
 __all__ = [
     "configure_logging",
+    "setup_log_archival",
     "get_logger",
     "JSONFormatter",
     "ColoredFormatter",
