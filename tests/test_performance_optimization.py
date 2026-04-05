@@ -63,37 +63,46 @@ class TestPerformanceOptimization:
 
     def test_B_trait_taxonomy_defined(self):
         """测试B: 验证特征分类体系已定义"""
-        assert "Technical" in TRAIT_TAXONOMY
         assert "Learning" in TRAIT_TAXONOMY
         assert "Social" in TRAIT_TAXONOMY
+        assert "Lifestyle" in TRAIT_TAXONOMY
         assert "Creative" in TRAIT_TAXONOMY
-        assert "Professional" in TRAIT_TAXONOMY
+        assert "Practical" in TRAIT_TAXONOMY
+        assert "Emotional" in TRAIT_TAXONOMY
+        assert "Leisure" in TRAIT_TAXONOMY
         
-        # 验证每个分类都有keywords
+        # 验证每个分类都有keywords和description
         for category, info in TRAIT_TAXONOMY.items():
             assert "keywords" in info
             assert len(info["keywords"]) > 0
             assert "priority" in info
+            assert "description" in info
 
     def test_B_normalize_trait_basic_classification(self):
         """测试B: 验证特征规范化基本分类"""
         manager = UserMemoryManager()
         
-        # 测试已分类的特征
-        assert manager._normalize_trait("编程") == "Technical"
-        assert manager._normalize_trait("代码") == "Technical"
+        # 测试已分类的特征（日常交流维度）
         assert manager._normalize_trait("学习") == "Learning"
+        assert manager._normalize_trait("研究") == "Learning"
+        assert manager._normalize_trait("交流") == "Social"
         assert manager._normalize_trait("团队") == "Social"
+        assert manager._normalize_trait("运动") == "Lifestyle"
         assert manager._normalize_trait("绘画") == "Creative"
-        assert manager._normalize_trait("项目") == "Professional"
+        assert manager._normalize_trait("工作") == "Practical"
+        assert manager._normalize_trait("开心") == "Emotional"
+        assert manager._normalize_trait("爱好") == "Leisure"
 
     def test_B_normalize_trait_already_classified(self):
         """测试B: 已分类标签直接返回"""
         manager = UserMemoryManager()
         
         # 已经是分类标签
-        assert manager._normalize_trait("Technical") == "Technical"
         assert manager._normalize_trait("Learning") == "Learning"
+        assert manager._normalize_trait("Social") == "Social"
+        assert manager._normalize_trait("Lifestyle") == "Lifestyle"
+        assert manager._normalize_trait("Creative") == "Creative"
+        assert manager._normalize_trait("Practical") == "Practical"
 
     def test_B_normalize_trait_unclassified(self):
         """测试B: 无法分类的特征保留原样"""
@@ -101,15 +110,17 @@ class TestPerformanceOptimization:
         
         # 无法分类的特征保留
         assert manager._normalize_trait("xyz_unknown_trait") == "xyz_unknown_trait"
-        assert manager._normalize_trait("某个特定风格") == "某个特定风格"
+        # 注："某个特定风格"会匹配到Creative（因为包含"风格"），这是预期行为
+        assert manager._normalize_trait("xyz_truly_unknown") == "xyz_truly_unknown"
 
     def test_B_normalize_trait_case_insensitive(self):
         """测试B: 规范化忽略大小写"""
         manager = UserMemoryManager()
         
-        assert manager._normalize_trait("PROGRAMMING") == "Technical"
-        assert manager._normalize_trait("Learning") == "Learning"
+        assert manager._normalize_trait("LEARNING") == "Learning"
+        assert manager._normalize_trait("learning") == "Learning"
         assert manager._normalize_trait("TEAM") == "Social"
+        assert manager._normalize_trait("team") == "Social"
 
     def test_B_add_memory_fact_with_trait_normalization(self):
         """测试B: 验证add_memory_fact中的特征规范化"""
@@ -117,19 +128,19 @@ class TestPerformanceOptimization:
         profile = UserProfile(user_id="user1", name="Alice")
         manager.register_user(profile)
         
-        # 添加一个关键词特征，应该被规范化
+        # 添加一个日常交流特征，应该被规范化
         manager.add_memory_fact(
             user_id="user1",
             fact_type="user_interest",
-            value="编程",  # 会被规范化为"Technical"
+            value="学习",  # 会被规范化为"Learning"
             source="test",
             confidence=0.8,
         )
         
         facts = manager.entries["user1"].runtime.memory_facts
         assert len(facts) == 1
-        # 值应该被规范化
-        assert facts[0].value == "Technical" or facts[0].value == "编程"  # 取决于实现
+        # 值应该被规范化为Learning
+        assert facts[0].value == "Learning" or facts[0].value == "学习"  # 取决于实现
 
     def test_C1_max_memory_facts_constant(self):
         """测试C1: 验证MAX_MEMORY_FACTS常数"""

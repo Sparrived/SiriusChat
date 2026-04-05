@@ -1048,15 +1048,3 @@ class UserMemoryFileStore:
             entry.runtime.last_seen_uid = str(runtime_data.get("last_seen_uid", "")).strip()
 
         return manager
-
-
-# ContextualEventInterpretation 已移到 event_memory.py
-
-
-# EventMemoryEntry 已移到 event_memory.py
-
-
-# EventMemoryManager 已移到 event_memory.py
-
-
-# EventMemoryFileStore 已移到 event_memory.py
