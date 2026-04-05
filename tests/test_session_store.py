@@ -1,7 +1,8 @@
 ﻿from pathlib import Path
 
-from sirius_chat.models import Message, TokenUsageRecord, Transcript
-from sirius_chat.session_store import SqliteSessionStore
+from sirius_chat.config import TokenUsageRecord
+from sirius_chat.models import Message, Transcript
+from sirius_chat.session.store import SqliteSessionStore
 
 
 def test_sqlite_session_store_save_and_load(tmp_path: Path) -> None:

@@ -146,7 +146,7 @@ def setup_log_archival(log_file: Path) -> None:
 
 
 class ColoredFormatter(logging.Formatter):
-    """带颜色的Console格式化器，提高可读性"""
+    """带颜色的Console格式化器，提高可读性（仅用于控制台）"""
 
     # ANSI颜色代码
     COLOR_CODES = {
@@ -159,13 +159,37 @@ class ColoredFormatter(logging.Formatter):
     RESET = "\033[0m"
 
     def format(self, record: logging.LogRecord) -> str:
-        # 仅在终端中添加颜色
+        # 创建基础日志
+        fmt = "[%(asctime)s] [%(levelname)s] %(name)s - %(message)s"
+        formatter = logging.Formatter(fmt, datefmt="%Y-%m-%d %H:%M:%S")
+        
+        # 仅在终端中添加颜色（不修改原record）
+        original_levelname = record.levelname
         if sys.stdout.isatty():
             levelname = record.levelname
             color = self.COLOR_CODES.get(levelname, self.RESET)
             record.levelname = f"{color}{levelname}{self.RESET}"
+        
+        result = formatter.format(record)
+        record.levelname = original_levelname  # 恢复原值，防止影响其他处理器
 
-        # 基础格式
+        # 添加额外信息（如果有）
+        if hasattr(record, "task") or hasattr(record, "user_id"):
+            extra_parts = []
+            if hasattr(record, "task"):
+                extra_parts.append(f"task={record.task}")
+            if hasattr(record, "user_id"):
+                extra_parts.append(f"user={record.user_id}")
+            if extra_parts:
+                result += f" ({', '.join(extra_parts)})"
+
+        return result
+
+
+class PlainFormatter(logging.Formatter):
+    """纯文本格式化器，用于日志文件（无颜色代码）"""
+
+    def format(self, record: logging.LogRecord) -> str:
         fmt = "[%(asctime)s] [%(levelname)s] %(name)s - %(message)s"
         formatter = logging.Formatter(fmt, datefmt="%Y-%m-%d %H:%M:%S")
         result = formatter.format(record)
@@ -181,6 +205,7 @@ class ColoredFormatter(logging.Formatter):
                 result += f" ({', '.join(extra_parts)})"
 
         return result
+
 
 
 def configure_logging(
@@ -254,7 +279,11 @@ def configure_logging(
             file_handler = FlushingFileHandler(log_path, encoding="utf-8")
 
         file_handler.setLevel(getattr(logging, level))
-        file_handler.setFormatter(JSONFormatter() if format_type == "json" else ColoredFormatter())
+        # 文件处理器使用纯文本格式化器（无颜色代码）
+        if format_type == "json":
+            file_handler.setFormatter(JSONFormatter())
+        else:
+            file_handler.setFormatter(PlainFormatter())
         root_logger.addHandler(file_handler)
 
     # 模型调用日志处理器（可选，专用日志文件）
@@ -265,7 +294,11 @@ def configure_logging(
         # 为模型调用日志创建独立的处理器
         model_handler = FlushingFileHandler(model_log_path, encoding="utf-8")
         model_handler.setLevel(getattr(logging, "INFO"))
-        model_handler.setFormatter(JSONFormatter() if format_type == "json" else ColoredFormatter())
+        # 文件处理器使用纯文本格式化器（无颜色代码）
+        if format_type == "json":
+            model_handler.setFormatter(JSONFormatter())
+        else:
+            model_handler.setFormatter(PlainFormatter())
         
         # 只处理 provider 相关的日志
         model_logger = logging.getLogger("sirius_chat.providers")
@@ -284,6 +317,7 @@ __all__ = [
     "setup_log_archival",
     "get_logger",
     "JSONFormatter",
+    "PlainFormatter",
     "ColoredFormatter",
     "LogLevel",
     "LogFormat",

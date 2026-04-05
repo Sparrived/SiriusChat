@@ -4,13 +4,13 @@ import pytest
 import asyncio
 from pathlib import Path
 
-from sirius_chat.models import (
+from sirius_chat.config import (
     SessionConfig,
     Agent,
     AgentPreset,
-    Message,
     OrchestrationPolicy,
 )
+from sirius_chat.models import Message
 from sirius_chat import AsyncRolePlayEngine
 from sirius_chat.exceptions import OrchestrationConfigError
 from sirius_chat.async_engine.orchestration_config import (

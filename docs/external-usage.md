@@ -43,6 +43,9 @@ config = create_session_config_from_selected_agent(
         task_budgets={"memory_extract": 1200},
         task_temperatures={"memory_extract": 0.1},
         task_max_tokens={"memory_extract": 128},
+        # 频率控制：每3条消息执行一次，且内容≥50字符
+        memory_extract_batch_size=3,
+        memory_extract_min_content_length=50,
     ),
 )
 

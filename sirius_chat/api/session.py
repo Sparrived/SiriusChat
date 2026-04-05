@@ -1,5 +1,5 @@
-from sirius_chat.session_runner import JsonPersistentSessionRunner
-from sirius_chat.session_store import JsonSessionStore, SqliteSessionStore
+from sirius_chat.session.runner import JsonPersistentSessionRunner
+from sirius_chat.session.store import JsonSessionStore, SqliteSessionStore
 
 __all__ = [
     "JsonPersistentSessionRunner",

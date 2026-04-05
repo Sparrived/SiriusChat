@@ -7,7 +7,7 @@ from pathlib import Path
 from sirius_chat.api import Agent, AgentPreset, JsonPersistentSessionRunner, Participant, SessionConfig
 from sirius_chat.config import OrchestrationPolicy
 from sirius_chat.providers.mock import MockProvider
-from sirius_chat.session_store import SqliteSessionStore
+from sirius_chat.session.store import SqliteSessionStore
 
 
 def test_json_persistent_session_runner_auto_persistence_and_reset(tmp_path: Path) -> None:

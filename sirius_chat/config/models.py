@@ -76,6 +76,10 @@ class OrchestrationPolicy:
     memory_manager_temperature: float = 0.3
     memory_manager_max_tokens: int = 512
     
+    # Memory Extract frequency control (避免调用过于频繁导致内容碎片化)
+    memory_extract_batch_size: int = 1  # 每隔N条消息执行一次提取（1=每次，3=每3条）
+    memory_extract_min_content_length: int = 0  # 最小内容长度阈值（字符数），0=无限制
+    
     def validate(self) -> None:
         """Validate configuration legitimacy."""
         if not self.unified_model and not self.task_models:

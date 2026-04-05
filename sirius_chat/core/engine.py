@@ -688,6 +688,7 @@ class AsyncRolePlayEngine:
         channel: str | None = None,
         channel_user_id: str | None = None,
         multimodal_inputs: list[dict[str, str]] | None = None,
+        user_message_count_since_extract: dict[str, int] | None = None,
     ) -> None:
         normalized_multimodal_inputs = self._normalize_multimodal_inputs(
             multimodal_inputs or [],
@@ -711,13 +712,34 @@ class AsyncRolePlayEngine:
             channel=channel,
             channel_user_id=channel_user_id,
         )
-        await self._run_memory_extract_task(
-            config=config,
-            transcript=transcript,
-            participant=participant,
-            content=content,
-            task_token_usage=task_token_usage,
+        
+        # ============================================================================
+        # Memory Extract 频率控制 - 避免调用过于频繁导致内容碎片化
+        # ============================================================================
+        batch_size = int(getattr(config.orchestration, 'memory_extract_batch_size', 1))
+        min_length = int(getattr(config.orchestration, 'memory_extract_min_content_length', 0))
+        user_message_count_since_extract = user_message_count_since_extract or {}
+        current_count = user_message_count_since_extract.get(participant.user_id, 0)
+        
+        should_run_memory_extract = (
+            # 条件1：消息计数达到批处理大小
+            (current_count + 1) % batch_size == 0
+            # 条件2：内容长度满足最小要求
+            and len(content) >= min_length
         )
+        
+        if should_run_memory_extract:
+            await self._run_memory_extract_task(
+                config=config,
+                transcript=transcript,
+                participant=participant,
+                content=content,
+                task_token_usage=task_token_usage,
+            )
+            user_message_count_since_extract[participant.user_id] = 0
+        else:
+            user_message_count_since_extract[participant.user_id] = current_count + 1
+        
         evidence = await self._run_multimodal_parse_task(
             config=config,
             transcript=transcript,
@@ -842,6 +864,8 @@ class AsyncRolePlayEngine:
         event_store = event_file_store.load()
         transcript.user_memory.merge_from(file_store.load_all())
         task_token_usage: dict[str, int] = {}
+        # 跟踪每个用户自上次memory_extract后的消息计数
+        user_message_count_since_extract: dict[str, int] = {}
 
         known_by_id: dict[str, Participant] = {}
         known_by_label: dict[str, str] = {}
@@ -938,6 +962,7 @@ class AsyncRolePlayEngine:
                 channel=turn.channel,
                 channel_user_id=turn.channel_user_id,
                 multimodal_inputs=turn.multimodal_inputs,
+                user_message_count_since_extract=user_message_count_since_extract,
             )
             assistant_message = await self._generate_assistant_message(config, transcript)
             if on_message:

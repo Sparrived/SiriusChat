@@ -217,7 +217,9 @@ SiliconFlow 配置示例：
       "multimodal_parse": 1
     },
     "max_multimodal_inputs_per_turn": 4,
-    "max_multimodal_value_length": 4096
+    "max_multimodal_value_length": 4096,
+    "memory_extract_batch_size": 3,
+    "memory_extract_min_content_length": 50
     }
   }
 }
@@ -228,6 +230,10 @@ SiliconFlow 配置示例：
 - **多模型协同现已成为默认运作方式**。所有任务默认启用，可通过 `task_enabled` 字典按需禁用特定任务。
 - `chat_main` 默认使用 `agent.model`。
 - `memory_extract` 可配置单独模型协助用户记忆提取。
+  - **频率控制**（避免调用过于频繁导致内容碎片化）：
+    * `memory_extract_batch_size`（默认1）：每隔N条消息执行一次提取。设为3表示每3条消息提取一次，有效降低LLM调用成本和提取内容零碎化问题。
+    * `memory_extract_min_content_length`（默认0）：内容最小长度阈值（字符数）。0表示无限制；设为50表示只有不少于50字符的消息才进行提取。
+    * 两个条件同时满足时才会执行提取，例如 `batch_size=3, min_length=50` 意为"每3条消息且内容≥50字"时提取。
 - `event_extract` 可配置单独模型提取事件结构化要素，增强跨会话事件命中。
 - `multimodal_parse` 可配置单独模型将图片/视频输入转成文本证据。
 - 若需全部由一个模型处理，可通过移除 `task_models` 并设置 `unified_model` 即可切换到统一模型模式。

@@ -306,7 +306,7 @@ config.orchestration.task_models = {
 ### 3. 自定义 Agent 提示词
 
 ```python
-from sirius_chat.models import Agent, AgentPreset
+from sirius_chat.config import Agent, AgentPreset
 
 agent = Agent(
     name="专业助手",

@@ -8,7 +8,7 @@ from sirius_chat.async_engine import AsyncRolePlayEngine
 from sirius_chat.config import SessionConfig
 from sirius_chat.models import Message, Participant, Transcript
 from sirius_chat.providers.base import AsyncLLMProvider, LLMProvider
-from sirius_chat.session_store import JsonSessionStore, SessionStore
+from sirius_chat.session.store import JsonSessionStore, SessionStore
 
 
 PRIMARY_USER_FILE_NAME = "primary_user.json"

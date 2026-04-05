@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from sirius_chat.memory import UserMemoryEntry, UserMemoryManager, UserProfile
-from sirius_chat.config import TokenUsageRecord
+from sirius_chat.config import TokenUsageRecord, OrchestrationPolicy
 
 
 @dataclass(slots=True)

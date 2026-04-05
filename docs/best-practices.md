@@ -60,7 +60,7 @@ async def run_isolated_session(session_id: str, user_input: str):
     session_work_path.mkdir(parents=True, exist_ok=True)
     
     # 创建这个会话的专用配置
-    from sirius_chat.models import SessionConfig
+    from sirius_chat.config import SessionConfig
     session_config = SessionConfig(
         work_path=session_work_path,
         preset=baseconfig.preset,
@@ -241,7 +241,8 @@ async def cached_generation(model: str, messages: list):
 ### 压缩会话历史
 
 ```python
-from sirius_chat.models import SessionConfig, Transcript
+from sirius_chat.config import SessionConfig
+from sirius_chat.models import Transcript
 
 def configure_compression(config: SessionConfig):
     """配置会话压缩策略。"""

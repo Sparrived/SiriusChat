@@ -72,7 +72,7 @@ from sirius_chat.providers.middleware import (
     RetryMiddleware,
     TokenBucketRateLimiter,
 )
-from sirius_chat.session_store import SqliteSessionStore
+from sirius_chat.session.store import SqliteSessionStore
 
 __all__ = [
     # Core Models
