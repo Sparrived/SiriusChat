@@ -264,6 +264,7 @@ class UserMemoryManager:
         channel_user_id: str | None = None,
     ) -> None:
         """Remember a message from user."""
+        is_new_user = profile.user_id not in self.entries
         self.register_user(profile)
         entry = self.entries[profile.user_id]
         entry.runtime.recent_messages.append(content)
@@ -273,6 +274,12 @@ class UserMemoryManager:
             entry.runtime.last_seen_channel = channel
         if channel_user_id:
             entry.runtime.last_seen_uid = channel_user_id
+        
+        # Heuristic: When first seeing a user, add initial summary note from their message
+        # This ensures summary_notes is populated even if memory_extract task is disabled
+        if is_new_user and content.strip():
+            clean_content = content.strip()[:100]  # Truncate if too long
+            self._append_summary_note(entry=entry, note=clean_content, max_notes=8)
 
     def apply_ai_runtime_update(
         self,
