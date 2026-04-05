@@ -18,6 +18,21 @@ class MockProvider(LLMProvider):
 
     def generate(self, request: GenerationRequest) -> str:
         self.requests.append(request)
+        # 检测事件验证请求并返回有效的 JSON
+        is_event_verification = (
+            "对话分析专家" in request.system_prompt or 
+            "分析这段对话中的潜在事件" in str(request.messages)
+        )
+        if is_event_verification:
+            return """{
+                "record": "是",
+                "reason": "测试事件",
+                "summary": "测试事件摘要",
+                "keywords": ["关键词"],
+                "role_slots": ["角色"],
+                "time_hints": ["时间"],
+                "emotion_tags": ["情绪"]
+            }"""
         if self._queue:
             return self._queue.popleft()
         return "[mock] no configured response"

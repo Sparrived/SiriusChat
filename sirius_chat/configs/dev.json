@@ -14,7 +14,11 @@
   "history_max_messages": 32,
   "enable_auto_compression": false,
   "orchestration": {
-    "enabled": true,
+    "task_enabled": {
+      "memory_extract": true,
+      "multimodal_parse": true,
+      "event_extract": true
+    },
     "task_models": {
       "memory_extract": "gpt-4-mini",
       "event_extract": "gpt-4-mini",

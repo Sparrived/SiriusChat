@@ -29,7 +29,11 @@ Sirius Chat 提供灵活的配置管理系统，支持：
   "max_recent_participant_messages": 5,
   "enable_auto_compression": true,
   "orchestration": {
-    "enabled": true,
+    "task_enabled": {
+      "memory_extract": true,
+      "multimodal_parse": true,
+      "event_extract": true
+    },
     "task_models": {},
     "task_budgets": {},
     "task_temperatures": {},
@@ -40,7 +44,6 @@ Sirius Chat 提供灵活的配置管理系统，支持：
     "enable_prompt_driven_splitting": true,
     "split_marker": "[MSG_BREAK]",
     "memory_manager_model": "",
-    "memory_manager_budget": 1500,
     "memory_manager_temperature": 0.3,
     "memory_manager_max_tokens": 512
   }
@@ -113,9 +116,17 @@ Agent 配置定义 AI 助手的身份和行为。
 ### orchestration
 多任务编排配置，这是一个高级功能。
 
-#### orchestration.enabled
-- **类型**: 布尔值
-- **含义**: 是否启用独立任务编排
+#### orchestration.task_enabled
+- **类型**: 对象（布尔值键值对）
+- **含义**: 各个任务的启用状态，所有任务默认启用
+- **示例**:
+```json
+{
+  "memory_extract": true,
+  "event_extract": true,
+  "multimodal_parse": true
+}
+```
 
 #### orchestration.task_models
 - **类型**: 对象
@@ -194,7 +205,11 @@ Agent 配置定义 AI 助手的身份和行为。
   },
   "enable_auto_compression": false,
   "orchestration": {
-    "enabled": true,
+    "task_enabled": {
+      "memory_extract": true,
+      "multimodal_parse": true,
+      "event_extract": true
+    },
     "task_models": {
       "memory_extract": "gpt-4-mini",
       "event_extract": "gpt-4-mini"
@@ -215,7 +230,11 @@ Agent 配置定义 AI 助手的身份和行为。
     "max_tokens": 256
   },
   "orchestration": {
-    "enabled": false
+    "task_enabled": {
+      "memory_extract": false,
+      "multimodal_parse": false,
+      "event_extract": false
+    }
   }
 }
 ```
@@ -234,7 +253,11 @@ Agent 配置定义 AI 助手的身份和行为。
   },
   "enable_auto_compression": true,
   "orchestration": {
-    "enabled": true,
+    "task_enabled": {
+      "memory_extract": true,
+      "multimodal_parse": true,
+      "event_extract": true
+    },
     "memory_manager_model": "${MEMORY_MANAGER_MODEL:gpt-4-mini}"
   }
 }

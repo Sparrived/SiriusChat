@@ -40,26 +40,25 @@ class TestOrchestrationConfigValidation:
             work_path=Path("./test_data"),
             preset=preset,
             orchestration=OrchestrationPolicy(
-                enabled=True,
-                task_models={},  # 初始为空
+                unified_model="gpt-4",
             ),
         )
 
     def test_orchestration_enabled_without_any_configured_tasks_no_error(self):
-        """当多模型协同启用但没有配置任何任务时，不抛出异常。"""
+        """当多模型协同使用统一模型时，不需要配置特定的任务模型。"""
         config = self.create_base_config()
-        # orchestration.enabled=True 但 task_models 为空
+        # 使用统一模型配置（方案1）
         
         provider = MockProvider()
         engine = AsyncRolePlayEngine(provider=provider)
         
-        # 应该不抛出异常，因为没有任何任务被配置
+        # 应该不抛出异常
         engine.validate_orchestration_config(config)
 
-    def test_orchestration_disabled_no_validation(self):
-        """当多模型协同禁用时，不进行验证。"""
+    def test_orchestration_unified_model_strategy(self):
+        """测试多模型协同的方案1（统一模型）。"""
         config = self.create_base_config()
-        config.orchestration.enabled = False
+        # unified_model 已在 create_base_config 中设置
         
         provider = MockProvider()
         engine = AsyncRolePlayEngine(provider=provider)
@@ -68,11 +67,40 @@ class TestOrchestrationConfigValidation:
         engine.validate_orchestration_config(config)
 
     def test_orchestration_enabled_without_required_models_raises_error(self):
-        """当多模型协同启用且任何任务已配置但缺少其他任务时抛出异常。"""
+        """当多模型协同使用 task_models 且任何任务已配置但缺少其他任务时抛出异常。"""
         config = self.create_base_config()
+        # 切换到按任务配置方案
+        config.orchestration.unified_model = ""
         # 配置 memory_extract 但不配置其他任务
         config.orchestration.task_models = {
             "memory_extract": "gpt-4-mini",
+        }
+        # 启用已配置的任务
+        config.orchestration.task_budgets = {
+            "memory_extract": 1000,
+        }
+        
+        provider = MockProvider()
+        engine = AsyncRolePlayEngine(provider=provider)
+        
+        # 应该不抛出异常，因为只有已配置的任务被启用
+        # 其他任务没有被启用，所以不需要配置模型
+        engine.validate_orchestration_config(config)
+
+    def test_orchestration_task_models_all_enabled_tasks_must_have_models(self):
+        """当多模型协同使用 task_models 且启用了多个任务时，所有启用的任务都必须有模型。"""
+        config = self.create_base_config()
+        # 切换到按任务配置方案
+        config.orchestration.unified_model = ""
+        # 配置 memory_extract 但不配置其他任务
+        config.orchestration.task_models = {
+            "memory_extract": "gpt-4-mini",
+        }
+        # 启用所有任务
+        config.orchestration.task_budgets = {
+            "memory_extract": 1000,
+            "multimodal_parse": 1000,
+            "event_extract": 1000,
         }
         
         provider = MockProvider()
@@ -87,12 +115,20 @@ class TestOrchestrationConfigValidation:
         assert "event_extract" in error.missing_models
 
     def test_orchestration_enabled_with_all_models_no_error(self):
-        """当所有必需模型都配置时，不抛出异常。"""
+        """当所有启用的任务都配置了模型时，不抛出异常。"""
         config = self.create_base_config()
+        # 切换到按任务配置方案
+        config.orchestration.unified_model = ""
         config.orchestration.task_models = {
             "memory_extract": "gpt-4-mini",
             "multimodal_parse": "gpt-4-mini",
             "event_extract": "gpt-4-mini",
+        }
+        # 启用所有任务
+        config.orchestration.task_budgets = {
+            "memory_extract": 1000,
+            "multimodal_parse": 1000,
+            "event_extract": 1000,
         }
         
         provider = MockProvider()
@@ -173,10 +209,18 @@ class TestOrchestrationConfigValidation:
 
     @pytest.mark.asyncio
     async def test_run_live_session_validates_config_when_partial_config(self):
-        """测试 run_live_session 在部分配置时进行验证。"""
+        """测试 run_live_session 在部分配置且启用了所有任务时进行验证。"""
         config = self.create_base_config()
+        # 切换到按任务配置模式
+        config.orchestration.unified_model = ""
         # 只配置一个任务
         config.orchestration.task_models = {"memory_extract": "gpt-4-mini"}
+        # 启用所有任务（这会导致错误，因为并非所有任务都有模型）
+        config.orchestration.task_budgets = {
+            "memory_extract": 1000,
+            "multimodal_parse": 1000,
+            "event_extract": 1000,
+        }
         
         provider = MockProvider()
         engine = AsyncRolePlayEngine(provider=provider)
@@ -221,8 +265,16 @@ class TestOrchestrationConfigValidation:
     def test_error_message_clarity(self):
         """测试错误消息的清晰性。"""
         config = self.create_base_config()
+        # 切换到按任务配置模式
+        config.orchestration.unified_model = ""
         # 配置一个任务但不配置其他任务
         config.orchestration.task_models = {"event_extract": "gpt-4-mini"}
+        # 启用所有任务（这会导致错误）
+        config.orchestration.task_budgets = {
+            "event_extract": 1000,
+            "memory_extract": 1000,
+            "multimodal_parse": 1000,
+        }
 
         provider = MockProvider()
         engine = AsyncRolePlayEngine(provider=provider)

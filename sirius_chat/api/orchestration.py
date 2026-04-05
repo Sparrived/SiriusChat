@@ -35,7 +35,7 @@ class MultiModelConfig:
     def to_orchestration_policy(self) -> OrchestrationPolicy:
         """转换为 OrchestrationPolicy 对象。"""
         return OrchestrationPolicy(
-            enabled=True,
+            unified_model="",  # 使用按任务配置模式
             task_models=self.task_models,
             task_budgets=self.task_budgets,
             task_temperatures=self.task_temperatures or {},

@@ -65,7 +65,11 @@ TASK_EVENT_EXTRACT_MODEL=gpt-4-mini
   "history_max_messages": 24,
   "enable_auto_compression": true,
   "orchestration": {
-    "enabled": true,
+    "task_enabled": {
+      "memory_extract": true,
+      "multimodal_parse": true,
+      "event_extract": true
+    },
     "task_models": {
       "memory_extract": "gpt-4-mini",
       "event_extract": "gpt-4-mini"
@@ -287,7 +291,11 @@ engine = AsyncRolePlayEngine(provider=cached_provider)
 ### 2. 启用多任务编排
 
 ```python
-config.orchestration.enabled = True
+config.orchestration.task_enabled = {
+    "memory_extract": True,
+    "event_extract": True,
+    "multimodal_parse": True,
+}
 config.orchestration.task_models = {
     "memory_extract": "gpt-4-mini",
     "event_extract": "gpt-4-mini",

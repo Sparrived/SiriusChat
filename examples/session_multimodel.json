@@ -23,7 +23,11 @@
   "history_max_chars": 6000,
   "enable_auto_compression": true,
   "orchestration": {
-    "enabled": true,
+    "task_enabled": {
+      "memory_extract": true,
+      "multimodal_parse": true,
+      "event_extract": true
+    },
     "task_models": {
       "memory_extract": "doubao-seed-2-0-lite-260215",
       "event_extract": "doubao-seed-2-0-lite-260215",

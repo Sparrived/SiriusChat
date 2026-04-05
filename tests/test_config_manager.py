@@ -36,7 +36,11 @@ class TestConfigManager:
                 "max_tokens": 256,
             },
             "orchestration": {
-                "enabled": True,
+                "task_enabled": {
+                    "memory_extract": True,
+                    "multimodal_parse": True,
+                    "event_extract": True,
+                },
                 "task_models": {},
             },
         }
@@ -142,7 +146,8 @@ class TestConfigManager:
         session_config = config_manager._dict_to_session_config(config_dict, Path("/tmp"))
         assert session_config.agent.name == "TestAgent"
         assert session_config.history_max_messages == 32
-        assert session_config.orchestration.enabled is False
+        # 当没有指定 unified_model 或 task_models 时，应使用 agent 的模型作为默认
+        assert session_config.orchestration.unified_model == "test-model"
         assert session_config.agent.metadata == {"key": "value"}
 
     def test_resolve_values_nested(self, config_manager: ConfigManager) -> None:
@@ -172,7 +177,13 @@ class TestConfigManager:
                 "persona": "Test",
                 "model": "test-model",
             },
-            "orchestration": {"enabled": True},
+            "orchestration": {
+                "task_enabled": {
+                    "memory_extract": True,
+                    "multimodal_parse": True,
+                    "event_extract": True,
+                }
+            },
         }
         with open(relative_config, "w") as f:
             json.dump(config_dict, f)
@@ -223,7 +234,8 @@ class TestConfigIntegration:
                 Path(__file__).parent.parent / "sirius_chat" / "configs" / "dev.json"
             )
             assert config.agent.name == "SiriusAI-Dev"
-            assert config.orchestration.enabled
+            # 验证多模型协同已配置（unified_model 或 task_models）
+            assert config.orchestration.unified_model or config.orchestration.task_models
         except FileNotFoundError:
             pytest.skip("Default config files not available")
 

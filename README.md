@@ -188,7 +188,11 @@ SiliconFlow 配置示例：
 ```json
 {
   "orchestration": {
-    "enabled": true,
+    "task_enabled": {
+      "memory_extract": true,
+      "multimodal_parse": true,
+      "event_extract": true
+    },
     "task_models": {
       "memory_extract": "doubao-seed-2-0-lite-260215",
       "event_extract": "doubao-seed-2-0-lite-260215",
@@ -221,12 +225,12 @@ SiliconFlow 配置示例：
 
 说明：
 
-- **多模型协同现已成为默认运作方式**。`SessionConfig.orchestration.enabled` 默认为 `True`，引擎会自动根据 `task_models` 配置分发任务。
+- **多模型协同现已成为默认运作方式**。所有任务默认启用，可通过 `task_enabled` 字典按需禁用特定任务。
 - `chat_main` 默认使用 `agent.model`。
 - `memory_extract` 可配置单独模型协助用户记忆提取。
 - `event_extract` 可配置单独模型提取事件结构化要素，增强跨会话事件命中。
 - `multimodal_parse` 可配置单独模型将图片/视频输入转成文本证据。
-- 若需全部由一个模型处理，设置 `orchestration.enabled=False` 即可切换回单模型模式。
+- 若需全部由一个模型处理，可通过移除 `task_models` 并设置 `unified_model` 即可切换到统一模型模式。
 - 可配置任务级重试（`task_retries`）提升临时错误恢复能力。
 - 可配置多模态输入限流（`max_multimodal_inputs_per_turn`、`max_multimodal_value_length`）降低提示词膨胀风险。
 - 预算超限或辅助任务失败会自动回退启发式记忆逻辑，不影响主回复。

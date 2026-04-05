@@ -106,7 +106,7 @@ def _load_session_config(config_path: Path, work_path: Path) -> tuple[SessionCon
         max_recent_participant_messages=int(raw.get("max_recent_participant_messages", 5)),
         enable_auto_compression=bool(raw.get("enable_auto_compression", True)),
         orchestration=OrchestrationPolicy(
-            enabled=bool(raw.get("orchestration", {}).get("enabled", False)),
+            unified_model=str(raw.get("orchestration", {}).get("unified_model", "")).strip(),
             task_models={
                 str(k): str(v)
                 for k, v in dict(raw.get("orchestration", {}).get("task_models", {})).items()
@@ -565,7 +565,7 @@ def _serialize_session_bundle(
         "max_recent_participant_messages": session_config.max_recent_participant_messages,
         "enable_auto_compression": session_config.enable_auto_compression,
         "orchestration": {
-            "enabled": session_config.orchestration.enabled,
+            "unified_model": session_config.orchestration.unified_model,
             "task_models": session_config.orchestration.task_models,
             "task_budgets": session_config.orchestration.task_budgets,
             "task_temperatures": session_config.orchestration.task_temperatures,

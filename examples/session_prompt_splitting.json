@@ -15,7 +15,11 @@
     }
   ],
   "orchestration": {
-    "enabled": true,
+    "task_enabled": {
+      "memory_extract": true,
+      "multimodal_parse": true,
+      "event_extract": true
+    },
     "enable_prompt_driven_splitting": true,
     "split_marker": "[MSG_BREAK]"
   },

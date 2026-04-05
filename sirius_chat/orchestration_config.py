@@ -19,6 +19,7 @@ def configure_orchestration_models(
     """为会话配置多模型协同的任务模型。
     
     这个函数允许外部代码在收到 OrchestrationConfigError 后动态添加模型配置。
+    使用此函数时，会自动切换到按任务配置模式（task_models）。
     
     Args:
         config: 会话配置对象
@@ -48,9 +49,11 @@ def configure_orchestration_models(
     updated_models = dict(config.orchestration.task_models)
     updated_models.update(task_models)
     
+    # 当使用 task_models 时，清除 unified_model（两种模式互斥）
     # 创建新的 OrchestrationPolicy 对象
     updated_orchestration = replace(
         config.orchestration,
+        unified_model="",  # 清除统一模型，切换到按任务配置模式
         task_models=updated_models,
     )
     
@@ -177,6 +180,7 @@ def configure_full_orchestration(
     """一次性配置多模型协同的所有参数。
     
     这是一个便捷方法，可以一次性设置多个配置字段。
+    如果指定了 task_models，会自动切换到按任务配置模式（task_models）。
     
     Args:
         config: 会话配置对象
@@ -212,10 +216,12 @@ def configure_full_orchestration(
     # 准备更新字段
     update_fields: dict[str, Any] = {}
     
+    # 如果指定了 task_models，清除 unified_model（切换到按任务配置模式）
     if task_models is not None:
         merged_models = dict(config.orchestration.task_models)
         merged_models.update(task_models)
         update_fields["task_models"] = merged_models
+        update_fields["unified_model"] = ""  # 清除统一模型
     
     if task_budgets is not None:
         merged_budgets = dict(config.orchestration.task_budgets)

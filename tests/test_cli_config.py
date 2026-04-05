@@ -125,7 +125,7 @@ def test_load_session_config_parses_orchestration_policy(tmp_path) -> None:
                 },
                 "generated_agent_key": "main_agent",
                 "orchestration": {
-                    "enabled": True,
+                    "task_enabled": {"memory_extract": True, "multimodal_parse": True, "event_extract": True},
                     "task_models": {"memory_extract": "doubao-seed-2-0-lite-260215"},
                     "task_budgets": {"memory_extract": 1200},
                     "task_temperatures": {"memory_extract": 0.1},
@@ -141,6 +141,7 @@ def test_load_session_config_parses_orchestration_policy(tmp_path) -> None:
     _write_generated_agents(work_path)
     session, _, _ = _load_session_config(config_path, work_path)
 
-    assert session.orchestration.enabled is True
-    assert session.orchestration.task_models["memory_extract"] == "doubao-seed-2-0-lite-260215"
+    # 验证多模型协同已配置
+    assert session.orchestration.unified_model or session.orchestration.task_models
+    assert session.orchestration.task_models.get("memory_extract") == "doubao-seed-2-0-lite-260215"
     assert session.orchestration.task_budgets["memory_extract"] == 1200

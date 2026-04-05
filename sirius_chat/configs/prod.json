@@ -15,7 +15,11 @@
   "history_max_chars": 6000,
   "enable_auto_compression": true,
   "orchestration": {
-    "enabled": true,
+    "task_enabled": {
+      "memory_extract": true,
+      "multimodal_parse": true,
+      "event_extract": true
+    },
     "task_models": {
       "memory_extract": "${TASK_MEMORY_EXTRACT_MODEL:gpt-4-mini}",
       "event_extract": "${TASK_EVENT_EXTRACT_MODEL:gpt-4-mini}",
@@ -40,7 +44,6 @@
       "memory_manager": 512
     },
     "memory_manager_model": "${MEMORY_MANAGER_MODEL:gpt-4-mini}",
-    "memory_manager_budget": 1500,
     "enable_prompt_driven_splitting": true
   }
 }

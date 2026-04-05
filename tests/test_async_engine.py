@@ -137,13 +137,17 @@ def test_async_engine_memory_extract_task_uses_aux_model() -> None:
                 global_system_prompt="测试系统提示词",
             ),
             orchestration=OrchestrationPolicy(
-                enabled=True,
+                unified_model="",  # 使用按任务配置模式
                 task_models={
                     "memory_extract": "memory-model",
                     "multimodal_parse": "mock-model",
                     "event_extract": "mock-model",
                 },
-                task_budgets={"memory_extract": 1000},
+                task_budgets={
+                    "memory_extract": 1000,
+                    "multimodal_parse": 1000,
+                    "event_extract": 1000,
+                },
                 task_temperatures={"memory_extract": 0.1},
                 task_max_tokens={"memory_extract": 64},
             ),
@@ -186,7 +190,7 @@ def test_async_engine_memory_extract_task_skips_when_budget_exceeded() -> None:
                 global_system_prompt="测试系统提示词",
             ),
             orchestration=OrchestrationPolicy(
-                enabled=True,
+                unified_model="",
                 task_models={
                     "memory_extract": "memory-model",
                     "multimodal_parse": "mock-model",
@@ -232,7 +236,7 @@ def test_async_engine_multimodal_parse_task_injects_evidence_message() -> None:
                 global_system_prompt="测试系统提示词",
             ),
             orchestration=OrchestrationPolicy(
-                enabled=True,
+                unified_model="",
                 task_models={
                     "multimodal_parse": "mm-model",
                     "memory_extract": "mock-model",
@@ -282,7 +286,7 @@ def test_async_engine_multimodal_parse_task_skips_when_budget_exceeded() -> None
                 global_system_prompt="测试系统提示词",
             ),
             orchestration=OrchestrationPolicy(
-                enabled=True,
+                unified_model="",
                 task_models={
                     "multimodal_parse": "mm-model",
                     "memory_extract": "mock-model",
@@ -334,12 +338,13 @@ def test_async_engine_task_retry_can_recover_from_transient_failure() -> None:
                 global_system_prompt="测试系统提示词",
             ),
             orchestration=OrchestrationPolicy(
-                enabled=True,
+                unified_model="",
                 task_models={
                     "memory_extract": "memory-model",
                     "multimodal_parse": "mock-model",
                     "event_extract": "mock-model",
                 },
+                task_budgets={"memory_extract": 1000},
                 task_retries={"memory_extract": 1},
             ),
         )
@@ -377,12 +382,13 @@ def test_async_engine_multimodal_validation_filters_and_truncates_inputs() -> No
                 global_system_prompt="测试系统提示词",
             ),
             orchestration=OrchestrationPolicy(
-                enabled=True,
+                unified_model="",
                 task_models={
                     "multimodal_parse": "mm-model",
                     "memory_extract": "mock-model",
                     "event_extract": "mock-model",
                 },
+                task_budgets={"multimodal_parse": 1000},
                 max_multimodal_inputs_per_turn=1,
                 max_multimodal_value_length=16,
             ),
@@ -425,7 +431,7 @@ def test_async_engine_records_token_usage_for_task_and_main_calls() -> None:
                 global_system_prompt="测试系统提示词",
             ),
             orchestration=OrchestrationPolicy(
-                enabled=True,
+                unified_model="",
                 task_models={
                     "memory_extract": "memory-model",
                     "multimodal_parse": "mock-model",
@@ -535,7 +541,7 @@ def test_async_engine_event_extract_task_enriches_event_features() -> None:
                 global_system_prompt="测试系统提示词",
             ),
             orchestration=OrchestrationPolicy(
-                enabled=True,
+                unified_model="",
                 task_models={
                     "event_extract": "event-model",
                     "memory_extract": "mock-model",
@@ -582,7 +588,7 @@ def test_async_engine_event_extract_task_skips_when_budget_exceeded() -> None:
                 global_system_prompt="测试系统提示词",
             ),
             orchestration=OrchestrationPolicy(
-                enabled=True,
+                unified_model="",
                 task_models={
                     "event_extract": "event-model",
                     "memory_extract": "mock-model",

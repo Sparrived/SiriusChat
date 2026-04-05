@@ -4,6 +4,7 @@ import asyncio
 from dataclasses import dataclass
 from datetime import datetime
 import json
+import logging
 import math
 import re
 from typing import Awaitable, Callable, cast
@@ -22,6 +23,7 @@ from sirius_chat.async_engine.prompts import build_system_prompt
 from sirius_chat.exceptions import OrchestrationConfigError
 
 AsyncOnMessage = Callable[[Message], None]
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -33,45 +35,89 @@ class AsyncRolePlayEngine:
     _TASK_EVENT_EXTRACT = "event_extract"
     _TASK_MEMORY_MANAGER = "memory_manager"
     _SUPPORTED_MULTIMODAL_TYPES = {"image", "video", "audio", "text"}
+    
+    # 所有需要模型支持的必需任务
+    _REQUIRED_TASKS = [
+        "memory_extract",
+        "multimodal_parse",
+        "event_extract",
+    ]
 
     def validate_orchestration_config(self, config: SessionConfig) -> None:
         """验证多模型协同配置的完整性。
         
-        当多模型协同启用时，检查所有必需的任务是否都配置了模型。
-        如果任何一个必需任务有模型配置，则所有必需任务都必须有配置。
-
+        多模型协同必需启用，支持两种配置方案：
+        1. unified_model: 所有任务使用同一个模型
+        2. task_models: 为每个任务独立配置模型
+        
+        所有任务默认启用，可通过 task_enabled 字典禁用特定任务。
+        
         Args:
             config: 会话配置
-
+            
         Raises:
-            OrchestrationConfigError: 如果缺少必需的模型配置
+            OrchestrationConfigError: 如果配置不完整或冲突
         """
-        if not config.orchestration.enabled:
-            return  # 未启用多模型协同，无需检查
-
-        # 定义必需任务及其对应的模型配置键
-        task_models = config.orchestration.task_models
-        required_tasks = [
-            self._TASK_MEMORY_EXTRACT,
-            self._TASK_MULTIMODAL_PARSE,
-            self._TASK_EVENT_EXTRACT,
-        ]
-
-        # 检查是否有任何任务被配置
-        configured_tasks = [task for task in required_tasks if task_models.get(task)]
+        orchestration = config.orchestration
         
-        # 如果没有任何任务被配置，无需检查（可以不使用多模型协同）
-        if not configured_tasks:
+        # 方案1：已经在 OrchestrationPolicy.validate() 中执行基本检查
+        # 这里进行运行时补充验证
+        
+        if orchestration.unified_model:
+            # 方案1：所有任务使用 unified_model
+            logger.info(
+                f"多模型协同（方案1）：所有任务共用模型 '{orchestration.unified_model}'"
+            )
             return
-
-        # 如果至少有一个任务被配置，则所有任务都必须被配置
-        missing_models: dict[str, list[str]] = {}
-        for task in required_tasks:
-            if not task_models.get(task):
-                missing_models[task] = [task]
-
-        if missing_models:
-            raise OrchestrationConfigError(missing_models)
+        
+        if orchestration.task_models:
+            # 方案2：按任务配置模型，但仅检查启用的任务
+            enabled_tasks = [
+                task for task in self._REQUIRED_TASKS
+                if orchestration.task_enabled.get(task, True)  # 检查启用的任务
+            ]
+            
+            missing_tasks = [
+                task for task in enabled_tasks
+                if not orchestration.task_models.get(task)
+            ]
+            if missing_tasks:
+                raise OrchestrationConfigError(
+                    {task: [task] for task in missing_tasks}
+                )
+            logger.info(
+                f"多模型协同（方案2）：按任务配置模型 - {orchestration.task_models}"
+            )
+            return
+    
+    def get_model_for_task(self, config: SessionConfig, task_name: str) -> str:
+        """根据多模型协同配置获取任务模型。
+        
+        Args:
+            config: 会话配置
+            task_name: 任务名称（如 'memory_extract'、'event_extract'）
+            
+        Returns:
+            该任务应使用的模型名称
+            
+        Raises:
+            ValueError: 如果无法确定任务模型
+        """
+        orchestration = config.orchestration
+        
+        # 优先返回统一模型（方案1）
+        if orchestration.unified_model:
+            return orchestration.unified_model
+        
+        # 其次返回按任务配置的模型（方案2）
+        model = orchestration.task_models.get(task_name)
+        if model:
+            return model
+        
+        # 不应该到达这里，因为已在验证时检查
+        raise ValueError(
+            f"无法获取任务 '{task_name}' 的模型。请检查 OrchestrationPolicy 配置。"
+        )
 
     def _prepare_transcript(self, config: SessionConfig, transcript: Transcript | None) -> Transcript:
         if transcript is not None:
@@ -160,13 +206,12 @@ class AsyncRolePlayEngine:
         content: str,
         task_token_usage: dict[str, int],
     ) -> None:
-        if not config.orchestration.enabled:
-            return
-
         task_name = self._TASK_MEMORY_EXTRACT
-        model = config.orchestration.task_models.get(task_name, "").strip()
-        if not model:
-            return
+        # 检查任务是否启用
+        if not config.orchestration.task_enabled.get(task_name, True):
+            return  # 任务被禁用
+        
+        model = self.get_model_for_task(config, task_name)
 
         self._record_task_stat(transcript, task_name, "attempted")
 
@@ -182,7 +227,6 @@ class AsyncRolePlayEngine:
         )
         estimated_cost = self._estimate_tokens(system_prompt + task_input)
 
-        budget = int(config.orchestration.task_budgets.get(task_name, 0))
         used = task_token_usage.get(task_name, 0)
         if budget > 0 and used + estimated_cost > budget:
             self._record_task_stat(transcript, task_name, "skipped_budget")
@@ -267,13 +311,12 @@ class AsyncRolePlayEngine:
         multimodal_inputs: list[dict[str, str]],
         task_token_usage: dict[str, int],
     ) -> str | None:
-        if not config.orchestration.enabled:
-            return None
-
         task_name = self._TASK_MULTIMODAL_PARSE
-        model = config.orchestration.task_models.get(task_name, "").strip()
-        if not model:
-            return None
+        # 检查任务是否启用
+        if not config.orchestration.task_enabled.get(task_name, True):
+            return None  # 任务被禁用
+        
+        model = self.get_model_for_task(config, task_name)
 
         normalized = self._normalize_multimodal_inputs(
             multimodal_inputs,
@@ -298,8 +341,8 @@ class AsyncRolePlayEngine:
         )
         estimated_cost = self._estimate_tokens(system_prompt + task_input)
 
-        budget = int(config.orchestration.task_budgets.get(task_name, 0))
         used = task_token_usage.get(task_name, 0)
+        budget = int(config.orchestration.task_budgets.get(task_name, 0))
         if budget > 0 and used + estimated_cost > budget:
             self._record_task_stat(transcript, task_name, "skipped_budget")
             return None
@@ -352,13 +395,12 @@ class AsyncRolePlayEngine:
         content: str,
         task_token_usage: dict[str, int],
     ) -> dict[str, object] | None:
-        if not config.orchestration.enabled:
-            return None
-
         task_name = self._TASK_EVENT_EXTRACT
-        model = config.orchestration.task_models.get(task_name, "").strip()
-        if not model:
-            return None
+        # 检查任务是否启用
+        if not config.orchestration.task_enabled.get(task_name, True):
+            return None  # 任务被禁用
+        
+        model = self.get_model_for_task(config, task_name)
 
         self._record_task_stat(transcript, task_name, "attempted")
         system_prompt = (
@@ -373,8 +415,8 @@ class AsyncRolePlayEngine:
         )
         estimated_cost = self._estimate_tokens(system_prompt + task_input)
 
-        budget = int(config.orchestration.task_budgets.get(task_name, 0))
         used = task_token_usage.get(task_name, 0)
+        budget = int(config.orchestration.task_budgets.get(task_name, 0))
         if budget > 0 and used + estimated_cost > budget:
             self._record_task_stat(transcript, task_name, "skipped_budget")
             return None
@@ -444,9 +486,6 @@ class AsyncRolePlayEngine:
         task_token_usage: dict[str, int],
     ) -> None:
         """汇聚、去重、标注、验证用户的记忆事实。"""
-        if not config.orchestration.enabled:
-            return
-
         task_name = self._TASK_MEMORY_MANAGER
         model = config.orchestration.memory_manager_model.strip()
         if not model:
@@ -485,7 +524,7 @@ class AsyncRolePlayEngine:
         task_input = f"记忆事实列表：{json.dumps(facts_json, ensure_ascii=False, indent=2)}"
         estimated_cost = self._estimate_tokens(system_prompt + task_input)
 
-        budget = int(config.orchestration.memory_manager_budget)
+        budget = int(config.orchestration.task_budgets.get(task_name, 0))
         used = task_token_usage.get(task_name, 0)
         if budget > 0 and used + estimated_cost > budget:
             self._record_task_stat(transcript, task_name, "skipped_budget")
@@ -576,7 +615,7 @@ class AsyncRolePlayEngine:
             temperature=config.agent.temperature,
             max_tokens=config.agent.max_tokens,
         )
-        retry_times = int(config.orchestration.task_retries.get("chat_main", 0)) if config.orchestration.enabled else 0
+        retry_times = int(config.orchestration.task_retries.get("chat_main", 0))
         content = await self._call_provider_with_retry(
             request_payload=request_payload,
             retry_times=retry_times,
@@ -859,6 +898,25 @@ class AsyncRolePlayEngine:
             assistant_message = await self._generate_assistant_message(config, transcript)
             if on_message:
                 on_message(assistant_message)
+
+        # 最终化事件记忆：对积累的事件进行 LLM 验证
+        try:
+            # 创建一个临时的 AsyncLLMProvider 包装器以支持同步 provider
+            class ProviderAdapter:
+                def __init__(self, engine: AsyncRolePlayEngine) -> None:
+                    self.engine = engine
+                
+                async def generate_async(self, request: GenerationRequest) -> str:
+                    return await self.engine._call_provider(request)
+            
+            finalize_result = await event_store.finalize_pending_events(
+                provider_async=ProviderAdapter(self),
+                model_name=config.agent.model,
+                min_mentions=3
+            )
+            logger.info(f"事件记忆最终化完成 - 已验证: {finalize_result['verified_count']}, 已拒绝: {finalize_result['rejected_count']}, 待验证: {finalize_result['pending_count']}")
+        except Exception as e:
+            logger.warning(f"事件记忆最终化失败，继续执行: {e}")
 
         file_store.save_all(transcript.user_memory)
         event_file_store.save(event_store)

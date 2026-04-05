@@ -198,9 +198,21 @@ class ConfigManager:
 
         # Build OrchestrationPolicy
         orch_dict = config_dict.get("orchestration", {})
+        # 如果既没有 unified_model 也没有 task_models，使用 agent 的模型作为 unified_model
+        unified_model = orch_dict.get("unified_model", "")
+        task_models = orch_dict.get("task_models", {})
+        if not unified_model and not task_models:
+            # 使用 agent 的模型作为默认的统一模型
+            unified_model = agent.model
+        
         orchestration = OrchestrationPolicy(
-            enabled=orch_dict.get("enabled", True),
-            task_models=orch_dict.get("task_models", {}),
+            unified_model=unified_model,
+            task_models=task_models,
+            task_enabled=orch_dict.get("task_enabled", {
+                "memory_extract": True,
+                "multimodal_parse": True,
+                "event_extract": True,
+            }),
             task_budgets=orch_dict.get("task_budgets", {}),
             task_temperatures=orch_dict.get("task_temperatures", {}),
             task_max_tokens=orch_dict.get("task_max_tokens", {}),
@@ -214,7 +226,6 @@ class ConfigManager:
             enable_prompt_driven_splitting=orch_dict.get("enable_prompt_driven_splitting", True),
             split_marker=orch_dict.get("split_marker", "[MSG_BREAK]"),
             memory_manager_model=orch_dict.get("memory_manager_model", ""),
-            memory_manager_budget=int(orch_dict.get("memory_manager_budget", 1500)),
             memory_manager_temperature=float(orch_dict.get("memory_manager_temperature", 0.3)),
             memory_manager_max_tokens=int(orch_dict.get("memory_manager_max_tokens", 512)),
         )

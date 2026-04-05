@@ -4,10 +4,10 @@
 
 ## 运作模式（默认：多模型协同）
 
-**Sirius Chat 现在默认采用多模型协同模式运作**。`SessionConfig.orchestration.enabled` 默认值为 `True`，引擎会按照任务路由策略自动调度不同的专用模型。
+**Sirius Chat 现在默认采用多模型协同模式运作**。所有任务（记忆提取、事件提取、多模态解析）默认启用，引擎会按照任务路由策略自动调度不同的专用模型。
 
-- **多模型协同模式**（默认，`enabled=True`）：引擎根据配置的 `task_models`，将不同任务（记忆提取、事件提取、多模态解析等）分发给相应的专用模型，提高各任务的准确性与成本效率。
-- **单模型模式**（可选，`enabled=False`）：如需全部由一个模型处理，设置 `orchestration.enabled=False`，所有任务将回退至 `SessionConfig.agent.model`。
+- **多模型协同模式**（默认）：引擎根据配置的 `task_models`，将不同任务分发给相应的专用模型，或使用 `unified_model` 统一处理。所有任务默认启用，可通过 `task_enabled` 字典按需禁用。
+- **单模型模式**（可选）：如需全部由一个模型处理，可移除 `task_models`，改为设置 `unified_model`，所有任务将使用该统一模型。
 
 ## 目标
 
@@ -25,9 +25,9 @@
 1. 任务路由层（Task Routing）
 
 - 主回复任务：`chat_main`，默认使用 `SessionConfig.agent.model`。
-- 记忆提取任务：`memory_extract`，可配置单独模型。
-- 事件提取任务：`event_extract`，用于抽取事件摘要/角色槽位/时间线索并增强事件命中。
-- 多模态解析任务：`multimodal_parse`，用于将图片/视频输入转换为文本证据。
+- 记忆提取任务：`memory_extract`，可配置单独模型，默认启用。
+- 事件提取任务：`event_extract`，用于抽取事件摘要/角色槽位/时间线索并增强事件命中，默认启用。
+- 多模态解析任务：`multimodal_parse`，用于将图片/视频输入转换为文本证据，默认启用。
 - 若未配置任务模型，则跳过该任务并保持回退逻辑。
 
 1. 预算控制层（Budget Guardrail）
@@ -43,7 +43,11 @@
 ```json
 {
   "orchestration": {
-    "enabled": true,
+    "task_enabled": {
+      "memory_extract": true,
+      "multimodal_parse": true,
+      "event_extract": true
+    },
     "task_models": {
       "memory_extract": "doubao-seed-2-0-lite-260215",
       "event_extract": "doubao-seed-2-0-lite-260215",
@@ -76,7 +80,7 @@
 
 说明：
 
-- `enabled=false` 时，不执行任务路由扩展。
+- `task_enabled.<task_name>` 为 `false` 时，不执行该任务。
 - `task_models.<task_name>` 未设置时，不发起该任务调用。
 - `task_budgets.<task_name>` 未设置或 <= 0 时，视为该任务不限制。
 - `task_retries.<task_name>` 配置任务级重试次数（默认 0）。

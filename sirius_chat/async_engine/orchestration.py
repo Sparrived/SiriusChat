@@ -69,13 +69,14 @@ def get_task_config(config: SessionConfig, task_name: str) -> TaskConfig:
     Returns:
         TaskConfig with merged defaults
     """
+    budget = int(config.orchestration.task_budgets.get(task_name, 0))
     return TaskConfig(
-        enabled=config.orchestration.enabled,
+        enabled=config.orchestration.task_enabled.get(task_name, True),  # Use task_enabled dict
         model=config.orchestration.task_models.get(task_name, "").strip(),
         temperature=float(config.orchestration.task_temperatures.get(task_name, 0.1)),
         max_tokens=int(config.orchestration.task_max_tokens.get(task_name, 128)),
         retries=int(config.orchestration.task_retries.get(task_name, 0)),
-        budget=int(config.orchestration.task_budgets.get(task_name, 0)),
+        budget=budget,
         system_prompt="",  # Set by caller based on task type
     )
 
