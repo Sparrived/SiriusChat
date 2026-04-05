@@ -50,7 +50,7 @@ class ConfigManager:
             config_path = self.base_path / config_path
 
         if not config_path.exists():
-            raise FileNotFoundError(f"Config file not found: {config_path}")
+            raise FileNotFoundError(f"配置文件不存在：{config_path}")
 
         with open(config_path, "r", encoding="utf-8") as f:
             raw_dict = json.load(f)
@@ -83,11 +83,11 @@ class ConfigManager:
         }
 
         if env not in env_mapping:
-            raise ValueError(f"Unknown environment: {env}. Must be one of: {list(env_mapping.keys())}")
+            raise ValueError(f"未知环境：{env}。必须是：{list(env_mapping.keys())}")
 
         config_file = self.base_path / "configs" / env_mapping[env]
         if not config_file.exists():
-            raise FileNotFoundError(f"Config file for '{env}' not found: {config_file}")
+            raise FileNotFoundError(f"环境 '{env}' 的配置文件不存在：{config_file}")
 
         return self.load_from_json(config_file)
 
@@ -150,20 +150,20 @@ class ConfigManager:
         required_keys = {"work_path", "agent", "orchestration"}
         missing = required_keys - set(config.keys())
         if missing:
-            raise ValueError(f"Missing required config keys: {missing}")
+            raise ValueError(f"缺少必要配置键：{missing}")
 
         # Validate agent section
         agent_config = config.get("agent", {})
         agent_required = {"name", "persona", "model"}
         agent_missing = agent_required - set(agent_config.keys())
         if agent_missing:
-            raise ValueError(f"Missing required agent keys: {agent_missing}")
+            raise ValueError(f"缺少必要的主角配置键：{agent_missing}")
 
         # Validate work_path can be converted to Path
         try:
             Path(config["work_path"])
         except (TypeError, ValueError) as e:
-            raise ValueError(f"Invalid work_path: {e}")
+            raise ValueError(f"无效的 work_path：{e}")
 
     def _dict_to_session_config(self, config_dict: dict[str, Any], base_dir: Path) -> SessionConfig:
         """Convert configuration dictionary to SessionConfig.

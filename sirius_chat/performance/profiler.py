@@ -43,7 +43,7 @@ class PerformanceProfiler:
                 self.memory_start = mem_info.rss
                 self.metric.memory_start = self.memory_start
             except Exception as e:
-                logger.warning(f"Failed to get memory info: {e}")
+                logger.warning(f"无法获取内存信息：{e}")
         
         return self
     
@@ -62,7 +62,7 @@ class PerformanceProfiler:
                 self.memory_end = mem_info.rss
                 self.metric.memory_end = self.memory_end
             except Exception as e:
-                logger.warning(f"Failed to get memory info: {e}")
+                logger.warning(f"无法获取内存信息：{e}")
         
         self.metric.finish()
         get_global_collector().record_metric(self.metric)
@@ -194,7 +194,7 @@ class MemoryProfiler:
             self.snapshots.append(snapshot)
             return snapshot
         except Exception as e:
-            logger.warning(f"Failed to take memory snapshot: {e}")
+            logger.warning(f"无法获取内存快照：{e}")
             return {}
     
     def get_report(self) -> str:

@@ -255,7 +255,7 @@ def _load_generated_agent_key_from_config_file(config_path: Path) -> str:
     raw = json.loads(config_path.read_text(encoding="utf-8-sig"))
     key = str(raw.get("generated_agent_key", "")).strip()
     if not key:
-        raise ValueError("generated_agent_key is required")
+        raise ValueError("必需提供 generated_agent_key")
     return key
 
 
@@ -888,7 +888,7 @@ def main(
             print_func(f"初始化首个 generated agent 失败：{bootstrap_exc}")
             return 1
     except Exception as e:
-        logger.error(f"Unexpected error loading session: {e}", exc_info=True)
+        logger.error(f"会话加载失败：{e}", exc_info=True)
         print_func(f"加载会话配置时发生未预期的错误：{e}")
         return 1
     
@@ -928,7 +928,7 @@ def main(
         print_func("\n会话已中断。")
         return 0
     except Exception as e:
-        logger.error(f"Unexpected error in session: {e}", exc_info=True)
+        logger.error(f"会话中遇到预查误误：{e}", exc_info=True)
         print_func(f"会话执行过程中发生错误：{e}")
         return 1
 

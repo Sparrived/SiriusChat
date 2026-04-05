@@ -80,7 +80,7 @@ class TestConfigManager:
     def test_validate_config_missing_keys(self, config_manager: ConfigManager) -> None:
         """Test validation of missing required keys."""
         config = {"agent": {"name": "test"}}
-        with pytest.raises(ValueError, match="Missing required config keys"):
+        with pytest.raises(ValueError, match="缺少必要配置键|Missing required config keys"):
             config_manager._validate_config(config)
 
     def test_validate_config_missing_agent_keys(self, config_manager: ConfigManager) -> None:
@@ -90,7 +90,7 @@ class TestConfigManager:
             "agent": {"name": "test"},
             "orchestration": {},
         }
-        with pytest.raises(ValueError, match="Missing required agent keys"):
+        with pytest.raises(ValueError, match="缺少必要的主角配置键|Missing required agent keys"):
             config_manager._validate_config(config)
 
     def test_validate_config_invalid_work_path(self, config_manager: ConfigManager) -> None:
@@ -100,7 +100,7 @@ class TestConfigManager:
             "agent": {"name": "test", "persona": "p", "model": "m"},
             "orchestration": {},
         }
-        with pytest.raises(ValueError, match="Invalid work_path"):
+        with pytest.raises(ValueError, match="无效的 work_path|Invalid work_path"):
             config_manager._validate_config(config)
 
     def test_load_from_env_dev(self, config_manager: ConfigManager) -> None:
@@ -115,7 +115,7 @@ class TestConfigManager:
 
     def test_load_from_env_invalid_env(self, config_manager: ConfigManager) -> None:
         """Test error handling for invalid environment."""
-        with pytest.raises(ValueError, match="Unknown environment"):
+        with pytest.raises(ValueError, match="未知环境|Unknown environment"):
             config_manager.load_from_env("invalid")
 
     def test_dict_to_session_config(self, config_manager: ConfigManager) -> None:

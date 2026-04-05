@@ -97,7 +97,7 @@ class AsyncRolePlayEngine:
             return await async_fn(request_payload)
         generate_sync = getattr(self.provider, "generate", None)
         if not callable(generate_sync):
-            raise RuntimeError("Configured provider does not implement generate/generate_async.")
+            raise RuntimeError("配置的提供商未实现 generate/generate_async 方法。")
         sync_fn = cast(Callable[[GenerationRequest], str], generate_sync)
         return await asyncio.to_thread(sync_fn, request_payload)
 
