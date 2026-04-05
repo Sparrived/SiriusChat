@@ -9,8 +9,8 @@ import json
 from pathlib import Path
 from typing import Any
 
-from sirius_chat.memory_quality import MemoryForgetEngine, MemoryQualityAssessor, MemoryQualityReport
-from sirius_chat.user_memory import UserMemoryFileStore, UserMemoryManager
+from sirius_chat.memory.quality.models import MemoryForgetEngine, MemoryQualityAssessor, MemoryQualityReport
+from sirius_chat.memory import UserMemoryFileStore, UserMemoryManager
 
 
 def analyze_workspace_memories(work_path: Path) -> dict[str, Any]:

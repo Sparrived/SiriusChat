@@ -3,7 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TypedDict
 
-from sirius_chat.models import TokenUsageRecord, Transcript
+from sirius_chat.config import TokenUsageRecord
+from sirius_chat.models import Transcript
 
 
 class TokenUsageBucketDict(TypedDict):

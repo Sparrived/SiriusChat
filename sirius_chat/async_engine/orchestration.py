@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from sirius_chat.models import SessionConfig
+    from sirius_chat.config import SessionConfig
 
 
 # Task identifiers

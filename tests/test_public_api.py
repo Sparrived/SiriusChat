@@ -11,7 +11,7 @@ from sirius_chat.api import (
     find_user_by_channel_uid,
     probe_provider_availability,
 )
-from sirius_chat.models import OrchestrationPolicy
+from sirius_chat.config import OrchestrationPolicy
 from sirius_chat.providers.mock import MockProvider
 
 

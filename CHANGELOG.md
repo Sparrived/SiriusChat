@@ -4,6 +4,46 @@
 
 ## [Unreleased]
 
+### Changed
+- **API隔离迁移完成** (Stage 1-4)：将单体模块分解为逻辑清晰的独立子包
+  - `sirius_chat/config/`：配置管理（models.py, manager.py, helpers.py, __init__.py）
+  - `sirius_chat/core/`：核心编排引擎（engine.py, __init__.py）
+  - `sirius_chat/memory/`：统一记忆系统（user/, event/, quality/ 子模块）
+    * `memory/user/`：用户档案与记忆管理（models.py, manager.py, store.py）
+    * `memory/event/`：事件记忆系统（models.py, manager.py, store.py）
+    * `memory/quality/`：记忆质量评估与智能遗忘（models.py, tools.py）
+  - `sirius_chat/models/`：数据模型与结构定义（models.py, __init__.py）
+  - `sirius_chat/session/`：会话管理与持久化（runner.py, store.py, __init__.py）
+  - `sirius_chat/token/`：Token管理与使用统计（usage.py, utils.py, __init__.py）
+- **删除所有弃用的包装文件**：
+  - `config_manager.py`（使用 `from sirius_chat.config import ConfigManager`）
+  - `orchestration_config.py`（使用 `from sirius_chat.config import configure_*`）
+  - `user_memory.py`（使用 `from sirius_chat.memory import UserMemoryManager`）
+  - `event_memory.py`（使用 `from sirius_chat.memory import EventMemoryManager`）
+  - `async_engine/core.py`（使用 `from sirius_chat import AsyncRolePlayEngine`）
+  - `memory_quality.py` / `memory_quality_tools.py`（使用 `from sirius_chat.memory.quality import *`）
+- **更新所有导入路径**：20+ 个源文件和文档已升级到新的导入路径
+- **清理过时设计文档**：
+  - 删除 C2C3_ARCHITECTURE_DESIGN.md、C2C3_IMPLEMENTATION_COMPLETE.md
+  - 删除 PERFORMANCE_OPTIMIZATION_PLAN.md、PERFORMANCE_OPTIMIZATION_IMPLEMENTATION.md
+  - 统一文档维护在 docs/architecture.md 而非独立设计文档
+
+### Fixed
+- **删除过时和冗余的测试**：
+  - test_event_user_memory_integration.py：移除3个调用不存在方法的测试
+  - test_api_integrity.py：移除测试已删除弃用导入的测试
+  - sirius_chat/core/engine.py：移除调用不存在的 `interpret_event_with_user_context()` 的代码
+- **修复test_orchestration_config.py**：更新导入从 `async_engine.orchestration_config` 到新的模块位置
+
+### Test Results
+- 256 个测试通过 ✅
+- 1 个测试被跳过
+- 0 个测试失败 ✅
+
+---
+
+## [Unreleased]
+
 ### Added
 - **logging_config.py**: 生产级日志系统，支持JSON结构化输出、彩色控制台格式、日志文件循环
   - JSONFormatter：输出机器可读的JSON日志

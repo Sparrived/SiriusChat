@@ -5,7 +5,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from sirius_chat.async_engine import AsyncRolePlayEngine
-from sirius_chat.models import Message, Participant, SessionConfig, Transcript
+from sirius_chat.config import SessionConfig
+from sirius_chat.models import Message, Participant, Transcript
 from sirius_chat.providers.base import AsyncLLMProvider, LLMProvider
 from sirius_chat.session_store import JsonSessionStore, SessionStore
 

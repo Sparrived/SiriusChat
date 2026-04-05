@@ -6,7 +6,8 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from sirius_chat.models import SessionConfig, Transcript
+    from sirius_chat.config import SessionConfig
+    from sirius_chat.models import Transcript
 
 
 def build_system_prompt(config: SessionConfig, transcript: Transcript) -> str:

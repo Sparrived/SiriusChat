@@ -7,7 +7,7 @@ from pathlib import Path
 from sirius_chat.api import Agent, AgentPreset, Message, OrchestrationPolicy, SessionConfig, create_async_engine
 from sirius_chat.providers.base import GenerationRequest
 from sirius_chat.providers.mock import MockProvider
-from sirius_chat.user_memory import UserMemoryManager, UserProfile
+from sirius_chat.memory import UserMemoryManager, UserProfile
 
 
 def test_async_engine_runs_live_session() -> None:

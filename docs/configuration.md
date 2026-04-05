@@ -268,7 +268,7 @@ Agent 配置定义 AI 助手的身份和行为。
 ### 通过环境名加载
 
 ```python
-from sirius_chat.config_manager import ConfigManager
+from sirius_chat.config import ConfigManager
 
 manager = ConfigManager()
 
@@ -283,7 +283,7 @@ config = manager.load_from_env("prod")
 
 ```python
 from pathlib import Path
-from sirius_chat.config_manager import ConfigManager
+from sirius_chat.config import ConfigManager
 
 manager = ConfigManager()
 

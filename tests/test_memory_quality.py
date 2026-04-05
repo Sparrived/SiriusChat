@@ -5,14 +5,14 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 import pytest
 
-from sirius_chat.memory_quality import (
+from sirius_chat.memory.quality.models import (
     MemoryForgetEngine,
     MemoryQualityAssessor,
     MemoryQualityMetrics,
     MemoryQualityReport,
     UserBehaviorConsistency,
 )
-from sirius_chat.user_memory import MemoryFact, UserMemoryEntry, UserProfile, UserRuntimeState
+from sirius_chat.memory import MemoryFact, UserMemoryEntry, UserProfile, UserRuntimeState
 
 
 def test_memory_quality_assessor_calculates_age() -> None:

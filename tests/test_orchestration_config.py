@@ -11,7 +11,7 @@ from sirius_chat.models import (
     Message,
     OrchestrationPolicy,
 )
-from sirius_chat.async_engine.core import AsyncRolePlayEngine
+from sirius_chat import AsyncRolePlayEngine
 from sirius_chat.exceptions import OrchestrationConfigError
 from sirius_chat.async_engine.orchestration_config import (
     configure_orchestration_models,

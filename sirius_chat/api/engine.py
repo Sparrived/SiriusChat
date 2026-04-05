@@ -3,9 +3,10 @@ from __future__ import annotations
 from typing import Callable
 
 from sirius_chat.async_engine import AsyncRolePlayEngine
-from sirius_chat.models import Message, SessionConfig, Transcript
+from sirius_chat.config import SessionConfig
+from sirius_chat.models import Message, Transcript
 from sirius_chat.providers.base import AsyncLLMProvider, LLMProvider
-from sirius_chat.user_memory import UserMemoryEntry
+from sirius_chat.memory import UserMemoryEntry
 
 OnMessage = Callable[[Message], None]
 

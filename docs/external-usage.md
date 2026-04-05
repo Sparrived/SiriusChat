@@ -340,7 +340,7 @@ if entry is not None:
 使用 `ConfigManager` 处理多环境配置：
 
 ```python
-from sirius_chat.config_manager import ConfigManager
+from sirius_chat.config import ConfigManager
 from pathlib import Path
 
 # 加载基础配置并应用环境变量替换

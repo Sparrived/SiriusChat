@@ -3,13 +3,16 @@ from sirius_chat.api import (
     AgentPreset,
     AsyncLLMProvider,
     AsyncRolePlayEngine,
+    EventMemoryManager,
     JsonPersistentSessionRunner,
     JsonSessionStore,
     Message,
     MockProvider,
     OpenAICompatibleProvider,
+    OrchestrationPolicy,
     Participant,
     SessionConfig,
+    TRAIT_TAXONOMY,
     GENERATED_AGENTS_FILE_NAME,
     GeneratedSessionPreset,
     TokenUsageBaseline,
@@ -81,12 +84,15 @@ __all__ = [
     "UserProfile",
     "UserMemoryEntry",
     "UserMemoryManager",
+    "EventMemoryManager",
     "TokenUsageRecord",
     "TokenUsageBaseline",
     "SessionConfig",
+    "OrchestrationPolicy",
     "Transcript",
     # Constants & Enums
     "GENERATED_AGENTS_FILE_NAME",
+    "TRAIT_TAXONOMY",
     "LogLevel",
     "LogFormat",
     # Session Management
@@ -146,3 +152,20 @@ __all__ = [
     "UserNotFoundError",
     "ConflictingMemoryError",
 ]
+
+# 为一些缺少文档的导入项添加 docstring
+AsyncLLMProvider.__doc__ = "Base class for LLM providers."
+JsonSessionStore.__doc__ = "JSON-based session store for persisting sessions."
+SqliteSessionStore.__doc__ = "SQLite-based session store for persisting sessions."
+Middleware.__doc__ = "Base class for middleware components."
+MiddlewareChain.__doc__ = "Chain of middleware components for request processing."
+MiddlewareContext.__doc__ = "Context information for middleware execution."
+abuild_roleplay_prompt_from_answers_and_apply.__doc__ = "Build roleplay prompt from user answers and apply it."
+agenerate_agent_prompts_from_answers.__doc__ = "Generate agent prompts from user answers."
+build_token_usage_baseline.__doc__ = "Build a baseline for token usage metrics."
+create_session_config_from_selected_agent.__doc__ = "Create session configuration from a selected agent preset."
+generate_humanized_roleplay_questions.__doc__ = "Generate humanized roleplay questions for user interaction."
+load_generated_agent_library.__doc__ = "Load the generated agent profile library."
+persist_generated_agent_profile.__doc__ = "Persist a generated agent profile to storage."
+select_generated_agent_profile.__doc__ = "Select a generated agent profile from the library."
+summarize_token_usage.__doc__ = "Summarize token usage statistics."

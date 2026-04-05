@@ -1,64 +1,22 @@
-"""事件记忆管理（Event Memory System）。
-
-负责：
-- 事件聚类与合并（absorb_mention）
-- 事件验证与充实（finalize_pending_events）
-- 事件持久化与恢复
-"""
+"""Event memory manager implementation"""
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from datetime import datetime
-import json
+from typing import Any
 import logging
 import re
-from pathlib import Path
-from typing import Any
+
+from sirius_chat.memory.event.models import ContextualEventInterpretation, EventMemoryEntry
 
 logger = logging.getLogger(__name__)
 
 
-@dataclass(slots=True)
-class ContextualEventInterpretation:
-    """事件的上下文理解：结合用户历史来调整事件理解和信度。"""
-
-    event_id: str
-    event_summary: str
-    base_confidence: float = 0.65
-    # 一致性评分（0-1）：事件与用户历史的对齐度
-    keyword_alignment: float = 0.0  # 事件关键词与用户历史的重叠度
-    role_alignment: float = 0.0  # 事件角色与用户已知角色的重叠度
-    emotion_alignment: float = 0.0  # 事件情感与用户历史情感的相似度
-    entity_alignment: float = 0.0  # 事件实体与用户已知实体的重叠度
-    # 调整后的信度
-    adjusted_confidence: float = 0.65
-    # 推荐的处理类别
-    recommended_category: str = "normal"  # normal|high_confidence|pending|low_relevance
-    # 对齐度详情说明
-    interpretation_notes: list[str] = field(default_factory=list)
-
-
-@dataclass(slots=True)
-class EventMemoryEntry:
-    event_id: str
-    summary: str
-    keywords: list[str] = field(default_factory=list)
-    role_slots: list[str] = field(default_factory=list)
-    entities: list[str] = field(default_factory=list)
-    time_hints: list[str] = field(default_factory=list)
-    emotion_tags: list[str] = field(default_factory=list)
-    evidence_samples: list[str] = field(default_factory=list)
-    hit_count: int = 0
-    created_at: str = ""
-    updated_at: str = ""
-    verified: bool = False  # Whether this event has been LLM-verified
-    mention_count: int = 0  # Number of related mentions accumulated
-
-
-@dataclass(slots=True)
 class EventMemoryManager:
-    entries: list[EventMemoryEntry] = field(default_factory=list)
+    """Manages event memory entries, clustering, and verification."""
+    
+    def __init__(self):
+        self.entries: list[EventMemoryEntry] = []
 
     _STOPWORDS = {
         "我们",
@@ -114,6 +72,7 @@ class EventMemoryManager:
 
     @staticmethod
     def _jaccard(left: list[str], right: list[str]) -> float:
+        """Calculate Jaccard similarity between two lists."""
         left_set = set(item for item in left if item)
         right_set = set(item for item in right if item)
         if not left_set or not right_set:
@@ -123,9 +82,11 @@ class EventMemoryManager:
         return overlap / union if union else 0.0
 
     def _next_event_id(self) -> str:
+        """Generate next event ID."""
         return f"evt_{len(self.entries) + 1:04d}"
 
     def _extract_keywords(self, content: str, max_items: int = 10) -> list[str]:
+        """Extract keywords from content."""
         tokens = re.findall(r"[A-Za-z0-9]{2,}", content)
         chinese_only = re.sub(r"[^\u4e00-\u9fff]", "", content)
         for size in (2, 3):
@@ -145,6 +106,7 @@ class EventMemoryManager:
         return normalized
 
     def _extract_role_slots(self, content: str) -> list[str]:
+        """Extract role slots from content."""
         values: list[str] = []
         for keyword, slot in self._ROLE_KEYWORDS.items():
             if keyword in content and slot not in values:
@@ -152,6 +114,7 @@ class EventMemoryManager:
         return values
 
     def _extract_time_hints(self, content: str) -> list[str]:
+        """Extract time hints from content."""
         values: list[str] = []
         for keyword, tag in self._TIME_KEYWORDS.items():
             if keyword in content and tag not in values:
@@ -159,6 +122,7 @@ class EventMemoryManager:
         return values
 
     def _extract_emotion_tags(self, content: str) -> list[str]:
+        """Extract emotion tags from content."""
         values: list[str] = []
         for keyword, tag in self._EMOTION_KEYWORDS.items():
             if keyword in content and tag not in values:
@@ -166,6 +130,7 @@ class EventMemoryManager:
         return values
 
     def _extract_entities(self, content: str, known_entities: list[str]) -> list[str]:
+        """Extract entities from content."""
         values: list[str] = []
         for entity in known_entities:
             item = entity.strip()
@@ -174,6 +139,7 @@ class EventMemoryManager:
         return values
 
     def _build_feature_payload(self, content: str, known_entities: list[str]) -> dict[str, list[str] | str]:
+        """Build feature payload from content."""
         summary = content.strip()
         if len(summary) > 72:
             summary = f"{summary[:72]}..."
@@ -188,6 +154,7 @@ class EventMemoryManager:
 
     @staticmethod
     def _normalize_feature_items(value: object) -> list[str]:
+        """Normalize feature items."""
         if not isinstance(value, list):
             return []
         normalized: list[str] = []
@@ -203,6 +170,7 @@ class EventMemoryManager:
         base: dict[str, list[str] | str],
         extracted: dict[str, object] | None,
     ) -> dict[str, list[str] | str]:
+        """Merge feature payloads."""
         if extracted is None:
             return base
         merged = dict(base)
@@ -216,6 +184,7 @@ class EventMemoryManager:
         return merged
 
     def _score(self, entry: EventMemoryEntry, features: dict[str, list[str] | str]) -> float:
+        """Score an entry against features."""
         incoming_summary = str(features.get("summary", ""))
         incoming_keywords = list(features.get("keywords", []))
         incoming_roles = list(features.get("role_slots", []))
@@ -244,6 +213,7 @@ class EventMemoryManager:
 
     @staticmethod
     def _merge_unique(target: list[str], source: list[str], max_items: int) -> list[str]:
+        """Merge unique items from source into target."""
         values = list(target)
         for item in source:
             if item and item not in values:
@@ -259,6 +229,7 @@ class EventMemoryManager:
         features: dict[str, list[str] | str],
         content: str,
     ) -> None:
+        """Update entry with new features."""
         summary = str(features.get("summary", "")).strip()
         if summary:
             entry.summary = summary
@@ -290,6 +261,7 @@ class EventMemoryManager:
         high_threshold: float = 0.60,
         weak_threshold: float = 0.35,
     ) -> dict[str, Any]:
+        """Absorb a mention of an event, clustering with existing if similar."""
         base = self._build_feature_payload(content, known_entities)
         features = self._merge_feature_payload(base=base, extracted=extracted_features)
 
@@ -390,37 +362,37 @@ class EventMemoryManager:
         rejected_count = 0
         
         for entry in pending:
-            # 准备验证提示词
-            prompt = f"""分析这段对话中的潜在事件，判断是否应该记录。
+            # Prepare verification prompt
+            prompt = f"""Analyze potential events in the conversation and judge whether they should be recorded.
 
-事件摘要：{entry.summary}
-相关关键词：{", ".join(entry.keywords) if entry.keywords else "无"}
-角色提及：{", ".join(entry.role_slots) if entry.role_slots else "无"}
-证据样本（共 {len(entry.evidence_samples)} 提及）：
+Event Summary: {entry.summary}
+Related Keywords: {", ".join(entry.keywords) if entry.keywords else "None"}
+Mentioned Roles: {", ".join(entry.role_slots) if entry.role_slots else "None"}
+Evidence Samples (Total {len(entry.evidence_samples)} mentions):
 {chr(10).join(f"- {s}" for s in entry.evidence_samples)}
 
-基于以上分析，回答：
-1. 这个事件值得记录吗？（是/否）
-2. 如果是，请提供改进的摘要（1-2 句话）
-3. 如果是，提供 5-10 个与该事件相关的关键词
-4. 如果是，涉及哪些人物/角色？（如：领导、同事、客户）
-5. 如果是，有时间线索吗？（如：昨天、本周、下月）
-6. 如果是，表达了什么情绪？（如：焦虑、积极）
+Based on the above analysis, answer:
+1. Is this event worth recording? (Yes/No)
+2. If yes, provide an improved summary (1-2 sentences)
+3. If yes, provide 5-10 keywords related to this event
+4. If yes, which people/roles are involved? (e.g.: manager, colleague, client)
+5. If yes, are there timeline clues? (e.g.: yesterday, this week, next month)
+6. If yes, what emotions are expressed? (e.g.: anxiety, positive)
 
-请以 JSON 格式回答：
+Please answer in JSON format:
 {{
-  "record": "是" 或 "否",
-  "reason": "简短原因",
-  "summary": "改进的摘要（如果是）",
-  "keywords": ["关键词1", "关键词2", ...],
-  "role_slots": ["领导", "同事", ...],
-  "time_hints": ["昨天", ...],
-  "emotion_tags": ["焦虑", ...]
+  "record": "Yes" or "No",
+  "reason": "Brief reason",
+  "summary": "Improved summary (if yes)",
+  "keywords": ["keyword1", "keyword2", ...],
+  "role_slots": ["manager", "colleague", ...],
+  "time_hints": ["yesterday", ...],
+  "emotion_tags": ["anxiety", ...]
 }}"""
 
             request = GenerationRequest(
                 model=model_name,
-                system_prompt="你是一位对话分析专家，擅长从对话中提取有意义的事件信息。",
+                system_prompt="You are a dialogue analysis expert skilled at extracting meaningful event information from conversations.",
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.5,
                 max_tokens=512,
@@ -429,9 +401,9 @@ class EventMemoryManager:
             try:
                 response = await provider_async.generate_async(request)
                 
-                # 解析 JSON 响应
+                # Parse JSON response
                 import json
-                # 从响应中提取 JSON（可能被包装在 markdown 代码块中）
+                # Extract JSON from response (may be wrapped in markdown code blocks)
                 json_str = response
                 if "```" in response:
                     json_str = response.split("```")[1]
@@ -441,9 +413,9 @@ class EventMemoryManager:
                 result = json.loads(json_str.strip())
                 
                 record_value = result.get("record", "").lower().strip()
-                # 支持中英文判断
+                # Support both Chinese and English judgments
                 if record_value in ("yes", "是", "y", "✓"):
-                    # 根据 LLM 反馈更新事件
+                    # Update event based on LLM feedback
                     entry.verified = True
                     summary = result.get("summary", "").strip()
                     if summary:
@@ -478,13 +450,13 @@ class EventMemoryManager:
                     entry.updated_at = datetime.now().isoformat(timespec="seconds")
                     verified_count += 1
                 else:
-                    # 删除 LLM 认为不值得记录的事件
+                    # Delete events LLM says are not worth recording
                     self.entries.remove(entry)
                     rejected_count += 1
                     
             except Exception as e:
-                # 记录错误但继续处理其他事件
-                logger.warning(f"事件验证失败 {entry.event_id}：{e}")
+                # Log error but continue processing other events
+                logger.warning(f"Event verification failed {entry.event_id}: {e}")
         
         pending_after = [e for e in self.entries if not e.verified and e.mention_count >= min_mentions]
         
@@ -495,6 +467,7 @@ class EventMemoryManager:
         }
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialize to dictionary."""
         return {
             "entries": [
                 {
@@ -518,6 +491,7 @@ class EventMemoryManager:
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "EventMemoryManager":
+        """Deserialize from dictionary."""
         manager = cls()
         raw = payload.get("entries", [])
         if not isinstance(raw, list):
@@ -547,30 +521,3 @@ class EventMemoryManager:
                 )
             )
         return manager
-
-
-class EventMemoryFileStore:
-    def __init__(self, work_path: Path, filename: str = "events.json") -> None:
-        self._dir = Path(work_path) / "events"
-        self._path = self._dir / filename
-
-    @property
-    def path(self) -> Path:
-        return self._path
-
-    def load(self) -> EventMemoryManager:
-        if not self._path.exists():
-            return EventMemoryManager()
-        try:
-            payload = json.loads(self._path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            return EventMemoryManager()
-        if not isinstance(payload, dict):
-            return EventMemoryManager()
-        return EventMemoryManager.from_dict(payload)
-
-    def save(self, manager: EventMemoryManager) -> None:
-        self._dir.mkdir(parents=True, exist_ok=True)
-        tmp = self._path.with_suffix(self._path.suffix + ".tmp")
-        tmp.write_text(json.dumps(manager.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
-        tmp.replace(self._path)

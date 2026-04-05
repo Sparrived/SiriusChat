@@ -4,13 +4,13 @@
 
 import pytest
 from datetime import datetime, timedelta, timezone
-from sirius_chat.user_memory import (
+from sirius_chat.memory import (
     UserMemoryManager,
     UserProfile,
     MAX_MEMORY_FACTS,
     EVENT_DEDUP_WINDOW_MINUTES,
-    TRAIT_TAXONOMY,
 )
+from sirius_chat.trait_taxonomy import TRAIT_TAXONOMY
 
 
 class TestPerformanceOptimization:

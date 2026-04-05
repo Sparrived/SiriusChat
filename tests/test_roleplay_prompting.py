@@ -17,7 +17,7 @@ from sirius_chat.api import (
     persist_generated_agent_profile,
     select_generated_agent_profile,
 )
-from sirius_chat.models import OrchestrationPolicy
+from sirius_chat.config import OrchestrationPolicy
 from sirius_chat.providers.mock import MockProvider
 
 

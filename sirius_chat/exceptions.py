@@ -174,7 +174,7 @@ class TokenBudgetExceededError(TokenError):
 
 
 class TokenEstimationError(TokenError):
-    """Token估算失败"""
+    """Token estimation error exception."""
 
     def __init__(self, message: str) -> None:
         super().__init__(
@@ -186,13 +186,13 @@ class TokenEstimationError(TokenError):
 
 
 class ParseError(SiriusException):
-    """内容解析错误的基类"""
+    """Content parsing error exception."""
 
     pass
 
 
 class JSONParseError(ParseError):
-    """JSON解析失败"""
+    """JSON parsing error exception."""
 
     def __init__(
         self,
@@ -241,13 +241,13 @@ class ContentValidationError(ParseError):
 
 
 class ConfigError(SiriusException):
-    """配置相关错误的基类"""
+    """Configuration error exception base class."""
 
     pass
 
 
 class InvalidConfigError(ConfigError):
-    """配置参数无效"""
+    """Configuration parameter is invalid exception."""
 
     def __init__(
         self,
@@ -274,7 +274,7 @@ class InvalidConfigError(ConfigError):
 
 
 class MissingConfigError(ConfigError):
-    """必需配置缺失"""
+    """Required configuration is missing exception."""
 
     def __init__(
         self,
@@ -326,13 +326,13 @@ class OrchestrationConfigError(ConfigError):
 
 
 class MemoryError(SiriusException):
-    """记忆管理相关错误"""
+    """Memory management error exception."""
 
     pass
 
 
 class UserNotFoundError(MemoryError):
-    """用户记录未找到"""
+    """User record not found exception."""
 
     def __init__(self, user_id: str) -> None:
         super().__init__(

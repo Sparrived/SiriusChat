@@ -9,9 +9,10 @@ import math
 import re
 from typing import Awaitable, Callable, cast
 
-from sirius_chat.models import Message, Participant, SessionConfig, TokenUsageRecord, Transcript
+from sirius_chat.config import SessionConfig, TokenUsageRecord
+from sirius_chat.models import Message, Participant, Transcript
 from sirius_chat.providers.base import AsyncLLMProvider, GenerationRequest, LLMProvider
-from sirius_chat.user_memory import (
+from sirius_chat.memory import (
     EventMemoryFileStore,
     EventMemoryManager,
     UserMemoryFileStore,
@@ -803,26 +804,6 @@ class AsyncRolePlayEngine:
                     event_features=extracted_event_features,
                     source="event_extract",
                     base_confidence=0.65,
-                )
-            
-            # 2. 解释事件并考虑用户上下文
-            event_id = str(getattr(event_entry, "event_id", "unknown"))
-            contextual_interp = transcript.user_memory.interpret_event_with_user_context(
-                user_id=participant.user_id,
-                event_id=event_id,
-                event_summary=summary,
-                event_features=extracted_event_features or {},
-            )
-            
-            # 3. 根据上下文解释调整事件处理
-            if contextual_interp.interpretation_notes:
-                notes_str = " | ".join(contextual_interp.interpretation_notes)
-                transcript.user_memory.add_memory_fact(
-                    user_id=participant.user_id,
-                    fact_type="event_context_note",
-                    value=f"事件上下文：{notes_str}",
-                    source="contextual_interp",
-                    confidence=contextual_interp.adjusted_confidence,
                 )
 
         # 运行 memory_manager 任务汇聚、去重、标注、验证记忆

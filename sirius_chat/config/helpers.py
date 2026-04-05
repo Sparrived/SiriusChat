@@ -8,7 +8,7 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Any
 
-from sirius_chat.models import SessionConfig
+from sirius_chat.config.models import SessionConfig
 from sirius_chat.exceptions import OrchestrationConfigError
 
 
@@ -35,7 +35,7 @@ def configure_orchestration_models(
         
     Example:
         >>> config = SessionConfig(...)
-        >>> from sirius_chat.orchestration_config import configure_orchestration_models
+        >>> from sirius_chat.config import configure_orchestration_models
         >>> config = configure_orchestration_models(
         ...     config,
         ...     memory_extract="gpt-4-mini",

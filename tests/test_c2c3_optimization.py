@@ -4,7 +4,7 @@ C2/C3优化测试 - RESIDENT/TRANSIENT分离存储和动态压缩
 
 import pytest
 from datetime import datetime, timedelta, timezone
-from sirius_chat.user_memory import (
+from sirius_chat.memory import (
     UserMemoryManager,
     UserProfile,
 )

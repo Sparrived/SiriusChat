@@ -14,8 +14,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from sirius_chat.models import Transcript
-from sirius_chat.user_memory import MemoryFact, UserMemoryEntry, UserMemoryManager, UserMemoryFileStore
+from sirius_chat.memory.user import MemoryFact, UserMemoryEntry, UserMemoryManager, UserMemoryFileStore
 
 
 @dataclass(slots=True)

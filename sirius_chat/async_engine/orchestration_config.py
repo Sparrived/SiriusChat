@@ -8,7 +8,7 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Any
 
-from sirius_chat.models import SessionConfig
+from sirius_chat.config import SessionConfig
 from sirius_chat.exceptions import OrchestrationConfigError
 
 

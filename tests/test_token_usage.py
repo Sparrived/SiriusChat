@@ -1,4 +1,5 @@
-﻿from sirius_chat.models import TokenUsageRecord, Transcript
+﻿from sirius_chat.config import TokenUsageRecord
+from sirius_chat.models import Transcript
 from sirius_chat.api import build_token_usage_baseline, summarize_token_usage
 
 

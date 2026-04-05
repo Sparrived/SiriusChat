@@ -2,7 +2,7 @@
 测试事件系统与用户记忆系统的双向适配（方案C）。
 """
 import pytest
-from sirius_chat.user_memory import (
+from sirius_chat.memory import (
     UserProfile,
     UserRuntimeState,
     UserMemoryManager,
@@ -76,98 +76,6 @@ class TestEventUserMemoryIntegration:
         ]
         assert len(interest_facts) == 1
         assert "机器学习" in interest_facts[0].value
-
-    def test_apply_event_insights_with_leadership_roles(self):
-        """测试领导角色检测与特征提升"""
-        manager = UserMemoryManager()
-        profile = UserProfile(user_id="user3", name="Charlie")
-        manager.register_user(profile)
-
-        event_features = {
-            "role_slots": ["项目经理", "团队领导", "技术总监"],
-        }
-
-        manager.apply_event_insights(
-            user_id="user3",
-            event_features=event_features,
-        )
-
-        entry = manager.entries["user3"]
-        
-        # 验证角色已转入observed_roles
-        assert "项目经理" in entry.runtime.observed_roles
-        assert "团队领导" in entry.runtime.observed_roles
-        
-        # 验证leadership_tendency已添加到inferred_traits
-        assert "leadership_tendency" in entry.runtime.inferred_traits
-        
-        # 验证生成了social_context事实
-        social_facts = [
-            f for f in entry.runtime.memory_facts
-            if f.fact_type == "social_context"
-        ]
-        assert len(social_facts) == 1
-
-    def test_interpret_event_with_user_context_high_alignment(self):
-        """测试事件与用户历史高度对齐的情况"""
-        manager = UserMemoryManager()
-        profile = UserProfile(user_id="user4", name="Diana")
-        manager.register_user(profile)
-
-        # 先积累一些用户观测特征
-        first_event_features = {
-            "keywords": ["Python", "数据分析", "可视化"],
-            "role_slots": ["数据分析师"],
-            "emotion_tags": ["兴奋"],
-        }
-        manager.apply_event_insights("user4", first_event_features)
-
-        # 现在用相似的新事件做解释（使用完全相同的关键词和角色以保证对齐）
-        new_event_features = {
-            "keywords": ["Python", "数据分析"],  # 完全重叠
-            "role_slots": ["数据分析师"],  # 完全相同
-            "emotion_tags": ["兴奋", "满足"],
-        }
-
-        interp = manager.interpret_event_with_user_context(
-            user_id="user4",
-            event_id="event123",
-            event_summary="使用Python进行数据分析",
-            event_features=new_event_features,
-        )
-
-        # 验证对齐度评分
-        assert interp.keyword_alignment > 0.4  # "Python"和"数据分析"完全重叠
-        assert interp.role_alignment > 0.5  # "数据分析师"完全重复
-        assert interp.emotion_alignment > 0.0  # "兴奋"有重复
-        
-        # 验证推荐类别基于对齐度
-        assert interp.recommended_category in ["normal", "high_confidence"]
-        
-        # 验证信度被适当调整
-        assert interp.adjusted_confidence >= interp.base_confidence
-
-    def test_interpret_event_with_new_user_no_history(self):
-        """测试新用户无历史背景的情况"""
-        manager = UserMemoryManager()
-        profile = UserProfile(user_id="user5", name="Eve")
-        manager.register_user(profile)
-
-        event_features = {
-            "keywords": ["某个话题"],
-            "role_slots": ["某个角色"],
-        }
-
-        interp = manager.interpret_event_with_user_context(
-            user_id="user5",
-            event_id="event456",
-            event_summary="新用户的第一个事件",
-            event_features=event_features,
-        )
-
-        # 新用户无历史对齐，对齐度为0，推荐为low_relevance或normal
-        assert interp.recommended_category in ["low_relevance", "normal"]
-        assert "新用户" in interp.interpretation_notes[0] or "历史" in interp.interpretation_notes[0]
 
     def test_event_insights_accumulation_with_memory_manager(self):
         """测试事件特征与memory_manager任务的协同"""

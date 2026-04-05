@@ -12,7 +12,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from sirius_chat.models import Agent, AgentPreset, OrchestrationPolicy, SessionConfig
+from sirius_chat.config.models import Agent, AgentPreset, OrchestrationPolicy, SessionConfig
 
 
 class ConfigManager:
@@ -85,7 +85,7 @@ class ConfigManager:
         if env not in env_mapping:
             raise ValueError(f"未知环境：{env}。必须是：{list(env_mapping.keys())}")
 
-        config_file = self.base_path / "configs" / env_mapping[env]
+        config_file = self.base_path / "presets" / env_mapping[env]
         if not config_file.exists():
             raise FileNotFoundError(f"环境 '{env}' 的配置文件不存在：{config_file}")
 

@@ -10,8 +10,7 @@ from unittest import mock
 
 import pytest
 
-from sirius_chat.config_manager import ConfigManager
-from sirius_chat.models import SessionConfig
+from sirius_chat.config import ConfigManager, SessionConfig
 
 
 class TestConfigManager:

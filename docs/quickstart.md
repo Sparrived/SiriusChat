@@ -82,7 +82,7 @@ TASK_EVENT_EXTRACT_MODEL=gpt-4-mini
 
 ```python
 from pathlib import Path
-from sirius_chat.config_manager import ConfigManager
+from sirius_chat.config import ConfigManager
 from sirius_chat.async_engine import AsyncRolePlayEngine
 from sirius_chat.providers.openai import OpenAIProvider
 
@@ -109,7 +109,7 @@ asyncio.run(main())
 ### 方式 2：按环境加载配置
 
 ```python
-from sirius_chat.config_manager import ConfigManager
+from sirius_chat.config import ConfigManager
 
 config_manager = ConfigManager()
 
@@ -132,7 +132,7 @@ config = config_manager.load_from_env("prod")
 ```python
 import asyncio
 from sirius_chat.models import Message, Participant
-from sirius_chat.config_manager import ConfigManager
+from sirius_chat.config import ConfigManager
 from sirius_chat.async_engine import AsyncRolePlayEngine
 from sirius_chat.providers.openai import OpenAIProvider
 
@@ -196,7 +196,7 @@ work_path = Path(session_config.work_path)
 work_path.mkdir(parents=True, exist_ok=True)
 
 # 保存用户记忆
-from sirius_chat.user_memory import UserMemoryFileStore
+from sirius_chat.memory import UserMemoryFileStore
 
 memory_store = UserMemoryFileStore(work_path)
 memory_store.save_all(transcript.user_memory)
@@ -225,7 +225,7 @@ print(f"会话已保存到: {work_path}")
 ```python
 import json
 from pathlib import Path
-from sirius_chat.user_memory import UserMemoryFileStore, UserMemoryManager
+from sirius_chat.memory import UserMemoryFileStore, UserMemoryManager
 from sirius_chat.models import Message, Transcript
 
 work_path = Path(session_config.work_path)

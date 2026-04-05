@@ -6,7 +6,7 @@
 
 ```python
 import asyncio
-from sirius_chat.config_manager import ConfigManager
+from sirius_chat.config import ConfigManager
 from sirius_chat.async_engine import AsyncRolePlayEngine
 from sirius_chat.models import Message, Participant
 from sirius_chat.providers.openai import OpenAIProvider
@@ -398,7 +398,7 @@ async def main():
 
 ```python
 # 使用环境变量
-from sirius_chat.config_manager import ConfigManager
+from sirius_chat.config import ConfigManager
 import os
 
 config_manager = ConfigManager()

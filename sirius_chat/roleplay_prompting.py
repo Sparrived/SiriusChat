@@ -7,7 +7,7 @@ import re
 from pathlib import Path
 from typing import Awaitable, Callable, cast
 
-from sirius_chat.models import Agent, AgentPreset, OrchestrationPolicy, SessionConfig
+from sirius_chat.config import Agent, AgentPreset, OrchestrationPolicy, SessionConfig
 from sirius_chat.providers.base import AsyncLLMProvider, GenerationRequest, LLMProvider
 
 GENERATED_AGENTS_FILE_NAME = "generated_agents.json"

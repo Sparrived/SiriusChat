@@ -5,7 +5,13 @@ from sirius_chat.api.engine import (
     create_async_engine,
     find_user_by_channel_uid,
 )
-from sirius_chat.api.memory import UserMemoryEntry, UserMemoryManager, UserProfile
+from sirius_chat.api.memory import (
+    EventMemoryManager,
+    TRAIT_TAXONOMY,
+    UserMemoryEntry,
+    UserMemoryManager,
+    UserProfile,
+)
 from sirius_chat.api.models import (
     Agent,
     AgentPreset,
@@ -55,7 +61,7 @@ from sirius_chat.api.orchestration import (
     create_multimodel_config,
     setup_multimodel_config,
 )
-from sirius_chat.async_engine.orchestration_config import (
+from sirius_chat.config import (
     configure_orchestration_models,
     configure_orchestration_budgets,
     configure_orchestration_temperatures,
@@ -74,6 +80,8 @@ __all__ = [
     "UserProfile",
     "UserMemoryEntry",
     "UserMemoryManager",
+    "EventMemoryManager",
+    "TRAIT_TAXONOMY",
     "TokenUsageRecord",
     "TokenUsageBaseline",
     "MultiModelConfig",

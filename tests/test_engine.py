@@ -1,7 +1,8 @@
 ﻿import asyncio
 
 from sirius_chat.async_engine import AsyncRolePlayEngine
-from sirius_chat.models import Agent, AgentPreset, Message, SessionConfig, OrchestrationPolicy
+from sirius_chat.config import Agent, AgentPreset, SessionConfig, OrchestrationPolicy
+from sirius_chat.models import Message
 from sirius_chat.providers.mock import MockProvider
 from sirius_chat.session_store import JsonSessionStore
 from pathlib import Path

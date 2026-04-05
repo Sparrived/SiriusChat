@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from sirius_chat.models import OrchestrationPolicy, SessionConfig
+from sirius_chat.config import OrchestrationPolicy, SessionConfig
 
 
 @dataclass(slots=True)
