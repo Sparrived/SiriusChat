@@ -8,8 +8,91 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Any
 
-from sirius_chat.config.models import SessionConfig
+from sirius_chat.config.models import Agent, SessionConfig
 from sirius_chat.exceptions import OrchestrationConfigError
+
+
+def auto_configure_multimodal_agent(
+    agent: Agent,
+    *,
+    multimodal_model: str | None = None,
+) -> Agent:
+    """为 Agent 配置多模态模型（如果有图片输入时使用）。
+    
+    不进行自动推断，而是要求用户显式指定或在 Agent.metadata 中设置。
+    这样可以兼容各种平台（有些平台可能没有 vision 版本）。
+    
+    Args:
+        agent: AI Agent 配置对象
+        multimodal_model: 多模态模型名称（可选）。如果提供，将覆盖 agent.metadata 中的设置。
+                         如果不提供，将检查 agent.metadata 中是否已有配置。
+        
+    Returns:
+        更新后的 Agent 对象（原对象被修改）
+        
+    Example:
+        >>> agent = Agent(name="Assistant", persona="helpful", model="gpt-4o-mini")
+        >>> agent = auto_configure_multimodal_agent(agent, multimodal_model="gpt-4o")
+        >>> agent.metadata["multimodal_model"]
+        'gpt-4o'
+    """
+    # 如果参数中指定了多模态模型，直接设置
+    if multimodal_model:
+        agent.metadata["multimodal_model"] = multimodal_model
+        return agent
+    
+    # 如果 metadata 中已经有了，就保留现有配置
+    if "multimodal_model" in agent.metadata:
+        return agent
+    
+    # 否则不做任何操作，让用户显式配置
+    return agent
+
+
+def create_agent_with_multimodal(
+    *,
+    name: str,
+    persona: str,
+    model: str,
+    multimodal_model: str,
+    temperature: float = 0.7,
+    max_tokens: int = 512,
+    **metadata: Any,
+) -> Agent:
+    """便捷函数：一次性创建带有多模态模型的 Agent。
+    
+    Args:
+        name: Agent 名称
+        persona: Agent 人设
+        model: 主模型名称
+        multimodal_model: 多模态模型名称（当有图片输入时使用）
+        temperature: 温度参数
+        max_tokens: 最大输出 token 数
+        **metadata: 其他元数据
+        
+    Returns:
+        已配置多模态模型的 Agent 对象
+        
+    Example:
+        >>> agent = create_agent_with_multimodal(
+        ...     name="Assistant",
+        ...     persona="helpful",
+        ...     model="gpt-4o-mini",
+        ...     multimodal_model="gpt-4o",
+        ... )
+    """
+    agent = Agent(
+        name=name,
+        persona=persona,
+        model=model,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        metadata={
+            "multimodal_model": multimodal_model,
+            **metadata,
+        },
+    )
+    return agent
 
 
 def configure_orchestration_models(

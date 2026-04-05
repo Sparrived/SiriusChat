@@ -25,6 +25,8 @@ from sirius_chat.config.helpers import (
     configure_orchestration_models,
     configure_orchestration_retries,
     configure_orchestration_temperatures,
+    auto_configure_multimodal_agent,
+    create_agent_with_multimodal,
 )
 
 __all__ = [
@@ -42,4 +44,6 @@ __all__ = [
     "configure_orchestration_models",
     "configure_orchestration_retries",
     "configure_orchestration_temperatures",
+    "auto_configure_multimodal_agent",
+    "create_agent_with_multimodal",
 ]

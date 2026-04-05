@@ -6,6 +6,11 @@ This example demonstrates automatic model switching based on input content:
 - With images: Automatically upgrades to multimodal model (e.g., gpt-4o)
 
 This approach optimizes cost while maintaining quality for multimodal scenarios.
+
+Three configuration methods are shown:
+1. Manual: Set agent.metadata["multimodal_model"] directly
+2. Helper: Use auto_configure_multimodal_agent() for flexible configuration
+3. Constructor: Use create_agent_with_multimodal() for one-shot creation
 """
 
 import asyncio
@@ -18,6 +23,8 @@ from sirius_chat.api import (
     Message,
     OpenAICompatibleProvider,
     SessionConfig,
+    auto_configure_multimodal_agent,
+    create_agent_with_multimodal,
 )
 
 
@@ -30,7 +37,11 @@ async def main() -> None:
         api_key="YOUR_API_KEY",
     )
 
-    # Create agent with multimodal_model in metadata for auto-upgrade
+    # ============================================================
+    # Method 1: Manual configuration (most explicit)
+    # ============================================================
+    print("Configuration Method 1: Manual metadata")
+    print("-" * 60)
     agent = Agent(
         name="Assistant",
         persona="A helpful AI assistant that can analyze images and answer questions.",
@@ -38,11 +49,42 @@ async def main() -> None:
         temperature=0.7,
         max_tokens=512,
     )
-    # Add multimodal model for automatic use when images are detected
-    agent.metadata = {
-        "multimodal_model": "gpt-4o",  # Upgrade to this when images are present
-    }
+    agent.metadata["multimodal_model"] = "gpt-4o"
+    print(f"Agent configured: {agent.name}, model={agent.model}, multimodal_model={agent.metadata.get('multimodal_model')}\n")
 
+    # ============================================================
+    # Method 2: Using auto_configure_multimodal_agent helper (flexible)
+    # ============================================================
+    print("Configuration Method 2: auto_configure_multimodal_agent helper")
+    print("-" * 60)
+    agent = Agent(
+        name="Assistant",
+        persona="A helpful AI assistant that can analyze images and answer questions.",
+        model="gpt-4o-mini",
+        temperature=0.7,
+        max_tokens=512,
+    )
+    agent = auto_configure_multimodal_agent(agent, multimodal_model="gpt-4o")
+    print(f"Agent configured: {agent.name}, model={agent.model}, multimodal_model={agent.metadata.get('multimodal_model')}\n")
+
+    # ============================================================
+    # Method 3: Using create_agent_with_multimodal convenience constructor
+    # ============================================================
+    print("Configuration Method 3: create_agent_with_multimodal convenience constructor")
+    print("-" * 60)
+    agent = create_agent_with_multimodal(
+        name="Assistant",
+        persona="A helpful AI assistant that can analyze images and answer questions.",
+        model="gpt-4o-mini",
+        multimodal_model="gpt-4o",
+        temperature=0.7,
+        max_tokens=512,
+    )
+    print(f"Agent configured: {agent.name}, model={agent.model}, multimodal_model={agent.metadata.get('multimodal_model')}\n")
+
+    # ============================================================
+    # Demo: Run live session with dynamic model routing
+    # ============================================================
     preset = AgentPreset(
         agent=agent,
         global_system_prompt="You are a helpful assistant. When presented with images, analyze them carefully and provide insightful responses.",
@@ -58,8 +100,9 @@ async def main() -> None:
     # ============================================================
     # Scenario 1: Plain text query (uses gpt-4o-mini)
     # ============================================================
-    print("Scenario 1: Plain text query")
-    print("-" * 60)
+    print("\n" + "=" * 60)
+    print("Scenario 1: Plain text query (uses gpt-4o-mini)")
+    print("=" * 60)
     transcript = await engine.run_live_session(
         config=config,
         human_turns=[
@@ -73,14 +116,15 @@ async def main() -> None:
     for msg in transcript.messages:
         if msg.role == "assistant":
             print(f"[{msg.speaker}] {msg.content}\n")
-    print(f"Model used: gpt-4o-mini (cheap route)")
+    print("✓ Model used: gpt-4o-mini (text route - cost optimized)")
     print()
 
     # ============================================================
     # Scenario 2: Query with images (auto-upgrades to gpt-4o)
     # ============================================================
-    print("Scenario 2: Query with image (auto-upgrade)")
-    print("-" * 60)
+    print("=" * 60)
+    print("Scenario 2: Query with image (auto-upgrades to gpt-4o)")
+    print("=" * 60)
     transcript = await engine.run_live_session(
         config=config,
         human_turns=[
@@ -100,14 +144,15 @@ async def main() -> None:
     for msg in transcript.messages:
         if msg.role == "assistant":
             print(f"[{msg.speaker}] {msg.content}\n")
-    print(f"Model used: gpt-4o (multimodal route - automatically upgraded)")
+    print("✓ Model used: gpt-4o (multimodal route - automatically upgraded)")
     print()
 
     # ============================================================
     # Scenario 3: Multiple images query
     # ============================================================
+    print("=" * 60)
     print("Scenario 3: Multiple images comparison")
-    print("-" * 60)
+    print("=" * 60)
     transcript = await engine.run_live_session(
         config=config,
         human_turns=[
@@ -125,14 +170,15 @@ async def main() -> None:
     for msg in transcript.messages:
         if msg.role == "assistant":
             print(f"[{msg.speaker}] {msg.content}\n")
-    print(f"Model used: gpt-4o (multimodal route)")
+    print("✓ Model used: gpt-4o (multimodal route)")
     print()
 
     # ============================================================
     # Benefits of Dynamic Model Routing
     # ============================================================
+    print("=" * 60)
     print("Benefits Summary")
-    print("-" * 60)
+    print("=" * 60)
     print("✓ Cost Optimization: Text queries use cheap model, image queries auto-upgrade")
     print("✓ Transparent: No manual model selection needed")
     print("✓ Consistent: Same system prompt across all scenarios")
