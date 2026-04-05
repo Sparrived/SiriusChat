@@ -36,6 +36,7 @@ def build_system_prompt(config: SessionConfig, transcript: Transcript) -> str:
         lines.append(
             "  [记忆使用说明] 下列记忆是内部结构化参考信息，仅用于理解语义。"
             "最终回复应采用自然对话表达，不应受该段内容的标签、分隔符、字段顺序影响。"
+            "你应基于其中的语义做自然复述，而不是沿用这段结构的外观。"
             "禁止沿用或仿写“字段: 值 | 字段: 值”样式。"
         )
         for user_id in transcript.user_memory.entries.keys():

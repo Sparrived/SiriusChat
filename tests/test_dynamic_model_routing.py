@@ -13,6 +13,7 @@ from sirius_chat.api import (
 )
 from sirius_chat.models.models import Transcript
 from sirius_chat.providers.mock import MockProvider
+from sirius_chat.memory.user.models import UserProfile
 
 
 def test_has_multimodal_inputs_no_messages():
@@ -345,3 +346,31 @@ def test_build_system_prompt_contains_output_boundary_constraint():
     assert "[输出边界约束]" in prompt
     assert "不要逐条复述或转储这些内部元信息" in prompt
     assert "不应受该段内容的标签、分隔符、字段顺序影响" in prompt
+
+
+def test_build_system_prompt_contains_memory_usage_guidance_when_memory_exists():
+    provider = MockProvider()
+    engine = AsyncRolePlayEngine(provider)
+
+    config = SessionConfig(
+        preset=AgentPreset(
+            agent=Agent(name="Assistant", persona="helpful", model="gpt-4o-mini"),
+            global_system_prompt="You are helpful.",
+        ),
+        work_path="./data",
+    )
+    transcript = Transcript()
+    transcript.user_memory.register_user(UserProfile(user_id="u1", name="小王"))
+    transcript.user_memory.add_memory_fact(
+        user_id="u1",
+        fact_type="preference",
+        value="喜欢简洁回答",
+        source="memory_extract",
+        confidence=0.9,
+    )
+
+    prompt = engine._build_system_prompt(config, transcript)
+
+    assert "[记忆使用说明]" in prompt
+    assert "仅用于理解语义" in prompt
+    assert "沿用这段结构的外观" in prompt
