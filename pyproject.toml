@@ -1,10 +1,28 @@
 [project]
 name = "sirius-chat"
 version = "0.3.0"
-description = "面向多人角色扮演对话的 LLM 框架（兼容 OpenAI 风格 Provider）"
+description = "A multi-user RPG dialogue LLM framework compatible with OpenAI providers"
 readme = "README.md"
 requires-python = ">=3.12"
+authors = [
+    {name = "Sparrived", email = "sparrived@example.com"}
+]
+license = {text = "MIT"}
+keywords = ["llm", "dialogue", "multi-user", "roleplay", "framework"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
 dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/Sparrived/SiriusChat"
+Documentation = "https://github.com/Sparrived/SiriusChat"
+Repository = "https://github.com/Sparrived/SiriusChat.git"
+Issues = "https://github.com/Sparrived/SiriusChat/issues"
 
 [project.optional-dependencies]
 test = [
