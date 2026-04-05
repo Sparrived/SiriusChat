@@ -128,11 +128,13 @@ def test_load_or_persist_session_bundle_loads_generated_key_persisted(monkeypatc
         json.dumps(
             {
                 "generated_agent_key": "main_agent",
-                "provider": {
-                    "type": "openai-compatible",
-                    "base_url": "https://api.openai.com",
-                    "api_key": "k",
-                },
+                "providers": [
+                    {
+                        "type": "openai-compatible",
+                        "base_url": "https://api.openai.com",
+                        "api_key": "k",
+                    }
+                ],
             },
             ensure_ascii=False,
         ),
@@ -199,48 +201,4 @@ def test_load_or_persist_session_bundle_uses_load_session_config_for_persisted(m
     assert providers[0]["type"] == "openai-compatible"
 
 
-def test_load_or_persist_session_bundle_rebuilds_legacy_persisted(monkeypatch, tmp_path) -> None:
-    persisted = tmp_path / "session_config.persisted.json"
-    persisted.write_text("{}", encoding="utf-8")
-    config_path = tmp_path / "config.json"
-    config_path.write_text("{}", encoding="utf-8")
 
-    session_from_config = main_module.SessionConfig(
-        work_path=tmp_path,
-        preset=main_module.AgentPreset(
-            agent=main_module.Agent(name="主助手", persona="测试", model="mock-model"),
-            global_system_prompt="测试系统提示词",
-        ),
-    )
-
-    def _fake_load_session(path, work_path):  # noqa: ANN001
-        if path == persisted:
-            raise ValueError("manual agent/global_system_prompt is not allowed; use generated_agent_key")
-        assert path == config_path
-        assert work_path == tmp_path
-        return (
-            session_from_config,
-            [{"type": "openai-compatible", "base_url": "https://api.openai.com", "api_key": "k"}],
-        )
-
-    writes: list[dict[str, object]] = []
-
-    def _fake_atomic_write(path, payload):  # noqa: ANN001
-        assert path == persisted
-        writes.append(payload)
-
-    monkeypatch.setattr(main_module, "_load_session_config", _fake_load_session)
-    monkeypatch.setattr(main_module, "_load_generated_agent_key_from_config_file", lambda _p: "main_agent")
-    monkeypatch.setattr(main_module, "_atomic_write_json", _fake_atomic_write)
-
-    session, providers = main_module._load_or_persist_session_bundle(
-        config_path=config_path,
-        work_path=tmp_path,
-        print_func=lambda _msg: None,
-    )
-
-    assert session is session_from_config
-    assert len(providers) == 1
-    assert providers[0]["type"] == "openai-compatible"
-    assert len(writes) == 1
-    assert writes[0]["generated_agent_key"] == "main_agent"

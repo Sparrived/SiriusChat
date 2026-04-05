@@ -93,14 +93,10 @@ def _load_session_config(config_path: Path, work_path: Path) -> tuple[SessionCon
         orchestration=orchestration,
     )
 
-    # 统一使用 providers 字段（list format）
+    # 加载 providers 列表（必需）
     providers_config = list(raw.get("providers", []))
-    
-    # 向后兼容：若传入 provider 单个对象，则转换为 providers list
     if not providers_config:
-        provider_obj = dict(raw.get("provider", {}))
-        if provider_obj and "api_key" in provider_obj:
-            providers_config = [provider_obj]
+        raise ValueError("SessionConfig 必需包含 providers 字段（list format）")
 
     return session, providers_config
 

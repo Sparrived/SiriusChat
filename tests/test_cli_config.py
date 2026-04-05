@@ -35,10 +35,12 @@ def test_load_session_config_parses_required_fields(tmp_path) -> None:
     config_path.write_text(
         json.dumps(
             {
-                "provider": {
-                    "type": "openai-compatible",
-                    "api_key": "test-key",
-                },
+                "providers": [
+                    {
+                        "type": "openai-compatible",
+                        "api_key": "test-key",
+                    }
+                ],
                 "generated_agent_key": "main_agent",
             },
             ensure_ascii=False,
@@ -62,10 +64,12 @@ def test_load_session_config_supports_siliconflow_defaults(tmp_path) -> None:
     config_path.write_text(
         json.dumps(
             {
-                "provider": {
-                    "type": "siliconflow",
-                    "api_key": "sf-test-key",
-                },
+                "providers": [
+                    {
+                        "type": "siliconflow",
+                        "api_key": "sf-test-key",
+                    }
+                ],
                 "generated_agent_key": "main_agent",
             },
             ensure_ascii=False,
@@ -122,10 +126,12 @@ def test_load_session_config_parses_orchestration_policy(tmp_path) -> None:
     config_path.write_text(
         json.dumps(
             {
-                "provider": {
-                    "type": "siliconflow",
-                    "api_key": "sf-key",
-                },
+                "providers": [
+                    {
+                        "type": "siliconflow",
+                        "api_key": "sf-key",
+                    }
+                ],
                 "generated_agent_key": "main_agent",
                 "orchestration": {
                     "task_enabled": {"memory_extract": True, "multimodal_parse": True, "event_extract": True},

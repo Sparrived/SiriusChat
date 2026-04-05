@@ -148,14 +148,10 @@ def _load_session_config(config_path: Path, work_path: Path) -> tuple[SessionCon
         orchestration=orchestration,
     )
 
-    # 统一使用 providers 字段（list format）
+    # 加载 providers 列表（必需）
     providers_config = list(raw.get("providers", []))
-    
-    # 向后兼容：若传入 provider 单个对象，则转换为 providers list
     if not providers_config:
-        provider_obj = dict(raw.get("provider", {}))
-        if provider_obj and "api_key" in provider_obj:
-            providers_config = [provider_obj]
+        raise ValueError("SessionConfig 必需包含 providers 字段（list format）")
 
     return session, providers_config
 
@@ -224,18 +220,14 @@ def _setup_multimodel_orchestration(
 def _load_providers_config_from_config_file(config_path: Path) -> list[dict[str, object]]:
     """加载 Session JSON 中的 providers 配置。
     
-    支持向后兼容：如果 JSON 包含 provider（单个对象），会自动转换为 providers 列表。
+    providers 字段为必需的 list format。
     """
     raw = json.loads(config_path.read_text(encoding="utf-8-sig"))
     
-    # 优先使用 providers 字段（list format）
+    # 加载 providers 字段（必需）
     providers_config = list(raw.get("providers", []))
-    
-    # 向后兼容：若传入 provider 单个对象，则转换为 providers list
     if not providers_config:
-        provider_obj = dict(raw.get("provider", {}))
-        if provider_obj and "api_key" in provider_obj:
-            providers_config = [provider_obj]
+        raise ValueError("SessionConfig 必需包含 providers 字段（list format）")
     
     return providers_config
 
@@ -546,21 +538,8 @@ def _serialize_session_bundle(
     session_config: SessionConfig,
     providers_config: list[dict[str, object]],
 ) -> dict[str, object]:
-    # 从 providers_config 列表中构建向后兼容的 provider 字段（取第一个）
-    provider: dict[str, str | object] = {
-        "type": "openai-compatible",
-        "base_url": "",
-        "api_key": "",
-    }
-    if providers_config and isinstance(providers_config[0], dict):
-        first_provider = providers_config[0]
-        provider["type"] = first_provider.get("type", "openai-compatible")
-        provider["base_url"] = first_provider.get("base_url", "")
-        provider["api_key"] = first_provider.get("api_key", "")
-    
     payload: dict[str, object] = {
         "generated_agent_key": generated_agent_key,
-        "provider": provider,
         "providers": providers_config,
         "history_max_messages": session_config.history_max_messages,
         "history_max_chars": session_config.history_max_chars,
@@ -595,15 +574,9 @@ def _load_or_persist_session_bundle(
 ) -> tuple[SessionConfig, list[dict[str, object]]]:
     persisted_path = work_path / PERSISTED_SESSION_CONFIG_FILE_NAME
     if persisted_path.exists():
-        try:
-            session_config, providers_config = _load_session_config(persisted_path, work_path)
-            print_func(f"已优先加载持久化 SessionConfig：{persisted_path}")
-            return session_config, providers_config
-        except ValueError as exc:
-            message = str(exc)
-            if "manual agent/global_system_prompt is not allowed" not in message:
-                raise
-            print_func("检测到旧版持久化 SessionConfig 格式，正在自动重建为 generated_agent_key 结构。")
+        session_config, providers_config = _load_session_config(persisted_path, work_path)
+        print_func(f"已加载持久化 SessionConfig：{persisted_path}")
+        return session_config, providers_config
 
     session_config, providers_config = _load_session_config(config_path, work_path)
     generated_agent_key = _load_generated_agent_key_from_config_file(config_path)

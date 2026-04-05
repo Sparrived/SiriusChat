@@ -60,11 +60,13 @@ def test_cli_runs_single_turn_with_message_and_output(tmp_path, monkeypatch) -> 
     config_path.write_text(
         json.dumps(
             {
-                "provider": {
-                    "type": "openai-compatible",
-                    "base_url": "https://api.openai.com",
-                    "api_key": "test-key",
-                },
+                "providers": [
+                    {
+                        "type": "openai-compatible",
+                        "base_url": "https://api.openai.com",
+                        "api_key": "test-key",
+                    }
+                ],
                 "generated_agent_key": "main_agent",
             },
             ensure_ascii=False,
@@ -95,11 +97,13 @@ def test_cli_reads_one_message_from_input_when_missing_message_arg(tmp_path, mon
     config_path.write_text(
         json.dumps(
             {
-                "provider": {
-                    "type": "openai-compatible",
-                    "base_url": "https://api.openai.com",
-                    "api_key": "test-key",
-                },
+                "providers": [
+                    {
+                        "type": "openai-compatible",
+                        "base_url": "https://api.openai.com",
+                        "api_key": "test-key",
+                    }
+                ],
                 "generated_agent_key": "main_agent",
             },
             ensure_ascii=False,
@@ -127,11 +131,13 @@ def test_cli_attaches_default_channel_identity(tmp_path, monkeypatch) -> None:
     config_path.write_text(
         json.dumps(
             {
-                "provider": {
-                    "type": "openai-compatible",
-                    "base_url": "https://api.openai.com",
-                    "api_key": "test-key",
-                },
+                "providers": [
+                    {
+                        "type": "openai-compatible",
+                        "base_url": "https://api.openai.com",
+                        "api_key": "test-key",
+                    }
+                ],
                 "generated_agent_key": "main_agent",
             },
             ensure_ascii=False,
@@ -160,11 +166,13 @@ def test_cli_exits_when_message_is_empty(tmp_path) -> None:
     config_path.write_text(
         json.dumps(
             {
-                "provider": {
-                    "type": "openai-compatible",
-                    "base_url": "https://api.openai.com",
-                    "api_key": "test-key",
-                },
+                "providers": [
+                    {
+                        "type": "openai-compatible",
+                        "base_url": "https://api.openai.com",
+                        "api_key": "test-key",
+                    }
+                ],
                 "generated_agent_key": "main_agent",
             },
             ensure_ascii=False,
