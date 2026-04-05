@@ -205,14 +205,31 @@ class ConfigManager:
             # 使用 agent 的模型作为默认的统一模型
             unified_model = agent.model
         
-        orchestration = OrchestrationPolicy(
-            unified_model=unified_model,
-            task_models=task_models,
-            task_enabled=orch_dict.get("task_enabled", {
+        # 确定默认的 task_enabled 值
+        # 当使用 unified_model 方案时，禁用辅助任务
+        # 当使用 task_models 方案时，启用所有任务（如果明确提供了 task_models）
+        if orch_dict.get("task_enabled"):
+            # 显式提供了 task_enabled 配置，直接使用
+            task_enabled = orch_dict["task_enabled"]
+        elif unified_model and not task_models:
+            # 使用 unified_model 方案，禁用辅助任务
+            task_enabled = {
+                "memory_extract": False,
+                "multimodal_parse": False,
+                "event_extract": False,
+            }
+        else:
+            # 其他情况（包括 task_models 方案），启用所有任务
+            task_enabled = {
                 "memory_extract": True,
                 "multimodal_parse": True,
                 "event_extract": True,
-            }),
+            }
+        
+        orchestration = OrchestrationPolicy(
+            unified_model=unified_model,
+            task_models=task_models,
+            task_enabled=task_enabled,
             task_budgets=orch_dict.get("task_budgets", {}),
             task_temperatures=orch_dict.get("task_temperatures", {}),
             task_max_tokens=orch_dict.get("task_max_tokens", {}),

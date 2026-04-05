@@ -236,7 +236,7 @@ def create_session_config_from_selected_agent(
         history_max_chars=history_max_chars,
         max_recent_participant_messages=max_recent_participant_messages,
         enable_auto_compression=enable_auto_compression,
-        orchestration=orchestration or OrchestrationPolicy(),
+        orchestration=orchestration,
     )
     return config
 

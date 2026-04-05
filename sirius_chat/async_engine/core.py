@@ -228,6 +228,7 @@ class AsyncRolePlayEngine:
         estimated_cost = self._estimate_tokens(system_prompt + task_input)
 
         used = task_token_usage.get(task_name, 0)
+        budget = int(config.orchestration.task_budgets.get(task_name, 0))
         if budget > 0 and used + estimated_cost > budget:
             self._record_task_stat(transcript, task_name, "skipped_budget")
             return

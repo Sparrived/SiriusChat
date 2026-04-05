@@ -167,7 +167,15 @@ class SessionConfig:
         
         # 如果没有提供 orchestration，创建默认配置：使用主 AI 模型作为统一模型
         if orchestration is None:
-            orchestration = OrchestrationPolicy(unified_model=preset.agent.model)
+            orchestration = OrchestrationPolicy(
+                unified_model=preset.agent.model,
+                # 在 unified_model 方案中，禁用辅助任务
+                task_enabled={
+                    "memory_extract": False,
+                    "multimodal_parse": False,
+                    "event_extract": False,
+                }
+            )
         
         self.orchestration = orchestration
         # 验证多模型协同配置
