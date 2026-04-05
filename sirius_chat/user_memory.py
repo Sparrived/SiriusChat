@@ -50,6 +50,11 @@ class UserRuntimeState:
     memory_facts: list[MemoryFact] = field(default_factory=list)
     last_seen_channel: str = ""
     last_seen_uid: str = ""
+    # 事件观测特征集合（用于与新事件做一致性比对）
+    observed_keywords: set[str] = field(default_factory=set)
+    observed_roles: set[str] = field(default_factory=set)
+    observed_emotions: set[str] = field(default_factory=set)
+    observed_entities: set[str] = field(default_factory=set)
 
 
 @dataclass(slots=True)
@@ -365,6 +370,173 @@ class UserMemoryManager:
                 cleanup_stats[user_id] = deleted_count
         return cleanup_stats
 
+    def apply_event_insights(
+        self,
+        user_id: str,
+        event_features: dict[str, object],
+        source: str = "event_extract",
+        base_confidence: float = 0.65,
+    ) -> None:
+        """将事件特征转化为用户记忆事实和特征信号。
+        
+        自动将事件的emotion_tags、keywords、role_slots、time_hints等
+        转化为相应的用户记忆事实，并更新用户的观察到的特征集合。
+        """
+        entry = self.entries.get(user_id)
+        if entry is None:
+            return
+
+        # 1. 情感识别 → 用户特征信号与记忆事实
+        emotions = event_features.get("emotion_tags", [])
+        if isinstance(emotions, list) and emotions:
+            clean_emotions = [str(e).strip() for e in emotions if str(e).strip()]
+            entry.runtime.observed_emotions.update(clean_emotions)
+            
+            emotion_str = ", ".join(clean_emotions[:3])
+            self.add_memory_fact(
+                user_id=user_id,
+                fact_type="emotional_pattern",
+                value=f"表现出的情感状态：{emotion_str}",
+                source=source,
+                confidence=base_confidence - 0.05,
+            )
+
+        # 2. 关键词积累 → 用户兴趣与记忆事实
+        keywords = event_features.get("keywords", [])
+        if isinstance(keywords, list) and keywords:
+            clean_keywords = [str(k).strip() for k in keywords if str(k).strip()]
+            entry.runtime.observed_keywords.update(clean_keywords)
+            
+            # 取前5个关键词，避免过长
+            keywords_str = ", ".join(clean_keywords[:5])
+            self.add_memory_fact(
+                user_id=user_id,
+                fact_type="user_interest",
+                value=f"关注的话题：{keywords_str}",
+                source=source,
+                confidence=base_confidence - 0.1,
+            )
+
+        # 3. 角色识别 → 社交网络与特征提升
+        roles = event_features.get("role_slots", [])
+        if isinstance(roles, list) and roles:
+            clean_roles = [str(r).strip() for r in roles if str(r).strip()]
+            entry.runtime.observed_roles.update(clean_roles)
+            
+            roles_str = ", ".join(set(clean_roles))
+            self.add_memory_fact(
+                user_id=user_id,
+                fact_type="social_context",
+                value=f"与以下角色互动：{roles_str}",
+                source=source,
+                confidence=base_confidence - 0.05,
+            )
+            
+            # 特征提升：检测领导相关角色
+            leadership_roles = {"管理者", "leader", "manager", "经理", "主管", "团队",
+                              "lead", "主导", "负责人", "项目经理", "项目主管"}
+            if any(role in leadership_roles for role in clean_roles):
+                if "leadership_tendency" not in entry.runtime.inferred_traits:
+                    entry.runtime.inferred_traits.append("leadership_tendency")
+
+        # 4. 实体识别 → 已知实体集合
+        entities = event_features.get("entities", [])
+        if isinstance(entities, list) and entities:
+            clean_entities = [str(e).strip() for e in entities if str(e).strip()]
+            entry.runtime.observed_entities.update(clean_entities)
+
+    def interpret_event_with_user_context(
+        self,
+        user_id: str,
+        event_id: str,
+        event_summary: str,
+        event_features: dict[str, object],
+    ) -> ContextualEventInterpretation:
+        """根据用户历史来调整事件理解，计算事件与用户背景的对齐度。
+        
+        返回ContextualEventInterpretation，包含多个对齐度评分和推荐的处理类别。
+        """
+        entry = self.entries.get(user_id)
+        
+        interpretation = ContextualEventInterpretation(
+            event_id=event_id,
+            event_summary=event_summary,
+            base_confidence=0.65,
+        )
+        
+        if entry is None:
+            # 新用户，无历史对齐信息
+            interpretation.recommended_category = "pending"
+            interpretation.interpretation_notes.append("新用户，未有历史背景")
+            return interpretation
+
+        # 1. 关键词对齐度
+        event_keywords = set(event_features.get("keywords", []) or [])
+        if event_keywords and entry.runtime.observed_keywords:
+            overlap = len(event_keywords & entry.runtime.observed_keywords)
+            interpretation.keyword_alignment = overlap / max(len(event_keywords), 1)
+            if interpretation.keyword_alignment > 0.5:
+                interpretation.interpretation_notes.append(
+                    f"关键词高度吻合（{interpretation.keyword_alignment:.1%}）"
+                )
+
+        # 2. 角色对齐度
+        event_roles = set(event_features.get("role_slots", []) or [])
+        if event_roles and entry.runtime.observed_roles:
+            overlap = len(event_roles & entry.runtime.observed_roles)
+            interpretation.role_alignment = overlap / max(len(event_roles), 1)
+            if interpretation.role_alignment > 0.5:
+                interpretation.interpretation_notes.append(
+                    f"角色高度一致（{interpretation.role_alignment:.1%}）"
+                )
+
+        # 3. 情感对齐度
+        event_emotions = set(event_features.get("emotion_tags", []) or [])
+        if event_emotions and entry.runtime.observed_emotions:
+            overlap = len(event_emotions & entry.runtime.observed_emotions)
+            interpretation.emotion_alignment = overlap / max(len(event_emotions), 1)
+            if interpretation.emotion_alignment > 0.5:
+                interpretation.interpretation_notes.append(
+                    f"情感模式重复（{interpretation.emotion_alignment:.1%}）"
+                )
+
+        # 4. 实体对齐度
+        event_entities = set(event_features.get("entities", []) or [])
+        if event_entities and entry.runtime.observed_entities:
+            overlap = len(event_entities & entry.runtime.observed_entities)
+            interpretation.entity_alignment = overlap / max(len(event_entities), 1)
+            if interpretation.entity_alignment > 0.3:
+                interpretation.interpretation_notes.append(
+                    f"已知实体出现（{interpretation.entity_alignment:.1%}）"
+                )
+
+        # 5. 计算调整后的信度与推荐类别
+        avg_alignment = (
+            interpretation.keyword_alignment +
+            interpretation.role_alignment +
+            interpretation.emotion_alignment +
+            interpretation.entity_alignment
+        ) / 4.0
+        
+        # 根据平均对齐度调整信度
+        interpretation.adjusted_confidence = (
+            interpretation.base_confidence + (avg_alignment * 0.3)
+        )
+        interpretation.adjusted_confidence = min(1.0, max(0.5, interpretation.adjusted_confidence))
+
+        # 推荐类别
+        if avg_alignment > 0.6:
+            interpretation.recommended_category = "high_confidence"
+        elif avg_alignment < 0.2:
+            interpretation.recommended_category = "low_relevance"
+        else:
+            interpretation.recommended_category = "normal"
+
+        if not interpretation.interpretation_notes:
+            interpretation.interpretation_notes.append("新事件，无明显与历史的关联")
+
+        return interpretation
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "entries": {
@@ -399,6 +571,10 @@ class UserMemoryManager:
                         ],
                         "last_seen_channel": entry.runtime.last_seen_channel,
                         "last_seen_uid": entry.runtime.last_seen_uid,
+                        "observed_keywords": list(entry.runtime.observed_keywords),
+                        "observed_roles": list(entry.runtime.observed_roles),
+                        "observed_emotions": list(entry.runtime.observed_emotions),
+                        "observed_entities": list(entry.runtime.observed_entities),
                     },
                 }
                 for user_id, entry in self.entries.items()
@@ -453,6 +629,10 @@ class UserMemoryManager:
                     ],
                     last_seen_channel=str(runtime_data.get("last_seen_channel", "")),
                     last_seen_uid=str(runtime_data.get("last_seen_uid", "")),
+                    observed_keywords=set(runtime_data.get("observed_keywords", [])),
+                    observed_roles=set(runtime_data.get("observed_roles", [])),
+                    observed_emotions=set(runtime_data.get("observed_emotions", [])),
+                    observed_entities=set(runtime_data.get("observed_entities", [])),
                 ),
             )
             runtime = manager.entries[user_id].runtime
@@ -613,6 +793,26 @@ class UserMemoryFileStore:
             entry.runtime.last_seen_uid = str(runtime_data.get("last_seen_uid", "")).strip()
 
         return manager
+
+
+@dataclass(slots=True)
+class ContextualEventInterpretation:
+    """事件的上下文理解：结合用户历史来调整事件理解和信度。"""
+
+    event_id: str
+    event_summary: str
+    base_confidence: float = 0.65
+    # 一致性评分（0-1）：事件与用户历史的对齐度
+    keyword_alignment: float = 0.0  # 事件关键词与用户历史的重叠度
+    role_alignment: float = 0.0  # 事件角色与用户已知角色的重叠度
+    emotion_alignment: float = 0.0  # 事件情感与用户历史情感的相似度
+    entity_alignment: float = 0.0  # 事件实体与用户已知实体的重叠度
+    # 调整后的信度
+    adjusted_confidence: float = 0.65
+    # 推荐的处理类别
+    recommended_category: str = "normal"  # normal|high_confidence|pending|low_relevance
+    # 对齐度详情说明
+    interpretation_notes: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)
