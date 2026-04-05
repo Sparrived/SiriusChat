@@ -57,6 +57,11 @@ description: "当你需要在不通读全部代码的情况下快速理解 Siriu
   - `async_engine/orchestration.py`：任务编排配置和管理（TaskConfig、任务常量、系统提示模板）
   - 模块分解后每个文件 < 200 行，关注点明确，可独立测试和维护
 - `async_engine.py` 的核心实现已迁移到 `async_engine/core.py`，旧导入位置仍然可用（向后兼容）。系统提示词生成时自动包含安全约束，防止 AI 主动泄露系统提示词。
+- ✨ **动态模型路由**：支持根据输入内容自动在不同模型间切换，以平衡成本与能力
+  - 在 `Agent.metadata["multimodal_model"]` 中配置多模态专用模型（如 `"gpt-4o"`）
+  - 无多媒体数据时使用 `Agent.model`（廉价文本模型，如 `"gpt-4o-mini"`）
+  - 检测到多媒体数据时自动升级至 `agent.metadata["multimodal_model"]`
+  - 提供便捷配置：`create_agent_with_multimodal(...)` 一次性创建，或 `auto_configure_multimodal_agent(...)` 灵活配置
 - `run_live_session` 支持动态参与者与识人记忆。
 - `user_memory.py` 负责用户身份识别（user_id/aliases/identities）与结构化用户记忆。
 - 用户记忆分为 `profile`（初始化字段）与 `runtime`（运行时可变字段）。

@@ -61,6 +61,57 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
+#### Agent 配置：多模态模型（动态模型路由）
+
+当需要在有图像时自动升级模型（例如使用廉价模型处理纯文本，但遇到图像时自动升级到多模态模型）时，可以为 Agent 配置 `multimodal_model`：
+
+**方法一：使用便捷构造函数（推荐）**
+
+```python
+from sirius_chat.api import create_agent_with_multimodal
+
+agent = create_agent_with_multimodal(
+    name="Assistant",
+    persona="A helpful AI assistant",
+    model="gpt-4o-mini",           # 文本模式使用廉价模型
+    multimodal_model="gpt-4o",     # 检测到图像时自动升级至多模态模型
+    temperature=0.7,
+    max_tokens=512,
+)
+```
+
+**方法二：使用灵活配置函数**
+
+```python
+from sirius_chat.api import Agent, auto_configure_multimodal_agent
+
+agent = Agent(
+    name="Assistant",
+    persona="A helpful AI assistant",
+    model="gpt-4o-mini",
+)
+agent = auto_configure_multimodal_agent(agent, multimodal_model="gpt-4o")
+```
+
+**方法三：手动配置**
+
+```python
+from sirius_chat.api import Agent
+
+agent = Agent(
+    name="Assistant",
+    persona="A helpful AI assistant",
+    model="gpt-4o-mini",
+)
+agent.metadata["multimodal_model"] = "gpt-4o"
+```
+
+**工作原理**：
+- 引擎在生成回复前检查用户输入中是否包含多媒体数据（图像、视频等）
+- 如果没有多媒体数据，使用 `Agent.model`（廉价模型）
+- 如果检测到多媒体数据，自动升级至 `agent.metadata["multimodal_model"]`（支持多模态的模型）
+- 此过程对调用方完全透明，无需手动干预
+
 #### OrchestrationPolicy 高级配置参考
 
 当需要对不同任务使用不同模型、成本预算、温度等参数时，以下是完整的配置示例：
