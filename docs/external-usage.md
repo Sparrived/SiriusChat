@@ -61,6 +61,59 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
+#### OrchestrationPolicy 高级配置参考
+
+当需要对不同任务使用不同模型、成本预算、温度等参数时，以下是完整的配置示例：
+
+```python
+orchestration = OrchestrationPolicy(
+    # === 统一配置（可选） ===
+    unified_model="gpt-4o",  # 若设置，则所有任务均使用该模型（覆盖task_models）
+    
+    # === 按任务细粒度配置 ===
+    task_models={
+        "memory_extract": "gpt-4o-mini",     # 用户记忆提取
+        "event_extract": "gpt-4o-mini",      # 事件提取
+        "multimodal_parse": "gpt-4o",        # 多模态处理
+        "memory_manager": "gpt-4o-mini",     # 记忆管理（可选）
+    },
+    
+    # === 预算与成本控制 ===
+    task_budgets={
+        "memory_extract": 1200,    # token预算
+        "event_extract": 800,
+        "multimodal_parse": 2000,
+    },
+    task_max_tokens={
+        "memory_extract": 128,     # 最大输出token
+        "event_extract": 256,
+        "multimodal_parse": 512,
+    },
+    task_temperatures={
+        "memory_extract": 0.1,     # 温度（越低越稳定）
+        "event_extract": 0.3,
+        "multimodal_parse": 0.7,
+    },
+    task_retries={
+        "memory_extract": 2,       # 失败重试次数
+        "event_extract": 1,
+    },
+    
+    # === 执行频率控制 ===
+    memory_extract_batch_size=3,           # 每3条消息执行一次
+    memory_extract_min_content_length=50,  # 消息内容需≥50字符才触发
+    
+    # === 提示词驱动分割（可选） ===
+    enable_prompt_driven_splitting=True,   # 启用AI主动分割消息
+    split_marker="[MSG_BREAK]",            # 分割标记
+)
+```
+
+**配置说明**：
+- 若 `unified_model` 设置，则覆盖所有 `task_models` 配置
+- 频率控制：当消息数达到批次大小且内容长度满足时，执行任务
+- 提示词分割：当 `enable_prompt_driven_splitting=True` 时，系统提示会带分割指令，AI 会在适当位置输出 `[MSG_BREAK]` 标记
+
 若使用 SiliconFlow，可直接替换 provider：
 
 ```python
@@ -131,6 +184,65 @@ provider = AutoRoutingProvider(registry.load())
 2. 检查平台是否属于已适配清单（不允许自定义 provider 类型）。
 3. 使用注册时提供的 `healthcheck_model` 发起最小请求验证可用性。
 
+#### ProviderRegistry API 参考
+
+`ProviderRegistry` 用于运行时管理多个 LLM provider，支持健康检查与自动路由。
+
+**核心方法**：
+
+```python
+registry = ProviderRegistry(work_path)
+
+# 注册或更新provider
+registry.upsert(
+    provider_type: str,           # "openai-compatible" | "siliconflow" | "volcengine-ark"
+    api_key: str,                 # 平台API密钥
+    healthcheck_model: str,       # 用于验证可用性的模型（如 "gpt-4o-mini"）
+    base_url: str = None,         # 可选，自定义基地址（会自动规范化）
+    name: str = None,             # 可选，provider昵称
+)
+
+# 加载所有已配置provider
+providers: dict = registry.load()  # 返回 {provider_type: provider_instance}
+
+# 获取 AutoRoutingProvider 用于自动路由
+auto_router = AutoRoutingProvider(registry.load())
+```
+
+**说明**：
+- `healthcheck_model` 在 `upsert` 时会自动发送最小请求验证 provider 可用性
+- 若检测失败，会记录警告但不抛异常（provider 可后续重试）
+- 按注册顺序建立优先级；可通过 `/provider list` 查看当前注册状态
+
+#### ProviderConfig 数据模型
+
+当手动构造 `ProviderConfig` 时，支持以下字段：
+
+| 字段 | 类型 | 说明 | 示例 |
+|------|------|------|------|
+| `api_key` | str | 平台API密钥（必需） | `sk-...` |
+| `base_url` | str | 自定义基地址（可选） | `https://api.custom.com` |
+| `name` | str | provider昵称（可选） | `"my-openai"` |
+| `healthcheck_model` | str | 用于检测可用性的模型 | `"gpt-4o-mini"` |
+
+**使用示例**：
+
+```python
+from sirius_chat.api import ProviderConfig, OpenAICompatibleProvider
+
+config = ProviderConfig(
+    api_key="sk-...",
+    base_url="https://api.openai.com",
+    name="openai-prod",
+    healthcheck_model="gpt-4o-mini",
+)
+
+provider = OpenAICompatibleProvider(
+    api_key=config.api_key,
+    base_url=config.base_url,
+)
+```
+
 ### 异步程序嵌入（推荐）
 
 ```python
@@ -176,6 +288,53 @@ print(baseline.to_dict())
 
 - 每次模型调用都会归档到 `transcript.token_usage_records`。
 - 记录包含调用者（actor）、任务名、模型、token 估算与重试次数，可用于成本和损耗评估。
+
+#### Transcript 对象 API 参考
+
+`run_live_session()` 与 `run_session()` 返回的 `Transcript` 对象包含完整的会话记录。
+
+**主要属性**：
+
+```python
+transcript = await engine.run_live_session(...)
+
+# 会话消息列表
+messages: list[Message]  # 所有轮次的消息（user + agent）
+
+# Token使用统计
+token_usage_records: list[TokenUsageRecord]  # 每次模型调用的详细记录
+
+# 参与者信息
+participants: dict[str, Participant]  # 本次会话的全部参与者
+users: dict[str, User]                # 本次会话的用户档案（含识人结果）
+
+# 会话配置
+config: SessionConfig  # 本次会话的配置
+
+# 用户内存（运行时维护的动态信息）
+user_memory: UserMemoryManager  # 用户识别与记忆
+event_memory: EventMemoryManager  # 事件记忆
+```
+
+**主要方法**：
+
+```python
+# 按渠道+外部UID查找用户
+user = transcript.find_user_by_channel_uid(
+    channel="qq",
+    uid="qq_12345"
+)  # 返回 User 对象或None
+
+# 导出为字典（便于序列化）
+data = transcript.to_dict()
+
+# 获取消息总数
+msg_count = len(transcript.messages)
+
+# 按角色过滤消息
+agent_messages = [m for m in transcript.messages if m.role == "assistant"]
+user_messages = [m for m in transcript.messages if m.role == "user"]
+```
 
 角色扮演提示词生成与注入示例：
 
@@ -247,6 +406,36 @@ session_config = create_session_config_from_selected_agent(
 
 ```bash
 sirius-chat --config examples/session.json --work-path data/session_runtime --output transcript.json
+```
+
+### CLI 参数完整列表
+
+| 参数 | 说明 | 示例 | 默认值 |
+|------|------|------|--------|
+| `--config` | 会话JSON配置文件路径 | `examples/session.json` | *必需* |
+| `--work-path` | 运行工作目录 | `data/session_runtime` | 当前目录下data |
+| `--output` | 输出transcript JSON路径 | `transcript.json` | `<work-path>/transcript.json` |
+| `--message` | 用户消息文本（单条，可选） | `"你好"` | 否（启动交互输入） |
+| `--speaker` | 消息发布者名称 | `"小王"` | `"用户"` |
+| `--channel` | 消息渠道标识 | `"cli"` | `"cli"` |
+| `--channel-user-id` | 渠道内用户ID | `"user123"` | 默认使用speaker |
+
+**使用示例**：
+
+```bash
+# 方式1：交互式输入（多轮对话）
+sirius-chat --config examples/session.json --work-path data/runtime
+
+# 方式2：单条消息，非交互
+sirius-chat --config examples/session.json --message "给我建议" --speaker "校务主任"
+
+# 方式3：指定渠道身份（用于识人）
+sirius-chat --config examples/session.json --channel "qq" --channel-user-id "qq_12345"
+
+# 方式4：完整调用，指定输出路径
+sirius-chat --config examples/session.json --work-path data/runtime \
+    --message "推荐开源" --speaker "开源爱好者" --channel "wechat" \
+    --output result.json
 ```
 
 带状态持久化与恢复运行：
@@ -325,6 +514,49 @@ if entry is not None:
     print(entry.profile.user_id)
 ```
 
+#### User 与 Participant 的区别
+
+Sirius Chat 中使用两个不同的模型来表示交互各方：
+
+| 维度 | Participant | User |
+|------|------------|------|
+| **定义** | 会话中的一个角色 | 人类参与者的识别与档案 |
+| **用途** | 会话配置中声明参与者 | 运行时识人与记忆管理 |
+| **生命周期** | 固定（配置时声明） | 动态（可运行时新增） |
+| **包含信息** | name, role, agent_id | user_id, name, traits, identities, profile, runtime |
+| **示例** | agent="Beichen", human="小王" | user_id="qq_12345", aliases=["小王"] |
+
+**使用场景**：
+
+1. **静态群聊**（参与者已知）→ 在 SessionConfig 中声明 Participant
+
+```python
+from sirius_chat.api import SessionConfig, Participant, Agent
+
+config = SessionConfig(
+    agent=Agent(name="主助手"),
+    participants=[
+        Participant(name="小王", role="human"),
+        Participant(name="李四", role="human"),
+    ],
+)
+```
+
+2. **动态群聊**（参与者运行时出现）→ 使用 User 与 run_live_session
+
+```python
+# 运行时动态添加参与者
+human_turns=[
+    Message(role="user", speaker="小王", content="..."),
+    Message(role="user", speaker="新的人", content="..."),  # 自动创建
+]
+transcript = await engine.run_live_session(config, human_turns)
+
+# 访问识别结果
+for user_id, user in transcript.users.items():
+    print(f"识别用户：{user.name}，别名：{user.aliases}")
+```
+
 ## 记忆压缩与上下文预算
 
 `SessionConfig` 提供以下压缩参数：
@@ -353,6 +585,50 @@ config_mgr = ConfigManager.load_from_json(Path("config/base.json"))
 # 也可加载环境特定的配置
 dev_config = ConfigManager.load_from_json(Path("config/dev.json"))
 ```
+
+#### OrchestrationPolicy 配置辅助函数
+
+为了简化 `OrchestrationPolicy` 的构造，提供了一套配置辅助函数：
+
+```python
+from sirius_chat.config import (
+    configure_orchestration_models,      # 配置任务模型
+    configure_orchestration_budgets,     # 配置任务预算
+    configure_orchestration_temperatures, # 配置任务温度  
+    configure_orchestration_retries,     # 配置重试策略
+    configure_full_orchestration,        # 完整一体化配置
+)
+from sirius_chat.api import OrchestrationPolicy
+
+# 方式1：分段配置（推荐用于逐步调整）
+orchestration = OrchestrationPolicy()
+configure_orchestration_models(orchestration, {
+    "memory_extract": "gpt-4o-mini",
+    "event_extract": "gpt-4o-mini",
+})
+configure_orchestration_budgets(orchestration, {
+    "memory_extract": 1200,
+    "event_extract": 800,
+})
+configure_orchestration_temperatures(orchestration, {
+    "memory_extract": 0.1,
+    "event_extract": 0.3,
+})
+
+# 方式2：一体化配置（推荐用于新项目）
+orchestration = configure_full_orchestration(
+    unified_model="gpt-4o",
+    budgets={"memory_extract": 1200}
+)
+```
+
+**函数说明**：
+
+- `configure_orchestration_models(policy, models_dict)`：设置各任务的模型
+- `configure_orchestration_budgets(policy, budgets_dict)`：设置各任务的token预算
+- `configure_orchestration_temperatures(policy, temps_dict)`：设置各任务的采样温度
+- `configure_orchestration_retries(policy, retries_dict)`：设置各任务的重试次数
+- `configure_full_orchestration(...)`：一次性配置所有参数，返回OrchestrationPolicy实例
 
 ### 缓存优化
 
