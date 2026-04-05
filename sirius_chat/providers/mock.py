@@ -5,7 +5,11 @@ import logging
 from collections import deque
 from dataclasses import dataclass, field
 
-from sirius_chat.providers.base import GenerationRequest, LLMProvider
+from sirius_chat.providers.base import (
+    GenerationRequest,
+    LLMProvider,
+    estimate_generation_request_input_tokens,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -23,10 +27,13 @@ class MockProvider(LLMProvider):
     def generate(self, request: GenerationRequest) -> str:
         # 基础调用日志（INFO）
         msg_count = len(request.messages)
+        estimated_input_tokens = estimate_generation_request_input_tokens(request)
+        estimated_total_upper = estimated_input_tokens + max(0, int(request.max_tokens))
 
         logger.info(
             f"[模型调用] mock-{request.model} | 温度: {request.temperature}, Token上限: {request.max_tokens} "
-            f"| 消息数: {msg_count}"
+            f"| 消息数: {msg_count} | 调用目的: {request.purpose} "
+            f"| 预计输入Token: {estimated_input_tokens} | 预计总Token上限: {estimated_total_upper}"
         )
         debug_input = {
             "system_prompt": request.system_prompt,

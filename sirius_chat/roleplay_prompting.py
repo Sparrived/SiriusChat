@@ -63,6 +63,7 @@ async def _agenerate_prompt(
         messages=[{"role": "user", "content": user_prompt}],
         temperature=float(temperature),
         max_tokens=max_tokens,
+        purpose="roleplay_prompt_generation",
     )
     return await _acall_provider(provider, request_payload)
 

@@ -268,6 +268,7 @@ class AsyncRolePlayEngine:
             messages=[{"role": "user", "content": task_input}],
             temperature=float(config.orchestration.task_temperatures.get(task_name, 0.1)),
             max_tokens=int(config.orchestration.task_max_tokens.get(task_name, 128)),
+            purpose=task_name,
         )
 
         retry_times = int(config.orchestration.task_retries.get(task_name, 0))
@@ -383,6 +384,7 @@ class AsyncRolePlayEngine:
             messages=[{"role": "user", "content": task_input}],
             temperature=float(config.orchestration.task_temperatures.get(task_name, 0.1)),
             max_tokens=int(config.orchestration.task_max_tokens.get(task_name, 256)),
+            purpose=task_name,
         )
         retry_times = int(config.orchestration.task_retries.get(task_name, 0))
         try:
@@ -457,6 +459,7 @@ class AsyncRolePlayEngine:
             messages=[{"role": "user", "content": task_input}],
             temperature=float(config.orchestration.task_temperatures.get(task_name, 0.1)),
             max_tokens=int(config.orchestration.task_max_tokens.get(task_name, 192)),
+            purpose=task_name,
         )
         retry_times = int(config.orchestration.task_retries.get(task_name, 0))
         try:
@@ -566,6 +569,7 @@ class AsyncRolePlayEngine:
             messages=[{"role": "user", "content": task_input}],
             temperature=float(config.orchestration.memory_manager_temperature),
             max_tokens=int(config.orchestration.memory_manager_max_tokens),
+            purpose=task_name,
         )
 
         retry_times = int(config.orchestration.task_retries.get(task_name, 0))
@@ -717,6 +721,7 @@ class AsyncRolePlayEngine:
             messages=transcript.as_chat_history(),
             temperature=config.agent.temperature,
             max_tokens=config.agent.max_tokens,
+            purpose="chat_main",
         )
         retry_times = int(config.orchestration.task_retries.get("chat_main", 0))
         content = await self._call_provider_with_retry(

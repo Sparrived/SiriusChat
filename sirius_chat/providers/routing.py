@@ -231,6 +231,7 @@ def probe_provider_availability(
             messages=[{"role": "user", "content": _PROVIDER_HEALTHCHECK_USER_MESSAGE}],
             temperature=0.0,
             max_tokens=8,
+            purpose="provider_healthcheck",
         )
     )
     if not content.strip():

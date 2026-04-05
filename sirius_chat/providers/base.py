@@ -11,6 +11,21 @@ class GenerationRequest:
     messages: list[dict[str, str]]
     temperature: float = 0.7
     max_tokens: int = 512
+    purpose: str = "chat_main"
+
+
+def estimate_generation_request_input_tokens(request: GenerationRequest) -> int:
+    """Estimate input tokens for logging and budget visibility.
+
+    Uses a coarse deterministic heuristic: ~1 token per 4 characters.
+    """
+    text_parts = [request.system_prompt]
+    for msg in request.messages:
+        text_parts.append(str(msg.get("content", "")))
+    merged = "\n".join(part for part in text_parts if part)
+    if not merged:
+        return 0
+    return max(1, (len(merged) + 3) // 4)
 
 
 class LLMProvider(Protocol):

@@ -396,6 +396,7 @@ Please answer in JSON format:
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.5,
                 max_tokens=512,
+                purpose="event_memory_verification",
             )
             
             try:
