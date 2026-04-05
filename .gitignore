@@ -16,6 +16,7 @@ ENV/
 # Runtime & cache
 .last_config_path
 data/
+logs/
 .pytest_cache/
 .coverage
 coverage.xml
@@ -37,3 +38,5 @@ null
 
 # OS-specific
 Thumbs.db
+
+null
