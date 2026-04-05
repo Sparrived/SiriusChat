@@ -609,14 +609,55 @@ class AsyncRolePlayEngine:
 
         self._record_task_stat(transcript, task_name, "succeeded")
 
+    def _has_multimodal_inputs(self, transcript: Transcript) -> bool:
+        """检测 transcript 中最后的用户消息是否包含多模态输入。
+        
+        Returns:
+            True 如果最后的用户消息有多模态输入，否则 False
+        """
+        # 从后往前遍历，找到最后一条用户消息
+        for message in reversed(transcript.messages):
+            if message.role == "user":
+                # 检查是否有多模态输入
+                return bool(message.multimodal_inputs)
+        return False
+
+    def _get_model_for_chat(self, config: SessionConfig, transcript: Transcript) -> str:
+        """根据是否有多模态输入，动态选择主模型。
+        
+        策略：
+        - 如果最后用户消息有多模态输入，使用 multimodal_model（如果配置）
+        - 否则使用默认的 agent.model
+        
+        Args:
+            config: 会话配置
+            transcript: 当前会话 transcript
+            
+        Returns:
+            选定的模型名称
+        """
+        # 检查是否有多模态输入
+        if self._has_multimodal_inputs(transcript):
+            # 尝试从 agent.metadata 中获取多模态模型
+            multimodal_model = config.agent.metadata.get("multimodal_model", "")
+            if multimodal_model:
+                return multimodal_model
+        
+        # 默认返回配置的主模型
+        return config.agent.model
+
     async def _generate_assistant_message(self, config: SessionConfig, transcript: Transcript) -> Message:
         if config.enable_auto_compression:
             transcript.compress_for_budget(
                 max_messages=config.history_max_messages,
                 max_chars=config.history_max_chars,
             )
+        
+        # 动态选择模型：有多模态输入时自动升级到多模态模型
+        model = self._get_model_for_chat(config, transcript)
+        
         request_payload = GenerationRequest(
-            model=config.agent.model,
+            model=model,
             system_prompt=self._build_system_prompt(config, transcript),
             messages=transcript.as_chat_history(),
             temperature=config.agent.temperature,
