@@ -25,9 +25,7 @@ description: "使用此技能在发布新版本到 PyPI 时执行完整的发布
      - Workflow Name: `publish.yml`
      - Environment Name: `pypi`
 
-2. **TestPyPI 配置**（可选但推荐）
-   - 访问：https://test.pypi.org/manage/account/publishing/
-   - 同样步骤，Environment Name 改为 `testpypi`
+
 
 详细步骤见项目根目录的 `SETUP_TRUSTED_PUBLISHING.md`。
 
@@ -105,7 +103,6 @@ git push origin v0.5.0
 |-----|---------|------|
 | `build` | 所有 tag push | 构建 wheel 和 sdist |
 | `publish-to-pypi` | 推送 v* tag | 发布到官方 PyPI |
-| `publish-to-testpypi` | 所有 push | 发布到测试 PyPI |
 
 ### Workflow 文件位置
 
