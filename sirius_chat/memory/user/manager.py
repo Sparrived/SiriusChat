@@ -509,6 +509,179 @@ class UserMemoryManager:
             if fact.confidence <= 0.85
         ]
 
+    def get_user_by_id(self, user_id: str) -> UserMemoryEntry | None:
+        """Get user memory entry by exact user ID.
+        
+        Args:
+            user_id: The user ID to look up
+        
+        Returns:
+            UserMemoryEntry or None if not found
+        """
+        return self.entries.get(user_id)
+
+    def search_users_by_fact(
+        self, 
+        fact_type: str, 
+        value: str | None = None,
+    ) -> dict[str, list[MemoryFact]]:
+        """Search for users with specific fact types or values.
+        
+        Args:
+            fact_type: The type of fact to search for (e.g., "job", "location", "hobby")
+            value: Optional specific value to match. If None, returns all facts of that type.
+        
+        Returns:
+            Dict mapping user_id to list of matching MemoryFact objects
+        """
+        results: dict[str, list[MemoryFact]] = {}
+        
+        for user_id, entry in self.entries.items():
+            matching_facts = []
+            for fact in entry.runtime.memory_facts:
+                if fact.fact_type != fact_type:
+                    continue
+                if value is not None and value.lower() not in fact.value.lower():
+                    continue
+                matching_facts.append(fact)
+            
+            if matching_facts:
+                results[user_id] = matching_facts
+        
+        return results
+
+    def get_rich_user_summary(
+        self, 
+        user_id: str, 
+        include_transient: bool = True,
+    ) -> dict[str, Any]:
+        """Generate a model-friendly user summary with rich context.
+        
+        This summary is suitable for injection into system prompts or as context
+        for the AI model to provide personalized responses.
+        
+        Args:
+            user_id: The user ID to generate summary for
+            include_transient: Whether to include low-confidence transient facts
+        
+        Returns:
+            Dict with keys: profile, summary, traits, interests, recent_facts, 
+                           identities, confidence_distribution, channels
+        """
+        entry = self.get_user_by_id(user_id)
+        if entry is None:
+            return {}
+        
+        profile = entry.profile
+        runtime = entry.runtime
+        
+        # Separate facts by confidence
+        resident_facts = self.get_resident_facts(user_id)
+        transient_facts = self.get_transient_facts(user_id)
+        
+        # Build facts list based on include_transient flag
+        facts_to_include = resident_facts
+        if include_transient:
+            facts_to_include.extend(transient_facts)
+        
+        # Group facts by type for organized summary
+        facts_by_type: dict[str, list[dict[str, Any]]] = {}
+        for fact in facts_to_include:
+            fact_type = fact.fact_type
+            if fact_type not in facts_by_type:
+                facts_by_type[fact_type] = []
+            
+            fact_info = {
+                "value": fact.value,
+                "confidence": fact.confidence,
+                "source": fact.source,
+                "time_desc": getattr(fact, "observed_time_desc", ""),
+                "channel": getattr(fact, "context_channel", ""),
+                "topic": getattr(fact, "context_topic", ""),
+            }
+            # Clean up empty fields
+            fact_info = {k: v for k, v in fact_info.items() if v}
+            facts_by_type[fact_type].append(fact_info)
+        
+        # Extract key traits and interests
+        key_traits = []
+        for trait in runtime.inferred_traits[:5]:  # Top 5 traits
+            key_traits.append(trait)
+        
+        key_interests = []
+        for tag in runtime.preference_tags[:5]:  # Top 5 interests
+            key_interests.append(tag)
+        
+        # Identify communication channels
+        observed_channels = set()
+        for fact in facts_to_include:
+            channel = getattr(fact, "context_channel", "")
+            if channel:
+                observed_channels.add(channel)
+        
+        if runtime.last_seen_channel:
+            observed_channels.add(runtime.last_seen_channel)
+        
+        return {
+            "user_id": user_id,
+            "name": profile.name,
+            "aliases": profile.aliases[:3],  # Top 3 aliases
+            "persona": profile.persona,
+            "inferred_persona": runtime.inferred_persona,
+            "traits": key_traits,
+            "interests": key_interests,
+            "recent_summary": runtime.summary_notes[:3] if runtime.summary_notes else [],
+            "facts_by_type": facts_by_type,
+            "identities": {channel: uid for channel, uid in profile.identities.items()},
+            "channels": list(observed_channels),
+            "confidence_stats": {
+                "resident_count": len(resident_facts),
+                "transient_count": len(transient_facts) if include_transient else 0,
+                "avg_confidence": (
+                    sum(f.confidence for f in facts_to_include) / len(facts_to_include)
+                    if facts_to_include else 0.0
+                ),
+            },
+        }
+
+    def get_facts_by_context(
+        self,
+        user_id: str,
+        channel: str | None = None,
+        topic: str | None = None,
+    ) -> list[MemoryFact]:
+        """Get facts filtered by communication channel and/or topic.
+        
+        Args:
+            user_id: The user ID to query
+            channel: Optional channel filter (e.g., "qq", "wechat", "email")
+            topic: Optional topic filter (e.g., "work", "hobby", "family")
+        
+        Returns:
+            List of MemoryFact objects matching the filters
+        """
+        entry = self.get_user_by_id(user_id)
+        if entry is None:
+            return []
+        
+        results = []
+        for fact in entry.runtime.memory_facts:
+            # Check channel match
+            if channel is not None:
+                fact_channel = getattr(fact, "context_channel", "")
+                if fact_channel.lower() != channel.lower():
+                    continue
+            
+            # Check topic match
+            if topic is not None:
+                fact_topic = getattr(fact, "context_topic", "")
+                if fact_topic.lower() != topic.lower():
+                    continue
+            
+            results.append(fact)
+        
+        return results
+
     def cleanup_expired_transient_facts(
         self,
         user_id: str,

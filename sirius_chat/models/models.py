@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -19,6 +20,20 @@ class Message:
 
 @dataclass(slots=True)
 class Participant:
+    """Multi-user participant representation with auto-generated unique user_id.
+    
+    Attributes:
+        name: Human-readable display name (not unique).
+        user_id: Unique identifier, auto-generated as UUID if not provided.
+                 Used for memory binding and accurate identification.
+        persona: Initial persona/background for the user.
+        identities: Mapping from external systems (channel:external_uid) to track
+                   cross-platform user identity.
+        aliases: Alternative names the user may go by.
+        traits: Initial traits/characteristics.
+        metadata: Additional custom metadata.
+    """
+    
     name: str
     user_id: str = ""
     persona: str = ""
@@ -28,8 +43,11 @@ class Participant:
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
+        """Auto-generate unique user_id if not provided."""
         if not self.user_id:
-            self.user_id = self.name
+            # Generate UUID-based user_id for guaranteed uniqueness
+            # Format: "user_<uuid>" for readability
+            self.user_id = f"user_{uuid.uuid4().hex[:12]}"
 
     def as_user_profile(self) -> UserProfile:
         return UserProfile(

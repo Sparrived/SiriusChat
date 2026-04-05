@@ -27,9 +27,15 @@ class UserProfile:
 class MemoryFact:
     """Traceable memory fact record. Supports multi-model collaboration and conflict detection.
     
-    C2 optimization: is_transient marks RESIDENT vs TRANSIENT facts:
-    - RESIDENT (confidence > 0.85): Persisted to user.json
-    - TRANSIENT: Session-only, auto-cleaned after 30 minutes
+    Rich context support:
+    - observed_at: ISO 8601 timestamp for precise moment
+    - observed_time_desc: Human-friendly time description (e.g. "昨天下午", "上周一")
+    - context_channel: Where the information came from (e.g. "qq", "wechat", "cli")
+    - context_topic: Conversation topic or domain (e.g. "work", "travel", "hobby")
+    
+    Confidence tiers:
+    - confidence > 0.85: High confidence, persistent storage
+    - confidence <= 0.85: Low confidence, transient (cleaned after session)
     """
 
     fact_type: str
@@ -37,12 +43,17 @@ class MemoryFact:
     source: str = "unknown"
     confidence: float = 0.5
     observed_at: str = ""
+    observed_time_desc: str = ""  # Human-friendly time description
     memory_category: str = "custom"  # identity|preference|emotion|event|custom
     validated: bool = False  # Whether verified by memory_manager
     conflict_with: list[str] = field(default_factory=list)  # List of conflicting memory IDs
     # C2: RESIDENT vs TRANSIENT separation marker
     is_transient: bool = False  # Whether this is a transient fact (confidence ≤ 0.85)
     created_at: str = ""  # Creation time (ISO format), for expiry judgment
+    # Rich context fields
+    context_channel: str = ""  # Source channel (qq, wechat, cli, etc.)
+    context_topic: str = ""  # Conversation topic or domain
+    context_metadata: dict[str, str] = field(default_factory=dict)  # Additional context
 
 
 @dataclass(slots=True)
