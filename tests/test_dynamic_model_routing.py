@@ -286,6 +286,47 @@ async def test_generate_assistant_message_strips_internal_memory_metadata_lines(
     assert "早上好，今天想聊点什么？" in result.content
 
 
+@pytest.mark.asyncio
+async def test_generate_assistant_message_strips_reordered_partial_metadata_lines():
+    provider = MockProvider(
+        responses=[
+            "| 来源: qq_group_728196560 | 时间: 2026-04-06 03:58:24 | 内容: 1 | 置信度: 100%\n好的，我明白了。"
+        ]
+    )
+    engine = AsyncRolePlayEngine(provider)
+
+    agent = Agent(
+        name="Assistant",
+        persona="helpful",
+        model="gpt-4o-mini",
+    )
+    preset = AgentPreset(
+        agent=agent,
+        global_system_prompt="You are helpful.",
+    )
+    config = SessionConfig(preset=preset, work_path="./data")
+
+    transcript = Transcript()
+    transcript.add(Message(role="system", content=config.global_system_prompt))
+    transcript.add(Message(role="user", content="hi", speaker="User"))
+
+    result = await engine._generate_assistant_message(config, transcript)
+
+    assert "来源:" not in result.content
+    assert "时间:" not in result.content
+    assert "内容:" not in result.content
+    assert "置信度:" not in result.content
+    assert "好的，我明白了。" in result.content
+
+
+def test_memory_metadata_detector_not_triggered_for_normal_sentence():
+    provider = MockProvider()
+    engine = AsyncRolePlayEngine(provider)
+
+    normal_line = "我会根据你的内容和时间安排来给建议。"
+    assert engine._is_internal_memory_metadata_line(normal_line) is False
+
+
 def test_build_system_prompt_contains_output_boundary_constraint():
     provider = MockProvider()
     engine = AsyncRolePlayEngine(provider)

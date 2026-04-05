@@ -50,6 +50,20 @@ class AsyncRolePlayEngine:
             re.IGNORECASE,
         ),
     )
+    _MEMORY_METADATA_CN_LABEL_PATTERNS = (
+        re.compile(r"置信度\s*[：:]"),
+        re.compile(r"类型\s*[：:]"),
+        re.compile(r"来源\s*[：:]"),
+        re.compile(r"时间\s*[：:]"),
+        re.compile(r"内容\s*[：:]"),
+    )
+    _MEMORY_METADATA_EN_LABEL_PATTERNS = (
+        re.compile(r"confidence\s*:", re.IGNORECASE),
+        re.compile(r"type\s*:", re.IGNORECASE),
+        re.compile(r"source\s*:", re.IGNORECASE),
+        re.compile(r"time\s*:", re.IGNORECASE),
+        re.compile(r"content\s*:", re.IGNORECASE),
+    )
     
     # 所有需要模型支持的必需任务
     _REQUIRED_TASKS = [
@@ -665,14 +679,12 @@ class AsyncRolePlayEngine:
             if pattern.match(stripped):
                 return True
 
-        return (
-            "|" in stripped
-            and "置信度" in stripped
-            and "类型" in stripped
-            and "来源" in stripped
-            and "时间" in stripped
-            and "内容" in stripped
-        )
+        if "|" not in stripped:
+            return False
+
+        cn_hits = sum(1 for p in cls._MEMORY_METADATA_CN_LABEL_PATTERNS if p.search(stripped))
+        en_hits = sum(1 for p in cls._MEMORY_METADATA_EN_LABEL_PATTERNS if p.search(stripped))
+        return cn_hits >= 2 or en_hits >= 2
 
     def _sanitize_assistant_content(self, content: str) -> str:
         if not content:
