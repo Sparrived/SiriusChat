@@ -1,9 +1,5 @@
 {
-  "provider": {
-    "type": "openai-compatible",
-    "base_url": "https://api.openai.com",
-    "api_key": "YOUR_MAIN_API_KEY"
-  },
+  "generated_agent_key": "sirius",
   "providers": [
     {
       "type": "openai-compatible",
@@ -18,7 +14,6 @@
       "healthcheck_model": "doubao-seed-2-0-lite-260215"
     }
   ],
-  "generated_agent_key": "sirius",
   "history_max_messages": 24,
   "history_max_chars": 6000,
   "enable_auto_compression": true,

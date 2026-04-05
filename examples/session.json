@@ -1,7 +1,10 @@
 {
-  "provider": {
-    "base_url": "https://api.openai.com",
-    "api_key": "YOUR_API_KEY"
-  },
-  "generated_agent_key": "sirius"
+  "generated_agent_key": "sirius",
+  "providers": [
+    {
+      "type": "openai-compatible",
+      "base_url": "https://api.openai.com",
+      "api_key": "YOUR_API_KEY"
+    }
+  ]
 }

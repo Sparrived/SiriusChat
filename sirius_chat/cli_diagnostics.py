@@ -85,16 +85,27 @@ class EnvironmentDiagnostics:
             import json
             raw = json.loads(config_path.read_text(encoding="utf-8-sig"))
             
-            provider_config = dict(raw.get("provider", {}))
+            # 统一使用 providers 字段（list format）
             providers_config = list(raw.get("providers", []))
             
+            # 向后兼容：若传入 provider 单个对象，则转换为 providers list
+            if not providers_config:
+                provider_obj = dict(raw.get("provider", {}))
+                if provider_obj and "api_key" in provider_obj:
+                    providers_config = [provider_obj]
+            
+            # 从providers列表中提取第一个作为primary provider
+            provider_config = {}
+            if providers_config and isinstance(providers_config[0], dict):
+                provider_config = dict(providers_config[0])
+            
             if not provider_config and not providers_config:
-                return False, "Provider 配置缺失\n修复建议: 在配置文件中添加 'provider' 或 'providers' 字段"
+                return False, "Provider 配置缺失\n修复建议: 在配置文件中添加 'providers' 字段（推荐）或 'provider' 字段（已废弃，仅用于向后兼容）"
             
             if provider_config:
                 api_key = str(provider_config.get("api_key", "")).strip()
                 if not api_key:
-                    return False, "Provider API Key 为空\n修复建议: 在配置中设置有效的 API Key"
+                    return False, "Provider API Key 为空\n修复建议: 在 'providers' 字段中设置有效的 API Key"
             
             return True, ""
         except Exception as e:

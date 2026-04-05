@@ -93,12 +93,19 @@ def _load_session_config(config_path: Path, work_path: Path) -> tuple[SessionCon
         orchestration=orchestration,
     )
 
-    provider_config = dict(raw.get("provider", {}))
+    # 统一使用 providers 字段（list format）
     providers_config = list(raw.get("providers", []))
-    if not provider_config and providers_config:
-        first = providers_config[0]
-        if isinstance(first, dict):
-            provider_config = dict(first)
+    
+    # 向后兼容：若传入 provider 单个对象，则转换为 providers list
+    if not providers_config:
+        provider_obj = dict(raw.get("provider", {}))
+        if provider_obj and "api_key" in provider_obj:
+            providers_config = [provider_obj]
+    
+    # 从providers列表中提取第一个作为primary provider（用于简单情况）
+    provider_config = {}
+    if providers_config and isinstance(providers_config[0], dict):
+        provider_config = dict(providers_config[0])
 
     provider_type = str(provider_config.get("type", "openai-compatible")).strip().lower()
     if provider_type == "siliconflow":

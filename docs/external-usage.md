@@ -146,6 +146,60 @@ provider = VolcengineArkProvider(
 - 兼容传入带 `/api/v3` 后缀的 base_url。
 - 接口路径为 `/api/v3/chat/completions`。
 
+#### Provider 统一配置体系
+
+Sirius Chat 支持三层 Provider 配置，优先级由高到低为：
+
+1. **会话配置层**：Session JSON 中的 `providers` 字段（推荐）
+2. **持久化层**：`<work_path>/provider_keys.json`（CLI交互式添加）
+3. **向后兼容层**：`provider` 字段（已废弃，自动转换为 `providers`）
+
+**推荐做法**：在 Session JSON 中统一使用 `providers` 字段（数组格式）
+
+```json
+{
+  "generated_agent_key": "sirius",
+  "providers": [
+    {
+      "type": "openai-compatible",
+      "base_url": "https://api.openai.com",
+      "api_key": "YOUR_API_KEY",
+      "healthcheck_model": "gpt-4o-mini"
+    }
+  ]
+}
+```
+
+多 Provider 配置时，可指定每个 provider 的 healthcheck_model，框架会自动按模型路由：
+
+```json
+{
+  "providers": [
+    {
+      "type": "openai-compatible",
+      "api_key": "YOUR_OPENAI_KEY",
+      "healthcheck_model": "gpt-4o-mini"
+    },
+    {
+      "type": "siliconflow",
+      "api_key": "YOUR_SF_KEY",
+      "healthcheck_model": "doubao-seed-2-0-lite-260215"
+    }
+  ],
+  "orchestration": {
+    "task_models": {
+      "memory_extract": "doubao-seed-2-0-lite-260215"  # 会自动路由到SiliconFlow
+    }
+  }
+}
+```
+
+**三层配置的合并规则**：
+
+1. 框架启动时，先从 `<work_path>/provider_keys.json` 加载持久化的 providers
+2. 再加载 Session JSON 中的 `providers` 字段，覆盖相同类型的预配置
+3. 若 `provider` 字段存在（向后兼容），将其转换加入 `providers`
+
 ### 多 provider 自动路由
 
 若希望按模型自动路由 provider，可使用 `ProviderRegistry + AutoRoutingProvider`：
