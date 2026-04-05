@@ -16,12 +16,13 @@ ENV/
 # Runtime & cache
 .last_config_path
 data/
+test_data/
 logs/
+null
 .pytest_cache/
 .coverage
 coverage.xml
 htmlcov/
-null
 
 # IDE & Editor
 .vscode/
