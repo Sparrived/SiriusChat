@@ -21,6 +21,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    outputs:
+      hashes: ${{ steps.hash.outputs.hashes }}
     
     steps:
       - uses: actions/checkout@v4
@@ -44,6 +46,14 @@ jobs:
         run: |
           twine check dist/*
       
+      - name: Generate hashes for release
+        id: hash
+        run: |
+          cd dist && sha256sum * | sed 's/ / /g' > hashes.txt && cat hashes.txt
+          echo "hashes<<EOF" >> $GITHUB_OUTPUT
+          cat hashes.txt >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+      
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -52,10 +62,13 @@ jobs:
           retention-days: 1
 
   publish-to-pypi:
-    name: Publish to PyPI
+    name: Publish to PyPI (Trusted Publishing)
     if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || (github.event_name == 'workflow_dispatch' && github.event.inputs.target_repo == 'pypi')
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
     
     steps:
       - name: Download artifacts
@@ -65,18 +78,18 @@ jobs:
           path: dist/
       
       - name: Publish to PyPI
-        env:
-          TWINE_USERNAME: __token__
-          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
-        run: |
-          pip install twine
-          twine upload dist/* --non-interactive
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/
 
   publish-to-testpypi:
-    name: Publish to TestPyPI
+    name: Publish to TestPyPI (Trusted Publishing)
     if: github.event_name == 'workflow_dispatch' && github.event.inputs.target_repo == 'testpypi'
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
     
     steps:
       - name: Download artifacts
@@ -86,12 +99,10 @@ jobs:
           path: dist/
       
       - name: Publish to TestPyPI
-        env:
-          TWINE_USERNAME: __token__
-          TWINE_PASSWORD: ${{ secrets.TEST_PYPI_API_TOKEN }}
-        run: |
-          pip install twine
-          twine upload dist/* --repository testpypi --non-interactive
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          packages-dir: dist/
 
   github-release:
     name: Create release with signatures
