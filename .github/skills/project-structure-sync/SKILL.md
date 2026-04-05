@@ -153,7 +153,7 @@ git diff HEAD~1 --stat
 #### C. 细节实现变更（中影响）
 
 **触发条件**：
-- `sirius_chat/models.py` 的数据结构变化
+- `sirius_chat/models/models.py` 的数据结构变化
 - 系统提示词生成逻辑改动
 - 缓存策略、性能监控逻辑修改
 
@@ -247,7 +247,7 @@ git show HEAD --stat
 git log origin/master..HEAD --oneline
 
 # 3. 查看特定文件的历史变更
-git log -p --follow sirius_chat/models.py | head -100
+git log -p --follow sirius_chat/models/models.py | head -100
 
 # 4. 对比文档和代码的一致性
 # 查看 framework-quickstart SKILL 中提到的模块是否存在
@@ -278,7 +278,7 @@ grep -r "^description:" .github/skills/*/SKILL.md
 ### 场景 2：修改 SessionConfig 数据结构
 
 ```
-变更：在 sirius_chat/models.py 中新增 SessionConfig 字段
+变更：在 sirius_chat/models/models.py 中新增 SessionConfig 字段
 
 检查清单：
 ✓ 字段包含完整类型注解和文档字符串

@@ -92,13 +92,13 @@ flowchart LR
 | `main.py` | 命令行参数、用户输入、`work_path` | `Transcript`、`transcript.json`、`session_config.persisted.json`、`primary_user.json` |
 | `sirius_chat/cli.py` | JSON 配置、单轮用户输入（`--message` 或一条交互输入） | 单轮 `Transcript`、`transcript.json` |
 | `sirius_chat/api/` | 外部程序调用参数 | 稳定对外函数与类型、`Transcript` |
-| `sirius_chat/models.py` | 配置与消息数据 | 统一数据契约（`SessionConfig`、`Message`、`Transcript` 等） |
+| `sirius_chat/models/models.py` | 配置与消息数据 | 统一数据契约（`Message`、`Participant`、`Transcript` 等） |
 | `sirius_chat/async_engine.py` | `SessionConfig`、`human_turns`、可选已有 `Transcript` | 更新后的 `Transcript`、assistant 回复、编排统计与 token 记录 |
 | `sirius_chat/user_memory.py` | speaker/channel identity、用户消息文本 | 用户档案与运行时记忆（profile/runtime）、事件记忆（命中/新增） |
 | `sirius_chat/roleplay_prompting.py` | 角色问答、agent 名称、模型 | `GeneratedSessionPreset`、`generated_agents.json`、可直接创建的 `SessionConfig` |
-| `sirius_chat/token_usage.py` | `Transcript.token_usage_records` | baseline 与按 actor/task/model 聚合报表 |
-| `sirius_chat/session_store.py` | `Transcript` | JSON/SQLite 持久化状态文件 |
-| `sirius_chat/session_runner.py` | `SessionConfig`、Provider、主用户输入 | 自动持久化会话循环、主用户档案维护 |
+| `sirius_chat/token/usage.py` | `Transcript.token_usage_records` | baseline 与按 actor/task/model 聚合报表 |
+| `sirius_chat/session/store.py` | `Transcript` | JSON/SQLite 持久化状态文件 |
+| `sirius_chat/session/runner.py` | `SessionConfig`、Provider、主用户输入 | 自动持久化会话循环、主用户档案维护 |
 | `sirius_chat/providers/base.py` | `GenerationRequest` | Provider 协议（同步/异步生成契约） |
 | `sirius_chat/providers/middleware/` ✨ | `GenerationRequest`、中间件链配置 | 透明的 Provider 功能扩展（流控、重试、成本计量） |
 | `sirius_chat/providers/routing.py` | provider 配置、模型名 | 目标 Provider 选择结果、`provider_keys.json` |

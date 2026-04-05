@@ -23,7 +23,7 @@ description: "当你需要在不通读全部代码的情况下快速理解 Siriu
 2. `docs/full-architecture-flow.md`
 3. `README.md`
 4. `docs/orchestration-policy.md`
-5. `sirius_chat/models.py`
+5. `sirius_chat/models/models.py` ✨ (包重构)
 6. `sirius_chat/async_engine/core.py` ✨ (P0-003 重构)
 7. `sirius_chat/async_engine/prompts.py` ✨
 8. `sirius_chat/async_engine/utils.py` ✨
@@ -48,7 +48,7 @@ description: "当你需要在不通读全部代码的情况下快速理解 Siriu
 
 ## 心智模型
 
-- `models.py` 定义数据契约（多人用户 + 单 AI 主助手）。
+- `models/models.py` ✨ **（包重构）** 定义数据契约（多人用户 + 单 AI 主助手）。
 - `OrchestrationPolicy` 用于任务路由与预算控制，**现已默认启用**（`enabled=True`），支持 `memory_extract`、`event_extract`、`multimodal_parse`、`memory_manager` 等任务的模型配置与预算限制。若需回退单模型模式，设置 `enabled=False`。同时支持提示词驱动的内容分割（`enable_prompt_driven_splitting=True`）。✨ `memory_manager` 是新增的可选 LLM 任务，用于汇聚、去重、标注、冲突检测记忆。
 - ✨ **async_engine 包重构** (P0-003)：将 924 行单文件分解为多个职责明确的模块
   - `async_engine/core.py`：核心 AsyncRolePlayEngine 类，保持公开 API 不变
@@ -80,8 +80,10 @@ description: "当你需要在不通读全部代码的情况下快速理解 Siriu
     * 推荐处理类别：high_confidence (avg>0.6) | normal | low_relevance (avg<0.2) | pending (新用户)
   - 实现真正的**双向观测**：事件不再被单向消费，而是成为用户理解的重要信号源
 - `Transcript.find_user_by_channel_uid(channel, uid)` 支持按渠道+外部 UID 直接定位用户。
-- `session_store.py` 提供会话持久化与重启恢复。
-- `Transcript.token_usage_records` 全量归档每次模型调用的 token 消耗信息。
+- `session/store.py` ✨ **（包重构）** 提供会话持久化与重启恢复（`SessionStore`、`JsonSessionStore`、`SqliteSessionStore`）。
+- `session/runner.py` ✨ **（包重构）** 提供上层封装的会话运行器（`JsonPersistentSessionRunner`），自动维护用户档案与持久化。
+- `Transcript.token_usage_records` 全量归档每次模型调用的 token 消耗信息（通过 `token/usage.py` 提供的 `summarize_token_usage` 与 `build_token_usage_baseline` 汇总）。
+- `token/utils.py` ✨ **（包重构）** 提供 Token 估算工具（启发式估算、Tiktoken 精确计算、统计辅助函数）。
 - 引擎支持自动记忆压缩（`session_summary` + 历史预算）。
 - ✨ **配置管理** (P1-006)：`config_manager.py` 提供多环境配置管理能力
   - 支持 JSON 配置文件加载（base/dev/test/prod）
@@ -105,7 +107,6 @@ description: "当你需要在不通读全部代码的情况下快速理解 Siriu
 - `providers/mock.py` 提供可复现的本地测试能力。
 - `providers/*` 实现具体的 LLM 后端。
 - `roleplay_prompting.py` 提供自动问题清单、回答提取式提示词生成、人格持久化与人格选择能力。
-- `token_usage.py` 提供 token 消耗基准与聚合分析函数。
 - 内置 provider 包含 `OpenAICompatibleProvider`、`SiliconFlowProvider` 与 `VolcengineArkProvider`。
 - 若配置了多 provider，`AutoRoutingProvider` 会按模型前缀自动选择可用 provider。
 - `cli.py` 是库内薄封装，仅负责调用 `api` 执行单轮会话。
@@ -127,8 +128,8 @@ description: "当你需要在不通读全部代码的情况下快速理解 Siriu
 
 - 新增 provider 支持：修改 `sirius_chat/providers/`，并保持 `async_engine.py` 不含 provider 细节。
 - 修改主 AI 或多人轮次策略：更新 `sirius_chat/async_engine.py`，并检查 transcript 兼容性。
-- 修改动态参与者或识人记忆逻辑：同步更新 `models.py`、`async_engine.py` 与 `docs/external-usage.md`。
-- 修改会话恢复或压缩策略：同步更新 `session_store.py`、`async_engine.py`、`README.md` 与 `docs/architecture.md`。
+- 修改动态参与者或识人记忆逻辑：同步更新 `models/models.py`、`async_engine.py` 与 `docs/external-usage.md`。
+- 修改会话恢复或压缩策略：同步更新 `session/store.py`、`async_engine.py`、`README.md` 与 `docs/architecture.md`。
 - 修改配置结构或环境变量处理：同步更新 `sirius_chat/config_manager.py`、`sirius_chat/cli.py`、`README.md` 与 `examples/session.json`。
 - 修改缓存策略或后端：在 `sirius_chat/cache/` 实现新后端或修改现有接口，并更新 `docs/best-practices.md`。
 - 修改性能监控或基准：更新 `sirius_chat/performance/` 中的指标收集或分析逻辑，添加相应测试。

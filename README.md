@@ -389,11 +389,11 @@ sirius-chat --config examples/session.json --output transcript.json
 
 ## 项目结构
 
-- `sirius_chat/models.py`：会话与 transcript 数据契约。
+- `sirius_chat/models/`：会话与 transcript 数据契约）。
 - `sirius_chat/providers/base.py`：provider 协议定义。
 - `sirius_chat/providers/mock.py`：测试/本地演练用的确定性 provider。
 - `sirius_chat/providers/openai_compatible.py`：OpenAI 兼容 provider 实现。
-- `sirius_chat/session_store.py`：基于 work-path 的会话状态持久化与恢复。
+- `sirius_chat/session/`：会话管理与持久化（store.py、runner.py）。
 - `sirius_chat/user_memory.py`：用户识别与用户记忆模块（User/UserMemoryManager，区分初始化档案与运行时状态）。
 - `sirius_chat/cli.py`：库内薄封装 CLI，仅调用 `public_api` 执行单轮会话。
 - `sirius_chat/api/`：统一对外接口入口（异步 facade 与便捷接口）。
