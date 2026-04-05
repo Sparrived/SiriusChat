@@ -98,6 +98,46 @@ def _load_session_config(config_path: Path, work_path: Path) -> tuple[SessionCon
     if not generated_agent_key:
         raise ValueError("必需提供 generated_agent_key")
 
+    # 构建orchestration配置：仅在配置中有实际内容时才创建，否则使用None让SessionConfig使用默认值（unified_model=agent.model）
+    orch_config = raw.get("orchestration", {})
+    unified_model = str(orch_config.get("unified_model", "")).strip()
+    task_models = {
+        str(k): str(v)
+        for k, v in dict(orch_config.get("task_models", {})).items()
+        if str(k).strip() and str(v).strip()
+    }
+    
+    # 若两种配置方案都未提供，则传递None，让SessionConfig使用默认方案1（unified_model=agent.model）
+    if unified_model or task_models:
+        orchestration = OrchestrationPolicy(
+            unified_model=unified_model,
+            task_models=task_models,
+            task_budgets={
+                str(k): int(v)
+                for k, v in dict(orch_config.get("task_budgets", {})).items()
+                if str(k).strip()
+            },
+            task_temperatures={
+                str(k): float(v)
+                for k, v in dict(orch_config.get("task_temperatures", {})).items()
+                if str(k).strip()
+            },
+            task_max_tokens={
+                str(k): int(v)
+                for k, v in dict(orch_config.get("task_max_tokens", {})).items()
+                if str(k).strip()
+            },
+            task_retries={
+                str(k): int(v)
+                for k, v in dict(orch_config.get("task_retries", {})).items()
+                if str(k).strip()
+            },
+            max_multimodal_inputs_per_turn=int(orch_config.get("max_multimodal_inputs_per_turn", 4)),
+            max_multimodal_value_length=int(orch_config.get("max_multimodal_value_length", 4096)),
+        )
+    else:
+        orchestration = None
+
     session = create_session_config_from_selected_agent(
         work_path=work_path,
         agent_key=generated_agent_key,
@@ -105,36 +145,7 @@ def _load_session_config(config_path: Path, work_path: Path) -> tuple[SessionCon
         history_max_chars=int(raw.get("history_max_chars", 6000)),
         max_recent_participant_messages=int(raw.get("max_recent_participant_messages", 5)),
         enable_auto_compression=bool(raw.get("enable_auto_compression", True)),
-        orchestration=OrchestrationPolicy(
-            unified_model=str(raw.get("orchestration", {}).get("unified_model", "")).strip(),
-            task_models={
-                str(k): str(v)
-                for k, v in dict(raw.get("orchestration", {}).get("task_models", {})).items()
-                if str(k).strip() and str(v).strip()
-            },
-            task_budgets={
-                str(k): int(v)
-                for k, v in dict(raw.get("orchestration", {}).get("task_budgets", {})).items()
-                if str(k).strip()
-            },
-            task_temperatures={
-                str(k): float(v)
-                for k, v in dict(raw.get("orchestration", {}).get("task_temperatures", {})).items()
-                if str(k).strip()
-            },
-            task_max_tokens={
-                str(k): int(v)
-                for k, v in dict(raw.get("orchestration", {}).get("task_max_tokens", {})).items()
-                if str(k).strip()
-            },
-            task_retries={
-                str(k): int(v)
-                for k, v in dict(raw.get("orchestration", {}).get("task_retries", {})).items()
-                if str(k).strip()
-            },
-            max_multimodal_inputs_per_turn=int(raw.get("orchestration", {}).get("max_multimodal_inputs_per_turn", 4)),
-            max_multimodal_value_length=int(raw.get("orchestration", {}).get("max_multimodal_value_length", 4096)),
-        ),
+        orchestration=orchestration,
     )
 
     provider_config = dict(raw.get("provider", {}))
