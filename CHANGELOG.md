@@ -4,6 +4,39 @@
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-04-06
+
+### Added
+- **动态模型路由配置 API**：新增灵活的多模态模型配置方式
+  - `create_agent_with_multimodal(...)` 便捷构造函数
+  - `auto_configure_multimodal_agent(agent, multimodal_model=...)` 灵活参数化配置
+  - 手动配置：直接设置 `agent.metadata["multimodal_model"]`
+  - 透明的自动路由：无多媒体内容使用廉价模型，有多媒体自动升级至指定的多模态模型
+
+### Changed
+- **提示词生成器大幅优化** (sirius_chat/roleplay_prompting.py)
+  - 精简拟人问题从 17 个核心到 8 个高质量问题，提高信号强度
+  - 每个问题添加详细的 hints 字段，为回答者提供更清晰的引导
+  - Agent 基础信息（name、alias、model、temperature、max_tokens）现在被精确传送至 LLM
+  - 补充信息（background、alias）权重强化，单独作为【补充信息】块呈现
+  - 重写 LLM 指令和输出规范，明确 agent_persona 与 global_system_prompt 的职责差异
+  - 系统提示词生成时自动包含安全约束，防止 AI 泄露系统提示词
+
+- **文档和 SKILL 同步更新**
+  - docs/external-usage.md：新增 Agent 多模态配置的详细说明和三种配置方法示例
+  - docs/architecture.md：新增动态模型路由的设计原理和使用指导
+  - .github/skills/external-integration/SKILL.md：补充多模态模型配置建议
+  - .github/skills/framework-quickstart/SKILL.md：补充动态模型路由设计说明
+
+### Test Results
+- 274 个测试通过 ✅
+- 1 个测试被跳过
+- 0 个测试失败 ✅
+
+---
+
+## [Unreleased - Previous]
+
 ### Changed
 - **API隔离迁移完成** (Stage 1-4)：将单体模块分解为逻辑清晰的独立子包
   - `sirius_chat/config/`：配置管理（models.py, manager.py, helpers.py, __init__.py）
