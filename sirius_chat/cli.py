@@ -38,10 +38,10 @@ def _load_session_config(config_path: Path, work_path: Path) -> tuple[SessionCon
     raw = json.loads(config_path.read_text(encoding="utf-8-sig"))
 
     if "agent" in raw or "global_system_prompt" in raw:
-        raise ValueError("manual agent/global_system_prompt is not allowed; use generated_agent_key")
+        raise ValueError("\u4e0d\u5141\u8bb8\u624b\u52a8\u6307\u5b9a agent/global_system_prompt\uff1b\u8bf7\u4f7f\u7528 generated_agent_key")
     generated_agent_key = str(raw.get("generated_agent_key", "")).strip()
     if not generated_agent_key:
-        raise ValueError("generated_agent_key is required")
+        raise ValueError("\u5fc5\u9700\u63d0\u4f9b generated_agent_key")
 
     session = create_session_config_from_selected_agent(
         work_path=work_path,

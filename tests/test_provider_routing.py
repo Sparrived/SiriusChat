@@ -161,7 +161,7 @@ def test_probe_provider_availability_raises_on_empty_response() -> None:
     try:
         probe_provider_availability(provider=_FakeProvider(), model_name="mock-model")
     except RuntimeError as exc:
-        assert "empty content" in str(exc)
+        assert "空内容" in str(exc) or "empty content" in str(exc)
     else:
         raise AssertionError("expected RuntimeError for empty provider healthcheck response")
 

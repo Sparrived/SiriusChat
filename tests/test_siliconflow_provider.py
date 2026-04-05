@@ -102,6 +102,6 @@ def test_siliconflow_provider_raises_runtime_error_on_network_failure() -> None:
         "sirius_chat.providers.siliconflow.urllib_request.urlopen",
         side_effect=error.URLError("timeout"),
     ):
-        with pytest.raises(RuntimeError, match="Provider network error"):
+        with pytest.raises(RuntimeError, match="网络错误|network error"):
             provider.generate(_request())
 

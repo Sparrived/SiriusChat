@@ -42,7 +42,7 @@ async def _acall_provider(
 
     generate_sync = getattr(provider, "generate", None)
     if not callable(generate_sync):
-        raise RuntimeError("Configured provider does not implement generate/generate_async.")
+        raise RuntimeError("配置的提供商未实现 generate/generate_async 方法。")
 
     sync_fn = cast(Callable[[GenerationRequest], str], generate_sync)
     return await asyncio.to_thread(sync_fn, request_payload)
@@ -170,9 +170,9 @@ def persist_generated_agent_profile(
 ) -> str:
     key = _normalize_agent_key(agent_key)
     if not config.agent.persona.strip():
-        raise ValueError("config.agent.persona cannot be empty")
+        raise ValueError("配置的主人上色（persona）不能为空")
     if not config.global_system_prompt.strip():
-        raise ValueError("config.global_system_prompt cannot be empty")
+        raise ValueError("全局系統提示不能为空")
 
     agents, selected = load_generated_agent_library(config.work_path)
     agents[key] = GeneratedSessionPreset(
@@ -196,7 +196,7 @@ def select_generated_agent_profile(work_path: Path, agent_key: str) -> Generated
     key = _normalize_agent_key(agent_key)
     agents, _ = load_generated_agent_library(work_path)
     if key not in agents:
-        raise ValueError(f"generated agent not found: {agent_key}")
+        raise ValueError(f"找不到生成的主教：{agent_key}")
     _save_generated_agent_library(work_path, agents, key)
     return agents[key]
 
@@ -214,9 +214,9 @@ def create_session_config_from_selected_agent(
     agents, selected = load_generated_agent_library(work_path)
     resolved_key = _normalize_agent_key(agent_key) if agent_key.strip() else selected
     if not resolved_key:
-        raise ValueError("no generated agent selected; provide agent_key or select one in library")
+        raise ValueError("未选择任何生成的主教；请提供 agent_key 或与库中易")
     if resolved_key not in agents:
-        raise ValueError(f"generated agent not found: {resolved_key}")
+        raise ValueError(f"找不到生成的主教：{resolved_key}")
 
     preset = agents[resolved_key]
     config = SessionConfig(
@@ -318,7 +318,7 @@ async def agenerate_agent_prompts_from_answers(
     base_max_tokens: int = 512,
 ) -> GeneratedSessionPreset:
     if not answers:
-        raise ValueError("answers cannot be empty")
+        raise ValueError("答案列表不能为空")
 
     system_prompt = (
         "你是角色扮演提示词提取器。"

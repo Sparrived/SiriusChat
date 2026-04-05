@@ -93,10 +93,10 @@ def _load_session_config(config_path: Path, work_path: Path) -> tuple[SessionCon
     raw = json.loads(config_path.read_text(encoding="utf-8-sig"))
 
     if "agent" in raw or "global_system_prompt" in raw:
-        raise ValueError("manual agent/global_system_prompt is not allowed; use generated_agent_key")
+        raise ValueError("不允许手动指定 agent/global_system_prompt；请使用 generated_agent_key")
     generated_agent_key = str(raw.get("generated_agent_key", "")).strip()
     if not generated_agent_key:
-        raise ValueError("generated_agent_key is required")
+        raise ValueError("必需提供 generated_agent_key")
 
     session = create_session_config_from_selected_agent(
         work_path=work_path,
@@ -803,7 +803,7 @@ def main(
             return 0
         except Exception as e:
             print_func(f"生成配置文件失败: {e}")
-            logger.error(f"Failed to generate config: {e}", exc_info=True)
+            logger.error(f"配置生成失败：{e}", exc_info=True)
             return 1
 
     # 处理特殊命令：--check-config
@@ -815,13 +815,13 @@ def main(
             return 0 if ran else 1
         except Exception as e:
             print_func(f"配置检查失败: {e}")
-            logger.error(f"Failed to check config: {e}", exc_info=True)
+            logger.error(f"配置检查失败：{e}", exc_info=True)
             return 1
 
     try:
         config_path, work_path = _resolve_runtime_paths(args, input_func, print_func)
     except Exception as e:
-        logger.error(f"Failed to resolve paths: {e}", exc_info=True)
+        logger.error(f"路径解析失败：{e}", exc_info=True)
         print_func(f"路径解析失败: {e}")
         return 1
     
@@ -836,7 +836,7 @@ def main(
             print_func=print_func,
         )
     except ValueError as exc:
-        logger.error(f"Failed to load SessionConfig: {exc}", exc_info=True)
+        logger.error(f"加载 SessionConfig 失败：{exc}", exc_info=True)
         print_func(f"加载 SessionConfig 失败：{exc}")
         should_bootstrap = input_func("是否现在初始化首个 generated agent？[Y/n] ").strip().lower()
         if should_bootstrap not in {"", "y", "yes"}:
@@ -849,7 +849,7 @@ def main(
                 print_func=print_func,
             )
         except Exception as provider_exc:
-            logger.error(f"Provider detection failed: {provider_exc}", exc_info=True)
+            logger.error(f"提供商检测失败：{provider_exc}", exc_info=True)
             print_func(f"Provider 检测流程失败：{provider_exc}")
             should_register = input_func("是否现在注册 provider 并重新检测？[Y/n] ").strip().lower()
             if should_register not in {"", "y", "yes"}:
@@ -866,7 +866,7 @@ def main(
                     print_func=print_func,
                 )
             except Exception as register_exc:
-                logger.error(f"Provider registration failed: {register_exc}", exc_info=True)
+                logger.error(f"提供商注册失败：{register_exc}", exc_info=True)
                 print_func(f"Provider 注册或检测失败：{register_exc}")
                 return 1
 
@@ -884,7 +884,7 @@ def main(
                 print_func=print_func,
             )
         except Exception as bootstrap_exc:
-            logger.error(f"Bootstrap failed: {bootstrap_exc}", exc_info=True)
+            logger.error(f"启动失败：{bootstrap_exc}", exc_info=True)
             print_func(f"初始化首个 generated agent 失败：{bootstrap_exc}")
             return 1
     except Exception as e:

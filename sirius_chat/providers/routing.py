@@ -197,11 +197,11 @@ class AutoRoutingProvider(LLMProvider):
             )
         if config.provider_type in _OPENAI_PROVIDER_TYPES:
             return OpenAICompatibleProvider(api_key=config.api_key, base_url=config.base_url or "https://api.openai.com")
-        raise RuntimeError(f"Unsupported provider type: {config.provider_type}")
+        raise RuntimeError(f"不支持的提供商类型：{config.provider_type}")
 
     def _pick_provider(self, model: str) -> ProviderConfig:
         if not self._providers:
-            raise RuntimeError("No provider configured. Please add at least one provider API key.")
+            raise RuntimeError("未配置任何提供商，请先添加至少一个提供商 API Key。")
 
         for provider in self._providers.values():
             if self._provider_matches_model(provider, model):
@@ -239,8 +239,7 @@ def probe_provider_availability(
         )
     )
     if not content.strip():
-        raise RuntimeError("provider healthcheck returned empty content")
-
+            raise RuntimeError("提供商健康检查返回空内容")
 
 def _create_provider_from_config(config: ProviderConfig) -> LLMProvider:
     provider_type = ensure_provider_platform_supported(config.provider_type)

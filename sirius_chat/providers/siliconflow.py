@@ -48,14 +48,14 @@ class SiliconFlowProvider(LLMProvider):
                 raw = response.read().decode("utf-8")
         except error.HTTPError as exc:
             details = exc.read().decode("utf-8", errors="replace")
-            raise RuntimeError(f"Provider HTTP error {exc.code}: {details}") from exc
+            raise RuntimeError(f"提供商 HTTP 错误 {exc.code}：{details}") from exc
         except error.URLError as exc:
-            raise RuntimeError(f"Provider network error: {exc.reason}") from exc
+            raise RuntimeError(f"提供商网络错误：{exc.reason}") from exc
 
         data = json.loads(raw)
         choices = data.get("choices", [])
         if not choices:
-            raise RuntimeError("Provider response has no choices.")
+            raise RuntimeError("提供商响应中没有 choices。")
 
         message = choices[0].get("message", {})
         content = message.get("content")
@@ -66,4 +66,4 @@ class SiliconFlowProvider(LLMProvider):
         if isinstance(reasoning_content, str) and reasoning_content.strip():
             return reasoning_content.strip()
 
-        raise RuntimeError("Provider response has empty content.")
+        raise RuntimeError("提供商响应内容为空。")

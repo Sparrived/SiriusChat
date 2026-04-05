@@ -963,37 +963,37 @@ class EventMemoryManager:
         rejected_count = 0
         
         for entry in pending:
-            # Prepare verification prompt
-            prompt = f"""Analyze this potential event from a conversation and determine if it should be recorded.
+            # 准备验证提示词
+            prompt = f"""分析这段对话中的潜在事件，判断是否应该记录。
 
-Event summary: {entry.summary}
-Related keywords: {", ".join(entry.keywords) if entry.keywords else "none"}
-Role mentions: {", ".join(entry.role_slots) if entry.role_slots else "none"}
-Evidence samples ({len(entry.evidence_samples)} mentions):
+事件摘要：{entry.summary}
+相关关键词：{", ".join(entry.keywords) if entry.keywords else "无"}
+角色提及：{", ".join(entry.role_slots) if entry.role_slots else "无"}
+证据样本（共 {len(entry.evidence_samples)} 提及）：
 {chr(10).join(f"- {s}" for s in entry.evidence_samples)}
 
-Based on this analysis, answer:
-1. Should this event be recorded? (yes/no)
-2. If yes, provide an improved summary (1-2 sentences)
-3. If yes, provide 5-10 key terms related to this event
-4. If yes, what people/roles are involved? (e.g., manager, peer, client)
-5. If yes, any time indicators? (e.g., yesterday, this week, next month)
-6. If yes, any emotions expressed? (e.g., anxiety, positive mood)
+基于以上分析，回答：
+1. 这个事件值得记录吗？（是/否）
+2. 如果是，请提供改进的摘要（1-2 句话）
+3. 如果是，提供 5-10 个与该事件相关的关键词
+4. 如果是，涉及哪些人物/角色？（如：领导、同事、客户）
+5. 如果是，有时间线索吗？（如：昨天、本周、下月）
+6. 如果是，表达了什么情绪？（如：焦虑、积极）
 
-Format your answer as JSON:
+请以 JSON 格式回答：
 {{
-  "record": "yes" or "no",
-  "reason": "brief reason",
-  "summary": "improved summary if yes",
-  "keywords": ["keyword1", "keyword2", ...],
-  "role_slots": ["manager", "peer", ...],
-  "time_hints": ["yesterday", ...],
-  "emotion_tags": ["anxiety", ...]
+  "record": "是" 或 "否",
+  "reason": "简短原因",
+  "summary": "改进的摘要（如果是）",
+  "keywords": ["关键词1", "关键词2", ...],
+  "role_slots": ["领导", "同事", ...],
+  "time_hints": ["昨天", ...],
+  "emotion_tags": ["焦虑", ...]
 }}"""
 
             request = GenerationRequest(
                 model=model_name,
-                system_prompt="You are an expert at analyzing conversations and extracting meaningful events.",
+                system_prompt="你是一位对话分析专家，擅长从对话中提取有意义的事件信息。",
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.5,
                 max_tokens=512,
@@ -1002,9 +1002,9 @@ Format your answer as JSON:
             try:
                 response = await provider_async.generate_async(request)
                 
-                # Parse JSON response
+                # 解析 JSON 响应
                 import json
-                # Extract JSON from response (might be wrapped in markdown code blocks)
+                # 从响应中提取 JSON（可能被包装在 markdown 代码块中）
                 json_str = response
                 if "```" in response:
                     json_str = response.split("```")[1]
@@ -1013,8 +1013,10 @@ Format your answer as JSON:
                 
                 result = json.loads(json_str.strip())
                 
-                if result.get("record", "").lower() == "yes":
-                    # Update event based on LLM feedback
+                record_value = result.get("record", "").lower().strip()
+                # 支持中英文判断
+                if record_value in ("yes", "是", "y", "✓"):
+                    # 根据 LLM 反馈更新事件
                     entry.verified = True
                     summary = result.get("summary", "").strip()
                     if summary:
@@ -1049,13 +1051,13 @@ Format your answer as JSON:
                     entry.updated_at = datetime.now().isoformat(timespec="seconds")
                     verified_count += 1
                 else:
-                    # Remove event if LLM says not worth recording
+                    # 删除 LLM 认为不值得记录的事件
                     self.entries.remove(entry)
                     rejected_count += 1
                     
             except Exception as e:
-                # Log error but continue with other events
-                logger.warning(f"Error verifying event {entry.event_id}: {e}")
+                # 记录错误但继续处理其他事件
+                logger.warning(f"事件验证失败 {entry.event_id}：{e}")
         
         pending_after = [e for e in self.entries if not e.verified and e.mention_count >= min_mentions]
         
