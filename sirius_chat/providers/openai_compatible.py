@@ -18,17 +18,20 @@ class OpenAICompatibleProvider(LLMProvider):
         self._timeout_seconds = timeout_seconds
 
     def generate(self, request: GenerationRequest) -> str:
-        # 记录调用详情
+        # 基础调用日志（INFO）
         msg_count = len(request.messages)
         system_preview = request.system_prompt[:200] if request.system_prompt else "(无系统提示)"
         user_msg_preview = ""
         if request.messages:
             user_content = request.messages[-1].get("content", "")[:150]
             user_msg_preview = f" | 用户消息: {user_content}"
-        
+
         logger.info(
             f"[模型调用] {request.model} | 温度: {request.temperature}, Token上限: {request.max_tokens} "
-            f"| 消息数: {msg_count}{user_msg_preview}\n"
+            f"| 消息数: {msg_count}"
+        )
+        logger.debug(
+            f"[模型调用详情] {request.model} | 用户消息: {user_msg_preview or '(无)'}\n"
             f"  系统提示: {system_preview}"
         )
         
@@ -78,5 +81,6 @@ class OpenAICompatibleProvider(LLMProvider):
             raise RuntimeError("提供商响应内容为空。")
         
         content_preview = content[:200]
-        logger.info(f"[模型调用成功] {request.model} | 字数: {len(content)}\n  响应内容: {content_preview}")
+        logger.info(f"[模型调用成功] {request.model} | 字数: {len(content)}")
+        logger.debug(f"[模型输出] {request.model} | 响应内容: {content_preview}")
         return content.strip()

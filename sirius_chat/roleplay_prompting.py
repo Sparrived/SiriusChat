@@ -368,7 +368,6 @@ async def agenerate_agent_prompts_from_answers(
         f"\n【Agent 基础配置】\n"
         f"name={agent_name}\n"
         f"alias={agent_alias or '(未设置)'}\n"
-        f"base_model={base_model or '(未指定)'}\n"
         f"temperature={base_temperature}（生成策略：{'稳定' if base_temperature < 0.5 else '均衡' if base_temperature < 1.0 else '创意'}）\n"
         f"max_tokens={base_max_tokens}（输出长度约{max_tokens}字）\n"
     )
