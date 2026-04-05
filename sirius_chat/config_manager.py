@@ -206,24 +206,24 @@ class ConfigManager:
             unified_model = agent.model
         
         # 确定默认的 task_enabled 值
-        # 当使用 unified_model 方案时，禁用辅助任务
-        # 当使用 task_models 方案时，启用所有任务（如果明确提供了 task_models）
+        # unified_model 模式：禁用辅助任务（减少开销）
+        # task_models 模式：启用所有任务（支持多模型协同）
         if orch_dict.get("task_enabled"):
-            # 显式提供了 task_enabled 配置，直接使用
+            # 显式配置了 task_enabled，直接使用
             task_enabled = orch_dict["task_enabled"]
-        elif unified_model and not task_models:
-            # 使用 unified_model 方案，禁用辅助任务
-            task_enabled = {
-                "memory_extract": False,
-                "multimodal_parse": False,
-                "event_extract": False,
-            }
-        else:
-            # 其他情况（包括 task_models 方案），启用所有任务
+        elif task_models:
+            # task_models 模式：启用所有任务
             task_enabled = {
                 "memory_extract": True,
                 "multimodal_parse": True,
                 "event_extract": True,
+            }
+        else:
+            # unified_model 模式（默认）：禁用辅助任务
+            task_enabled = {
+                "memory_extract": False,
+                "multimodal_parse": False,
+                "event_extract": False,
             }
         
         orchestration = OrchestrationPolicy(

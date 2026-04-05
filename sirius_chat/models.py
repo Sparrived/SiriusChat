@@ -169,7 +169,7 @@ class SessionConfig:
         if orchestration is None:
             orchestration = OrchestrationPolicy(
                 unified_model=preset.agent.model,
-                # 在 unified_model 方案中，禁用辅助任务
+                # unified_model 模式下禁用辅助任务（不产生额外开销）
                 task_enabled={
                     "memory_extract": False,
                     "multimodal_parse": False,
