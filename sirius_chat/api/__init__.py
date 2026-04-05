@@ -55,7 +55,7 @@ from sirius_chat.api.orchestration import (
     create_multimodel_config,
     setup_multimodel_config,
 )
-from sirius_chat.orchestration_config import (
+from sirius_chat.async_engine.orchestration_config import (
     configure_orchestration_models,
     configure_orchestration_budgets,
     configure_orchestration_temperatures,

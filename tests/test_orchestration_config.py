@@ -13,7 +13,7 @@ from sirius_chat.models import (
 )
 from sirius_chat.async_engine.core import AsyncRolePlayEngine
 from sirius_chat.exceptions import OrchestrationConfigError
-from sirius_chat.orchestration_config import (
+from sirius_chat.async_engine.orchestration_config import (
     configure_orchestration_models,
     configure_orchestration_budgets,
     configure_orchestration_temperatures,

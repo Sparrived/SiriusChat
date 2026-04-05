@@ -18,7 +18,9 @@ ENV/
 data/
 .pytest_cache/
 .coverage
+coverage.xml
 htmlcov/
+null
 
 # IDE & Editor
 .vscode/
