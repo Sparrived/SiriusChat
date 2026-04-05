@@ -20,7 +20,20 @@ class MockProvider(LLMProvider):
         self.requests: list[GenerationRequest] = []
 
     def generate(self, request: GenerationRequest) -> str:
-        logger.info(f"[模型调用] mock-{request.model} | 温度: {request.temperature}, Token上限: {request.max_tokens}")
+        # 记录调用详情
+        msg_count = len(request.messages)
+        system_preview = request.system_prompt[:200] if request.system_prompt else "(无系统提示)"
+        user_msg_preview = ""
+        if request.messages:
+            user_content = request.messages[-1].get("content", "")[:150]
+            user_msg_preview = f" | 用户消息: {user_content}"
+        
+        logger.info(
+            f"[模型调用] mock-{request.model} | 温度: {request.temperature}, Token上限: {request.max_tokens} "
+            f"| 消息数: {msg_count}{user_msg_preview}\n"
+            f"  系统提示: {system_preview}"
+        )
+        
         self.requests.append(request)
         # 检测事件验证请求并返回有效的 JSON
         is_event_verification = (
@@ -37,11 +50,12 @@ class MockProvider(LLMProvider):
                 "time_hints": ["时间"],
                 "emotion_tags": ["情绪"]
             }"""
-            logger.info(f"[模型调用成功] mock-{request.model} | 事件验证响应")
+            logger.info(f"[模型调用成功] mock-{request.model} | 字数: {len(response)}\n  响应内容: 事件验证JSON")
             return response
         if self._queue:
             response = self._queue.popleft()
-            logger.info(f"[模型调用成功] mock-{request.model} | 回复长度: {len(response)}")
+            content_preview = response[:200]
+            logger.info(f"[模型调用成功] mock-{request.model} | 字数: {len(response)}\n  响应内容: {content_preview}")
             return response
         logger.warning(f"[模型调用] mock-{request.model} | 无配置响应")
         return "[mock] no configured response"

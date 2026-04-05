@@ -23,7 +23,20 @@ class SiliconFlowProvider(LLMProvider):
         self._timeout_seconds = timeout_seconds
 
     def generate(self, request: GenerationRequest) -> str:
-        logger.info(f"[模型调用] {request.model} | 温度: {request.temperature}, Token上限: {request.max_tokens}")
+        # 记录调用详情
+        msg_count = len(request.messages)
+        system_preview = request.system_prompt[:200] if request.system_prompt else "(无系统提示)"
+        user_msg_preview = ""
+        if request.messages:
+            user_content = request.messages[-1].get("content", "")[:150]
+            user_msg_preview = f" | 用户消息: {user_content}"
+        
+        logger.info(
+            f"[模型调用] {request.model} | 温度: {request.temperature}, Token上限: {request.max_tokens} "
+            f"| 消息数: {msg_count}{user_msg_preview}\n"
+            f"  系统提示: {system_preview}"
+        )
+        
         url = f"{self._base_url}/v1/chat/completions"
         payload = {
             "model": request.model,
@@ -66,12 +79,14 @@ class SiliconFlowProvider(LLMProvider):
         message = choices[0].get("message", {})
         content = message.get("content")
         if isinstance(content, str) and content.strip():
-            logger.info(f"[模型调用成功] {request.model} | 回复字数: {len(content)}")
+            content_preview = content[:200]
+            logger.info(f"[模型调用成功] {request.model} | 字数: {len(content)}\n  响应内容: {content_preview}")
             return content.strip()
 
         reasoning_content = message.get("reasoning_content")
         if isinstance(reasoning_content, str) and reasoning_content.strip():
-            logger.info(f"[模型调用成功] {request.model} | 回复字数: {len(reasoning_content)}")
+            content_preview = reasoning_content[:200]
+            logger.info(f"[模型调用成功] {request.model} | 字数: {len(reasoning_content)}\n  响应内容: {content_preview}")
             return reasoning_content.strip()
 
         logger.error(f"[模型调用失败] {request.model} | 响应为空")
