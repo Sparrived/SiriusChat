@@ -1066,6 +1066,9 @@ class AsyncRolePlayEngine:
                     probability_floor,
                     min(1.0, score * probability_coefficient),
                 )
+                # 明确点名主 AI 时，提高兜底回复概率，减少“被叫到但未回应”的体验。
+                if addressing_score >= 0.20:
+                    reply_probability = max(reply_probability, 0.80)
                 probability_roll = cls._deterministic_probability_roll(
                     turn=turn,
                     group_recent_count=group_recent_count,
@@ -1295,40 +1298,11 @@ class AsyncRolePlayEngine:
             # 条件2：内容长度满足最小要求
             and len(content) >= min_length
         )
-        
+
         if should_run_memory_extract:
-            await self._run_memory_extract_task(
-                config=config,
-                transcript=transcript,
-                participant=participant,
-                content=content,
-                task_token_usage=task_token_usage,
-            )
             user_message_count_since_extract[participant.user_id] = 0
         else:
             user_message_count_since_extract[participant.user_id] = current_count + 1
-        
-        evidence = await self._run_multimodal_parse_task(
-            config=config,
-            transcript=transcript,
-            participant=participant,
-            content=content,
-            multimodal_inputs=normalized_multimodal_inputs,
-            task_token_usage=task_token_usage,
-        )
-        if evidence:
-            transcript.add(
-                Message(
-                    role="system",
-                    content=f"多模态解析证据[{participant.name}]：{evidence}",
-                )
-            )
-            transcript.user_memory.apply_ai_runtime_update(
-                user_id=participant.user_id,
-                summary_note=f"多模态证据：{evidence[:48]}",
-                source="multimodal_parse",
-                confidence=0.75,
-            )
 
         # ============================================================================
         # A1方案: 时间窗口去重 - 防止短时间内重复调用event_extract
@@ -1351,19 +1325,67 @@ class AsyncRolePlayEngine:
 
         # 根据去重结果决定是否执行event_extract
         if should_process_event:
-            extracted_event_features = await self._run_event_extract_task(
-                config=config,
-                transcript=transcript,
-                participant=participant,
-                content=content,
-                task_token_usage=task_token_usage,
+            event_task: asyncio.Task[dict[str, object] | None] | None = asyncio.create_task(
+                self._run_event_extract_task(
+                    config=config,
+                    transcript=transcript,
+                    participant=participant,
+                    content=content,
+                    task_token_usage=task_token_usage,
+                )
             )
             # 更新最后处理时间戳
             if user_memory_entry is not None:
                 user_memory_entry.runtime.last_event_processed_at = datetime.now(timezone.utc)
         else:
             # 去重模式：不调用event_extract，但仍然保存消息到内存
-            extracted_event_features = None
+            event_task = None
+
+        memory_extract_task: asyncio.Task[None] | None = None
+        if should_run_memory_extract:
+            memory_extract_task = asyncio.create_task(
+                self._run_memory_extract_task(
+                    config=config,
+                    transcript=transcript,
+                    participant=participant,
+                    content=content,
+                    task_token_usage=task_token_usage,
+                )
+            )
+
+        multimodal_task: asyncio.Task[str | None] = asyncio.create_task(
+            self._run_multimodal_parse_task(
+                config=config,
+                transcript=transcript,
+                participant=participant,
+                content=content,
+                multimodal_inputs=normalized_multimodal_inputs,
+                task_token_usage=task_token_usage,
+            )
+        )
+
+        pending_tasks: list[asyncio.Task[object]] = [multimodal_task]
+        if memory_extract_task is not None:
+            pending_tasks.append(cast(asyncio.Task[object], memory_extract_task))
+        if event_task is not None:
+            pending_tasks.append(cast(asyncio.Task[object], event_task))
+        await asyncio.gather(*pending_tasks)
+
+        evidence = multimodal_task.result()
+        extracted_event_features = event_task.result() if event_task is not None else None
+        if evidence:
+            transcript.add(
+                Message(
+                    role="system",
+                    content=f"多模态解析证据[{participant.name}]：{evidence}",
+                )
+            )
+            transcript.user_memory.apply_ai_runtime_update(
+                user_id=participant.user_id,
+                summary_note=f"多模态证据：{evidence[:48]}",
+                source="multimodal_parse",
+                confidence=0.75,
+            )
         hit_payload = event_store.absorb_mention(
             content=content,
             known_entities=known_entities,

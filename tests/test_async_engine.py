@@ -714,6 +714,54 @@ def test_run_live_session_reply_mode_auto_probability_fallback_can_trigger_reply
     asyncio.run(_run())
 
 
+def test_auto_reply_probability_boosts_when_directly_addressed() -> None:
+    config = SessionConfig(
+        work_path=Path("data/tests/reply_mode_auto_addressing_boost"),
+        preset=AgentPreset(
+            agent=Agent(name="月白", persona="异步测试", model="mock-model"),
+            global_system_prompt="测试系统提示词",
+        ),
+        orchestration=OrchestrationPolicy(
+            unified_model="mock-model",
+            auto_reply_base_score=0.0,
+            auto_reply_threshold=0.95,
+            auto_reply_threshold_min=0.95,
+            auto_reply_threshold_max=0.95,
+            auto_reply_probability_coefficient=0.1,
+            auto_reply_probability_floor=0.05,
+            task_enabled={
+                "memory_extract": False,
+                "multimodal_parse": False,
+                "event_extract": False,
+            },
+        ),
+    )
+
+    plain_turn = Message(role="user", speaker="小王", content="早上好", reply_mode="auto")
+    addressed_turn = Message(role="user", speaker="小王", content="早上好月白", reply_mode="auto")
+
+    plain = type(create_async_engine(MockProvider()))._evaluate_reply_willingness(
+        turn=plain_turn,
+        config=config,
+        event_hit_payload=None,
+        user_interval_seconds=None,
+        group_recent_count=1,
+        assistant_interval_seconds=None,
+    )
+    addressed = type(create_async_engine(MockProvider()))._evaluate_reply_willingness(
+        turn=addressed_turn,
+        config=config,
+        event_hit_payload=None,
+        user_interval_seconds=None,
+        group_recent_count=1,
+        assistant_interval_seconds=None,
+    )
+
+    assert plain.reply_probability <= 0.10
+    assert addressed.addressing_score >= 0.20
+    assert addressed.reply_probability >= 0.60
+
+
 def test_run_live_session_reply_mode_auto_suppresses_rapid_chatter() -> None:
     async def _run() -> None:
         provider = MockProvider(responses=["第一条回复", "第二条回复", "第三条回复"])
@@ -746,6 +794,76 @@ def test_run_live_session_reply_mode_auto_suppresses_rapid_chatter() -> None:
         assistant_messages = [msg for msg in transcript.messages if msg.role == "assistant"]
         assert len(assistant_messages) == 0
         assert all(request.purpose != "chat_main" for request in provider.requests)
+
+    asyncio.run(_run())
+
+
+def test_auxiliary_tasks_run_in_parallel_for_single_turn() -> None:
+    class SlowAsyncProvider:
+        def __init__(self) -> None:
+            self.active_calls = 0
+            self.max_active_calls = 0
+            self.purposes: list[str] = []
+
+        async def generate_async(self, request: GenerationRequest) -> str:
+            purpose = str(getattr(request, "purpose", "") or "")
+            self.purposes.append(purpose)
+            self.active_calls += 1
+            self.max_active_calls = max(self.max_active_calls, self.active_calls)
+            await asyncio.sleep(0.03)
+            self.active_calls -= 1
+
+            if purpose == "memory_extract":
+                return (
+                    '{"inferred_persona":"","inferred_traits":[],"inferred_aliases":[],'
+                    '"preference_tags":[],"summary_note":""}'
+                )
+            if purpose == "multimodal_parse":
+                return '{"evidence":"看到一张图片"}'
+            if purpose == "event_extract":
+                return (
+                    '{"summary":"","keywords":[],"role_slots":[],"entities":[],'
+                    '"time_hints":[],"emotion_tags":[]}'
+                )
+            return "ok"
+
+    async def _run() -> None:
+        provider = SlowAsyncProvider()
+        engine = create_async_engine(provider)
+        config = SessionConfig(
+            work_path=Path("data/tests/aux_tasks_parallel"),
+            preset=AgentPreset(
+                agent=Agent(name="主助手", persona="异步测试", model="mock-model"),
+                global_system_prompt="测试系统提示词",
+            ),
+            orchestration=OrchestrationPolicy(
+                unified_model="mock-model",
+                task_enabled={
+                    "memory_extract": True,
+                    "multimodal_parse": True,
+                    "event_extract": True,
+                },
+            ),
+        )
+
+        await _run_live_turns(
+            engine=engine,
+            config=config,
+            human_turns=[
+                Message(
+                    role="user",
+                    speaker="小王",
+                    content="请看下这张图并记住我刚刚说的重点",
+                    reply_mode="never",
+                    multimodal_inputs=[{"type": "image", "value": "https://example.com/demo.png"}],
+                )
+            ],
+        )
+
+        assert "memory_extract" in provider.purposes
+        assert "multimodal_parse" in provider.purposes
+        assert "event_extract" in provider.purposes
+        assert provider.max_active_calls >= 2
 
     asyncio.run(_run())
 

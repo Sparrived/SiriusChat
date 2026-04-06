@@ -4,6 +4,23 @@
 
 ## [Unreleased]
 
+## [0.5.6] - 2026-04-06
+
+### Added
+- **辅助任务并行执行**
+  - 单条用户消息处理中，`memory_extract`、`multimodal_parse`、`event_extract` 改为并行调度
+  - 保留 `memory_manager` 后置执行，确保汇聚阶段读取的是已更新记忆
+  - 新增并行回归测试，验证单轮内辅助任务存在重叠执行
+
+### Changed
+- **点名回复概率增强**
+  - 在 `session_reply_mode=auto` 下，明确点名主 AI 时提高概率兜底下限
+  - 降低“被叫到但未回复”的体验问题
+
+### Docs
+- 更新 `OrchestrationPolicy` 文档与示例，使字段说明与实现保持一致
+- 修正文档中对 `orchestration.enabled` 的过时描述
+
 ## [0.5.5] - 2026-04-06
 
 ### Added

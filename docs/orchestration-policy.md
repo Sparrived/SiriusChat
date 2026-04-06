@@ -1,150 +1,171 @@
-# 多模型协作编排策略（阶段二）
+# OrchestrationPolicy 配置说明
 
-本文档定义 Sirius Chat 在“多模型、多能力、成本约束”场景下的最小可用策略，作为实现与回归测试的唯一依据。
+本文档描述 `SessionConfig.orchestration` 的实际字段与运行行为，以 `sirius_chat/config/models.py` 中 `OrchestrationPolicy` 为准。
 
-## 运作模式（默认：多模型协同）
+## 总览
 
-**Sirius Chat 现在默认采用多模型协同模式运作**。所有任务（记忆提取、事件提取、多模态解析）默认启用，引擎会按照任务路由策略自动调度不同的专用模型。
+`OrchestrationPolicy` 负责控制：
 
-- **多模型协同模式**（默认）：引擎根据配置的 `task_models`，将不同任务分发给相应的专用模型，或使用 `unified_model` 统一处理。所有任务默认启用，可通过 `task_enabled` 字典按需禁用。
-- **单模型模式**（可选）：如需全部由一个模型处理，可移除 `task_models`，改为设置 `unified_model`，所有任务将使用该统一模型。
+- 辅助任务的模型路由与开关（`memory_extract`、`event_extract`、`multimodal_parse`）。
+- 各任务预算、温度、最大输出、重试次数。
+- 多模态输入限流。
+- 提示词驱动消息分割（`split_marker`）。
+- 记忆管理器任务（`memory_manager_model`）。
+- `reply_mode="auto"` 下的回复意愿参数。
 
-## 目标
+注意：没有 `orchestration.enabled` 字段。
 
-- 默认启用多模型协同，降低多模态/纯文本模型混用导致的配置复杂度。
-- 支持主回复与用户信息维护的分任务路由。
-- 提供可控的 token 预算，避免低价值任务抢占成本。
+## 模型路由模式
 
-## 三层策略
+`OrchestrationPolicy` 支持两种互斥模式，必须二选一：
 
-1. 能力声明层（平台/模型能力）
+- 统一模型模式：设置 `unified_model`，所有辅助任务使用同一模型。
+- 按任务模式：设置 `task_models`，每个任务单独指定模型。
 
-- 由 provider 平台清单给出默认入口与说明。
-- 模型能力先以“任务路由”方式显式声明，不做自动探测。
+校验规则：
 
-1. 任务路由层（Task Routing）
+- `unified_model` 和 `task_models` 不能同时为空。
+- `unified_model` 和 `task_models` 不能同时有值。
 
-- 主回复任务：`chat_main`，默认使用 `SessionConfig.agent.model`。
-- 记忆提取任务：`memory_extract`，可配置单独模型，默认启用。
-- 事件提取任务：`event_extract`，用于抽取事件摘要/角色槽位/时间线索并增强事件命中，默认启用。
-- 多模态解析任务：`multimodal_parse`，用于将图片/视频输入转换为文本证据，默认启用。
-- 若未配置任务模型，则跳过该任务并保持回退逻辑。
+## 任务与默认值
 
-1. 预算控制层（Budget Guardrail）
+默认启用任务（通过 `task_enabled` 控制）：
 
-- 预算按任务维度配置（当前支持 `memory_extract`、`event_extract`、`multimodal_parse`）。
-- 使用近似 token 估算（字符数 / 4，向上取整）。
-- 当预计消耗超预算时，跳过该任务并回退启发式逻辑。
+- `memory_extract`: `true`
+- `event_extract`: `true`
+- `multimodal_parse`: `true`
 
-## 配置结构（SessionConfig）
+其他关键默认值：
 
-新增 `orchestration` 字段（可选）：
+- `max_multimodal_inputs_per_turn`: `4`
+- `max_multimodal_value_length`: `4096`
+- `enable_prompt_driven_splitting`: `true`
+- `split_marker`: `[MSG_BREAK]`
+- `memory_manager_model`: 空字符串（不启用）
+- `memory_manager_temperature`: `0.3`
+- `memory_manager_max_tokens`: `512`
+- `memory_extract_batch_size`: `1`
+- `memory_extract_min_content_length`: `0`
+- `session_reply_mode`: `always`
+
+## 完整示例
 
 ```json
 {
   "orchestration": {
-    "task_enabled": {
-      "memory_extract": true,
-      "multimodal_parse": true,
-      "event_extract": true
-    },
+    "unified_model": "",
     "task_models": {
       "memory_extract": "doubao-seed-2-0-lite-260215",
       "event_extract": "doubao-seed-2-0-lite-260215",
       "multimodal_parse": "doubao-seed-2-0-lite-260215"
     },
+    "task_enabled": {
+      "memory_extract": true,
+      "event_extract": true,
+      "multimodal_parse": true
+    },
     "task_budgets": {
       "memory_extract": 1200,
       "event_extract": 1000,
-      "multimodal_parse": 1000
+      "multimodal_parse": 1000,
+      "memory_manager": 800
     },
     "task_temperatures": {
       "memory_extract": 0.1,
-      "event_extract": 0.1
+      "event_extract": 0.1,
+      "multimodal_parse": 0.3
     },
     "task_max_tokens": {
       "memory_extract": 128,
-      "event_extract": 192
+      "event_extract": 192,
+      "multimodal_parse": 256
     },
     "task_retries": {
       "memory_extract": 1,
       "event_extract": 1,
-      "multimodal_parse": 1
+      "multimodal_parse": 1,
+      "memory_manager": 1
     },
     "max_multimodal_inputs_per_turn": 4,
-    "max_multimodal_value_length": 4096
-    }
+    "max_multimodal_value_length": 4096,
+    "enable_prompt_driven_splitting": true,
+    "split_marker": "[MSG_BREAK]",
+    "memory_manager_model": "gpt-4o-mini",
+    "memory_manager_temperature": 0.3,
+    "memory_manager_max_tokens": 512,
+    "memory_extract_batch_size": 3,
+    "memory_extract_min_content_length": 30,
+    "session_reply_mode": "auto",
+    "auto_reply_base_score": 0.22,
+    "auto_reply_threshold": 0.58,
+    "auto_reply_threshold_min": 0.4,
+    "auto_reply_threshold_max": 0.72,
+    "auto_reply_threshold_boost_start_count": 4,
+    "auto_reply_probability_coefficient": 0.35,
+    "auto_reply_probability_floor": 0.05,
+    "auto_reply_user_cadence_seconds": 7.0,
+    "auto_reply_group_window_seconds": 8.0,
+    "auto_reply_group_penalty_start_count": 2,
+    "auto_reply_assistant_cooldown_seconds": 12.0
   }
 }
 ```
 
-说明：
+## 行为说明
 
-- `task_enabled.<task_name>` 为 `false` 时，不执行该任务。
-- `task_models.<task_name>` 未设置时，不发起该任务调用。
-- `task_budgets.<task_name>` 未设置或 <= 0 时，视为该任务不限制。
-- `task_retries.<task_name>` 配置任务级重试次数（默认 0）。
-- `max_multimodal_inputs_per_turn` 与 `max_multimodal_value_length` 用于输入限流与裁剪。
+任务调度：
 
-`Message` 可选字段：
+- `task_enabled[task] = false` 时，任务直接跳过。
+- 任务未配置模型时不会调用该任务模型。
+- `task_budgets[task] <= 0` 或未设置，视为不限制预算。
+- 预算判断采用近似 token 估算（字符数 / 4，向上取整）。
 
-```json
-{
-  "role": "user",
-  "speaker": "小王",
-  "content": "请结合图片分析",
-  "multimodal_inputs": [
-    {"type": "image", "value": "https://example.com/demo.png"}
-  ]
-}
-```
+记忆提取频率控制：
 
-## 执行顺序（单轮用户输入）
+- `memory_extract_batch_size > 1` 时，按消息批次触发记忆提取。
+- `memory_extract_min_content_length > 0` 时，短内容会跳过记忆提取。
 
-1. 写入用户消息到 transcript。
-2. 先执行现有启发式更新（关键词/角色短语）。
-3. 若编排启用且配置了 `memory_extract` 模型：
+提示词驱动分割：
 
-- 构造结构化提取请求。
-- 检查预算是否允许。
-- 调用辅助模型，解析 JSON 结果。
-- 将提取结果合并进 `UserMemoryManager.apply_ai_runtime_update`。
+- `enable_prompt_driven_splitting = true` 时，系统提示会注入分割规则。
+- 模型输出中出现 `split_marker` 后，引擎按标记拆分为多条 assistant 消息。
 
-1. 若编排启用且配置了 `event_extract` 模型：
+记忆管理器：
 
-- 构造结构化事件提取请求。
-- 检查预算是否允许。
-- 调用辅助模型，解析事件 JSON（summary/keywords/role_slots/entities/time_hints/emotion_tags）。
-- 将模型提取结果与启发式特征融合后执行事件命中评分。
+- `memory_manager_model` 非空时启用记忆管理任务。
+- 该任务可使用 `task_budgets["memory_manager"]` 与 `task_retries["memory_manager"]`。
 
-1. 若存在 `multimodal_inputs` 且配置了 `multimodal_parse` 模型：
+## 回复意愿参数（reply_mode=auto）
 
-- 构造多模态解析请求。
-- 检查预算是否允许。
-- 调用辅助模型，解析 `{"evidence": "..."}`。
-- 将证据以 system 消息注入上下文。
+会话级策略由 `session_reply_mode` 控制，可用值：
 
-1. 调用主模型生成最终回复。
+- `always`
+- `never`
+- `auto`
+- `smart`（等价于 `auto`）
+- `silent` / `none` / `no_reply`（等价于 `never`）
 
-## 可观测性（生产建议）
+概率与阈值相关参数：
 
-- 运行统计写入 `Transcript.orchestration_stats`，并随 session store 持久化。
-- 常见指标：`attempted`、`succeeded`、`failed_provider`、`failed_parse`、`skipped_budget`、`skipped_invalid_input`。
+- `auto_reply_base_score`
+- `auto_reply_threshold`
+- `auto_reply_threshold_min`
+- `auto_reply_threshold_max`
+- `auto_reply_threshold_boost_start_count`
+- `auto_reply_probability_coefficient`
+- `auto_reply_probability_floor`
+- `auto_reply_user_cadence_seconds`
+- `auto_reply_group_window_seconds`
+- `auto_reply_group_penalty_start_count`
+- `auto_reply_assistant_cooldown_seconds`
 
-## 失败与回退
+## 校验约束
 
-- 辅助任务失败、超时、返回非 JSON、预算不足时：
+`OrchestrationPolicy.validate()` 会检查：
 
-- 不中断主流程。
-- 保留启发式记忆结果。
+- 模型路由模式互斥与必填规则。
+- `memory_extract_batch_size > 0`。
+- `memory_extract_min_content_length >= 0`。
+- 回复模式与阈值/概率/时间参数的取值范围合法。
 
-## 持久化与优先级
-
-- `main.py` 的 `session_config.persisted.json` 需完整保存 `orchestration`。
-- 按现有策略：持久化配置优先于外部 `--config`。
-
-## 非目标（当前阶段不做）
-
-- 自动探测模型能力并动态重排任务。
-- 复杂负载均衡与健康检查。
-- 复杂多模态编解码与 OCR/ASR 管线（当前仅通过模型任务提取文本证据）。
+若配置非法，会在 `SessionConfig` 初始化阶段抛出 `ValueError`。
