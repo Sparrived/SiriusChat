@@ -199,6 +199,64 @@ def test_async_engine_memory_extract_task_uses_aux_model() -> None:
     asyncio.run(_run())
 
 
+def test_memory_extract_task_includes_recent_conversation_context() -> None:
+    class ContextCaptureProvider:
+        def __init__(self) -> None:
+            self.memory_inputs: list[str] = []
+
+        def generate(self, request: GenerationRequest) -> str:
+            if str(getattr(request, "purpose", "") or "") == "memory_extract":
+                self.memory_inputs.append(str(request.messages[0].get("content", "")))
+                return json.dumps(
+                    {
+                        "inferred_persona": "",
+                        "inferred_aliases": [],
+                        "inferred_traits": [],
+                        "preference_tags": [],
+                        "summary_note": "",
+                    },
+                    ensure_ascii=False,
+                )
+            return "主回复"
+
+    async def _run() -> None:
+        provider = ContextCaptureProvider()
+        engine = create_async_engine(provider)
+        config = SessionConfig(
+            work_path=Path("data/tests/memory_extract_context"),
+            preset=AgentPreset(
+                agent=Agent(name="主助手", persona="异步测试", model="main-model"),
+                global_system_prompt="测试系统提示词",
+            ),
+            orchestration=OrchestrationPolicy(
+                unified_model="main-model",
+                task_enabled={
+                    "memory_extract": True,
+                    "multimodal_parse": False,
+                    "event_extract": False,
+                },
+            ),
+        )
+
+        await _run_live_turns(
+            engine=engine,
+            config=config,
+            human_turns=[
+                Message(role="user", speaker="小王", content="我们要做一个发布方案。"),
+                Message(role="user", speaker="小王", content="重点是灰度和回滚策略。"),
+            ],
+        )
+
+        assert len(provider.memory_inputs) >= 2
+        second_input = provider.memory_inputs[-1]
+        assert "latest_user_content=重点是灰度和回滚策略。" in second_input
+        assert "conversation_context=" in second_input
+        assert "[user][小王] 我们要做一个发布方案。" in second_input
+        assert "[assistant][主助手] 主回复" in second_input
+
+    asyncio.run(_run())
+
+
 def test_async_engine_memory_extract_task_skips_when_budget_exceeded() -> None:
     class BudgetProvider:
         def __init__(self) -> None:
@@ -904,6 +962,61 @@ def test_auxiliary_tasks_run_in_parallel_for_single_turn() -> None:
         assert "multimodal_parse" in provider.purposes
         assert "event_extract" in provider.purposes
         assert provider.max_active_calls >= 2
+
+    asyncio.run(_run())
+
+
+def test_event_extract_runs_for_consecutive_messages_without_dedup() -> None:
+    class EventOnlyProvider:
+        def __init__(self) -> None:
+            self.event_extract_calls = 0
+
+        async def generate_async(self, request: GenerationRequest) -> str:
+            purpose = str(getattr(request, "purpose", "") or "")
+            if purpose == "event_extract":
+                self.event_extract_calls += 1
+                return (
+                    '{"summary":"","keywords":[],"role_slots":[],"entities":[],'
+                    '"time_hints":[],"emotion_tags":[]}'
+                )
+            if purpose == "memory_extract":
+                return (
+                    '{"inferred_persona":"","inferred_traits":[],"inferred_aliases":[],'
+                    '"preference_tags":[],"summary_note":""}'
+                )
+            if purpose == "multimodal_parse":
+                return '{"evidence":""}'
+            return "ok"
+
+    async def _run() -> None:
+        provider = EventOnlyProvider()
+        engine = create_async_engine(provider)
+        config = SessionConfig(
+            work_path=Path("data/tests/event_extract_no_dedup"),
+            preset=AgentPreset(
+                agent=Agent(name="主助手", persona="异步测试", model="mock-model"),
+                global_system_prompt="测试系统提示词",
+            ),
+            orchestration=OrchestrationPolicy(
+                unified_model="mock-model",
+                task_enabled={
+                    "memory_extract": False,
+                    "multimodal_parse": False,
+                    "event_extract": True,
+                },
+            ),
+        )
+
+        await _run_live_turns(
+            engine=engine,
+            config=config,
+            human_turns=[
+                Message(role="user", speaker="小王", content="第一条消息", reply_mode="never"),
+                Message(role="user", speaker="小王", content="第二条消息", reply_mode="never"),
+            ],
+        )
+
+        assert provider.event_extract_calls == 2
 
     asyncio.run(_run())
 

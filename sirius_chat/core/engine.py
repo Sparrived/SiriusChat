@@ -17,7 +17,6 @@ from sirius_chat.memory import (
     EventMemoryFileStore,
     EventMemoryManager,
     UserMemoryFileStore,
-    EVENT_DEDUP_WINDOW_MINUTES,
 )
 from sirius_chat.async_engine.utils import (
     build_event_hit_system_note,
@@ -453,10 +452,10 @@ class AsyncRolePlayEngine:
             "字段仅包含 inferred_persona(string)、inferred_traits(array[string])、"
             "inferred_aliases(array[string])、preference_tags(array[string])、summary_note(string)。"
         )
-        task_input = (
-            f"user_id={participant.user_id}\n"
-            f"speaker={participant.name}\n"
-            f"content={content}"
+        task_input = self._build_memory_extract_task_input(
+            transcript=transcript,
+            participant=participant,
+            content=content,
         )
         estimated_cost = self._estimate_tokens(system_prompt + task_input)
 
@@ -1209,6 +1208,41 @@ class AsyncRolePlayEngine:
         ]
         return system_prompt, chat_history
 
+    @staticmethod
+    def _build_memory_extract_task_input(
+        *,
+        transcript: Transcript,
+        participant: Participant,
+        content: str,
+        max_context_messages: int = 8,
+        max_context_chars: int = 1200,
+    ) -> str:
+        context_lines: list[str] = []
+        for message in transcript.messages:
+            role = str(message.role or "").strip().lower()
+            if role not in {"user", "assistant"}:
+                continue
+            text = str(message.content or "").strip()
+            if not text:
+                continue
+            speaker = str(message.speaker or role).strip()
+            context_lines.append(f"[{role}][{speaker}] {text}")
+
+        if max_context_messages > 0:
+            context_lines = context_lines[-max_context_messages:]
+
+        context_text = "\n".join(context_lines)
+        if max_context_chars > 0 and len(context_text) > max_context_chars:
+            context_text = context_text[-max_context_chars:]
+
+        return (
+            f"user_id={participant.user_id}\n"
+            f"speaker={participant.name}\n"
+            f"latest_user_content={content}\n"
+            "conversation_context=\n"
+            f"{context_text}"
+        )
+
     async def _generate_assistant_message(self, config: SessionConfig, transcript: Transcript) -> Message:
         if config.enable_auto_compression:
             transcript.compress_for_budget(
@@ -1344,42 +1378,15 @@ class AsyncRolePlayEngine:
         else:
             user_message_count_since_extract[participant.user_id] = current_count + 1
 
-        # ============================================================================
-        # A1方案: 时间窗口去重 - 防止短时间内重复调用event_extract
-        # ============================================================================
-        user_memory_entry = transcript.user_memory.entries.get(participant.user_id)
-        should_process_event = True
-        
-        if user_memory_entry is not None:
-            last_processed = user_memory_entry.runtime.last_event_processed_at
-            if last_processed is not None:
-                # 计算距离上次处理的时间（分钟）
-                time_since_last = (datetime.now(timezone.utc) - last_processed).total_seconds() / 60
-                
-                # 如果在去重窗口内，则跳过事件处理
-                if time_since_last < EVENT_DEDUP_WINDOW_MINUTES:
-                    should_process_event = False
-                    logger.info(
-                        f"[去重] 用户{participant.name}在{time_since_last:.1f}分钟内重复消息，跳过事件处理"
-                    )
-
-        # 根据去重结果决定是否执行event_extract
-        if should_process_event:
-            event_task: asyncio.Task[dict[str, object] | None] | None = asyncio.create_task(
-                self._run_event_extract_task(
-                    config=config,
-                    transcript=transcript,
-                    participant=participant,
-                    content=content,
-                    task_token_usage=task_token_usage,
-                )
+        event_task: asyncio.Task[dict[str, object] | None] | None = asyncio.create_task(
+            self._run_event_extract_task(
+                config=config,
+                transcript=transcript,
+                participant=participant,
+                content=content,
+                task_token_usage=task_token_usage,
             )
-            # 更新最后处理时间戳
-            if user_memory_entry is not None:
-                user_memory_entry.runtime.last_event_processed_at = datetime.now(timezone.utc)
-        else:
-            # 去重模式：不调用event_extract，但仍然保存消息到内存
-            event_task = None
+        )
 
         memory_extract_task: asyncio.Task[None] | None = None
         if should_run_memory_extract:
