@@ -9,6 +9,7 @@ from sirius_chat.api import (
     ainit_live_session,
     arun_live_message,
     create_async_engine,
+    extract_assistant_messages,
     find_user_by_channel_uid,
     probe_provider_availability,
 )
@@ -91,6 +92,35 @@ def test_public_api_async_facade() -> None:
 
 def test_public_api_exposes_provider_probe() -> None:
     assert callable(probe_provider_availability)
+
+
+def test_extract_assistant_messages_filters_system_and_user() -> None:
+    async def _run() -> None:
+        provider = MockProvider(responses=["ok-1", "ok-2"])
+        engine = create_async_engine(provider)
+
+        config = SessionConfig(
+            work_path=Path("data/tests/public_api_extract_assistant"),
+            preset=AgentPreset(
+                agent=Agent(name="主助手", persona="test", model="mock-model"),
+                global_system_prompt="测试系统提示词",
+            ),
+        )
+
+        transcript = await ainit_live_session(engine=engine, config=config)
+        start_index = len(transcript.messages)
+        transcript = await arun_live_message(
+            engine=engine,
+            config=config,
+            transcript=transcript,
+            turn=Message(role="user", speaker="小王", content="hello"),
+        )
+
+        outgoing = extract_assistant_messages(transcript, since_index=start_index)
+        assert outgoing
+        assert all(m.role == "assistant" for m in outgoing)
+
+    asyncio.run(_run())
 
 
 

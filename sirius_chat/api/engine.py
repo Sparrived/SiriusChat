@@ -54,6 +54,19 @@ def find_user_by_channel_uid(
     return transcript.find_user_by_channel_uid(channel=channel, uid=uid)
 
 
+def extract_assistant_messages(
+    transcript: Transcript,
+    *,
+    since_index: int = 0,
+) -> list[Message]:
+    """Extract assistant messages only.
+
+    Useful for downstream delivery to avoid sending internal system notes.
+    """
+    start = max(0, int(since_index))
+    return [m for m in transcript.messages[start:] if m.role == "assistant"]
+
+
 __all__ = [
     "AsyncRolePlayEngine",
     "OnMessage",
@@ -61,4 +74,5 @@ __all__ = [
     "ainit_live_session",
     "arun_live_message",
     "find_user_by_channel_uid",
+    "extract_assistant_messages",
 ]

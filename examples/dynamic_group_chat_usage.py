@@ -1,7 +1,12 @@
 ﻿import asyncio
 from pathlib import Path
 
-from sirius_chat.api import AsyncRolePlayEngine, Message, create_session_config_from_selected_agent
+from sirius_chat.api import (
+    AsyncRolePlayEngine,
+    Message,
+    create_session_config_from_selected_agent,
+    extract_assistant_messages,
+)
 from sirius_chat.providers import OpenAICompatibleProvider
 
 
@@ -32,9 +37,8 @@ async def _run() -> None:
             session_reply_mode=turn.reply_mode,
             finalize_and_persist=False,
         )
-    for message in transcript.messages:
-        if message.speaker:
-            print(f"[{message.speaker}] {message.content}")
+    for message in extract_assistant_messages(transcript):
+        print(f"[{message.speaker}] {message.content}")
 
 
 if __name__ == "__main__":

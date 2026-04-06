@@ -95,6 +95,50 @@ def test_deepseek_provider_falls_back_to_reasoning_content() -> None:
     assert output == "先分析，再回答。"
 
 
+def test_deepseek_provider_accepts_content_as_structured_list() -> None:
+    provider = DeepSeekProvider(api_key="test-key")
+
+    with patch("sirius_chat.providers.deepseek.urllib_request.urlopen") as mocked_urlopen:
+        mocked_urlopen.return_value = _FakeResponse(
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": [
+                                {"type": "text", "text": "段落A"},
+                                {"type": "text", "text": "段落B"},
+                            ]
+                        }
+                    }
+                ]
+            }
+        )
+        output = provider.generate(_request())
+
+    assert output == "段落A\n段落B"
+
+
+def test_deepseek_provider_falls_back_to_refusal_when_present() -> None:
+    provider = DeepSeekProvider(api_key="test-key")
+
+    with patch("sirius_chat.providers.deepseek.urllib_request.urlopen") as mocked_urlopen:
+        mocked_urlopen.return_value = _FakeResponse(
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": "",
+                            "refusal": "暂时无法回答该请求",
+                        }
+                    }
+                ]
+            }
+        )
+        output = provider.generate(_request())
+
+    assert output == "暂时无法回答该请求"
+
+
 def test_deepseek_provider_raises_runtime_error_on_network_failure() -> None:
     provider = DeepSeekProvider(api_key="test-key")
 

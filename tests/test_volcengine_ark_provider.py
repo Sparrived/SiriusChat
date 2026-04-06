@@ -95,6 +95,50 @@ def test_volcengine_ark_provider_falls_back_to_reasoning_content() -> None:
     assert output == "先分析后回答。"
 
 
+def test_volcengine_ark_provider_accepts_content_as_structured_list() -> None:
+    provider = VolcengineArkProvider(api_key="test-key")
+
+    with patch("sirius_chat.providers.volcengine_ark.urllib_request.urlopen") as mocked_urlopen:
+        mocked_urlopen.return_value = _FakeResponse(
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": [
+                                {"type": "text", "text": "段落一"},
+                                {"type": "text", "text": "段落二"},
+                            ]
+                        }
+                    }
+                ]
+            }
+        )
+        output = provider.generate(_request())
+
+    assert output == "段落一\n段落二"
+
+
+def test_volcengine_ark_provider_falls_back_to_refusal_when_present() -> None:
+    provider = VolcengineArkProvider(api_key="test-key")
+
+    with patch("sirius_chat.providers.volcengine_ark.urllib_request.urlopen") as mocked_urlopen:
+        mocked_urlopen.return_value = _FakeResponse(
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": "",
+                            "refusal": "策略限制，暂不回答",
+                        }
+                    }
+                ]
+            }
+        )
+        output = provider.generate(_request())
+
+    assert output == "策略限制，暂不回答"
+
+
 def test_volcengine_ark_provider_raises_runtime_error_on_network_failure() -> None:
     provider = VolcengineArkProvider(api_key="test-key")
 

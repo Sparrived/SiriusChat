@@ -9,6 +9,7 @@ from sirius_chat.providers.base import (
     LLMProvider,
     estimate_generation_request_input_tokens,
 )
+from sirius_chat.providers.response_utils import extract_assistant_text
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +75,8 @@ class OpenAICompatibleProvider(LLMProvider):
             logger.error(f"[模型调用失败] {request.model} | 网络错误: {exc.reason}")
             raise RuntimeError(f"提供商网络错误：{exc.reason}") from exc
 
+        logger.debug(f"[模型原始响应] {request.model} | raw:\n{raw}")
+
         data = json.loads(raw)
         choices = data.get("choices", [])
         if not choices:
@@ -81,11 +84,17 @@ class OpenAICompatibleProvider(LLMProvider):
             raise RuntimeError("提供商响应中没有 choices。")
 
         message = choices[0].get("message", {})
-        content = message.get("content")
-        if not isinstance(content, str) or not content.strip():
-            logger.error(f"[模型调用失败] {request.model} | 响应为空")
+        if not isinstance(message, dict):
+            logger.error(f"[模型调用失败] {request.model} | message 字段无效")
+            raise RuntimeError("提供商响应中 message 字段无效。")
+
+        content = extract_assistant_text(message)
+        if not content:
+            logger.error(
+                f"[模型调用失败] {request.model} | 响应为空 | message_keys={list(message.keys())}"
+            )
             raise RuntimeError("提供商响应内容为空。")
         
         logger.info(f"[模型调用成功] {request.model} | 字数: {len(content)}")
         logger.debug(f"[模型输出] {request.model} | 响应内容:\n{content}")
-        return content.strip()
+        return content

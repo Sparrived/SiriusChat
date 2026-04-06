@@ -4,6 +4,7 @@ from sirius_chat.api.engine import (
     ainit_live_session,
     arun_live_message,
     create_async_engine,
+    extract_assistant_messages,
     find_user_by_channel_uid,
 )
 from sirius_chat.api.memory import (
@@ -117,6 +118,7 @@ __all__ = [
     "create_async_engine",
     "ainit_live_session",
     "arun_live_message",
+    "extract_assistant_messages",
     "find_user_by_channel_uid",
     "generate_humanized_roleplay_questions",
     "load_generated_agent_library",

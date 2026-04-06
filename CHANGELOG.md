@@ -4,6 +4,23 @@
 
 ## [Unreleased]
 
+## [0.5.8] - 2026-04-07
+
+### Added
+- **下游安全消息提取 API**
+  - 新增 `extract_assistant_messages(transcript, since_index=0)`，用于只提取 assistant 消息下发
+  - 更新示例代码，避免将 system 内部说明误发到聊天渠道
+- **OpenAI provider 测试覆盖补齐**
+  - 新增 `tests/test_openai_compatible_provider.py`
+
+### Changed
+- **Provider 响应解析兼容性增强**
+  - 新增统一解析工具 `providers/response_utils.py`
+  - `openai_compatible` / `siliconflow` / `deepseek` / `volcengine_ark` 统一支持结构化 `content`
+  - 支持 `refusal` / `output_text` 等字段回退，减少误判“响应为空”
+- **Provider DEBUG 日志增强**
+  - 在 DEBUG 级别新增“模型原始响应 raw”日志，便于线上排障
+
 ## [0.5.7] - 2026-04-07
 
 ### Added

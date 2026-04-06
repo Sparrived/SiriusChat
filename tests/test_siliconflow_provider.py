@@ -95,6 +95,50 @@ def test_siliconflow_provider_falls_back_to_reasoning_content() -> None:
     assert output == "先分析目标，再给出方案。"
 
 
+def test_siliconflow_provider_accepts_content_as_structured_list() -> None:
+    provider = SiliconFlowProvider(api_key="test-key")
+
+    with patch("sirius_chat.providers.siliconflow.urllib_request.urlopen") as mocked_urlopen:
+        mocked_urlopen.return_value = _FakeResponse(
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": [
+                                {"type": "text", "text": "第一段"},
+                                {"type": "text", "text": "第二段"},
+                            ]
+                        }
+                    }
+                ]
+            }
+        )
+        output = provider.generate(_request())
+
+    assert output == "第一段\n第二段"
+
+
+def test_siliconflow_provider_falls_back_to_refusal_when_present() -> None:
+    provider = SiliconFlowProvider(api_key="test-key")
+
+    with patch("sirius_chat.providers.siliconflow.urllib_request.urlopen") as mocked_urlopen:
+        mocked_urlopen.return_value = _FakeResponse(
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": "",
+                            "refusal": "当前问题暂时无法回答",
+                        }
+                    }
+                ]
+            }
+        )
+        output = provider.generate(_request())
+
+    assert output == "当前问题暂时无法回答"
+
+
 def test_siliconflow_provider_raises_runtime_error_on_network_failure() -> None:
     provider = SiliconFlowProvider(api_key="test-key")
 
