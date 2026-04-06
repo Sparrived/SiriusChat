@@ -4,6 +4,19 @@
 
 ## [Unreleased]
 
+## [0.5.9] - 2026-04-07
+
+### Changed
+- **chat_main system 消息注入策略调整**
+  - 将 transcript 内的 `system` 消息统一合并到首个 `system_prompt`
+  - `chat_main` 的 `messages` 不再携带中途 `role=system` 历史项
+  - 保留内部系统信息语义，同时降低模型对中途 system 行的复述倾向
+
+### Test
+- 新增回归测试，验证第二轮 `chat_main` 请求中：
+  - `messages` 无 `role=system`
+  - `system_prompt` 包含“会话内部系统补充”与事件说明
+
 ## [0.5.8] - 2026-04-07
 
 ### Added

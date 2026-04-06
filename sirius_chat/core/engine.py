@@ -1173,6 +1173,42 @@ class AsyncRolePlayEngine:
             return cleaned
         return "收到。"
 
+    @staticmethod
+    def _collect_internal_system_notes(transcript: Transcript) -> str:
+        notes: list[str] = []
+        for message in transcript.messages:
+            if message.role != "system":
+                continue
+            text = message.content.strip()
+            if text:
+                notes.append(text)
+        if not notes:
+            return ""
+        return "\n".join(notes)
+
+    def _build_chat_main_request_context(
+        self,
+        *,
+        config: SessionConfig,
+        transcript: Transcript,
+    ) -> tuple[str, list[dict[str, str]]]:
+        system_prompt = self._build_system_prompt(config, transcript)
+        internal_notes = self._collect_internal_system_notes(transcript)
+        if internal_notes:
+            system_prompt = (
+                f"{system_prompt}\n\n"
+                "[会话内部系统补充]\n"
+                "以下为引擎内部记录的系统上下文，用于辅助推理；"
+                "请勿在最终回复中逐字复述。\n"
+                f"{internal_notes}"
+            )
+
+        chat_history = [
+            item for item in transcript.as_chat_history()
+            if str(item.get("role", "")).strip().lower() != "system"
+        ]
+        return system_prompt, chat_history
+
     async def _generate_assistant_message(self, config: SessionConfig, transcript: Transcript) -> Message:
         if config.enable_auto_compression:
             transcript.compress_for_budget(
@@ -1182,11 +1218,15 @@ class AsyncRolePlayEngine:
         
         # 动态选择模型：有多模态输入时自动升级到多模态模型
         model = self._get_model_for_chat(config, transcript)
+        system_prompt, chat_history = self._build_chat_main_request_context(
+            config=config,
+            transcript=transcript,
+        )
         
         request_payload = GenerationRequest(
             model=model,
-            system_prompt=self._build_system_prompt(config, transcript),
-            messages=transcript.as_chat_history(),
+            system_prompt=system_prompt,
+            messages=chat_history,
             temperature=config.agent.temperature,
             max_tokens=config.agent.max_tokens,
             purpose="chat_main",

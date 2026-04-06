@@ -673,6 +673,46 @@ def test_run_live_session_reply_mode_auto_infers_when_to_reply() -> None:
     asyncio.run(_run())
 
 
+def test_chat_main_merges_system_messages_into_system_prompt() -> None:
+    async def _run() -> None:
+        provider = MockProvider(responses=["第一次回复", "第二次回复"])
+        engine = create_async_engine(provider)
+        config = SessionConfig(
+            work_path=Path("data/tests/chat_main_system_merge"),
+            preset=AgentPreset(
+                agent=Agent(name="主助手", persona="异步测试", model="mock-model"),
+                global_system_prompt="测试系统提示词",
+            ),
+            orchestration=OrchestrationPolicy(
+                unified_model="mock-model",
+                task_enabled={
+                    "memory_extract": False,
+                    "multimodal_parse": False,
+                    "event_extract": False,
+                },
+            ),
+        )
+
+        await _run_live_turns(
+            engine=engine,
+            config=config,
+            human_turns=[
+                Message(role="user", speaker="小王", content="今天有点奇怪。", reply_mode="always"),
+                Message(role="user", speaker="小王", content="你怎么看？", reply_mode="always"),
+            ],
+        )
+
+        chat_requests = [req for req in provider.requests if req.purpose == "chat_main"]
+        assert len(chat_requests) == 2
+        second_request = chat_requests[-1]
+
+        assert all(item.get("role") != "system" for item in second_request.messages)
+        assert "会话内部系统补充" in second_request.system_prompt
+        assert "事件记忆" in second_request.system_prompt
+
+    asyncio.run(_run())
+
+
 def test_run_live_session_reply_mode_auto_probability_fallback_can_trigger_reply() -> None:
     async def _run() -> None:
         provider = MockProvider(responses=["概率兜底触发回复"])
