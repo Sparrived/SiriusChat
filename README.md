@@ -9,7 +9,7 @@ Sirius Chat 是一个用于“多人用户与单 AI 主助手”交互场景的 
 - 库模式：在你的程序中直接调用框架 API。
 - CLI 模式：通过 JSON 配置文件运行会话。
 - 外部 LLM Provider：当前内置 OpenAI 兼容接口。
-- 外部 LLM Provider：内置 OpenAI 兼容接口，并提供 SiliconFlow 专用快捷适配。
+- 外部 LLM Provider：内置 OpenAI 兼容接口，并提供 DeepSeek、SiliconFlow、Volcengine Ark 专用快捷适配。
 - Provider 管理：支持多平台 API Key 持久化，按模型自动路由到已配置 provider。
 - 动态群聊模式：参与者可运行时出现，主 AI 自动维护识人记忆。
 
@@ -133,6 +133,20 @@ SiliconFlow 配置示例：
 }
 ```
 
+DeepSeek 配置示例：
+
+```json
+{
+  "providers": [
+    {
+      "type": "deepseek",
+      "api_key": "YOUR_DEEPSEEK_API_KEY"
+    }
+  ],
+  "generated_agent_key": "main_agent"
+}
+```
+
 火山方舟（Volcengine Ark）配置示例：
 
 ```json
@@ -159,6 +173,12 @@ SiliconFlow 配置示例：
 - `provider.type` 设为 `siliconflow` 时，默认使用 `https://api.siliconflow.cn`。
 - 若你填入 `https://api.siliconflow.cn/v1` 也可正常工作，框架会自动规范化路径。
 - 该适配走 OpenAI 兼容路径（`/v1/chat/completions`）。
+
+说明：
+
+- `provider.type` 设为 `deepseek` 时，默认使用 `https://api.deepseek.com`。
+- 若你填入 `https://api.deepseek.com/v1` 也可正常工作，框架会自动规范化路径。
+- 接口路径使用 `POST /chat/completions`（兼容 OpenAI 格式消息体）。
 
 多 provider 自动路由示例：
 

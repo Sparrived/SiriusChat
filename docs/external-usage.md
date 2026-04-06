@@ -186,6 +186,22 @@ provider = SiliconFlowProvider(
 - 若外部配置传入 `https://api.siliconflow.cn/v1` 也可兼容，内部会自动规范化。
 - 接口路径遵循 OpenAI 兼容的 `/v1/chat/completions`。
 
+若使用 DeepSeek，可使用：
+
+```python
+from sirius_chat.api import DeepSeekProvider
+
+provider = DeepSeekProvider(
+    api_key="YOUR_DEEPSEEK_API_KEY",
+)
+```
+
+说明：
+
+- `DeepSeekProvider` 默认基地址为 `https://api.deepseek.com`。
+- 若外部配置传入 `https://api.deepseek.com/v1` 也可兼容，内部会自动规范化。
+- 接口路径为 `POST /chat/completions`，请求体格式与 OpenAI 兼容。
+
 若使用火山方舟，可使用：
 
 ```python

@@ -39,8 +39,9 @@ description: "当你需要在不通读全部代码的情况下快速理解 Siriu
 18. `sirius_chat/providers/openai_compatible.py`
 19. `sirius_chat/providers/siliconflow.py`
 20. `sirius_chat/providers/volcengine_ark.py`
-21. `sirius_chat/providers/routing.py`
-22. `sirius_chat/user_memory.py`
+21. `sirius_chat/providers/deepseek.py`
+22. `sirius_chat/providers/routing.py`
+23. `sirius_chat/user_memory.py`
 23. `sirius_chat/performance/` ✨ (P2-002 性能监控)
 24. `sirius_chat/cli.py`
 25. `sirius_chat/api/`
@@ -117,7 +118,7 @@ description: "当你需要在不通读全部代码的情况下快速理解 Siriu
 - `providers/mock.py` 提供可复现的本地测试能力。
 - `providers/*` 实现具体的 LLM 后端。
 - `roleplay_prompting.py` 提供自动问题清单、回答提取式提示词生成、人格持久化与人格选择能力。
-- 内置 provider 包含 `OpenAICompatibleProvider`、`SiliconFlowProvider` 与 `VolcengineArkProvider`。
+- 内置 provider 包含 `OpenAICompatibleProvider`、`DeepSeekProvider`、`SiliconFlowProvider` 与 `VolcengineArkProvider`。
 - 若配置了多 provider，`AutoRoutingProvider` 会按模型前缀自动选择可用 provider。
 - `cli.py` 是库内薄封装，仅负责调用 `api` 执行单轮会话。
 - `api/` 是统一对外接口文件；外部调用优先使用该文件暴露的 API。

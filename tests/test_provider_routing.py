@@ -112,9 +112,11 @@ def test_get_supported_provider_platforms_contains_core_platforms() -> None:
     platforms = get_supported_provider_platforms()
 
     assert "siliconflow" in platforms
+    assert "deepseek" in platforms
     assert "openai-compatible" in platforms
     assert "volcengine-ark" in platforms
     assert platforms["siliconflow"]["default_base_url"] == "https://api.siliconflow.cn"
+    assert platforms["deepseek"]["default_base_url"] == "https://api.deepseek.com"
     assert platforms["volcengine-ark"]["default_base_url"] == "https://ark.cn-beijing.volces.com/api/v3"
 
 
@@ -141,6 +143,31 @@ def test_auto_routing_provider_prefers_ark_for_doubao_model() -> None:
 
     assert output == "ark-ok"
     assert ark_generate.call_count == 1
+
+
+def test_auto_routing_provider_prefers_deepseek_for_deepseek_model() -> None:
+    routing = AutoRoutingProvider(
+        {
+            "deepseek": ProviderConfig(
+                provider_type="deepseek",
+                api_key="deepseek-key",
+                base_url="",
+                healthcheck_model="",
+            ),
+            "openai-compatible": ProviderConfig(
+                provider_type="openai-compatible",
+                api_key="openai-key",
+                base_url="",
+                healthcheck_model="",
+            ),
+        }
+    )
+
+    with patch("sirius_chat.providers.routing.DeepSeekProvider.generate", return_value="deepseek-ok") as ds_generate:
+        output = routing.generate(_request("deepseek-chat"))
+
+    assert output == "deepseek-ok"
+    assert ds_generate.call_count == 1
 
 
 def test_probe_provider_availability_passes_on_non_empty_response() -> None:

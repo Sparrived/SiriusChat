@@ -1,4 +1,5 @@
 from sirius_chat.providers.base import GenerationRequest, LLMProvider
+from sirius_chat.providers.deepseek import DeepSeekProvider
 from sirius_chat.providers.mock import MockProvider
 from sirius_chat.providers.openai_compatible import OpenAICompatibleProvider
 from sirius_chat.providers.routing import (
@@ -20,6 +21,7 @@ __all__ = [
 	"GenerationRequest",
 	"LLMProvider",
 	"MockProvider",
+	"DeepSeekProvider",
 	"OpenAICompatibleProvider",
 	"ProviderConfig",
 	"ProviderRegistry",

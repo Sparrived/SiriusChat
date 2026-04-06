@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from sirius_chat.providers.base import GenerationRequest, LLMProvider
+from sirius_chat.providers.deepseek import DeepSeekProvider
 from sirius_chat.providers.openai_compatible import OpenAICompatibleProvider
 from sirius_chat.providers.siliconflow import SiliconFlowProvider
 from sirius_chat.providers.volcengine_ark import VolcengineArkProvider
@@ -12,6 +13,7 @@ from sirius_chat.providers.volcengine_ark import VolcengineArkProvider
 PROVIDER_KEYS_FILE = "provider_keys.json"
 
 _OPENAI_PROVIDER_TYPES = {"openai", "openai-compatible"}
+_DEEPSEEK_PROVIDER_TYPES = {"deepseek"}
 _SILICONFLOW_PROVIDER_TYPES = {"siliconflow"}
 _VOLCENGINE_ARK_PROVIDER_TYPES = {"volcengine-ark", "ark"}
 
@@ -19,6 +21,10 @@ _SUPPORTED_PROVIDER_PLATFORMS: dict[str, dict[str, str]] = {
     "openai-compatible": {
         "default_base_url": "https://api.openai.com",
         "notes": "OpenAI-compatible chat completions endpoint",
+    },
+    "deepseek": {
+        "default_base_url": "https://api.deepseek.com",
+        "notes": "DeepSeek chat completions endpoint (OpenAI-compatible format)",
     },
     "siliconflow": {
         "default_base_url": "https://api.siliconflow.cn",
@@ -185,6 +191,8 @@ class AutoRoutingProvider(LLMProvider):
     def _create_provider(self, config: ProviderConfig) -> LLMProvider:
         if config.provider_type in _SILICONFLOW_PROVIDER_TYPES:
             return SiliconFlowProvider(api_key=config.api_key, base_url=config.base_url or "https://api.siliconflow.cn")
+        if config.provider_type in _DEEPSEEK_PROVIDER_TYPES:
+            return DeepSeekProvider(api_key=config.api_key, base_url=config.base_url or "https://api.deepseek.com")
         if config.provider_type in _VOLCENGINE_ARK_PROVIDER_TYPES:
             return VolcengineArkProvider(
                 api_key=config.api_key,
@@ -205,6 +213,8 @@ class AutoRoutingProvider(LLMProvider):
         # Heuristic fallback for common model namespaces.
         if "/" in model and any(key in self._providers for key in _SILICONFLOW_PROVIDER_TYPES):
             return self._providers["siliconflow"]
+        if model.startswith("deepseek-") and any(key in self._providers for key in _DEEPSEEK_PROVIDER_TYPES):
+            return self._providers["deepseek"]
         if model.startswith("doubao-") and any(key in self._providers for key in _VOLCENGINE_ARK_PROVIDER_TYPES):
             # Doubao models are commonly served by Volcengine Ark endpoints.
             return self._providers["volcengine-ark"] if "volcengine-ark" in self._providers else self._providers["ark"]
@@ -241,6 +251,8 @@ def _create_provider_from_config(config: ProviderConfig) -> LLMProvider:
     provider_type = ensure_provider_platform_supported(config.provider_type)
     if provider_type in _SILICONFLOW_PROVIDER_TYPES:
         return SiliconFlowProvider(api_key=config.api_key, base_url=config.base_url or "https://api.siliconflow.cn")
+    if provider_type in _DEEPSEEK_PROVIDER_TYPES:
+        return DeepSeekProvider(api_key=config.api_key, base_url=config.base_url or "https://api.deepseek.com")
     if provider_type in _VOLCENGINE_ARK_PROVIDER_TYPES:
         return VolcengineArkProvider(
             api_key=config.api_key,

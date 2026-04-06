@@ -1,5 +1,6 @@
 from sirius_chat.providers import (
     AutoRoutingProvider,
+    DeepSeekProvider,
     MockProvider,
     OpenAICompatibleProvider,
     ProviderConfig,
@@ -18,6 +19,7 @@ from sirius_chat.providers.base import AsyncLLMProvider, LLMProvider
 
 __all__ = [
     "AutoRoutingProvider",
+    "DeepSeekProvider",
     "MockProvider",
     "OpenAICompatibleProvider",
     "ProviderConfig",

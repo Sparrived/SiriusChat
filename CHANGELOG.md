@@ -4,6 +4,24 @@
 
 ## [Unreleased]
 
+## [0.5.7] - 2026-04-07
+
+### Added
+- **DeepSeek provider 适配**
+  - 新增 `DeepSeekProvider`，默认基地址 `https://api.deepseek.com`
+  - 兼容传入 `https://api.deepseek.com/v1` 的 base_url 规范化
+  - 支持 `reasoning_content` 回退解析
+- **DeepSeek 示例配置**
+  - 新增 `examples/session.deepseek.json`，可直接用于 DeepSeek 快速接入
+
+### Changed
+- **Provider 路由增强**
+  - 自动路由新增 `deepseek` 平台与模型前缀识别
+  - 支持平台清单增加 `deepseek`
+
+### Docs
+- 更新 README、架构文档、外部接入文档与相关 SKILL，补充 DeepSeek 使用方式
+
 ## [0.5.6] - 2026-04-06
 
 ### Added
