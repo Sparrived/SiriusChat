@@ -79,6 +79,20 @@ class OrchestrationPolicy:
     # Memory Extract frequency control (避免调用过于频繁导致内容碎片化)
     memory_extract_batch_size: int = 1  # 每隔N条消息执行一次提取（1=每次，3=每3条）
     memory_extract_min_content_length: int = 0  # 最小内容长度阈值（字符数），0=无限制
+
+    # Reply willingness configuration (auto reply mode)
+    session_reply_mode: str = "always"  # auto|always|never
+    auto_reply_base_score: float = 0.22
+    auto_reply_threshold: float = 0.58
+    auto_reply_threshold_min: float = 0.40
+    auto_reply_threshold_max: float = 0.72
+    auto_reply_threshold_boost_start_count: int = 4
+    auto_reply_probability_coefficient: float = 0.35
+    auto_reply_probability_floor: float = 0.05
+    auto_reply_user_cadence_seconds: float = 7.0
+    auto_reply_group_window_seconds: float = 8.0
+    auto_reply_group_penalty_start_count: int = 2
+    auto_reply_assistant_cooldown_seconds: float = 12.0
     
     def validate(self) -> None:
         """Validate configuration legitimacy."""
@@ -94,6 +108,50 @@ class OrchestrationPolicy:
                 "and task_models (approach 2) cannot be specified simultaneously. "
                 "Please choose one approach."
             )
+
+        if self.memory_extract_batch_size <= 0:
+            raise ValueError("memory_extract_batch_size 必须大于 0。")
+        if self.memory_extract_min_content_length < 0:
+            raise ValueError("memory_extract_min_content_length 不能小于 0。")
+
+        normalized_reply_mode = self.session_reply_mode.strip().lower()
+        if normalized_reply_mode not in {
+            "auto",
+            "smart",
+            "always",
+            "never",
+            "silent",
+            "none",
+            "no_reply",
+        }:
+            raise ValueError(
+                "session_reply_mode 仅支持 auto/smart/always/never/silent/none/no_reply。"
+            )
+
+        if not 0.0 <= self.auto_reply_base_score <= 1.0:
+            raise ValueError("auto_reply_base_score 必须在 [0,1] 范围内。")
+        if not 0.0 <= self.auto_reply_threshold <= 1.0:
+            raise ValueError("auto_reply_threshold 必须在 [0,1] 范围内。")
+        if not 0.0 <= self.auto_reply_threshold_min <= 1.0:
+            raise ValueError("auto_reply_threshold_min 必须在 [0,1] 范围内。")
+        if not 0.0 <= self.auto_reply_threshold_max <= 1.0:
+            raise ValueError("auto_reply_threshold_max 必须在 [0,1] 范围内。")
+        if self.auto_reply_threshold_min > self.auto_reply_threshold_max:
+            raise ValueError("auto_reply_threshold_min 不能大于 auto_reply_threshold_max。")
+        if self.auto_reply_threshold_boost_start_count < 0:
+            raise ValueError("auto_reply_threshold_boost_start_count 不能小于 0。")
+        if not 0.0 <= self.auto_reply_probability_coefficient <= 1.0:
+            raise ValueError("auto_reply_probability_coefficient 必须在 [0,1] 范围内。")
+        if not 0.0 <= self.auto_reply_probability_floor <= 1.0:
+            raise ValueError("auto_reply_probability_floor 必须在 [0,1] 范围内。")
+        if self.auto_reply_user_cadence_seconds <= 0:
+            raise ValueError("auto_reply_user_cadence_seconds 必须大于 0。")
+        if self.auto_reply_group_window_seconds <= 0:
+            raise ValueError("auto_reply_group_window_seconds 必须大于 0。")
+        if self.auto_reply_group_penalty_start_count < 0:
+            raise ValueError("auto_reply_group_penalty_start_count 不能小于 0。")
+        if self.auto_reply_assistant_cooldown_seconds <= 0:
+            raise ValueError("auto_reply_assistant_cooldown_seconds 必须大于 0。")
 
 
 @dataclass(slots=True)

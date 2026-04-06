@@ -53,9 +53,13 @@ def test_generated_prompt_is_used_by_engine() -> None:
             answers=[RolePlayAnswer(question="沟通风格", answer="先共情，再给结构化步骤")],
             persona_key="assistant_v1",
         )
-        await engine.run_live_session(
+        transcript = await engine.run_live_session(config=config)
+        await engine.run_live_message(
             config=config,
-            human_turns=[Message(role="user", speaker="小王", content="hello")],
+            transcript=transcript,
+            turn=Message(role="user", speaker="小王", content="hello"),
+            session_reply_mode="always",
+            finalize_and_persist=False,
         )
 
         assert "先共情后给行动项" in provider.requests[1].system_prompt

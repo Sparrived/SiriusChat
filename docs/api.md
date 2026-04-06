@@ -23,9 +23,13 @@
 
 Create an async roleplay engine for non-blocking integration.
 
-#### `async arun_live_session(engine: AsyncRolePlayEngine, config: SessionConfig, human_turns: list[Message], on_message: OnMessage | None, transcript: Transcript | None) -> Transcript`
+#### `async ainit_live_session(engine: AsyncRolePlayEngine, config: SessionConfig, transcript: Transcript | None) -> Transcript`
 
-Async facade for dynamic live session runs.
+Async facade for live session initialization.
+
+#### `async arun_live_message(engine: AsyncRolePlayEngine, config: SessionConfig, turn: Message, on_message: OnMessage | None, transcript: Transcript | None) -> Transcript`
+
+Async facade for single-message live processing.
 
 #### `find_user_by_channel_uid(transcript: Transcript, channel: str, uid: str) -> UserMemoryEntry | None`
 

@@ -62,7 +62,12 @@ description: "当你需要在不通读全部代码的情况下快速理解 Siriu
   - 无多媒体数据时使用 `Agent.model`（廉价文本模型，如 `"gpt-4o-mini"`）
   - 检测到多媒体数据时自动升级至 `agent.metadata["multimodal_model"]`
   - 提供便捷配置：`create_agent_with_multimodal(...)` 一次性创建，或 `auto_configure_multimodal_agent(...)` 灵活配置
-- `run_live_session` 支持动态参与者与识人记忆。
+- `run_live_session` 负责会话初始化；动态参与者与逐条消息处理通过 `run_live_message` 完成。
+- `Message.reply_mode` 可按消息控制回复策略：`always`（默认）/`never`（仅写入记忆与 transcript）/`auto`（自动推断是否回复）。
+- 推荐在实时流式接入时使用 `run_live_message` 逐条处理消息；`run_live_session(...)` 用于一次性会话初始化。
+- `run_live_message` 默认使用会话级 `session_reply_mode`，将回复策略从消息级提升为 session 级。
+- `reply_mode=auto` 已升级为多维意愿分系统，参数由 `OrchestrationPolicy` 提供：`auto_reply_user_cadence_seconds`、`auto_reply_group_window_seconds`、`auto_reply_group_penalty_start_count`、`auto_reply_assistant_cooldown_seconds`、`auto_reply_threshold`、`auto_reply_threshold_boost_start_count` 等。
+- `run_live_session` 的节奏临时状态已挂载到 `Transcript.reply_runtime`，跨调用复用 transcript 时可保持节奏连续性。
 - `user_memory.py` 负责用户身份识别（user_id/aliases/identities）与结构化用户记忆。
 - 用户记忆分为 `profile`（初始化字段）与 `runtime`（运行时可变字段）。
 - `runtime.memory_facts` 是结构化分类记忆，每个记忆包含：

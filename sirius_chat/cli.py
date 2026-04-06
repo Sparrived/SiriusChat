@@ -164,18 +164,18 @@ def main(
         print_func("未输入消息，已退出。")
         return 0
 
+    transcript = asyncio.run(engine.run_live_session(config=session_config))
     transcript = asyncio.run(
-        engine.run_live_session(
+        engine.run_live_message(
             config=session_config,
-            human_turns=[
-                Message(
-                    role="user",
-                    speaker=args.speaker,
-                    content=user_text,
-                    channel=(args.channel or DEFAULT_CLI_CHANNEL).strip().lower(),
-                    channel_user_id=(args.channel_user_id.strip() or args.speaker),
-                )
-            ],
+            transcript=transcript,
+            turn=Message(
+                role="user",
+                speaker=args.speaker,
+                content=user_text,
+                channel=(args.channel or DEFAULT_CLI_CHANNEL).strip().lower(),
+                channel_user_id=(args.channel_user_id.strip() or args.speaker),
+            ),
         )
     )
 

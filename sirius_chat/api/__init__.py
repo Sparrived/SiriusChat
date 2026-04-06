@@ -1,7 +1,8 @@
 from sirius_chat.api.engine import (
     AsyncRolePlayEngine,
     OnMessage,
-    arun_live_session,
+    ainit_live_session,
+    arun_live_message,
     create_async_engine,
     find_user_by_channel_uid,
 )
@@ -114,7 +115,8 @@ __all__ = [
     "AsyncLLMProvider",
     "OnMessage",
     "create_async_engine",
-    "arun_live_session",
+    "ainit_live_session",
+    "arun_live_message",
     "find_user_by_channel_uid",
     "generate_humanized_roleplay_questions",
     "load_generated_agent_library",

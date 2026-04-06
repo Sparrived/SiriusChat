@@ -4,6 +4,18 @@
 
 ## [Unreleased]
 
+## [0.5.5] - 2026-04-06
+
+### Added
+- **auto 回复概率决策日志增强**
+  - 新增 `[会话] 触发回复` 日志，输出 `trigger`（`threshold` 或 `probability_fallback`）
+  - 输出 `score`、`threshold`、`probability`、`roll`，便于在线调参与回放分析
+
+### Changed
+- **意愿系统概率兜底补齐**
+  - 在分数未过阈值时，按 `auto_reply_probability_coefficient` 与 `auto_reply_probability_floor` 计算兜底回复概率
+  - 保持 `session_reply_mode=auto` 下的长期参与性，降低连续沉默概率
+
 ## [0.5.4] - 2026-04-06
 
 ### Added

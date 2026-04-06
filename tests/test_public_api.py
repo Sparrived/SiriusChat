@@ -6,7 +6,8 @@ from sirius_chat.api import (
     AgentPreset,
     Message,
     SessionConfig,
-    arun_live_session,
+    ainit_live_session,
+    arun_live_message,
     create_async_engine,
     find_user_by_channel_uid,
     probe_provider_availability,
@@ -28,18 +29,21 @@ def test_public_api_live_session_and_identity_lookup() -> None:
             ),
         )
 
-        transcript = await arun_live_session(
+        transcript = await ainit_live_session(
             engine=engine,
             config=config,
-            human_turns=[
-                Message(
-                    role="user",
-                    speaker="微信昵称",
-                    content="hello",
-                    channel="wechat",
-                    channel_user_id="wx_1",
-                )
-            ],
+        )
+        transcript = await arun_live_message(
+            engine=engine,
+            config=config,
+            transcript=transcript,
+            turn=Message(
+                role="user",
+                speaker="微信昵称",
+                content="hello",
+                channel="wechat",
+                channel_user_id="wx_1",
+            ),
         )
 
         entry = find_user_by_channel_uid(transcript, channel="wechat", uid="wx_1")
@@ -70,10 +74,15 @@ def test_public_api_async_facade() -> None:
             ),
         )
 
-        transcript = await arun_live_session(
+        transcript = await ainit_live_session(
             engine=engine,
             config=config,
-            human_turns=[Message(role="user", speaker="小王", content="hello")],
+        )
+        transcript = await arun_live_message(
+            engine=engine,
+            config=config,
+            transcript=transcript,
+            turn=Message(role="user", speaker="小王", content="hello"),
         )
         assert transcript.messages[-1].content == "ok-async"
 

@@ -16,6 +16,18 @@ class Message:
     channel: str | None = None
     channel_user_id: str | None = None
     multimodal_inputs: list[dict[str, str]] = field(default_factory=list)
+    # 回复策略：always(默认总是回复) / never(只记忆不回复) / auto(自动判断是否需要回复)
+    reply_mode: str = "always"
+
+
+@dataclass(slots=True)
+class ReplyRuntimeState:
+    # 按用户记录最近一次发言时间（ISO 8601）
+    user_last_turn_at: dict[str, str] = field(default_factory=dict)
+    # 群聊窗口内消息时间序列（ISO 8601）
+    group_recent_turn_timestamps: list[str] = field(default_factory=list)
+    # 最近一次 AI 回复时间（ISO 8601）
+    last_assistant_reply_at: str = ""
 
 
 @dataclass(slots=True)
@@ -69,6 +81,7 @@ User = Participant
 class Transcript:
     messages: list[Message] = field(default_factory=list)
     user_memory: UserMemoryManager = field(default_factory=UserMemoryManager)
+    reply_runtime: ReplyRuntimeState = field(default_factory=ReplyRuntimeState)
     session_summary: str = ""
     orchestration_stats: dict[str, dict[str, int]] = field(default_factory=dict)
     token_usage_records: list[TokenUsageRecord] = field(default_factory=list)
@@ -151,10 +164,16 @@ class Transcript:
                     "channel": item.channel,
                     "channel_user_id": item.channel_user_id,
                     "multimodal_inputs": item.multimodal_inputs,
+                    "reply_mode": item.reply_mode,
                 }
                 for item in self.messages
             ],
             "user_memory": self.user_memory.to_dict(),
+            "reply_runtime": {
+                "user_last_turn_at": dict(self.reply_runtime.user_last_turn_at),
+                "group_recent_turn_timestamps": list(self.reply_runtime.group_recent_turn_timestamps),
+                "last_assistant_reply_at": self.reply_runtime.last_assistant_reply_at,
+            },
             "session_summary": self.session_summary,
             "orchestration_stats": self.orchestration_stats,
             "token_usage_records": [
@@ -185,6 +204,7 @@ class Transcript:
                     channel=item.get("channel"),
                     channel_user_id=item.get("channel_user_id"),
                     multimodal_inputs=list(item.get("multimodal_inputs", [])),
+                    reply_mode=str(item.get("reply_mode", "always")),
                 )
                 for item in payload.get("messages", [])
             ],
@@ -223,6 +243,20 @@ class Transcript:
                         content=text,
                         max_recent_messages=64,
                     )
+
+        reply_runtime_data = payload.get("reply_runtime", {})
+        if isinstance(reply_runtime_data, dict):
+            user_last_turn_at = reply_runtime_data.get("user_last_turn_at", {})
+            group_recent_turn_timestamps = reply_runtime_data.get("group_recent_turn_timestamps", [])
+            transcript.reply_runtime = ReplyRuntimeState(
+                user_last_turn_at=dict(user_last_turn_at)
+                if isinstance(user_last_turn_at, dict)
+                else {},
+                group_recent_turn_timestamps=list(group_recent_turn_timestamps)
+                if isinstance(group_recent_turn_timestamps, list)
+                else [],
+                last_assistant_reply_at=str(reply_runtime_data.get("last_assistant_reply_at", "")).strip(),
+            )
         return transcript
 
     def as_chat_history(self) -> list[dict[str, str]]:

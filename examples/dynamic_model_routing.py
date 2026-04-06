@@ -103,15 +103,15 @@ async def main() -> None:
     print("\n" + "=" * 60)
     print("Scenario 1: Plain text query (uses gpt-4o-mini)")
     print("=" * 60)
-    transcript = await engine.run_live_session(
+    transcript = await engine.run_live_session(config=config)
+    transcript = await engine.run_live_message(
         config=config,
-        human_turns=[
-            Message(
-                role="user",
-                speaker="User",
-                content="What are the main differences between Python and JavaScript?",
-            )
-        ],
+        transcript=transcript,
+        turn=Message(
+            role="user",
+            speaker="User",
+            content="What are the main differences between Python and JavaScript?",
+        ),
     )
     for msg in transcript.messages:
         if msg.role == "assistant":
@@ -125,21 +125,21 @@ async def main() -> None:
     print("=" * 60)
     print("Scenario 2: Query with image (auto-upgrades to gpt-4o)")
     print("=" * 60)
-    transcript = await engine.run_live_session(
+    transcript = await engine.run_live_session(config=config)
+    transcript = await engine.run_live_message(
         config=config,
-        human_turns=[
-            Message(
-                role="user",
-                speaker="User",
-                content="Please analyze this architecture diagram and explain the components",
-                multimodal_inputs=[
-                    {
-                        "type": "image",
-                        "value": "https://example.com/architecture.png",
-                    }
-                ],
-            )
-        ],
+        transcript=transcript,
+        turn=Message(
+            role="user",
+            speaker="User",
+            content="Please analyze this architecture diagram and explain the components",
+            multimodal_inputs=[
+                {
+                    "type": "image",
+                    "value": "https://example.com/architecture.png",
+                }
+            ],
+        ),
     )
     for msg in transcript.messages:
         if msg.role == "assistant":
@@ -153,19 +153,19 @@ async def main() -> None:
     print("=" * 60)
     print("Scenario 3: Multiple images comparison")
     print("=" * 60)
-    transcript = await engine.run_live_session(
+    transcript = await engine.run_live_session(config=config)
+    transcript = await engine.run_live_message(
         config=config,
-        human_turns=[
-            Message(
-                role="user",
-                speaker="User",
-                content="Compare these two interface designs. Which one is better and why?",
-                multimodal_inputs=[
-                    {"type": "image", "value": "https://example.com/design-v1.png"},
-                    {"type": "image", "value": "https://example.com/design-v2.png"},
-                ],
-            )
-        ],
+        transcript=transcript,
+        turn=Message(
+            role="user",
+            speaker="User",
+            content="Compare these two interface designs. Which one is better and why?",
+            multimodal_inputs=[
+                {"type": "image", "value": "https://example.com/design-v1.png"},
+                {"type": "image", "value": "https://example.com/design-v2.png"},
+            ],
+        ),
     )
     for msg in transcript.messages:
         if msg.role == "assistant":

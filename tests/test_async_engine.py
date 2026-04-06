@@ -10,6 +10,27 @@ from sirius_chat.providers.mock import MockProvider
 from sirius_chat.memory import UserMemoryManager, UserProfile
 
 
+async def _run_live_turns(
+    *,
+    engine,
+    config: SessionConfig,
+    human_turns: list[Message],
+    transcript=None,
+    on_message=None,
+):
+    transcript = await engine.run_live_session(config=config, transcript=transcript)
+    for index, turn in enumerate(human_turns):
+        transcript = await engine.run_live_message(
+            config=config,
+            turn=turn,
+            on_message=on_message,
+            transcript=transcript,
+            session_reply_mode=turn.reply_mode,
+            finalize_and_persist=index == len(human_turns) - 1,
+        )
+    return transcript
+
+
 def test_async_engine_runs_live_session() -> None:
     """Test async engine basic functionality.
     
@@ -27,6 +48,7 @@ def test_async_engine_runs_live_session() -> None:
             ),
             orchestration=OrchestrationPolicy(
                 unified_model="mock-model",
+                auto_reply_probability_coefficient=0.0,
                 task_enabled={
                     "memory_extract": False,
                     "multimodal_parse": False,
@@ -35,7 +57,7 @@ def test_async_engine_runs_live_session() -> None:
             ),
         )
 
-        transcript = await engine.run_live_session(
+        transcript = await _run_live_turns(engine=engine, 
             config=config,
             human_turns=[Message(role="user", speaker="小王", content="我是产品经理，你可以叫我老王，关注成本和灰度节奏")],
         )
@@ -101,7 +123,7 @@ def test_async_engine_does_not_block_event_loop_for_sync_provider() -> None:
                 ticks.append(i)
 
         session_task = asyncio.create_task(
-            engine.run_live_session(
+            _run_live_turns(engine=engine, 
                 config=config,
                 human_turns=[Message(role="user", speaker="A", content="hello")],
             )
@@ -161,7 +183,7 @@ def test_async_engine_memory_extract_task_uses_aux_model() -> None:
             ),
         )
 
-        transcript = await engine.run_live_session(
+        transcript = await _run_live_turns(engine=engine, 
             config=config,
             human_turns=[Message(role="user", speaker="小王", content="我是运营，关注灰度节奏")],
         )
@@ -208,7 +230,7 @@ def test_async_engine_memory_extract_task_skips_when_budget_exceeded() -> None:
             ),
         )
 
-        transcript = await engine.run_live_session(
+        transcript = await _run_live_turns(engine=engine, 
             config=config,
             human_turns=[Message(role="user", speaker="小王", content="我是产品经理，关注成本")],
         )
@@ -254,7 +276,7 @@ def test_async_engine_multimodal_parse_task_injects_evidence_message() -> None:
             ),
         )
 
-        transcript = await engine.run_live_session(
+        transcript = await _run_live_turns(engine=engine, 
             config=config,
             human_turns=[
                 Message(
@@ -304,7 +326,7 @@ def test_async_engine_multimodal_parse_task_skips_when_budget_exceeded() -> None
             ),
         )
 
-        transcript = await engine.run_live_session(
+        transcript = await _run_live_turns(engine=engine, 
             config=config,
             human_turns=[
                 Message(
@@ -357,7 +379,7 @@ def test_async_engine_task_retry_can_recover_from_transient_failure() -> None:
             ),
         )
 
-        transcript = await engine.run_live_session(
+        transcript = await _run_live_turns(engine=engine, 
             config=config,
             human_turns=[Message(role="user", speaker="小王", content="我是运营")],
         )
@@ -402,7 +424,7 @@ def test_async_engine_multimodal_validation_filters_and_truncates_inputs() -> No
             ),
         )
 
-        await engine.run_live_session(
+        await _run_live_turns(engine=engine, 
             config=config,
             human_turns=[
                 Message(
@@ -449,7 +471,7 @@ def test_async_engine_records_token_usage_for_task_and_main_calls() -> None:
             ),
         )
 
-        transcript = await engine.run_live_session(
+        transcript = await _run_live_turns(engine=engine, 
             config=config,
             human_turns=[Message(role="user", speaker="小王", content="我是运营")],
         )
@@ -481,7 +503,7 @@ def test_async_engine_event_memory_add_and_hit_across_sessions() -> None:
         )
 
         engine1 = create_async_engine(MockProvider(responses=["第一轮回复"]))
-        transcript1 = await engine1.run_live_session(
+        transcript1 = await _run_live_turns(engine=engine1, 
             config=config,
             human_turns=[
                 Message(
@@ -494,7 +516,7 @@ def test_async_engine_event_memory_add_and_hit_across_sessions() -> None:
         assert any("事件记忆新增[小王]" in item.content for item in transcript1.messages if item.role == "system")
 
         engine2 = create_async_engine(MockProvider(responses=["第二轮回复"]))
-        transcript2 = await engine2.run_live_session(
+        transcript2 = await _run_live_turns(engine=engine2, 
             config=config,
             human_turns=[
                 Message(
@@ -559,7 +581,7 @@ def test_async_engine_event_extract_task_enriches_event_features() -> None:
             ),
         )
 
-        await engine.run_live_session(
+        await _run_live_turns(engine=engine, 
             config=config,
             human_turns=[Message(role="user", speaker="小王", content="这周老板说项目A预算要收紧，发布可能延期")],
         )
@@ -571,6 +593,317 @@ def test_async_engine_event_extract_task_enriches_event_features() -> None:
         first = payload["entries"][0]
         assert "预算收紧" in first.get("keywords", [])
         assert "发布延期" in first.get("keywords", [])
+
+    asyncio.run(_run())
+
+
+def test_run_live_session_reply_mode_never_updates_memory_without_reply() -> None:
+    async def _run() -> None:
+        provider = MockProvider(responses=["不应被调用"])
+        engine = create_async_engine(provider)
+        config = SessionConfig(
+            work_path=Path("data/tests/reply_mode_never"),
+            preset=AgentPreset(
+                agent=Agent(name="主助手", persona="异步测试", model="mock-model"),
+                global_system_prompt="测试系统提示词",
+            ),
+            orchestration=OrchestrationPolicy(
+                unified_model="mock-model",
+                auto_reply_probability_coefficient=0.0,
+                task_enabled={
+                    "memory_extract": False,
+                    "multimodal_parse": False,
+                    "event_extract": False,
+                },
+            ),
+        )
+
+        transcript = await _run_live_turns(engine=engine, 
+            config=config,
+            human_turns=[
+                Message(
+                    role="user",
+                    speaker="小王",
+                    content="这条消息只用于记忆，不需要回复。",
+                    reply_mode="never",
+                )
+            ],
+        )
+
+        assert "小王" in transcript.user_memory.entries
+        assert all(msg.role != "assistant" for msg in transcript.messages)
+        assert all(request.purpose != "chat_main" for request in provider.requests)
+
+    asyncio.run(_run())
+
+
+def test_run_live_session_reply_mode_auto_infers_when_to_reply() -> None:
+    async def _run() -> None:
+        provider = MockProvider(responses=["这是自动判断后的回复"])
+        engine = create_async_engine(provider)
+        config = SessionConfig(
+            work_path=Path("data/tests/reply_mode_auto"),
+            preset=AgentPreset(
+                agent=Agent(name="主助手", persona="异步测试", model="mock-model"),
+                global_system_prompt="测试系统提示词",
+            ),
+            orchestration=OrchestrationPolicy(
+                unified_model="mock-model",
+                auto_reply_probability_coefficient=0.0,
+                task_enabled={
+                    "memory_extract": False,
+                    "multimodal_parse": False,
+                    "event_extract": False,
+                },
+            ),
+        )
+
+        transcript = await _run_live_turns(engine=engine, 
+            config=config,
+            human_turns=[
+                Message(role="user", speaker="小王", content="今天天气还不错。", reply_mode="auto"),
+                Message(role="user", speaker="小王", content="主助手，可以帮我总结一下吗？", reply_mode="auto"),
+            ],
+        )
+
+        assistant_messages = [msg for msg in transcript.messages if msg.role == "assistant"]
+        assert len(assistant_messages) == 1
+        assert assistant_messages[0].content == "这是自动判断后的回复"
+
+    asyncio.run(_run())
+
+
+def test_run_live_session_reply_mode_auto_probability_fallback_can_trigger_reply() -> None:
+    async def _run() -> None:
+        provider = MockProvider(responses=["概率兜底触发回复"])
+        engine = create_async_engine(provider)
+        config = SessionConfig(
+            work_path=Path("data/tests/reply_mode_auto_probability_fallback"),
+            preset=AgentPreset(
+                agent=Agent(name="主助手", persona="异步测试", model="mock-model"),
+                global_system_prompt="测试系统提示词",
+            ),
+            orchestration=OrchestrationPolicy(
+                unified_model="mock-model",
+                task_enabled={
+                    "memory_extract": False,
+                    "multimodal_parse": False,
+                    "event_extract": False,
+                },
+                auto_reply_base_score=0.0,
+                auto_reply_threshold=0.95,
+                auto_reply_threshold_min=0.95,
+                auto_reply_threshold_max=0.95,
+                auto_reply_probability_coefficient=1.0,
+                auto_reply_probability_floor=1.0,
+            ),
+        )
+
+        transcript = await _run_live_turns(
+            engine=engine,
+            config=config,
+            human_turns=[
+                Message(role="user", speaker="小王", content="记录一下", reply_mode="auto"),
+            ],
+        )
+
+        assistant_messages = [msg for msg in transcript.messages if msg.role == "assistant"]
+        assert len(assistant_messages) == 1
+        assert assistant_messages[0].content == "概率兜底触发回复"
+
+    asyncio.run(_run())
+
+
+def test_run_live_session_reply_mode_auto_suppresses_rapid_chatter() -> None:
+    async def _run() -> None:
+        provider = MockProvider(responses=["第一条回复", "第二条回复", "第三条回复"])
+        engine = create_async_engine(provider)
+        config = SessionConfig(
+            work_path=Path("data/tests/reply_mode_auto_chatter"),
+            preset=AgentPreset(
+                agent=Agent(name="主助手", persona="异步测试", model="mock-model"),
+                global_system_prompt="测试系统提示词",
+            ),
+            orchestration=OrchestrationPolicy(
+                unified_model="mock-model",
+                task_enabled={
+                    "memory_extract": False,
+                    "multimodal_parse": False,
+                    "event_extract": False,
+                },
+            ),
+        )
+
+        transcript = await _run_live_turns(engine=engine, 
+            config=config,
+            human_turns=[
+                Message(role="user", speaker="小王", content="今天打卡。", reply_mode="auto"),
+                Message(role="user", speaker="小王", content="我在喝水。", reply_mode="auto"),
+                Message(role="user", speaker="小王", content="准备继续工作。", reply_mode="auto"),
+            ],
+        )
+
+        assistant_messages = [msg for msg in transcript.messages if msg.role == "assistant"]
+        assert len(assistant_messages) == 0
+        assert all(request.purpose != "chat_main" for request in provider.requests)
+
+    asyncio.run(_run())
+
+
+def test_run_live_session_reply_mode_auto_threshold_is_configurable() -> None:
+    async def _run() -> None:
+        provider = MockProvider(responses=["低阈值触发的回复"])
+        engine = create_async_engine(provider)
+        config = SessionConfig(
+            work_path=Path("data/tests/reply_mode_auto_configurable"),
+            preset=AgentPreset(
+                agent=Agent(name="主助手", persona="异步测试", model="mock-model"),
+                global_system_prompt="测试系统提示词",
+            ),
+            orchestration=OrchestrationPolicy(
+                unified_model="mock-model",
+                task_enabled={
+                    "memory_extract": False,
+                    "multimodal_parse": False,
+                    "event_extract": False,
+                },
+                auto_reply_threshold=0.20,
+                auto_reply_threshold_min=0.10,
+            ),
+        )
+
+        transcript = await _run_live_turns(engine=engine, 
+            config=config,
+            human_turns=[
+                Message(role="user", speaker="小王", content="今天先记录一个状态。", reply_mode="auto"),
+            ],
+        )
+
+        assistant_messages = [msg for msg in transcript.messages if msg.role == "assistant"]
+        assert len(assistant_messages) == 1
+        assert assistant_messages[0].content == "低阈值触发的回复"
+
+    asyncio.run(_run())
+
+
+def test_run_live_session_reply_runtime_persists_across_calls() -> None:
+    async def _run() -> None:
+        provider = MockProvider(responses=["首次回复", "不应触发的第二次回复"])
+        engine = create_async_engine(provider)
+        config = SessionConfig(
+            work_path=Path("data/tests/reply_runtime_cross_call"),
+            preset=AgentPreset(
+                agent=Agent(name="主助手", persona="异步测试", model="mock-model"),
+                global_system_prompt="测试系统提示词",
+            ),
+            orchestration=OrchestrationPolicy(
+                unified_model="mock-model",
+                task_enabled={
+                    "memory_extract": False,
+                    "multimodal_parse": False,
+                    "event_extract": False,
+                },
+                auto_reply_threshold=0.30,
+                auto_reply_threshold_min=0.30,
+            ),
+        )
+
+        transcript = await _run_live_turns(engine=engine, 
+            config=config,
+            human_turns=[
+                Message(role="user", speaker="小王", content="你在吗？", reply_mode="auto"),
+            ],
+        )
+        transcript = await _run_live_turns(engine=engine, 
+            config=config,
+            transcript=transcript,
+            human_turns=[
+                Message(role="user", speaker="小王", content="你在吗？", reply_mode="auto"),
+            ],
+        )
+
+        assistant_messages = [msg for msg in transcript.messages if msg.role == "assistant"]
+        assert len(assistant_messages) == 1
+        assert transcript.reply_runtime.last_assistant_reply_at
+        assert "小王" in transcript.reply_runtime.user_last_turn_at
+        assert transcript.reply_runtime.group_recent_turn_timestamps
+
+    asyncio.run(_run())
+
+
+def test_run_live_session_auto_threshold_boost_start_count_is_configurable() -> None:
+    async def _run() -> None:
+        provider = MockProvider(responses=["第一条应回复", "第二条也应回复"])
+        engine = create_async_engine(provider)
+        config = SessionConfig(
+            work_path=Path("data/tests/reply_threshold_boost_start"),
+            preset=AgentPreset(
+                agent=Agent(name="主助手", persona="异步测试", model="mock-model"),
+                global_system_prompt="测试系统提示词",
+            ),
+            orchestration=OrchestrationPolicy(
+                unified_model="mock-model",
+                task_enabled={
+                    "memory_extract": False,
+                    "multimodal_parse": False,
+                    "event_extract": False,
+                },
+                auto_reply_threshold=0.58,
+                auto_reply_threshold_min=0.40,
+                auto_reply_threshold_max=0.90,
+                auto_reply_threshold_boost_start_count=10,
+            ),
+        )
+
+        transcript = await _run_live_turns(engine=engine, 
+            config=config,
+            human_turns=[
+                Message(role="user", speaker="小王", content="主助手请帮我看下？", reply_mode="auto"),
+                Message(role="user", speaker="小李", content="主助手请帮我看下？", reply_mode="auto"),
+            ],
+        )
+
+        assistant_messages = [msg for msg in transcript.messages if msg.role == "assistant"]
+        assert len(assistant_messages) == 2
+
+    asyncio.run(_run())
+
+
+def test_run_live_message_uses_session_level_auto_reply_mode() -> None:
+    async def _run() -> None:
+        work_path = Path("data/tests/run_live_message_auto")
+        if work_path.exists():
+            shutil.rmtree(work_path)
+
+        provider = MockProvider(responses=["自动回复命中"])
+        engine = create_async_engine(provider)
+        config = SessionConfig(
+            work_path=work_path,
+            preset=AgentPreset(
+                agent=Agent(name="主助手", persona="异步测试", model="mock-model"),
+                global_system_prompt="测试系统提示词",
+            ),
+            orchestration=OrchestrationPolicy(
+                unified_model="mock-model",
+                session_reply_mode="auto",
+                task_enabled={
+                    "memory_extract": False,
+                    "multimodal_parse": False,
+                    "event_extract": False,
+                },
+            ),
+        )
+
+        transcript = await _run_live_turns(engine=engine, config=config, human_turns=[])
+        transcript = await engine.run_live_message(
+            config=config,
+            transcript=transcript,
+            turn=Message(role="user", speaker="小王", content="主助手，帮我总结一下？"),
+        )
+
+        assistant_messages = [msg for msg in transcript.messages if msg.role == "assistant"]
+        assert len(assistant_messages) == 1
+        assert assistant_messages[0].content == "自动回复命中"
 
     asyncio.run(_run())
 
@@ -606,7 +939,7 @@ def test_async_engine_event_extract_task_skips_when_budget_exceeded() -> None:
             ),
         )
 
-        await engine.run_live_session(
+        await _run_live_turns(engine=engine, 
             config=config,
             human_turns=[Message(role="user", speaker="小王", content="老板提到预算收紧")],
         )
@@ -615,6 +948,7 @@ def test_async_engine_event_extract_task_skips_when_budget_exceeded() -> None:
         assert "main-model" in provider.models
 
     asyncio.run(_run())
+
 
 
 

@@ -22,8 +22,16 @@ async def run_user_session(engine, config, user_id: str, messages: list[str]):
         Message(role="user", content=msg, speaker=user.name)
         for msg in messages
     ]
-    
-    transcript = await engine.run_live_session(config, turns)
+
+    transcript = await engine.run_live_session(config=config)
+    for turn in turns:
+        transcript = await engine.run_live_message(
+            config=config,
+            transcript=transcript,
+            turn=turn,
+            session_reply_mode=turn.reply_mode,
+            finalize_and_persist=False,
+        )
     return {"user_id": user_id, "transcript": transcript}
 
 async def main():
@@ -88,7 +96,15 @@ async def safe_run_session(config, human_turns):
     """使用完整的错误处理运行会话。"""
     try:
         engine = AsyncRolePlayEngine(provider=provider)
-        transcript = await engine.run_live_session(config, human_turns)
+        transcript = await engine.run_live_session(config=config)
+        for turn in human_turns:
+            transcript = await engine.run_live_message(
+                config=config,
+                transcript=transcript,
+                turn=turn,
+                session_reply_mode=turn.reply_mode,
+                finalize_and_persist=False,
+            )
         return transcript
     except ProviderError as e:
         # Provider 相关错误（网络、API 限制等）
@@ -141,7 +157,16 @@ def async_retry(max_attempts: int = 3, backoff_factor: float = 2.0):
 async def run_session_with_retry(config, human_turns):
     """带重试的会话运行。"""
     engine = AsyncRolePlayEngine(provider=provider)
-    return await engine.run_live_session(config, human_turns)
+    transcript = await engine.run_live_session(config=config)
+    for turn in human_turns:
+        transcript = await engine.run_live_message(
+            config=config,
+            transcript=transcript,
+            turn=turn,
+            session_reply_mode=turn.reply_mode,
+            finalize_and_persist=False,
+        )
+    return transcript
 ```
 
 ## 3. 资源管理
@@ -298,7 +323,15 @@ from sirius_chat.performance import PerformanceProfiler, Benchmark, MetricsColle
 async def run_monitored_session():
     with PerformanceProfiler("session_execution"):
         # 你的会话逻辑
-        transcript = await engine.run_live_session(config=config, human_turns=human_turns)
+        transcript = await engine.run_live_session(config=config)
+        for turn in human_turns:
+            transcript = await engine.run_live_message(
+                config=config,
+                transcript=transcript,
+                turn=turn,
+                session_reply_mode=turn.reply_mode,
+                finalize_and_persist=False,
+            )
     
     # 获取性能指标
     collector = MetricsCollector()

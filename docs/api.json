@@ -18,7 +18,7 @@
           "docstring": "Create an async roleplay engine for non-blocking integration."
         },
         {
-          "name": "arun_live_session",
+          "name": "ainit_live_session",
           "is_async": true,
           "params": [
             {
@@ -32,8 +32,31 @@
               "kind": "positional"
             },
             {
-              "name": "human_turns",
-              "annotation": "list[Message]",
+              "name": "transcript",
+              "annotation": "Transcript | None",
+              "kind": "positional"
+            }
+          ],
+          "return_type": "Transcript",
+          "docstring": "Async facade for live session initialization."
+        },
+        {
+          "name": "arun_live_message",
+          "is_async": true,
+          "params": [
+            {
+              "name": "engine",
+              "annotation": "AsyncRolePlayEngine",
+              "kind": "positional"
+            },
+            {
+              "name": "config",
+              "annotation": "SessionConfig",
+              "kind": "positional"
+            },
+            {
+              "name": "turn",
+              "annotation": "Message",
               "kind": "positional"
             },
             {
@@ -48,7 +71,7 @@
             }
           ],
           "return_type": "Transcript",
-          "docstring": "Async facade for dynamic live session runs."
+          "docstring": "Async facade for single-message live processing."
         },
         {
           "name": "find_user_by_channel_uid",

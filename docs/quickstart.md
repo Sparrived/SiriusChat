@@ -170,10 +170,15 @@ async def main():
     ]
     
     # 运行实时会话
-    transcript = await engine.run_live_session(
-        config=session_config,
-        human_turns=human_turns,
-    )
+    transcript = await engine.run_live_session(config=session_config)
+    for turn in human_turns:
+        transcript = await engine.run_live_message(
+            config=session_config,
+            transcript=transcript,
+            turn=turn,
+            session_reply_mode=turn.reply_mode,
+            finalize_and_persist=False,
+        )
     
     # 访问结果
     print(f"总消息数: {len(transcript.messages)}")

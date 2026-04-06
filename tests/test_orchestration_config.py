@@ -255,10 +255,15 @@ class TestOrchestrationConfigValidation:
         ]
         
         with pytest.raises(OrchestrationConfigError):
-            await engine.run_live_session(
-                config=config,
-                human_turns=human_turns,
-            )
+            transcript = await engine.run_live_session(config=config)
+            for turn in human_turns:
+                transcript = await engine.run_live_message(
+                    config=config,
+                    transcript=transcript,
+                    turn=turn,
+                    session_reply_mode=turn.reply_mode,
+                    finalize_and_persist=False,
+                )
 
     @pytest.mark.asyncio
     async def test_run_live_session_with_valid_config(self):
@@ -279,10 +284,15 @@ class TestOrchestrationConfigValidation:
         ]
         
         # 应该不抛出异常
-        transcript = await engine.run_live_session(
-            config=config,
-            human_turns=human_turns,
-        )
+        transcript = await engine.run_live_session(config=config)
+        for turn in human_turns:
+            transcript = await engine.run_live_message(
+                config=config,
+                transcript=transcript,
+                turn=turn,
+                session_reply_mode=turn.reply_mode,
+                finalize_and_persist=False,
+            )
         
         assert transcript is not None
         assert len(transcript.messages) > 0

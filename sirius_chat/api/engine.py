@@ -16,17 +16,29 @@ def create_async_engine(provider: LLMProvider | AsyncLLMProvider) -> AsyncRolePl
     return AsyncRolePlayEngine(provider=provider)
 
 
-async def arun_live_session(
+async def ainit_live_session(
     engine: AsyncRolePlayEngine,
     config: SessionConfig,
-    human_turns: list[Message],
+    transcript: Transcript | None = None,
+) -> Transcript:
+    """Async facade for live session initialization."""
+    return await engine.run_live_session(
+        config=config,
+        transcript=transcript,
+    )
+
+
+async def arun_live_message(
+    engine: AsyncRolePlayEngine,
+    config: SessionConfig,
+    turn: Message,
     on_message: OnMessage | None = None,
     transcript: Transcript | None = None,
 ) -> Transcript:
-    """Async facade for dynamic live session runs."""
-    return await engine.run_live_session(
+    """Async facade for single-message live processing."""
+    return await engine.run_live_message(
         config=config,
-        human_turns=human_turns,
+        turn=turn,
         on_message=on_message,
         transcript=transcript,
     )
@@ -46,6 +58,7 @@ __all__ = [
     "AsyncRolePlayEngine",
     "OnMessage",
     "create_async_engine",
-    "arun_live_session",
+    "ainit_live_session",
+    "arun_live_message",
     "find_user_by_channel_uid",
 ]

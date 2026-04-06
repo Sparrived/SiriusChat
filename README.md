@@ -298,9 +298,11 @@ config = create_session_config_from_selected_agent(
 )
 
 async def main() -> None:
-  transcript = await engine.run_live_session(
+  transcript = await engine.run_live_session(config=config)
+  transcript = await engine.run_live_message(
     config=config,
-    human_turns=[Message(role="user", speaker="Professor Lin", content="我们先从需求分层开始讨论")],
+    transcript=transcript,
+    turn=Message(role="user", speaker="Professor Lin", content="我们先从需求分层开始讨论"),
   )
   for msg in transcript.messages:
     if msg.speaker:
@@ -371,9 +373,11 @@ asyncio.run(main())
 from sirius_chat.api import Message, create_async_engine
 
 engine = create_async_engine(provider)
-transcript = await engine.run_live_session(
+transcript = await engine.run_live_session(config=config)
+transcript = await engine.run_live_message(
   config=config,
-  human_turns=[Message(role="user", speaker="用户", content="hello")],
+  transcript=transcript,
+  turn=Message(role="user", speaker="用户", content="hello"),
 )
 ```
 
@@ -394,6 +398,8 @@ sirius-chat --config examples/session.json --output transcript.json
 ```
 
 完整接入说明见 `docs/external-usage.md`。
+
+`run_live_session` 破坏性变更迁移说明见 `docs/migration-live-message.md`。
 
 ## 项目结构
 

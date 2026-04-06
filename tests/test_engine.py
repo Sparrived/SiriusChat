@@ -8,6 +8,25 @@ from sirius_chat.session.store import JsonSessionStore
 from pathlib import Path
 
 
+async def _run_live_turns(
+    *,
+    engine: AsyncRolePlayEngine,
+    config: SessionConfig,
+    human_turns: list[Message],
+    transcript=None,
+):
+    transcript = await engine.run_live_session(config=config, transcript=transcript)
+    for index, turn in enumerate(human_turns):
+        transcript = await engine.run_live_message(
+            config=config,
+            turn=turn,
+            transcript=transcript,
+            session_reply_mode=turn.reply_mode,
+            finalize_and_persist=index == len(human_turns) - 1,
+        )
+    return transcript
+
+
 def test_roleplay_engine_multi_human_single_ai_transcript() -> None:
     async def _run() -> None:
         provider = MockProvider(
@@ -36,7 +55,7 @@ def test_roleplay_engine_multi_human_single_ai_transcript() -> None:
             ),
         )
 
-        transcript = await engine.run_live_session(
+        transcript = await _run_live_turns(engine=engine, 
             config=config,
             human_turns=[
                 Message(role="user", speaker="AgentA", content="A-1"),
@@ -92,7 +111,7 @@ def test_run_live_session_supports_dynamic_participants_and_memory() -> None:
             Message(role="user", speaker="王PM", content="建议先在一个城市灰度。"),
         ]
 
-        transcript = await engine.run_live_session(config=config, human_turns=human_turns)
+        transcript = await _run_live_turns(engine=engine, config=config, human_turns=human_turns)
 
         # 只有 3 个生成请求（没有事件验证，因为 mention_count < min_mentions=3）
         assert len(provider.requests) == 3
@@ -129,16 +148,18 @@ def test_transcript_can_resume_after_persist_and_reboot(tmp_path) -> None:
         )
         store = JsonSessionStore(config.work_path)
 
-        first = await engine.run_live_session(
-            config,
-            [Message(role="user", speaker="小王", content="第一次发言")],
+        first = await _run_live_turns(
+            engine=engine,
+            config=config,
+            human_turns=[Message(role="user", speaker="小王", content="第一次发言")],
         )
         store.save(first)
 
         loaded = store.load()
-        resumed = await engine.run_live_session(
-            config,
-            [Message(role="user", speaker="小王", content="第二次发言")],
+        resumed = await _run_live_turns(
+            engine=engine,
+            config=config,
+            human_turns=[Message(role="user", speaker="小王", content="第二次发言")],
             transcript=loaded,
         )
 
@@ -164,7 +185,7 @@ def test_auto_compression_limits_context_budget() -> None:
             history_max_chars=240,
         )
 
-        transcript = await engine.run_live_session(
+        transcript = await _run_live_turns(engine=engine, 
             config=config,
             human_turns=[
                 Message(role="user", speaker="A", content="m1"),
@@ -202,7 +223,7 @@ def test_cross_environment_identity_mapping_resolves_same_user() -> None:
             ),
         )
 
-        transcript = await engine.run_live_session(
+        transcript = await _run_live_turns(engine=engine, 
             config=config,
             human_turns=[
                 Message(
@@ -247,7 +268,7 @@ def test_user_memory_is_persisted_per_user_file_across_new_sessions(tmp_path) ->
             ),
         )
 
-        await engine.run_live_session(
+        await _run_live_turns(engine=engine, 
             config=config,
             human_turns=[
                 Message(
@@ -265,7 +286,7 @@ def test_user_memory_is_persisted_per_user_file_across_new_sessions(tmp_path) ->
         user_files = list(users_dir.glob("*.json"))
         assert user_files
 
-        await engine.run_live_session(
+        await _run_live_turns(engine=engine, 
             config=config,
             human_turns=[
                 Message(
@@ -283,5 +304,6 @@ def test_user_memory_is_persisted_per_user_file_across_new_sessions(tmp_path) ->
         assert "灰度" in provider.requests[-1].system_prompt
 
     asyncio.run(_run())
+
 
 

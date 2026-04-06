@@ -21,9 +21,11 @@ async def main() -> None:
         agent_key="main_agent",
     )
 
-    transcript = await engine.run_live_session(
+    transcript = await engine.run_live_session(config=config)
+    transcript = await engine.run_live_message(
         config=config,
-        human_turns=[Message(role="user", speaker="教育顾问", content="我们先做小范围试点并评估效果")],
+        transcript=transcript,
+        turn=Message(role="user", speaker="教育顾问", content="我们先做小范围试点并评估效果"),
     )
     for message in transcript.messages:
         if message.speaker:

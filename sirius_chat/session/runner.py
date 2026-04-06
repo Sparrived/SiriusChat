@@ -122,12 +122,16 @@ class JsonPersistentSessionRunner:
         if self.primary_user is None:
             raise RuntimeError("Runner not initialized. Call initialize() first.")
 
-        self.transcript = await self.engine.run_live_session(
+        if self.transcript is None:
+            self.transcript = await self.engine.run_live_session(
+                config=self.config,
+                transcript=self.transcript,
+            )
+
+        self.transcript = await self.engine.run_live_message(
             config=self.config,
-            human_turns=[
-                Message(role="user", speaker=self.primary_user.name, content=content),
-            ],
             transcript=self.transcript,
+            turn=Message(role="user", speaker=self.primary_user.name, content=content),
         )
         self.store.save(self.transcript)
         self._persist_primary_user()

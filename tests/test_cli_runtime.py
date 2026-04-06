@@ -35,24 +35,38 @@ class _FakeEngine:
     def __init__(self, response: str = "主助手回复") -> None:
         self.response = response
         self.last_turn = None
+        self._transcript = None
 
-    async def run_live_session(self, *, config, human_turns):  # noqa: ANN001
-        self.last_turn = human_turns[0]
+    async def run_live_session(self, *, config, transcript=None):  # noqa: ANN001
+        _ = config
+        if transcript is not None:
+            self._transcript = transcript
+            return transcript
+
+        transcript_cls = type("Transcript", (), {})
+        instance = transcript_cls()
+        instance.messages = []
+        self._transcript = instance
+        return instance
+
+    async def run_live_message(self, *, config, transcript, turn, **kwargs):  # noqa: ANN001
+        _ = config
+        _ = kwargs
+        self.last_turn = turn
         msg = type("Msg", (), {})
         user_msg = msg()
         user_msg.role = "user"
-        user_msg.speaker = human_turns[0].speaker
-        user_msg.content = human_turns[0].content
+        user_msg.speaker = turn.speaker
+        user_msg.content = turn.content
 
         assistant = msg()
         assistant.role = "assistant"
         assistant.speaker = config.agent.name
         assistant.content = self.response
 
-        transcript = type("Transcript", (), {})
-        instance = transcript()
-        instance.messages = [user_msg, assistant]
-        return instance
+        transcript.messages = [*transcript.messages, user_msg, assistant]
+        self._transcript = transcript
+        return transcript
 
 
 def test_cli_runs_single_turn_with_message_and_output(tmp_path, monkeypatch) -> None:

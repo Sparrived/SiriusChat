@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
+import hashlib
 import json
 import logging
 import math
@@ -33,8 +34,36 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
+class ReplyWillingnessDecision:
+    should_reply: bool
+    score: float
+    threshold: float
+    reply_probability: float
+    probability_roll: float
+    intent_score: float
+    addressing_score: float
+    event_score: float
+    richness_score: float
+    user_cadence_penalty: float
+    group_cadence_penalty: float
+    assistant_cadence_penalty: float
+
+
+@dataclass(slots=True)
+class LiveSessionContext:
+    file_store: UserMemoryFileStore
+    event_file_store: EventMemoryFileStore
+    event_store: EventMemoryManager
+    task_token_usage: dict[str, int] = field(default_factory=dict)
+    user_message_count_since_extract: dict[str, int] = field(default_factory=dict)
+    known_by_id: dict[str, Participant] = field(default_factory=dict)
+    known_by_label: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
 class AsyncRolePlayEngine:
     provider: LLMProvider | AsyncLLMProvider
+    _live_session_contexts: dict[int, LiveSessionContext] = field(default_factory=dict, init=False, repr=False)
 
     _TASK_MEMORY_EXTRACT = "memory_extract"
     _TASK_MULTIMODAL_PARSE = "multimodal_parse"
@@ -154,6 +183,181 @@ class AsyncRolePlayEngine:
         prepared = Transcript()
         prepared.add(Message(role="system", content=config.global_system_prompt))
         return prepared
+
+    def _get_or_create_live_context(
+        self,
+        *,
+        config: SessionConfig,
+        transcript: Transcript,
+    ) -> LiveSessionContext:
+        key = id(transcript)
+        existing = self._live_session_contexts.get(key)
+        if existing is not None:
+            return existing
+
+        file_store = UserMemoryFileStore(config.work_path)
+        event_file_store = EventMemoryFileStore(config.work_path)
+        event_store = event_file_store.load()
+        transcript.user_memory.merge_from(file_store.load_all())
+
+        known_by_id: dict[str, Participant] = {}
+        known_by_label: dict[str, str] = {}
+        for user_id, entry in transcript.user_memory.entries.items():
+            profile = entry.profile
+            participant = Participant(
+                name=profile.name,
+                user_id=profile.user_id,
+                persona=profile.persona,
+                identities=dict(profile.identities),
+                aliases=list(profile.aliases),
+                traits=list(profile.traits),
+                metadata=dict(profile.metadata),
+            )
+            known_by_id[user_id] = participant
+            labels = [participant.name, participant.user_id, *participant.aliases]
+            for label in labels:
+                if label:
+                    known_by_label[label.strip().lower()] = participant.user_id
+
+        created = LiveSessionContext(
+            file_store=file_store,
+            event_file_store=event_file_store,
+            event_store=event_store,
+            known_by_id=known_by_id,
+            known_by_label=known_by_label,
+        )
+        self._live_session_contexts[key] = created
+        return created
+
+    @staticmethod
+    def _build_known_entities(known_by_id: dict[str, Participant]) -> list[str]:
+        known_entities: list[str] = []
+        for item in known_by_id.values():
+            values = [item.name, item.user_id, *item.aliases]
+            for value in values:
+                text = value.strip()
+                if text and text not in known_entities:
+                    known_entities.append(text)
+        return known_entities
+
+    @staticmethod
+    def _resolve_session_reply_mode(config: SessionConfig) -> str:
+        mode = str(config.orchestration.session_reply_mode or "auto").strip().lower()
+        if mode == "smart":
+            return "auto"
+        if mode in {"silent", "none", "no_reply"}:
+            return "never"
+        if mode in {"always", "never", "auto"}:
+            return mode
+        return "auto"
+
+    def _resolve_participant_for_turn(
+        self,
+        *,
+        transcript: Transcript,
+        turn: Message,
+        context: LiveSessionContext,
+    ) -> Participant:
+        normalized = turn.speaker.strip().lower()
+        participant: Participant | None = None
+
+        if turn.channel and turn.channel_user_id:
+            mapped_user_id = transcript.user_memory.resolve_user_id(
+                channel=turn.channel,
+                external_user_id=turn.channel_user_id,
+            )
+            if mapped_user_id:
+                participant = context.known_by_id.get(mapped_user_id)
+                if participant is None and mapped_user_id in transcript.user_memory.entries:
+                    profile = transcript.user_memory.entries[mapped_user_id].profile
+                    participant = Participant(
+                        name=profile.name,
+                        user_id=profile.user_id,
+                        persona=profile.persona,
+                        identities=dict(profile.identities),
+                        aliases=list(profile.aliases),
+                        traits=list(profile.traits),
+                        metadata=dict(profile.metadata),
+                    )
+                    context.known_by_id[participant.user_id] = participant
+
+        resolved_id = context.known_by_label.get(normalized)
+        if resolved_id and participant is None:
+            participant = context.known_by_id.get(resolved_id)
+        if participant is None:
+            memory_user_id = transcript.user_memory.resolve_user_id(speaker=turn.speaker)
+            if memory_user_id:
+                participant = context.known_by_id.get(memory_user_id)
+                if participant is None and memory_user_id in transcript.user_memory.entries:
+                    profile = transcript.user_memory.entries[memory_user_id].profile
+                    participant = Participant(
+                        name=profile.name,
+                        user_id=profile.user_id,
+                        persona=profile.persona,
+                        identities=dict(profile.identities),
+                        aliases=list(profile.aliases),
+                        traits=list(profile.traits),
+                        metadata=dict(profile.metadata),
+                    )
+                    context.known_by_id[participant.user_id] = participant
+        if participant is None:
+            identities = {}
+            if turn.channel and turn.channel_user_id:
+                identities[turn.channel] = turn.channel_user_id
+            participant = Participant(name=turn.speaker, user_id=turn.speaker, identities=identities)
+            context.known_by_id[participant.user_id] = participant
+
+        labels = [participant.name, participant.user_id, *participant.aliases]
+        for label in labels:
+            if label:
+                context.known_by_label[label.strip().lower()] = participant.user_id
+        return participant
+
+    async def _finalize_and_persist_live_context(
+        self,
+        *,
+        config: SessionConfig,
+        transcript: Transcript,
+        context: LiveSessionContext,
+    ) -> None:
+        # 最终化事件记忆：对积累的事件进行 LLM 验证
+        try:
+            class ProviderAdapter:
+                def __init__(self, engine: AsyncRolePlayEngine) -> None:
+                    self.engine = engine
+
+                async def generate_async(self, request: GenerationRequest) -> str:
+                    return await self.engine._call_provider(request)
+
+            finalize_result = await context.event_store.finalize_pending_events(
+                provider_async=ProviderAdapter(self),
+                model_name=config.agent.model,
+                min_mentions=3,
+            )
+            logger.info(
+                "事件记忆最终化完成 - 已验证: %s, 已拒绝: %s, 待验证: %s",
+                finalize_result["verified_count"],
+                finalize_result["rejected_count"],
+                finalize_result["pending_count"],
+            )
+        except Exception as e:
+            logger.warning(f"事件记忆最终化失败，继续执行: {e}")
+
+        context.file_store.save_all(transcript.user_memory)
+        context.event_file_store.save(context.event_store)
+
+    @staticmethod
+    def _parse_runtime_datetime(raw: str) -> datetime | None:
+        text = raw.strip()
+        if not text:
+            return None
+        try:
+            parsed = datetime.fromisoformat(text)
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
 
     def _record_task_stat(
         self, transcript: Transcript, task_name: str, metric: str, increment: int = 1
@@ -649,6 +853,267 @@ class AsyncRolePlayEngine:
                 return bool(message.multimodal_inputs)
         return False
 
+    @staticmethod
+    def _compute_intent_score(content: str) -> float:
+        text = content.strip()
+        if not text:
+            return 0.0
+
+        lowered = text.lower()
+        score = 0.0
+        if "?" in text or "？" in text:
+            score += 0.30
+
+        request_markers = (
+            "请",
+            "帮我",
+            "麻烦",
+            "可以",
+            "能不能",
+            "如何",
+            "怎么",
+            "为什么",
+            "总结",
+            "建议",
+            "分析",
+            "please",
+            "could you",
+            "can you",
+            "how",
+            "why",
+        )
+        if any(marker in lowered for marker in request_markers):
+            score += 0.25
+
+        return max(0.0, min(0.5, score))
+
+    @staticmethod
+    def _compute_addressing_score(*, content: str, agent_name: str, agent_alias: str) -> float:
+        text = content.strip()
+        if not text:
+            return 0.0
+
+        lowered = text.lower()
+        names = [agent_name.strip(), agent_alias.strip()]
+        for name in names:
+            if name and name.lower() in lowered:
+                return 0.20
+
+        if "@" in text:
+            return 0.16
+
+        if "你" in text or "您" in text:
+            return 0.08
+        return 0.0
+
+    @staticmethod
+    def _compute_event_relevance_score(event_hit_payload: dict[str, object] | None) -> float:
+        if not event_hit_payload:
+            return 0.0
+        level = str(event_hit_payload.get("level", "")).strip().lower()
+        score = float(event_hit_payload.get("score", 0.0) or 0.0)
+
+        if level == "high":
+            return 0.20
+        if level == "weak":
+            return 0.12
+        if level == "new":
+            return 0.06 + min(0.04, score * 0.04)
+        return min(0.08, max(0.0, score) * 0.10)
+
+    @staticmethod
+    def _compute_richness_score(content: str) -> float:
+        text = content.strip()
+        if not text:
+            return 0.0
+        if len(text) >= 96:
+            return 0.10
+        if len(text) >= 48:
+            return 0.07
+        if len(text) >= 24:
+            return 0.04
+        return 0.0
+
+    @staticmethod
+    def _deterministic_probability_roll(*, turn: Message, group_recent_count: int) -> float:
+        seed = (
+            f"{turn.speaker or ''}|{turn.channel or ''}|{turn.channel_user_id or ''}|"
+            f"{group_recent_count}|{turn.content.strip()}"
+        )
+        digest = hashlib.sha256(seed.encode("utf-8")).digest()
+        return int.from_bytes(digest[:8], "big") / float(2**64)
+
+    @classmethod
+    def _evaluate_reply_willingness(
+        cls,
+        *,
+        turn: Message,
+        config: SessionConfig,
+        event_hit_payload: dict[str, object] | None,
+        user_interval_seconds: float | None,
+        group_recent_count: int,
+        assistant_interval_seconds: float | None,
+    ) -> ReplyWillingnessDecision:
+        content = turn.content
+        if not content.strip():
+            return ReplyWillingnessDecision(
+                should_reply=False,
+                score=0.0,
+                threshold=0.58,
+                reply_probability=0.0,
+                probability_roll=1.0,
+                intent_score=0.0,
+                addressing_score=0.0,
+                event_score=0.0,
+                richness_score=0.0,
+                user_cadence_penalty=0.0,
+                group_cadence_penalty=0.0,
+                assistant_cadence_penalty=0.0,
+            )
+
+        agent_alias = str(config.agent.metadata.get("alias", "")).strip()
+        intent_score = cls._compute_intent_score(content)
+        addressing_score = cls._compute_addressing_score(
+            content=content,
+            agent_name=config.agent.name,
+            agent_alias=agent_alias,
+        )
+        event_score = cls._compute_event_relevance_score(event_hit_payload)
+        richness_score = cls._compute_richness_score(content)
+
+        orchestration = config.orchestration
+        user_cadence_seconds = max(0.5, float(orchestration.auto_reply_user_cadence_seconds))
+        group_penalty_start_count = max(0, int(orchestration.auto_reply_group_penalty_start_count))
+        assistant_cooldown_seconds = max(0.5, float(orchestration.auto_reply_assistant_cooldown_seconds))
+
+        # 用户发言频率因子：默认目标间隔 7 秒（覆盖 6~8 秒需求）
+        user_cadence_penalty = 0.0
+        if user_interval_seconds is not None and user_interval_seconds < user_cadence_seconds:
+            cadence_ratio = max(
+                0.0,
+                min(1.0, (user_cadence_seconds - user_interval_seconds) / user_cadence_seconds),
+            )
+            # 明确请求时降低频率惩罚，让“强请求”仍可能得到回复
+            user_cadence_penalty = 0.35 * cadence_ratio
+            if intent_score >= 0.35:
+                user_cadence_penalty *= 0.35
+
+        # 群聊密度因子：8 秒窗口内消息越多，越倾向潜水
+        group_cadence_penalty = 0.0
+        if group_recent_count > group_penalty_start_count:
+            density_ratio = max(
+                0.0,
+                min(1.0, (group_recent_count - group_penalty_start_count) / 4.0),
+            )
+            group_cadence_penalty = 0.30 * density_ratio
+            if intent_score >= 0.45:
+                group_cadence_penalty *= 0.40
+
+        # AI 刚回复过时，若没有明确请求则降低参与度
+        assistant_cadence_penalty = 0.0
+        if (
+            assistant_interval_seconds is not None
+            and assistant_interval_seconds < assistant_cooldown_seconds
+            and intent_score < 0.35
+        ):
+            assistant_cadence_penalty = 0.15 * max(
+                0.0,
+                min(
+                    1.0,
+                    (assistant_cooldown_seconds - assistant_interval_seconds)
+                    / assistant_cooldown_seconds,
+                ),
+            )
+
+        score = (
+            float(orchestration.auto_reply_base_score)
+            + intent_score
+            + addressing_score
+            + event_score
+            + richness_score
+            - user_cadence_penalty
+            - group_cadence_penalty
+            - assistant_cadence_penalty
+        )
+        score = max(0.0, min(1.0, score))
+
+        threshold = float(orchestration.auto_reply_threshold)
+        if group_recent_count >= int(orchestration.auto_reply_threshold_boost_start_count):
+            threshold += 0.06
+        if intent_score >= 0.35:
+            threshold -= 0.08
+        if event_score >= 0.12:
+            threshold -= 0.03
+        threshold = max(
+            float(orchestration.auto_reply_threshold_min),
+            min(float(orchestration.auto_reply_threshold_max), threshold),
+        )
+
+        should_reply = score >= threshold
+        reply_probability = 1.0 if should_reply else 0.0
+        probability_roll = 1.0
+        if not should_reply:
+            probability_coefficient = max(
+                0.0,
+                min(1.0, float(orchestration.auto_reply_probability_coefficient)),
+            )
+            if probability_coefficient > 0.0:
+                probability_floor = max(
+                    0.0,
+                    min(1.0, float(orchestration.auto_reply_probability_floor)),
+                )
+                reply_probability = max(
+                    probability_floor,
+                    min(1.0, score * probability_coefficient),
+                )
+                probability_roll = cls._deterministic_probability_roll(
+                    turn=turn,
+                    group_recent_count=group_recent_count,
+                )
+                should_reply = probability_roll < reply_probability
+
+        return ReplyWillingnessDecision(
+            should_reply=should_reply,
+            score=score,
+            threshold=threshold,
+            reply_probability=reply_probability,
+            probability_roll=probability_roll,
+            intent_score=intent_score,
+            addressing_score=addressing_score,
+            event_score=event_score,
+            richness_score=richness_score,
+            user_cadence_penalty=user_cadence_penalty,
+            group_cadence_penalty=group_cadence_penalty,
+            assistant_cadence_penalty=assistant_cadence_penalty,
+        )
+
+    @classmethod
+    def _should_reply_for_turn(
+        cls,
+        *,
+        turn: Message,
+        config: SessionConfig,
+        event_hit_payload: dict[str, object] | None = None,
+        user_interval_seconds: float | None = None,
+        group_recent_count: int = 1,
+        assistant_interval_seconds: float | None = None,
+    ) -> tuple[bool, ReplyWillingnessDecision | None]:
+        mode = str(getattr(turn, "reply_mode", "always") or "always").strip().lower()
+        if mode in {"never", "silent", "none", "no_reply"}:
+            return False, None
+        if mode in {"auto", "smart"}:
+            decision = cls._evaluate_reply_willingness(
+                turn=turn,
+                config=config,
+                event_hit_payload=event_hit_payload,
+                user_interval_seconds=user_interval_seconds,
+                group_recent_count=group_recent_count,
+                assistant_interval_seconds=assistant_interval_seconds,
+            )
+            return decision.should_reply, decision
+        # unknown mode falls back to always
+        return True, None
+
     def _get_model_for_chat(self, config: SessionConfig, transcript: Transcript) -> str:
         """根据是否有多模态输入，动态选择主模型。
         
@@ -792,7 +1257,7 @@ class AsyncRolePlayEngine:
         channel_user_id: str | None = None,
         multimodal_inputs: list[dict[str, str]] | None = None,
         user_message_count_since_extract: dict[str, int] | None = None,
-    ) -> None:
+    ) -> dict[str, object]:
         normalized_multimodal_inputs = self._normalize_multimodal_inputs(
             multimodal_inputs or [],
             max_items=max(1, int(config.orchestration.max_multimodal_inputs_per_turn)),
@@ -938,6 +1403,7 @@ class AsyncRolePlayEngine:
             participant=participant,
             task_token_usage=task_token_usage,
         )
+        return hit_payload
 
     async def run_session(
         self,
@@ -954,142 +1420,181 @@ class AsyncRolePlayEngine:
     async def run_live_session(
         self,
         config: SessionConfig,
-        human_turns: list[Message],
-        on_message: AsyncOnMessage | None = None,
         transcript: Transcript | None = None,
     ) -> Transcript:
-        # 验证多模型协同配置
+        """Initialize a live session and prepare runtime context.
+
+        Breaking change: this method no longer processes user messages.
+        Use run_live_message(...) for per-message input/output handling.
+        """
         self.validate_orchestration_config(config)
-        
+
         transcript = self._prepare_transcript(config, transcript)
-        file_store = UserMemoryFileStore(config.work_path)
-        event_file_store = EventMemoryFileStore(config.work_path)
-        event_store = event_file_store.load()
-        transcript.user_memory.merge_from(file_store.load_all())
-        task_token_usage: dict[str, int] = {}
-        # 跟踪每个用户自上次memory_extract后的消息计数
-        user_message_count_since_extract: dict[str, int] = {}
+        _ = self._get_or_create_live_context(config=config, transcript=transcript)
+        return transcript
 
-        known_by_id: dict[str, Participant] = {}
-        known_by_label: dict[str, str] = {}
-        for user_id, entry in transcript.user_memory.entries.items():
-            profile = entry.profile
-            participant = Participant(
-                name=profile.name,
-                user_id=profile.user_id,
-                persona=profile.persona,
-                identities=dict(profile.identities),
-                aliases=list(profile.aliases),
-                traits=list(profile.traits),
-                metadata=dict(profile.metadata),
+    async def run_live_message(
+        self,
+        config: SessionConfig,
+        turn: Message,
+        on_message: AsyncOnMessage | None = None,
+        transcript: Transcript | None = None,
+        session_reply_mode: str | None = None,
+        finalize_and_persist: bool = True,
+    ) -> Transcript:
+        self.validate_orchestration_config(config)
+
+        transcript = self._prepare_transcript(config, transcript)
+        if turn.role != "user" or not turn.speaker:
+            raise ValueError("run_live_message 仅接受带 speaker 的单条 user 消息。")
+
+        context = self._get_or_create_live_context(config=config, transcript=transcript)
+        participant = self._resolve_participant_for_turn(
+            transcript=transcript,
+            turn=turn,
+            context=context,
+        )
+        known_entities = self._build_known_entities(context.known_by_id)
+
+        user_last_turn_at: dict[str, datetime] = {}
+        for user_id, raw_time in transcript.reply_runtime.user_last_turn_at.items():
+            parsed = self._parse_runtime_datetime(str(raw_time))
+            if parsed is not None:
+                user_last_turn_at[user_id] = parsed
+
+        group_recent_turns: list[datetime] = []
+        for raw_time in transcript.reply_runtime.group_recent_turn_timestamps:
+            parsed = self._parse_runtime_datetime(str(raw_time))
+            if parsed is not None:
+                group_recent_turns.append(parsed)
+
+        last_assistant_reply_at = self._parse_runtime_datetime(
+            transcript.reply_runtime.last_assistant_reply_at
+        )
+
+        now = datetime.now(timezone.utc)
+        previous_user_turn_at = user_last_turn_at.get(participant.user_id)
+        user_interval_seconds: float | None = None
+        if previous_user_turn_at is not None:
+            user_interval_seconds = max(0.0, (now - previous_user_turn_at).total_seconds())
+        user_last_turn_at[participant.user_id] = now
+
+        group_recent_turns.append(now)
+        group_window_start = now.timestamp() - float(config.orchestration.auto_reply_group_window_seconds)
+        group_recent_turns = [item for item in group_recent_turns if item.timestamp() >= group_window_start]
+        group_recent_count = len(group_recent_turns)
+
+        event_hit_payload = await self._add_human_turn(
+            config,
+            transcript,
+            participant,
+            turn.content,
+            task_token_usage=context.task_token_usage,
+            event_store=context.event_store,
+            known_entities=known_entities,
+            channel=turn.channel,
+            channel_user_id=turn.channel_user_id,
+            multimodal_inputs=turn.multimodal_inputs,
+            user_message_count_since_extract=context.user_message_count_since_extract,
+        )
+
+        assistant_interval_seconds: float | None = None
+        if last_assistant_reply_at is not None:
+            assistant_interval_seconds = max(
+                0.0,
+                (now - last_assistant_reply_at).total_seconds(),
             )
-            known_by_id[user_id] = participant
-            labels = [participant.name, participant.user_id, *participant.aliases]
-            for label in labels:
-                if label:
-                    known_by_label[label.strip().lower()] = participant.user_id
 
-        for turn in human_turns:
-            if turn.role != "user" or not turn.speaker:
-                raise ValueError("run_live_session 仅接受带 speaker 的 user 消息。")
-            normalized = turn.speaker.strip().lower()
-            participant = None
-
-            if turn.channel and turn.channel_user_id:
-                mapped_user_id = transcript.user_memory.resolve_user_id(
-                    channel=turn.channel,
-                    external_user_id=turn.channel_user_id,
+        resolved_session_mode = (
+            str(session_reply_mode).strip().lower()
+            if session_reply_mode is not None and str(session_reply_mode).strip()
+            else self._resolve_session_reply_mode(config)
+        )
+        effective_turn = Message(
+            role=turn.role,
+            content=turn.content,
+            speaker=turn.speaker,
+            channel=turn.channel,
+            channel_user_id=turn.channel_user_id,
+            multimodal_inputs=list(turn.multimodal_inputs),
+            reply_mode=resolved_session_mode,
+        )
+        should_reply, willingness = self._should_reply_for_turn(
+            turn=effective_turn,
+            config=config,
+            event_hit_payload=event_hit_payload,
+            user_interval_seconds=user_interval_seconds,
+            group_recent_count=group_recent_count,
+            assistant_interval_seconds=assistant_interval_seconds,
+        )
+        if should_reply:
+            if willingness is not None:
+                reply_trigger = (
+                    "threshold"
+                    if willingness.score >= willingness.threshold
+                    else "probability_fallback"
                 )
-                if mapped_user_id:
-                    participant = known_by_id.get(mapped_user_id)
-                    if participant is None and mapped_user_id in transcript.user_memory.entries:
-                        profile = transcript.user_memory.entries[mapped_user_id].profile
-                        participant = Participant(
-                            name=profile.name,
-                            user_id=profile.user_id,
-                            persona=profile.persona,
-                            identities=dict(profile.identities),
-                            aliases=list(profile.aliases),
-                            traits=list(profile.traits),
-                            metadata=dict(profile.metadata),
-                        )
-                        known_by_id[participant.user_id] = participant
-
-            resolved_id = known_by_label.get(normalized)
-            if resolved_id and participant is None:
-                participant = known_by_id.get(resolved_id)
-            if participant is None:
-                memory_user_id = transcript.user_memory.resolve_user_id(speaker=turn.speaker)
-                if memory_user_id:
-                    participant = known_by_id.get(memory_user_id)
-                    if participant is None and memory_user_id in transcript.user_memory.entries:
-                        profile = transcript.user_memory.entries[memory_user_id].profile
-                        participant = Participant(
-                            name=profile.name,
-                            user_id=profile.user_id,
-                            persona=profile.persona,
-                            identities=dict(profile.identities),
-                            aliases=list(profile.aliases),
-                            traits=list(profile.traits),
-                            metadata=dict(profile.metadata),
-                        )
-                        known_by_id[participant.user_id] = participant
-            if participant is None:
-                identities = {}
-                if turn.channel and turn.channel_user_id:
-                    identities[turn.channel] = turn.channel_user_id
-                participant = Participant(name=turn.speaker, user_id=turn.speaker, identities=identities)
-                known_by_id[participant.user_id] = participant
-
-            labels = [participant.name, participant.user_id, *participant.aliases]
-            for label in labels:
-                if label:
-                    known_by_label[label.strip().lower()] = participant.user_id
-
-            known_entities: list[str] = []
-            for item in known_by_id.values():
-                values = [item.name, item.user_id, *item.aliases]
-                for value in values:
-                    text = value.strip()
-                    if text and text not in known_entities:
-                        known_entities.append(text)
-
-            await self._add_human_turn(
-                config,
-                transcript,
-                participant,
-                turn.content,
-                task_token_usage=task_token_usage,
-                event_store=event_store,
-                known_entities=known_entities,
-                channel=turn.channel,
-                channel_user_id=turn.channel_user_id,
-                multimodal_inputs=turn.multimodal_inputs,
-                user_message_count_since_extract=user_message_count_since_extract,
-            )
+                logger.info(
+                    "[会话] 触发回复 | speaker=%s | session_reply_mode=%s | trigger=%s | "
+                    "score=%.3f | threshold=%.3f | probability=%.3f | roll=%.3f",
+                    turn.speaker,
+                    resolved_session_mode,
+                    reply_trigger,
+                    willingness.score,
+                    willingness.threshold,
+                    willingness.reply_probability,
+                    willingness.probability_roll,
+                )
             assistant_message = await self._generate_assistant_message(config, transcript)
+            last_assistant_reply_at = datetime.now(timezone.utc)
             if on_message:
                 on_message(assistant_message)
+        else:
+            if willingness is None:
+                logger.info(
+                    "[会话] 跳过回复 | speaker=%s | session_reply_mode=%s",
+                    turn.speaker,
+                    resolved_session_mode,
+                )
+            else:
+                logger.info(
+                    "[会话] 跳过回复 | speaker=%s | session_reply_mode=%s | score=%.3f | threshold=%.3f | "
+                    "probability=%.3f | roll=%.3f | "
+                    "intent=%.3f | addr=%.3f | event=%.3f | richness=%.3f | "
+                    "penalty_user=%.3f | penalty_group=%.3f | penalty_assistant=%.3f | "
+                    "user_interval=%.2fs | group_recent_count=%d",
+                    turn.speaker,
+                    resolved_session_mode,
+                    willingness.score,
+                    willingness.threshold,
+                    willingness.reply_probability,
+                    willingness.probability_roll,
+                    willingness.intent_score,
+                    willingness.addressing_score,
+                    willingness.event_score,
+                    willingness.richness_score,
+                    willingness.user_cadence_penalty,
+                    willingness.group_cadence_penalty,
+                    willingness.assistant_cadence_penalty,
+                    user_interval_seconds or -1.0,
+                    group_recent_count,
+                )
 
-        # 最终化事件记忆：对积累的事件进行 LLM 验证
-        try:
-            # 创建一个临时的 AsyncLLMProvider 包装器以支持同步 provider
-            class ProviderAdapter:
-                def __init__(self, engine: AsyncRolePlayEngine) -> None:
-                    self.engine = engine
-                
-                async def generate_async(self, request: GenerationRequest) -> str:
-                    return await self.engine._call_provider(request)
-            
-            finalize_result = await event_store.finalize_pending_events(
-                provider_async=ProviderAdapter(self),
-                model_name=config.agent.model,
-                min_mentions=3
+        transcript.reply_runtime.user_last_turn_at = {
+            user_id: timestamp.isoformat()
+            for user_id, timestamp in user_last_turn_at.items()
+        }
+        transcript.reply_runtime.group_recent_turn_timestamps = [
+            timestamp.isoformat() for timestamp in group_recent_turns
+        ]
+        transcript.reply_runtime.last_assistant_reply_at = (
+            last_assistant_reply_at.isoformat() if last_assistant_reply_at is not None else ""
+        )
+
+        if finalize_and_persist:
+            await self._finalize_and_persist_live_context(
+                config=config,
+                transcript=transcript,
+                context=context,
             )
-            logger.info(f"事件记忆最终化完成 - 已验证: {finalize_result['verified_count']}, 已拒绝: {finalize_result['rejected_count']}, 待验证: {finalize_result['pending_count']}")
-        except Exception as e:
-            logger.warning(f"事件记忆最终化失败，继续执行: {e}")
-
-        file_store.save_all(transcript.user_memory)
-        event_file_store.save(event_store)
         return transcript

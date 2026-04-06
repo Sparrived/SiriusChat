@@ -730,11 +730,18 @@ def run_interactive_session(
         human_turn = _parse_user_turn(raw_text)
         human_turn.speaker = primary_speaker
         try:
+            if active_transcript is None:
+                active_transcript = asyncio.run(
+                    engine.run_live_session(
+                        config=config,
+                        transcript=active_transcript,
+                    )
+                )
             active_transcript = asyncio.run(
-                engine.run_live_session(
+                engine.run_live_message(
                     config=config,
-                    human_turns=[human_turn],
                     transcript=active_transcript,
+                    turn=human_turn,
                 )
             )
         except RuntimeError as exc:

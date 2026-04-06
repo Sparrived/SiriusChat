@@ -50,9 +50,11 @@ config = create_session_config_from_selected_agent(
 )
 
 async def main() -> None:
-    transcript = await engine.run_live_session(
+    transcript = await engine.run_live_session(config=config)
+    transcript = await engine.run_live_message(
         config=config,
-        human_turns=[Message(role="user", speaker="校务主任", content="我关心预算和安全约束")],
+        transcript=transcript,
+        turn=Message(role="user", speaker="校务主任", content="我关心预算和安全约束"),
     )
     for message in transcript.messages:
         if message.speaker:
@@ -60,6 +62,9 @@ async def main() -> None:
 
 asyncio.run(main())
 ```
+
+> 破坏性变更提示：`run_live_session` 现在只做会话初始化，不再接收 `human_turns`。
+> 迁移请参考 `docs/migration-live-message.md`。
 
 #### Agent 配置：多模态模型（动态模型路由）
 
@@ -254,10 +259,66 @@ Sirius Chat v1.0 统一采用单一 `providers` 列表格式：
 from sirius_chat.api import Message, create_async_engine
 
 engine = create_async_engine(provider)
-transcript = await engine.run_live_session(
+transcript = await engine.run_live_session(config=config)
+transcript = await engine.run_live_message(
     config=config,
-    human_turns=[Message(role="user", speaker="小王", content="请给我发布建议")],
+    transcript=transcript,
+    turn=Message(role="user", speaker="小王", content="请给我发布建议"),
 )
+```
+
+`Message` 支持 `reply_mode` 控制该条用户消息是否触发主 AI 回复：
+
+- `"always"`：始终回复（默认值）。
+- `"never"`：仅写入记忆与 transcript，不触发回复。
+- `"auto"`：由引擎根据内容推断是否需要回复（如疑问句、@助手、请求语气时更倾向回复）。
+
+推荐实时接入方式（每次仅传入一条上游消息）：
+
+```python
+transcript = await engine.run_live_session(config=config)  # 一次性初始化
+
+for incoming in stream_of_messages:
+    transcript = await engine.run_live_message(
+        config=config,
+        transcript=transcript,
+        turn=Message(role="user", speaker=incoming.speaker, content=incoming.content),
+    )
+```
+
+`run_live_message` 默认使用会话级 `session_reply_mode`（配置于 `OrchestrationPolicy`），外部无需逐条传 `reply_mode`。
+
+`reply_mode="auto"` 的意愿系统可通过 `OrchestrationPolicy` 调参：
+
+- `auto_reply_user_cadence_seconds`：单用户发言间隔阈值（默认 7 秒，低于该值会增加“少回复”惩罚）。
+- `auto_reply_group_window_seconds`：群聊密度统计窗口（默认 8 秒）。
+- `auto_reply_group_penalty_start_count`：窗口内从第几条消息开始施加群聊密度惩罚（默认 2）。
+- `auto_reply_assistant_cooldown_seconds`：AI 连续发言冷却时间（默认 12 秒）。
+- `auto_reply_base_score` / `auto_reply_threshold`：基础意愿值与回复阈值。
+- `auto_reply_probability_coefficient`：当分数未过阈值时，按 `score * coefficient` 计算回复概率系数（0 表示关闭概率兜底）。
+- `auto_reply_probability_floor`：概率兜底最小值，避免长期不参与回复。
+- `auto_reply_threshold_min` / `auto_reply_threshold_max`：动态阈值钳制范围。
+- `auto_reply_threshold_boost_start_count`：群聊窗口内达到该消息数后开始上调回复阈值（默认 4）。
+- `session_reply_mode`：会话级回复策略（`always`/`never`/`auto`），用于 `run_live_message`。
+
+跨多次 `run_live_message` 调用时，若复用同一个 `transcript`，引擎会复用 `transcript.reply_runtime`
+中的临时节奏状态（用户最近发言时间、群聊窗口时间序列、最近 AI 回复时间），从而保持
+`reply_mode="auto"` 的连续拟人节奏。
+
+示例：
+
+```python
+transcript = await engine.run_live_session(config=config)
+for turn in [
+    Message(role="user", speaker="小王", content="今天开完周会，记录一下进展", reply_mode="never"),
+    Message(role="user", speaker="小王", content="请你给我一个明天的优先级建议", reply_mode="auto"),
+]:
+    transcript = await engine.run_live_message(
+        config=config,
+        transcript=transcript,
+        turn=turn,
+        session_reply_mode=turn.reply_mode,
+    )
 ```
 
 多模态输入示例（阶段二）：
@@ -296,12 +357,13 @@ print(baseline.to_dict())
 
 #### Transcript 对象 API 参考
 
-`run_live_session()` 与 `run_session()` 返回的 `Transcript` 对象包含完整的会话记录。
+`run_session()`、`run_live_session()`（初始化）与 `run_live_message()` 返回的 `Transcript` 对象包含完整的会话记录。
 
 **主要属性**：
 
 ```python
 transcript = await engine.run_live_session(...)
+transcript = await engine.run_live_message(...)
 
 # 会话消息列表
 messages: list[Message]  # 所有轮次的消息（user + agent）
@@ -453,7 +515,7 @@ sirius-chat --config examples/session.json --work-path data/session_runtime
 
 ## 方式三：动态群聊（参与者预先未知）
 
-当参与者是动态加入（例如群聊环境）时，使用 `run_live_session`：
+当参与者是动态加入（例如群聊环境）时，先初始化会话，再逐条调用 `run_live_message`：
 
 ```python
 import asyncio
@@ -470,11 +532,19 @@ config = create_session_config_from_selected_agent(
 
 human_turns = [
     Message(role="user", speaker="王PM", content="我是产品经理，偏好快速试点"),
-    Message(role="user", speaker="小李", content="我是财务，关注成本"),
+    Message(role="user", speaker="小李", content="我是财务，关注成本", reply_mode="never"),
 ]
 
 async def main() -> None:
-    transcript = await engine.run_live_session(config=config, human_turns=human_turns)
+    transcript = await engine.run_live_session(config=config)
+    for turn in human_turns:
+        transcript = await engine.run_live_message(
+            config=config,
+            transcript=transcript,
+            turn=turn,
+            session_reply_mode=turn.reply_mode,
+            finalize_and_persist=False,
+        )
 
 asyncio.run(main())
 ```
@@ -547,15 +617,16 @@ config = SessionConfig(
 )
 ```
 
-2. **动态群聊**（参与者运行时出现）→ 使用 User 与 run_live_session
+2. **动态群聊**（参与者运行时出现）→ 使用 User + run_live_session 初始化 + run_live_message 逐条输入
 
 ```python
 # 运行时动态添加参与者
-human_turns=[
+transcript = await engine.run_live_session(config=config)
+for turn in [
     Message(role="user", speaker="小王", content="..."),
     Message(role="user", speaker="新的人", content="..."),  # 自动创建
-]
-transcript = await engine.run_live_session(config, human_turns)
+]:
+    transcript = await engine.run_live_message(config=config, transcript=transcript, turn=turn)
 
 # 访问识别结果
 for user_id, user in transcript.users.items():
@@ -670,7 +741,15 @@ from sirius_chat.performance import PerformanceProfiler, Benchmark
 # 上下文管理器方式
 with PerformanceProfiler("session_execution"):
     # 执行会话逻辑
-    transcript = await engine.run_live_session(config=config, human_turns=human_turns)
+    transcript = await engine.run_live_session(config=config)
+    for turn in human_turns:
+        transcript = await engine.run_live_message(
+            config=config,
+            transcript=transcript,
+            turn=turn,
+            session_reply_mode=turn.reply_mode,
+            finalize_and_persist=False,
+        )
 
 # 装饰器方式
 from sirius_chat.performance import profile_async

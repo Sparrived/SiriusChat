@@ -23,7 +23,15 @@ async def _run() -> None:
         Message(role="user", speaker="小王", content="建议先在一线城市灰度。"),
     ]
 
-    transcript = await engine.run_live_session(config=config, human_turns=human_turns)
+    transcript = await engine.run_live_session(config=config)
+    for turn in human_turns:
+        transcript = await engine.run_live_message(
+            config=config,
+            transcript=transcript,
+            turn=turn,
+            session_reply_mode=turn.reply_mode,
+            finalize_and_persist=False,
+        )
     for message in transcript.messages:
         if message.speaker:
             print(f"[{message.speaker}] {message.content}")
