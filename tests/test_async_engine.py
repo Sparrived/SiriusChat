@@ -1021,6 +1021,56 @@ def test_event_extract_runs_for_consecutive_messages_without_dedup() -> None:
     asyncio.run(_run())
 
 
+def test_memory_extract_provider_timeout_does_not_block_live_message() -> None:
+    class SlowAsyncProvider:
+        async def generate_async(self, request: GenerationRequest) -> str:
+            purpose = str(getattr(request, "purpose", "") or "")
+            if purpose == "memory_extract":
+                await asyncio.sleep(0.2)
+                return '{"inferred_persona":"不应到达"}'
+            return "ok"
+
+    async def _run() -> None:
+        provider = SlowAsyncProvider()
+        engine = create_async_engine(provider)
+        engine_cls = type(engine)
+        original_timeout = engine_cls._TASK_TIMEOUT_SECONDS_DEFAULT
+        engine_cls._TASK_TIMEOUT_SECONDS_DEFAULT = 0.05
+
+        try:
+            config = SessionConfig(
+                work_path=Path("data/tests/memory_extract_timeout"),
+                preset=AgentPreset(
+                    agent=Agent(name="主助手", persona="异步测试", model="mock-model"),
+                    global_system_prompt="测试系统提示词",
+                ),
+                orchestration=OrchestrationPolicy(
+                    unified_model="mock-model",
+                    session_reply_mode="never",
+                    task_enabled={
+                        "memory_extract": True,
+                        "multimodal_parse": False,
+                        "event_extract": False,
+                    },
+                ),
+            )
+
+            transcript = await _run_live_turns(
+                engine=engine,
+                config=config,
+                human_turns=[
+                    Message(role="user", speaker="小王", content="这条消息会触发慢速提取", reply_mode="never"),
+                ],
+            )
+
+            stats = transcript.orchestration_stats.get("memory_extract", {})
+            assert int(stats.get("failed_provider", 0)) >= 1
+        finally:
+            engine_cls._TASK_TIMEOUT_SECONDS_DEFAULT = original_timeout
+
+    asyncio.run(_run())
+
+
 def test_run_live_session_reply_mode_auto_threshold_is_configurable() -> None:
     async def _run() -> None:
         provider = MockProvider(responses=["低阈值触发的回复"])

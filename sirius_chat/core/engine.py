@@ -63,11 +63,14 @@ class LiveSessionContext:
 class AsyncRolePlayEngine:
     provider: LLMProvider | AsyncLLMProvider
     _live_session_contexts: dict[int, LiveSessionContext] = field(default_factory=dict, init=False, repr=False)
+    _orchestration_log_cache: set[str] = field(default_factory=set, init=False, repr=False)
 
     _TASK_MEMORY_EXTRACT = "memory_extract"
     _TASK_MULTIMODAL_PARSE = "multimodal_parse"
     _TASK_EVENT_EXTRACT = "event_extract"
     _TASK_MEMORY_MANAGER = "memory_manager"
+    _TASK_TIMEOUT_SECONDS_DEFAULT = 45.0
+    _TASK_TIMEOUT_SECONDS_CHAT_MAIN = 90.0
     _SUPPORTED_MULTIMODAL_TYPES = {"image", "video", "audio", "text"}
     _MEMORY_METADATA_LINE_PATTERNS = (
         re.compile(
@@ -122,9 +125,12 @@ class AsyncRolePlayEngine:
         
         if orchestration.unified_model:
             # 方案1：所有任务使用 unified_model
-            logger.info(
-                f"多模型协同（方案1）：所有任务共用模型 '{orchestration.unified_model}'"
-            )
+            log_key = f"unified:{orchestration.unified_model.strip()}"
+            if log_key not in self._orchestration_log_cache:
+                logger.info(
+                    f"多模型协同（方案1）：所有任务共用模型 '{orchestration.unified_model}'"
+                )
+                self._orchestration_log_cache.add(log_key)
             return
         
         if orchestration.task_models:
@@ -142,10 +148,26 @@ class AsyncRolePlayEngine:
                 raise OrchestrationConfigError(
                     {task: [task] for task in missing_tasks}
                 )
-            logger.info(
-                f"多模型协同（方案2）：按任务配置模型 - {orchestration.task_models}"
+            enabled_flag = {
+                task: bool(orchestration.task_enabled.get(task, True))
+                for task in self._REQUIRED_TASKS
+            }
+            log_key = (
+                "task_models:"
+                f"{json.dumps(dict(sorted(orchestration.task_models.items())), ensure_ascii=False, sort_keys=True)}|"
+                f"{json.dumps(enabled_flag, ensure_ascii=False, sort_keys=True)}"
             )
+            if log_key not in self._orchestration_log_cache:
+                logger.info(
+                    f"多模型协同（方案2）：按任务配置模型 - {orchestration.task_models}"
+                )
+                self._orchestration_log_cache.add(log_key)
             return
+
+    def _get_task_timeout_seconds(self, task_name: str) -> float:
+        if task_name == "chat_main":
+            return self._TASK_TIMEOUT_SECONDS_CHAT_MAIN
+        return self._TASK_TIMEOUT_SECONDS_DEFAULT
     
     def get_model_for_task(self, config: SessionConfig, task_name: str) -> str:
         """根据多模型协同配置获取任务模型。
@@ -390,9 +412,13 @@ class AsyncRolePlayEngine:
     ) -> str:
         last_error: RuntimeError | None = None
         attempts = max(1, retry_times + 1)
+        timeout_seconds = self._get_task_timeout_seconds(task_name)
         for index in range(attempts):
             try:
-                content = await self._call_provider(request_payload)
+                content = await asyncio.wait_for(
+                    self._call_provider(request_payload),
+                    timeout=timeout_seconds,
+                )
                 prompt_text = request_payload.system_prompt + "\n" + "\n".join(
                     item.get("content", "") for item in request_payload.messages
                 )
@@ -412,6 +438,13 @@ class AsyncRolePlayEngine:
                     )
                 )
                 return content
+            except asyncio.TimeoutError as exc:
+                last_error = RuntimeError(
+                    f"提供商调用超时：task={task_name}, model={request_payload.model}, timeout={timeout_seconds:.0f}s"
+                )
+                if index >= attempts - 1:
+                    break
+                await asyncio.sleep(min(0.05 * (2**index), 0.3))
             except RuntimeError as exc:
                 last_error = exc
                 if index >= attempts - 1:

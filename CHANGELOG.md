@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+## [0.5.11] - 2026-04-07
+
+### Changed
+- 引擎层 provider 调用新增超时兜底，避免上游请求长时间阻塞导致消息处理卡住
+- orchestration 配置日志增加去重，同一配置不再在每条消息重复打印“多模型协同（方案2）”
+
+### Test
+- 新增回归测试，验证 memory_extract 超时不会阻塞 live message 执行
+
 ## [0.5.10] - 2026-04-07
 
 ### Changed
