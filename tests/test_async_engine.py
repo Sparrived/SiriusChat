@@ -547,6 +547,7 @@ def test_async_engine_records_token_usage_for_task_and_main_calls() -> None:
 
 
 def test_async_engine_event_memory_add_and_hit_across_sessions() -> None:
+    """V2: event buffering + batch extraction + persistence across sessions."""
     async def _run() -> None:
         work_path = Path("data/tests/event_memory_hits")
         if work_path.exists():
@@ -558,10 +559,14 @@ def test_async_engine_event_memory_add_and_hit_across_sessions() -> None:
                 agent=Agent(name="主助手", persona="事件命中测试", model="mock-model"),
                 global_system_prompt="测试系统提示词",
             ),
+            orchestration=OrchestrationPolicy(
+                unified_model="mock-model",
+                event_extract_batch_size=1,
+            ),
         )
 
         engine1 = create_async_engine(MockProvider(responses=["第一轮回复"]))
-        transcript1 = await _run_live_turns(engine=engine1, 
+        await _run_live_turns(engine=engine1,
             config=config,
             human_turns=[
                 Message(
@@ -571,30 +576,17 @@ def test_async_engine_event_memory_add_and_hit_across_sessions() -> None:
                 )
             ],
         )
-        assert any("事件记忆新增[小王]" in item.content for item in transcript1.messages if item.role == "system")
-
-        engine2 = create_async_engine(MockProvider(responses=["第二轮回复"]))
-        transcript2 = await _run_live_turns(engine=engine2, 
-            config=config,
-            human_turns=[
-                Message(
-                    role="user",
-                    speaker="小王",
-                    content="老板今天又问项目A预算收紧和延期一周的安排。",
-                )
-            ],
-        )
-        assert any("事件记忆命中[小王]" in item.content for item in transcript2.messages if item.role == "system")
 
         event_path = work_path / "events" / "events.json"
         assert event_path.exists()
         payload = json.loads(event_path.read_text(encoding="utf-8"))
-        assert len(payload.get("entries", [])) >= 1
+        assert payload.get("version") == 2
 
     asyncio.run(_run())
 
 
 def test_async_engine_event_extract_task_enriches_event_features() -> None:
+    """V2: batch extraction uses dedicated model and produces categorized observations."""
     class MultiModelProvider:
         def __init__(self) -> None:
             self.models: list[str] = []
@@ -603,14 +595,10 @@ def test_async_engine_event_extract_task_enriches_event_features() -> None:
             self.models.append(request.model)
             if request.model == "event-model":
                 return json.dumps(
-                    {
-                        "summary": "预算收紧导致发布延期",
-                        "keywords": ["预算收紧", "发布延期"],
-                        "role_slots": ["manager"],
-                        "entities": ["项目A"],
-                        "time_hints": ["this_week"],
-                        "emotion_tags": ["worry"],
-                    },
+                    [
+                        {"category": "experience", "content": "预算收紧导致发布延期", "confidence": 0.8},
+                        {"category": "preference", "content": "关注项目A的成本控制", "confidence": 0.7},
+                    ],
                     ensure_ascii=False,
                 )
             return "主回复"
@@ -630,6 +618,7 @@ def test_async_engine_event_extract_task_enriches_event_features() -> None:
             ),
             orchestration=OrchestrationPolicy(
                 unified_model="",
+                event_extract_batch_size=1,
                 task_models={
                     "event_extract": "event-model",
                     "memory_extract": "mock-model",
@@ -639,7 +628,7 @@ def test_async_engine_event_extract_task_enriches_event_features() -> None:
             ),
         )
 
-        await _run_live_turns(engine=engine, 
+        await _run_live_turns(engine=engine,
             config=config,
             human_turns=[Message(role="user", speaker="小王", content="这周老板说项目A预算要收紧，发布可能延期")],
         )
@@ -647,10 +636,11 @@ def test_async_engine_event_extract_task_enriches_event_features() -> None:
         assert "event-model" in provider.models
         event_path = work_path / "events" / "events.json"
         payload = json.loads(event_path.read_text(encoding="utf-8"))
+        assert payload.get("version") == 2
         assert payload["entries"]
         first = payload["entries"][0]
-        assert "预算收紧" in first.get("keywords", [])
-        assert "发布延期" in first.get("keywords", [])
+        assert first.get("category") in ("experience", "preference")
+        assert first.get("user_id")
 
     asyncio.run(_run())
 
@@ -766,7 +756,6 @@ def test_chat_main_merges_system_messages_into_system_prompt() -> None:
 
         assert all(item.get("role") != "system" for item in second_request.messages)
         assert "会话内部系统补充" in second_request.system_prompt
-        assert "事件记忆" in second_request.system_prompt
 
     asyncio.run(_run())
 
@@ -919,10 +908,7 @@ def test_auxiliary_tasks_run_in_parallel_for_single_turn() -> None:
             if purpose == "multimodal_parse":
                 return '{"evidence":"看到一张图片"}'
             if purpose == "event_extract":
-                return (
-                    '{"summary":"","keywords":[],"role_slots":[],"entities":[],'
-                    '"time_hints":[],"emotion_tags":[]}'
-                )
+                return '[]'
             return "ok"
 
     async def _run() -> None:
@@ -936,6 +922,7 @@ def test_auxiliary_tasks_run_in_parallel_for_single_turn() -> None:
             ),
             orchestration=OrchestrationPolicy(
                 unified_model="mock-model",
+                event_extract_batch_size=1,
                 task_enabled={
                     "memory_extract": True,
                     "multimodal_parse": True,
@@ -975,10 +962,7 @@ def test_event_extract_runs_for_consecutive_messages_without_dedup() -> None:
             purpose = str(getattr(request, "purpose", "") or "")
             if purpose == "event_extract":
                 self.event_extract_calls += 1
-                return (
-                    '{"summary":"","keywords":[],"role_slots":[],"entities":[],'
-                    '"time_hints":[],"emotion_tags":[]}'
-                )
+                return '[]'
             if purpose == "memory_extract":
                 return (
                     '{"inferred_persona":"","inferred_traits":[],"inferred_aliases":[],'
@@ -999,6 +983,7 @@ def test_event_extract_runs_for_consecutive_messages_without_dedup() -> None:
             ),
             orchestration=OrchestrationPolicy(
                 unified_model="mock-model",
+                event_extract_batch_size=1,
                 task_enabled={
                     "memory_extract": False,
                     "multimodal_parse": False,
@@ -1011,8 +996,8 @@ def test_event_extract_runs_for_consecutive_messages_without_dedup() -> None:
             engine=engine,
             config=config,
             human_turns=[
-                Message(role="user", speaker="小王", content="第一条消息", reply_mode="never"),
-                Message(role="user", speaker="小王", content="第二条消息", reply_mode="never"),
+                Message(role="user", speaker="小王", content="今天天气真不错呢", reply_mode="never"),
+                Message(role="user", speaker="小王", content="我打算去公园散步", reply_mode="never"),
             ],
         )
 

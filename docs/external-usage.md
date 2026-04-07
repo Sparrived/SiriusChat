@@ -55,6 +55,7 @@ async def main() -> None:
         config=config,
         transcript=transcript,
         turn=Message(role="user", speaker="校务主任", content="我关心预算和安全约束"),
+        environment_context="当前群名: 教务讨论群\n群成员数: 15",  # 可选：注入外部环境信息
     )
     for message in transcript.messages:
         if message.speaker:
@@ -158,6 +159,11 @@ orchestration = OrchestrationPolicy(
     # === 执行频率控制 ===
     memory_extract_batch_size=3,           # 每3条消息执行一次
     memory_extract_min_content_length=50,  # 消息内容需≥50字符才触发
+    
+    # === SKILL 系统 ===
+    enable_skills=True,                    # 启用 SKILL 系统
+    skill_execution_timeout=30.0,          # SKILL 最大执行时长（秒），0=不限制
+    max_skill_rounds=3,                    # AI 单轮最多调用 SKILL 次数
     
     # === 提示词驱动分割（可选） ===
     enable_prompt_driven_splitting=True,   # 启用AI主动分割消息
@@ -280,6 +286,7 @@ transcript = await engine.run_live_message(
     config=config,
     transcript=transcript,
     turn=Message(role="user", speaker="小王", content="请给我发布建议"),
+    environment_context="群聊:技术部 | 在线:12人",  # 可选
 )
 ```
 
@@ -299,6 +306,7 @@ for incoming in stream_of_messages:
         config=config,
         transcript=transcript,
         turn=Message(role="user", speaker=incoming.speaker, content=incoming.content),
+        environment_context=incoming.env_context,  # 可选：传递外部环境信息
     )
 ```
 

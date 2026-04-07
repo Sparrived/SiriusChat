@@ -63,7 +63,7 @@ def test_generated_prompt_is_used_by_engine() -> None:
         )
 
         assert "先共情后给行动项" in provider.requests[1].system_prompt
-        assert "角色设定：行动导向" in provider.requests[1].system_prompt
+        assert "设定: 行动导向" in provider.requests[1].system_prompt
         assert provider.requests[1].temperature == 0.35
         assert provider.requests[1].max_tokens == 256
 

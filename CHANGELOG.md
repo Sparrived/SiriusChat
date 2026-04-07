@@ -4,6 +4,30 @@
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-04-10
+
+### Added
+- **System Prompt 瘦身**：大幅压缩系统提示词体积（约 22%），合并 `<output_constraints>` 与 `<security_constraints>` 为 `<constraints>`，压缩参与者记忆格式（`?`/`~` 替代冗长标签）
+- **SKILL 执行超时**：`OrchestrationPolicy` 新增 `skill_execution_timeout`（默认 30 秒），超时后返回 `SkillResult(success=False)` 及友好提示
+- **环境上下文注入**：`run_live_message` / `arun_live_message` 新增 `environment_context` 参数，允许外部注入群组信息、渠道上下文等附加信息，自动写入系统提示词的 `<environment_context>` 段
+- **SKILL 编写指南**：新增 `docs/skill-authoring.md`，提供 AI 友好的 SKILL 开发模板与规范
+- **外部调用同步指南**：新增 `docs/integration-sync-guide.md`，供 AI 编码助手在变更接口后快速同步外部调用
+- 新增 13 个测试覆盖超时、环境上下文、提示词紧凑格式
+
+## [0.7.0] - 2026-04-09
+
+### Added
+- **SKILL 系统**：AI 可在运行时调用外部 Python 代码的扩展机制
+  - `sirius_chat/skills/models.py`：SkillDefinition、SkillParameter、SkillResult 数据模型
+  - `sirius_chat/skills/registry.py`：从 `{work_path}/skills/` 自动发现并加载 SKILL 文件
+  - `sirius_chat/skills/executor.py`：参数校验、类型转换和安全执行
+  - `sirius_chat/skills/data_store.py`：每个 SKILL 独立的 JSON 持久化键值存储
+  - `OrchestrationPolicy` 新增 `enable_skills`、`skill_call_marker`、`max_skill_rounds` 配置
+  - 引擎通过 `[SKILL_CALL: name | {params}]` 提示词驱动机制检测和执行 SKILL 调用
+  - 持久化数据通过 `data_store` 参数自动注入 SKILL 的 `run()` 函数
+  - 新增示例 SKILL：`examples/skills/system_info.py`
+  - 新增 50 个 SKILL 系统专项测试
+
 ## [0.6.0] - 2026-04-08
 
 ### Breaking Changes

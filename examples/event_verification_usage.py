@@ -1,122 +1,143 @@
 #!/usr/bin/env python
 """
-Example: LLM-assisted Event Verification System
+Example: Event Memory V2 — Buffer-based Batch Observation Extraction
 
-Demonstrates the two-level event memory strategy:
-1. Fast path: Keyword matching and similarity scoring (no LLM calls)
-2. Verification path: LLM validates pending events when they accumulate
+Demonstrates the V2 event memory strategy:
+1. Messages are buffered per user (no LLM calls on each message)
+2. When buffer reaches batch_size, LLM batch-extracts user observations
+3. Observations are categorized and directly written to user memory
 
-This prevents trivial conversations (greetings, chatter) from being recorded
-while ensuring meaningful events are properly captured and enriched.
+This avoids the V1 problem of generating an event for nearly every message.
 """
 
 import asyncio
-from pathlib import Path
 
-from sirius_chat.memory import UserProfile, EventMemoryManager, EventMemoryFileStore
+from sirius_chat.memory import EventMemoryManager
+from sirius_chat.memory.event import OBSERVATION_CATEGORIES
 from sirius_chat.providers.base import GenerationRequest
 
 
-async def demo_event_verification():
+async def demo_buffer_and_extract():
     """
-    Demo: How event verification works.
-    
+    Demo: How V2 buffer-based extraction works.
+
     Scenario:
-    - User mentions some activities over 3+ interactions
-    - Each mention creates a pending event (verified=False)
-    - When mention_count >= 3, LLM verifies if it's worth recording
+    - User sends several messages
+    - Messages are buffered until batch_size is reached
+    - LLM extracts structured observations in one call
     """
-    
-    # Initialize event memory manager
+
     event_manager = EventMemoryManager()
-    
-    # Sample interactions that should accumulate into one event
-    mentions = [
-        "We discussed the Q4 roadmap yesterday",  # Actual event
-        "Yeah, the Q4 roadmap looks good",  # Related mention
-        "I think the Q4 roadmap needs some adjustments",  # Another mention
+    user_id = "user_alice"
+    batch_size = 3
+
+    messages = [
+        "I really love Italian coffee, especially espresso",
+        "My sister just moved to Tokyo last week",
+        "I've been trying to learn piano for two months",
+        "Espresso is my daily morning ritual",
     ]
-    
-    # Register mentions (these are usually called by AsyncRolePlayEngine)
-    print("📝 Registering mentions...")
-    for mention in mentions:
-        result = event_manager.absorb_mention(
-            content=mention,
-            known_entities=["Q4 roadmap"],
-        )
-        entry = result.get("entry")
-        print(f"  - '{mention[:40]}...'")
-        print(f"    Level: {result['level']}, Verified: {entry.verified}, Mentions: {entry.mention_count}")
-    
-    print(f"\n📊 Events before verification:")
-    print(f"  Total: {len(event_manager.entries)}")
-    for entry in event_manager.entries:
-        print(f"    {entry.event_id}: '{entry.summary[:50]}...' (verified={entry.verified}, mentions={entry.mention_count})")
-    
-    # Simulate LLM verification
-    print("\n🤖 Running LLM verification on pending events...")
-    
-    # In production, use actual provider:
-    # from sirius_chat.providers import create_provider
-    # provider = create_provider("openai", api_key=..., base_url=...)
-    
-    # For demo, use mock provider
+
+    print("1. Buffering messages (no LLM calls)...")
+    for msg in messages:
+        event_manager.buffer_message(user_id=user_id, content=msg)
+        ready = event_manager.should_extract(user_id=user_id, batch_size=batch_size)
+        print(f"  buffered: '{msg[:50]}' | ready={ready}")
+
+    # Mock provider that returns structured observations
     class DemoAsyncProvider:
         async def generate_async(self, request: GenerationRequest) -> str:
-            # Simulated LLM response
-            return """{
-                "record": "yes",
-                "reason": "Multiple mentions about Q4 roadmap planning",
-                "summary": "Team discussed and reviewed Q4 product roadmap with proposed adjustments",
-                "keywords": ["Q4", "roadmap", "planning", "adjustments"],
-                "role_slots": ["manager", "teammate"],
-                "time_hints": ["yesterday", "Q4"],
-                "emotion_tags": []
-            }"""
-    
-    result = await event_manager.finalize_pending_events(
+            return """[
+                {"category": "preference", "content": "loves Italian coffee, especially espresso", "confidence": 0.9},
+                {"category": "relationship", "content": "has a sister who recently moved to Tokyo", "confidence": 0.8},
+                {"category": "goal", "content": "learning piano, two months in", "confidence": 0.7}
+            ]"""
+
+    print("\n2. Extracting observations (single LLM call)...")
+    new_entries = await event_manager.extract_observations(
+        user_id=user_id,
+        user_name="Alice",
         provider_async=DemoAsyncProvider(),
-        model_name="gpt-4",
-        min_mentions=3
+        model_name="gpt-4o-mini",
     )
-    
-    print(f"  Verified: {result['verified_count']}")
-    print(f"  Rejected: {result['rejected_count']}")
-    print(f"  Still pending: {result['pending_count']}")
-    
-    print(f"\n📊 Events after verification:")
-    for entry in event_manager.entries:
-        print(f"  {entry.event_id}:")
-        print(f"    Summary: {entry.summary}")
-        print(f"    Verified: {entry.verified}")
-        print(f"    Keywords: {', '.join(entry.keywords)}")
-        print(f"    Roles: {', '.join(entry.role_slots)}")
-        print(f"    Time hints: {', '.join(entry.time_hints)}")
+
+    print(f"   Extracted {len(new_entries)} observations:\n")
+    for entry in new_entries:
+        print(f"   [{entry.category}] {entry.summary} (confidence={entry.confidence})")
+        print(f"     evidence: {entry.evidence}")
+
+    # Query observations for a user
+    print("\n3. Querying observations by user...")
+    user_obs = event_manager.get_user_observations(user_id)
+    print(f"   {user_id} has {len(user_obs)} observations")
+
+    # Check relevance of new message against existing observations
+    print("\n4. Checking relevance of new content...")
+    hit = event_manager.check_relevance(user_id=user_id, content="I had a great espresso today")
+    if hit:
+        print(f"   Relevant! level={hit['level']}, score={hit['score']:.2f}")
+    else:
+        print("   No relevant observations found")
 
 
-async def demo_query_behavior():
+def demo_serialization():
     """
-    Demo: Different query behaviors with verified vs pending events.
+    Demo: V2 serialization with automatic V1 migration.
     """
     event_manager = EventMemoryManager()
-    
-    # Create mix of verified and pending events
-    # (In real usage, these come from different stages of accumulation)
-    
-    print("\n📋 Query behavior example:")
-    print(f"  top_events(include_pending=False): Only returns verified events")
-    print(f"  top_events(include_pending=True):  Returns verified + pending (mention_count>=2)")
-    print(f"  This allows filtering out trivial conversations in production")
-    print(f"  while keeping them available for debugging.")
+    event_manager.buffer_message(user_id="u1", content="test message")
+
+    # Serialize
+    data = event_manager.to_dict()
+    print("\n5. Serialized format:")
+    print(f"   version: {data['version']}")
+    print(f"   entries: {len(data['entries'])}")
+
+    # Deserialize (also handles V1 auto-migration)
+    restored = EventMemoryManager.from_dict(data)
+    print(f"   Restored {len(restored.entries)} entries")
+
+    # V1 data is auto-migrated
+    v1_data = {
+        "entries": [{
+            "event_id": "legacy_001",
+            "summary": "old event",
+            "keywords": ["test"],
+            "role_slots": [],
+            "entities": ["Alice"],
+            "time_hints": ["yesterday"],
+            "emotion_tags": ["happy"],
+            "hit_count": 5,
+            "verified": True,
+            "first_seen": "2025-01-01T00:00:00",
+            "last_seen": "2025-01-01T00:00:00",
+            "mention_count": 5,
+        }]
+    }
+    migrated = EventMemoryManager.from_dict(v1_data)
+    entry = migrated.entries[0]
+    print(f"\n6. V1 auto-migration:")
+    print(f"   event_id={entry.event_id}, category={entry.category}")
+    print(f"   confidence={entry.confidence}, evidence={entry.evidence}")
+
+
+def demo_categories():
+    """
+    Demo: Available observation categories.
+    """
+    print("\n7. Observation categories:")
+    for cat in sorted(OBSERVATION_CATEGORIES):
+        print(f"   - {cat}")
 
 
 if __name__ == "__main__":
     print("=" * 60)
-    print("LLM-Assisted Event Verification System Demo")
-    print("=" * 60)
-    
-    asyncio.run(demo_event_verification())
-    asyncio.run(demo_query_behavior())
+    print("Event Memory V2 — Batch Observation Extraction Demo")
+    print("=" * 60 + "\n")
+
+    asyncio.run(demo_buffer_and_extract())
+    demo_serialization()
+    demo_categories()
     
     print("\n" + "=" * 60)
     print("Integration points:")

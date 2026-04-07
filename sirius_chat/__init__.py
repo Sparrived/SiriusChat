@@ -38,6 +38,12 @@ from sirius_chat.api import (
     RolePlayQuestion,
     select_generated_agent_profile,
     summarize_token_usage,
+    SkillDefinition,
+    SkillParameter,
+    SkillResult,
+    SkillRegistry,
+    SkillExecutor,
+    SkillDataStore,
 )
 from sirius_chat.exceptions import (
     ConfigError,
@@ -120,6 +126,13 @@ __all__ = [
     "CostMetricsMiddleware",
     # Engine
     "AsyncRolePlayEngine",
+    # Skill System
+    "SkillDefinition",
+    "SkillParameter",
+    "SkillResult",
+    "SkillRegistry",
+    "SkillExecutor",
+    "SkillDataStore",
     # API Functions
     "create_async_engine",
     "ainit_live_session",

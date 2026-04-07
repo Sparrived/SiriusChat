@@ -75,7 +75,6 @@ def test_roleplay_engine_multi_human_single_ai_transcript() -> None:
         assert len(assistant_messages) == 4
         assert assistant_messages[0].speaker == "主助手"
         assert assistant_messages[-1].content == "主助手回复 B-2"
-        assert any("事件记忆" in item.content for item in system_messages)
 
     asyncio.run(_run())
 
@@ -300,8 +299,10 @@ def test_user_memory_is_persisted_per_user_file_across_new_sessions(tmp_path) ->
             transcript=None,
         )
 
-        assert "成本" in provider.requests[-1].system_prompt
-        assert "灰度" in provider.requests[-1].system_prompt
+        chat_requests = [r for r in provider.requests if r.purpose == "chat_main"]
+        assert chat_requests, "Should have at least one chat_main request"
+        assert "成本" in chat_requests[-1].system_prompt
+        assert "灰度" in chat_requests[-1].system_prompt
 
     asyncio.run(_run())
 

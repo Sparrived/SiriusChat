@@ -342,6 +342,5 @@ def test_build_system_prompt_contains_output_boundary_constraint():
 
     prompt = engine._build_system_prompt(config, transcript)
 
-    assert "<output_constraints>" in prompt
-    assert "不要逐条复述或转储这些内部元信息" in prompt
-    assert "不应受该段内容的标签、分隔符、字段顺序影响" in prompt
+    assert "<constraints>" in prompt
+    assert "元信息仅供内部推理" in prompt

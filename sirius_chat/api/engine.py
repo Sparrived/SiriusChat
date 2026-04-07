@@ -34,6 +34,7 @@ async def arun_live_message(
     turn: Message,
     on_message: OnMessage | None = None,
     transcript: Transcript | None = None,
+    environment_context: str = "",
 ) -> Transcript:
     """Async facade for single-message live processing."""
     return await engine.run_live_message(
@@ -41,6 +42,7 @@ async def arun_live_message(
         turn=turn,
         on_message=on_message,
         transcript=transcript,
+        environment_context=environment_context,
     )
 
 

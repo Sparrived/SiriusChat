@@ -73,6 +73,14 @@ from sirius_chat.config import (
     auto_configure_multimodal_agent,
     create_agent_with_multimodal,
 )
+from sirius_chat.skills import (
+    SkillDefinition,
+    SkillParameter,
+    SkillResult,
+    SkillRegistry,
+    SkillExecutor,
+    SkillDataStore,
+)
 
 __all__ = [
     "Agent",
@@ -140,4 +148,11 @@ __all__ = [
     "auto_configure_multimodal_agent",
     "create_agent_with_multimodal",
     "configure_full_orchestration",
+    # Skill system
+    "SkillDefinition",
+    "SkillParameter",
+    "SkillResult",
+    "SkillRegistry",
+    "SkillExecutor",
+    "SkillDataStore",
 ]

@@ -1,256 +1,275 @@
-"""Event memory manager implementation"""
+"""Event memory manager v2 — observation-based, user-scoped, batch extraction.
+
+Core changes from v1:
+- Messages are buffered per-user, not processed individually.
+- LLM batch extraction replaces per-message heuristic clustering.
+- Observations are directly linked to a specific user_id.
+- Simple content-similarity deduplication replaces Jaccard feature scoring.
+"""
 
 from __future__ import annotations
 
+import json
+import logging
 from datetime import datetime
 from typing import Any
-import logging
-import re
 
-from sirius_chat.memory.event.models import ContextualEventInterpretation, EventMemoryEntry
+from sirius_chat.memory.event.models import EventMemoryEntry, OBSERVATION_CATEGORIES
 
 logger = logging.getLogger(__name__)
 
+# ────────────────────────────────────────────────────────────────
+# Tunables
+# ────────────────────────────────────────────────────────────────
+_MIN_CONTENT_LENGTH = 6        # 低于此长度的消息不缓冲
+_MAX_BUFFER_PER_USER = 20      # 单用户最大缓冲消息数
+_MAX_EVIDENCE_SAMPLES = 4      # 单条观察最大证据条数
+_MAX_MESSAGE_SAMPLE_LEN = 200  # 缓冲消息截断长度
+_SIMILARITY_MERGE_THRESHOLD = 0.55  # 字符集重合度高于此值视为重复
+
+_EXTRACTION_SYSTEM_PROMPT = (
+    "你是用户画像分析器。请分析参与者的对话消息，提取值得长期记住的观察信息。\n"
+    "如果消息内容过于日常（问候、简短回应、无信息量），返回空 JSON 数组 []。\n"
+    "请严格输出 JSON 数组，每个元素包含：\n"
+    "- category: string（preference|trait|relationship|experience|emotion|goal）\n"
+    "- content: string（简洁的自然语言描述，不超过50字）\n"
+    "- confidence: float（0.0-1.0，信息确定度）"
+)
+
+
+def _build_extraction_user_prompt(user_name: str, messages: list[str]) -> str:
+    numbered = "\n".join(f"{i + 1}. {m}" for i, m in enumerate(messages))
+    return (
+        f'以下是参与者 "{user_name}" 的近期对话消息：\n'
+        f"{numbered}\n\n"
+        "请提取对该参与者有长期参考价值的观察（偏好、特质、关系、经历、情绪模式、目标计划）。\n"
+        "如果没有有价值的信息，返回 []。"
+    )
+
+
+def _char_similarity(a: str, b: str) -> float:
+    """Character-set Jaccard — cheap proxy for semantic overlap."""
+    if not a or not b:
+        return 0.0
+    sa, sb = set(a), set(b)
+    union = len(sa | sb)
+    return len(sa & sb) / union if union else 0.0
+
 
 class EventMemoryManager:
-    """Manages event memory entries, clustering, and verification."""
-    
-    def __init__(self):
+    """Manages user-scoped observations with buffered batch extraction."""
+
+    def __init__(self) -> None:
         self.entries: list[EventMemoryEntry] = []
+        self._buffer: dict[str, list[str]] = {}   # user_id → buffered messages
 
-    _STOPWORDS = {
-        "我们",
-        "你们",
-        "他们",
-        "这个",
-        "那个",
-        "然后",
-        "就是",
-        "因为",
-        "所以",
-        "今天",
-        "昨天",
-        "刚才",
-        "现在",
-        "一下",
-    }
-
-    _ROLE_KEYWORDS = {
-        "老板": "manager",
-        "领导": "manager",
-        "同事": "peer",
-        "客户": "client",
-        "用户": "user",
-        "财务": "finance",
-        "运维": "ops",
-        "研发": "engineering",
-        "产品": "product",
-        "测试": "qa",
-    }
-
-    _TIME_KEYWORDS = {
-        "昨天": "yesterday",
-        "今天": "today",
-        "上周": "last_week",
-        "本周": "this_week",
-        "下周": "next_week",
-        "月底": "month_end",
-        "上线前": "before_release",
-        "发布前": "before_release",
-        "发布后": "after_release",
-    }
-
-    _EMOTION_KEYWORDS = {
-        "焦虑": "anxiety",
-        "担心": "worry",
-        "害怕": "fear",
-        "生气": "anger",
-        "高兴": "positive",
-        "开心": "positive",
-        "难过": "sadness",
-    }
-
-    @staticmethod
-    def _jaccard(left: list[str], right: list[str]) -> float:
-        """Calculate Jaccard similarity between two lists."""
-        left_set = set(item for item in left if item)
-        right_set = set(item for item in right if item)
-        if not left_set or not right_set:
-            return 0.0
-        overlap = len(left_set & right_set)
-        union = len(left_set | right_set)
-        return overlap / union if union else 0.0
+    # ── id generation ──────────────────────────────────────────
 
     def _next_event_id(self) -> str:
-        """Generate next event ID."""
         return f"evt_{len(self.entries) + 1:04d}"
 
-    def _extract_keywords(self, content: str, max_items: int = 10) -> list[str]:
-        """Extract keywords from content."""
-        tokens = re.findall(r"[A-Za-z0-9]{2,}", content)
-        chinese_only = re.sub(r"[^\u4e00-\u9fff]", "", content)
-        for size in (2, 3):
-            if len(chinese_only) < size:
+    # ── message buffering ──────────────────────────────────────
+
+    def buffer_message(self, *, user_id: str, content: str) -> None:
+        """Buffer a message for later batch extraction.
+
+        Very short / trivial messages are silently discarded.
+        """
+        text = content.strip()
+        if len(text) < _MIN_CONTENT_LENGTH:
+            return
+        buf = self._buffer.setdefault(user_id, [])
+        buf.append(text[:_MAX_MESSAGE_SAMPLE_LEN])
+        if len(buf) > _MAX_BUFFER_PER_USER:
+            buf[:] = buf[-_MAX_BUFFER_PER_USER:]
+
+    def should_extract(self, user_id: str, batch_size: int = 5) -> bool:
+        """Check whether buffered messages reached the extraction threshold."""
+        return len(self._buffer.get(user_id, [])) >= batch_size
+
+    def pending_buffer_counts(self) -> dict[str, int]:
+        """Return {user_id: buffered_message_count} for diagnostics."""
+        return {uid: len(msgs) for uid, msgs in self._buffer.items() if msgs}
+
+    # ── quick relevance check (no LLM) ────────────────────────
+
+    def check_relevance(self, *, user_id: str, content: str) -> dict[str, object]:
+        """Lightweight relevance check against existing observations.
+
+        Returns a dict compatible with the legacy *hit_payload* shape
+        so ``_compute_event_relevance_score`` keeps working.
+        """
+        user_entries = [e for e in self.entries if e.user_id == user_id and e.verified]
+        if not user_entries:
+            return {"level": "new", "score": 0.0}
+        best = max(_char_similarity(content, e.summary) for e in user_entries)
+        if best >= 0.35:
+            return {"level": "high", "score": best}
+        if best >= 0.20:
+            return {"level": "weak", "score": best}
+        return {"level": "new", "score": best}
+
+    # ── batch LLM extraction ──────────────────────────────────
+
+    async def extract_observations(
+        self,
+        *,
+        user_id: str,
+        user_name: str,
+        provider_async: Any,
+        model_name: str,
+        temperature: float = 0.3,
+        max_tokens: int = 512,
+    ) -> list[EventMemoryEntry]:
+        """Consume the buffer for *user_id* and return new/merged observations.
+
+        ``provider_async`` must expose an async ``generate_async(request)`` method
+        compatible with ``GenerationRequest``.
+        """
+        from sirius_chat.providers.base import GenerationRequest
+
+        messages = self._buffer.pop(user_id, [])
+        if not messages:
+            return []
+
+        request = GenerationRequest(
+            model=model_name,
+            system_prompt=_EXTRACTION_SYSTEM_PROMPT,
+            messages=[{
+                "role": "user",
+                "content": _build_extraction_user_prompt(user_name, messages),
+            }],
+            temperature=temperature,
+            max_tokens=max_tokens,
+            purpose="event_extract",
+        )
+
+        try:
+            raw = await provider_async.generate_async(request)
+        except Exception as exc:
+            logger.warning("观察提取 LLM 调用失败 (user=%s): %s", user_id, exc)
+            # 放回缓冲以便下次重试
+            self._buffer.setdefault(user_id, []).extend(messages)
+            return []
+
+        parsed = self._parse_extraction_response(raw)
+        if not parsed:
+            return []
+
+        now_iso = datetime.now().isoformat(timespec="seconds")
+        # 取最后几条消息作为证据
+        evidence = messages[-_MAX_EVIDENCE_SAMPLES:]
+
+        new_entries: list[EventMemoryEntry] = []
+        for item in parsed:
+            category = str(item.get("category", "custom")).strip().lower()
+            if category not in OBSERVATION_CATEGORIES:
+                category = "custom"
+            summary_text = str(item.get("content", "")).strip()
+            if not summary_text:
                 continue
-            for index in range(0, len(chinese_only) - size + 1):
-                tokens.append(chinese_only[index : index + size])
-        normalized: list[str] = []
-        for token in tokens:
-            value = token.strip().lower()
-            if not value or value in self._STOPWORDS:
+            confidence = max(0.0, min(1.0, float(item.get("confidence", 0.5))))
+
+            entry = EventMemoryEntry(
+                event_id=self._next_event_id(),
+                user_id=user_id,
+                category=category,
+                summary=summary_text[:100],
+                confidence=confidence,
+                evidence_samples=list(evidence),
+                created_at=now_iso,
+                updated_at=now_iso,
+                mention_count=1,
+                verified=True,  # LLM-produced — considered verified
+            )
+            merged = self._merge_or_add(entry)
+            new_entries.append(merged)
+
+        return new_entries
+
+    # ── finalize (session end) ─────────────────────────────────
+
+    async def finalize_pending_events(
+        self,
+        provider_async: Any,
+        model_name: str,
+        min_mentions: int = 3,  # kept for signature compat, unused in v2
+    ) -> dict[str, Any]:
+        """Flush all remaining buffers at session end.
+
+        Signature is kept compatible with v1 for engine integration.
+        Returns stats dict with verified_count / rejected_count / pending_count.
+        """
+        verified_count = 0
+        rejected_count = 0
+        for uid in list(self._buffer.keys()):
+            messages = self._buffer.get(uid, [])
+            if not messages:
                 continue
-            if value not in normalized:
-                normalized.append(value)
-            if len(normalized) >= max_items:
-                break
-        return normalized
-
-    def _extract_role_slots(self, content: str) -> list[str]:
-        """Extract role slots from content."""
-        values: list[str] = []
-        for keyword, slot in self._ROLE_KEYWORDS.items():
-            if keyword in content and slot not in values:
-                values.append(slot)
-        return values
-
-    def _extract_time_hints(self, content: str) -> list[str]:
-        """Extract time hints from content."""
-        values: list[str] = []
-        for keyword, tag in self._TIME_KEYWORDS.items():
-            if keyword in content and tag not in values:
-                values.append(tag)
-        return values
-
-    def _extract_emotion_tags(self, content: str) -> list[str]:
-        """Extract emotion tags from content."""
-        values: list[str] = []
-        for keyword, tag in self._EMOTION_KEYWORDS.items():
-            if keyword in content and tag not in values:
-                values.append(tag)
-        return values
-
-    def _extract_entities(self, content: str, known_entities: list[str]) -> list[str]:
-        """Extract entities from content."""
-        values: list[str] = []
-        for entity in known_entities:
-            item = entity.strip()
-            if item and item in content and item not in values:
-                values.append(item)
-        return values
-
-    def _build_feature_payload(self, content: str, known_entities: list[str]) -> dict[str, list[str] | str]:
-        """Build feature payload from content."""
-        summary = content.strip()
-        if len(summary) > 72:
-            summary = f"{summary[:72]}..."
+            results = await self.extract_observations(
+                user_id=uid,
+                user_name=uid,   # engine should pass real name at call site
+                provider_async=provider_async,
+                model_name=model_name,
+            )
+            verified_count += len(results)
+        pending_count = sum(len(v) for v in self._buffer.values())
         return {
-            "summary": summary,
-            "keywords": self._extract_keywords(content),
-            "role_slots": self._extract_role_slots(content),
-            "entities": self._extract_entities(content, known_entities),
-            "time_hints": self._extract_time_hints(content),
-            "emotion_tags": self._extract_emotion_tags(content),
+            "verified_count": verified_count,
+            "rejected_count": rejected_count,
+            "pending_count": pending_count,
         }
 
-    @staticmethod
-    def _normalize_feature_items(value: object) -> list[str]:
-        """Normalize feature items."""
-        if not isinstance(value, list):
-            return []
-        normalized: list[str] = []
-        for item in value:
-            text = str(item).strip()
-            if text and text not in normalized:
-                normalized.append(text)
-        return normalized
+    # ── query ──────────────────────────────────────────────────
 
-    def _merge_feature_payload(
+    def top_events(
         self,
-        *,
-        base: dict[str, list[str] | str],
-        extracted: dict[str, object] | None,
-    ) -> dict[str, list[str] | str]:
-        """Merge feature payloads."""
-        if extracted is None:
-            return base
-        merged = dict(base)
-        summary = str(extracted.get("summary", "")).strip()
-        if summary:
-            merged["summary"] = summary
-        for key in ("keywords", "role_slots", "entities", "time_hints", "emotion_tags"):
-            existing = list(merged.get(key, []))
-            incoming = self._normalize_feature_items(extracted.get(key))
-            merged[key] = self._merge_unique(existing, incoming, 24)
-        return merged
+        limit: int = 5,
+        include_pending: bool = False,
+        user_id: str | None = None,
+    ) -> list[EventMemoryEntry]:
+        """Return top observations, optionally filtered by user."""
+        filtered = list(self.entries)
+        if user_id:
+            filtered = [e for e in filtered if e.user_id == user_id]
+        if not include_pending:
+            filtered = [e for e in filtered if e.verified]
+        else:
+            filtered = [e for e in filtered if e.verified or e.mention_count >= 2]
+        filtered.sort(key=lambda e: (e.updated_at, e.mention_count), reverse=True)
+        return filtered[:limit]
 
-    def _score(self, entry: EventMemoryEntry, features: dict[str, list[str] | str]) -> float:
-        """Score an entry against features."""
-        incoming_summary = str(features.get("summary", ""))
-        incoming_keywords = list(features.get("keywords", []))
-        incoming_roles = list(features.get("role_slots", []))
-        incoming_entities = list(features.get("entities", []))
-        incoming_time = list(features.get("time_hints", []))
-        incoming_emotion = list(features.get("emotion_tags", []))
+    def get_user_observations(self, user_id: str, limit: int = 10) -> list[EventMemoryEntry]:
+        """Get observations for a specific user, ordered by confidence."""
+        user_entries = [e for e in self.entries if e.user_id == user_id]
+        user_entries.sort(key=lambda e: (e.confidence, e.mention_count), reverse=True)
+        return user_entries[:limit]
 
-        semantic_current = self._extract_keywords(entry.summary + " " + " ".join(entry.evidence_samples), max_items=16)
-        semantic_incoming = self._extract_keywords(incoming_summary + " " + " ".join(incoming_keywords), max_items=16)
-        semantic_score = self._jaccard(semantic_current, semantic_incoming)
-        keyword_score = self._jaccard(entry.keywords, incoming_keywords)
-        role_score = self._jaccard(entry.role_slots, incoming_roles)
-        time_score = self._jaccard(entry.time_hints, incoming_time)
-        entity_score = self._jaccard(entry.entities, incoming_entities)
-        emotion_score = self._jaccard(entry.emotion_tags, incoming_emotion)
+    # ── deduplication ──────────────────────────────────────────
 
-        score = (
-            0.35 * semantic_score
-            + 0.20 * keyword_score
-            + 0.15 * role_score
-            + 0.15 * time_score
-            + 0.10 * entity_score
-            + 0.05 * emotion_score
-        )
-        return max(0.0, min(1.0, score))
+    def _merge_or_add(self, entry: EventMemoryEntry) -> EventMemoryEntry:
+        """If a similar observation for the same user+category exists, merge."""
+        for existing in self.entries:
+            if existing.user_id != entry.user_id:
+                continue
+            if existing.category != entry.category:
+                continue
+            if _char_similarity(existing.summary, entry.summary) < _SIMILARITY_MERGE_THRESHOLD:
+                continue
+            # merge
+            existing.mention_count += 1
+            existing.confidence = min(1.0, max(existing.confidence, entry.confidence))
+            existing.updated_at = entry.updated_at
+            for sample in entry.evidence_samples:
+                if sample not in existing.evidence_samples:
+                    existing.evidence_samples.append(sample)
+            if len(existing.evidence_samples) > _MAX_EVIDENCE_SAMPLES:
+                existing.evidence_samples = existing.evidence_samples[-_MAX_EVIDENCE_SAMPLES:]
+            return existing
+        self.entries.append(entry)
+        return entry
 
-    @staticmethod
-    def _merge_unique(target: list[str], source: list[str], max_items: int) -> list[str]:
-        """Merge unique items from source into target."""
-        values = list(target)
-        for item in source:
-            if item and item not in values:
-                values.append(item)
-        if len(values) > max_items:
-            values = values[-max_items:]
-        return values
-
-    def _update_entry(
-        self,
-        entry: EventMemoryEntry,
-        *,
-        features: dict[str, list[str] | str],
-        content: str,
-    ) -> None:
-        """Update entry with new features."""
-        summary = str(features.get("summary", "")).strip()
-        if summary:
-            entry.summary = summary
-        entry.keywords = self._merge_unique(entry.keywords, list(features.get("keywords", [])), 20)
-        entry.role_slots = self._merge_unique(entry.role_slots, list(features.get("role_slots", [])), 12)
-        entry.entities = self._merge_unique(entry.entities, list(features.get("entities", [])), 16)
-        entry.time_hints = self._merge_unique(entry.time_hints, list(features.get("time_hints", [])), 12)
-        entry.emotion_tags = self._merge_unique(entry.emotion_tags, list(features.get("emotion_tags", [])), 12)
-
-        sample = content.strip()
-        if len(sample) > 96:
-            sample = f"{sample[:96]}..."
-        if sample:
-            entry.evidence_samples = self._merge_unique(entry.evidence_samples, [sample], 6)
-
-        now_text = datetime.now().isoformat(timespec="seconds")
-        if not entry.created_at:
-            entry.created_at = now_text
-        entry.updated_at = now_text
-        entry.hit_count += 1
-        entry.mention_count += 1
+    # ── backward-compat wrapper (v1 API) ──────────────────────
 
     def absorb_mention(
         self,
@@ -261,264 +280,111 @@ class EventMemoryManager:
         high_threshold: float = 0.60,
         weak_threshold: float = 0.35,
     ) -> dict[str, Any]:
-        """Absorb a mention of an event, clustering with existing if similar."""
-        base = self._build_feature_payload(content, known_entities)
-        features = self._merge_feature_payload(base=base, extracted=extracted_features)
+        """v1 compatibility shim — buffers the message and returns a hit payload."""
+        # 无法确定 user_id，使用 "unknown"
+        self.buffer_message(user_id="unknown", content=content)
+        return {"level": "new", "score": 0.0, "entry": None, "candidates": []}
 
-        if not self.entries:
-            entry = EventMemoryEntry(event_id=self._next_event_id(), summary=str(features["summary"]))
-            self._update_entry(entry, features=features, content=content)
-            self.entries.append(entry)
-            return {"level": "new", "entry": entry, "score": 0.0, "candidates": []}
-
-        scored: list[tuple[float, EventMemoryEntry]] = []
-        for entry in self.entries:
-            scored.append((self._score(entry, features), entry))
-        scored.sort(key=lambda item: item[0], reverse=True)
-
-        best_score, best_entry = scored[0]
-        incoming_keywords = list(features.get("keywords", []))
-        incoming_roles = list(features.get("role_slots", []))
-        keyword_overlap = len(set(best_entry.keywords) & set(incoming_keywords))
-        role_overlap = len(set(best_entry.role_slots) & set(incoming_roles))
-        fallback_weak_hit = keyword_overlap >= 2 or (keyword_overlap >= 1 and role_overlap >= 1)
-        if best_score >= high_threshold:
-            self._update_entry(best_entry, features=features, content=content)
-            return {
-                "level": "high",
-                "entry": best_entry,
-                "score": best_score,
-                "candidates": [item[1].event_id for item in scored[:3]],
-            }
-
-        if best_score >= weak_threshold or fallback_weak_hit:
-            self._update_entry(best_entry, features=features, content=content)
-            return {
-                "level": "weak",
-                "entry": best_entry,
-                "score": best_score,
-                "candidates": [item[1].event_id for item in scored[:3]],
-            }
-
-        entry = EventMemoryEntry(event_id=self._next_event_id(), summary=str(features["summary"]))
-        self._update_entry(entry, features=features, content=content)
-        self.entries.append(entry)
-        return {
-            "level": "new",
-            "entry": entry,
-            "score": best_score,
-            "candidates": [item[1].event_id for item in scored[:3]],
-        }
-
-    def top_events(self, limit: int = 5, include_pending: bool = False) -> list[EventMemoryEntry]:
-        """Get top events.
-        
-        Args:
-            limit: Maximum number of events to return
-            include_pending: If False (default), only return verified events.
-                           If True, include pending events with mention_count >= 2.
-        
-        Returns:
-            List of top events sorted by recency and hit count
-        """
-        if include_pending:
-            # Include both verified and recent pending events
-            filtered = [
-                e for e in self.entries
-                if e.verified or e.mention_count >= 2
-            ]
-        else:
-            # Only include verified events
-            filtered = [e for e in self.entries if e.verified]
-        
-        values = sorted(filtered, key=lambda item: (item.updated_at, item.hit_count), reverse=True)
-        return values[:limit]
-
-    async def finalize_pending_events(
-        self,
-        provider_async: Any,  # AsyncLLMProvider
-        model_name: str,
-        min_mentions: int = 3,
-    ) -> dict[str, Any]:
-        """Verify pending events using LLM.
-        
-        Args:
-            provider_async: AsyncLLMProvider to call for LLM verification
-            model_name: Model to use for verification
-            min_mentions: Minimum mention count to qualify for verification
-            
-        Returns:
-            Dictionary with:
-            - verified_count: Number of newly verified events
-            - rejected_count: Number of rejected events
-            - pending_count: Number of remaining pending events
-        """
-        from sirius_chat.providers.base import GenerationRequest
-        
-        # Find pending events that meet the threshold
-        pending = [e for e in self.entries if not e.verified and e.mention_count >= min_mentions]
-        
-        verified_count = 0
-        rejected_count = 0
-        
-        for entry in pending:
-            # Prepare verification prompt
-            prompt = f"""Analyze potential events in the conversation and judge whether they should be recorded.
-
-Event Summary: {entry.summary}
-Related Keywords: {", ".join(entry.keywords) if entry.keywords else "None"}
-Mentioned Roles: {", ".join(entry.role_slots) if entry.role_slots else "None"}
-Evidence Samples (Total {len(entry.evidence_samples)} mentions):
-{chr(10).join(f"- {s}" for s in entry.evidence_samples)}
-
-Based on the above analysis, answer:
-1. Is this event worth recording? (Yes/No)
-2. If yes, provide an improved summary (1-2 sentences)
-3. If yes, provide 5-10 keywords related to this event
-4. If yes, which people/roles are involved? (e.g.: manager, colleague, client)
-5. If yes, are there timeline clues? (e.g.: yesterday, this week, next month)
-6. If yes, what emotions are expressed? (e.g.: anxiety, positive)
-
-Please answer in JSON format:
-{{
-  "record": "Yes" or "No",
-  "reason": "Brief reason",
-  "summary": "Improved summary (if yes)",
-  "keywords": ["keyword1", "keyword2", ...],
-  "role_slots": ["manager", "colleague", ...],
-  "time_hints": ["yesterday", ...],
-  "emotion_tags": ["anxiety", ...]
-}}"""
-
-            request = GenerationRequest(
-                model=model_name,
-                system_prompt="You are a dialogue analysis expert skilled at extracting meaningful event information from conversations.",
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.5,
-                max_tokens=512,
-                purpose="event_memory_verification",
-            )
-            
-            try:
-                response = await provider_async.generate_async(request)
-                
-                # Parse JSON response
-                import json
-                # Extract JSON from response (may be wrapped in markdown code blocks)
-                json_str = response
-                if "```" in response:
-                    json_str = response.split("```")[1]
-                    if json_str.startswith("json"):
-                        json_str = json_str[4:]
-                
-                result = json.loads(json_str.strip())
-                
-                record_value = result.get("record", "").lower().strip()
-                # Support both Chinese and English judgments
-                if record_value in ("yes", "是", "y", "✓"):
-                    # Update event based on LLM feedback
-                    entry.verified = True
-                    summary = result.get("summary", "").strip()
-                    if summary:
-                        entry.summary = summary
-                    
-                    # Merge LLM-extracted features
-                    if "keywords" in result:
-                        entry.keywords = self._merge_unique(
-                            entry.keywords,
-                            result.get("keywords", []),
-                            20
-                        )
-                    if "role_slots" in result:
-                        entry.role_slots = self._merge_unique(
-                            entry.role_slots,
-                            result.get("role_slots", []),
-                            12
-                        )
-                    if "time_hints" in result:
-                        entry.time_hints = self._merge_unique(
-                            entry.time_hints,
-                            result.get("time_hints", []),
-                            12
-                        )
-                    if "emotion_tags" in result:
-                        entry.emotion_tags = self._merge_unique(
-                            entry.emotion_tags,
-                            result.get("emotion_tags", []),
-                            12
-                        )
-                    
-                    entry.updated_at = datetime.now().isoformat(timespec="seconds")
-                    verified_count += 1
-                else:
-                    # Delete events LLM says are not worth recording
-                    self.entries.remove(entry)
-                    rejected_count += 1
-                    
-            except Exception as e:
-                # Log error but continue processing other events
-                logger.warning(f"Event verification failed {entry.event_id}: {e}")
-        
-        pending_after = [e for e in self.entries if not e.verified and e.mention_count >= min_mentions]
-        
-        return {
-            "verified_count": verified_count,
-            "rejected_count": rejected_count,
-            "pending_count": len(pending_after),
-        }
+    # ── serialization ──────────────────────────────────────────
 
     def to_dict(self) -> dict[str, Any]:
-        """Serialize to dictionary."""
         return {
+            "version": 2,
             "entries": [
                 {
-                    "event_id": item.event_id,
-                    "summary": item.summary,
-                    "keywords": item.keywords,
-                    "role_slots": item.role_slots,
-                    "entities": item.entities,
-                    "time_hints": item.time_hints,
-                    "emotion_tags": item.emotion_tags,
-                    "evidence_samples": item.evidence_samples,
-                    "hit_count": item.hit_count,
-                    "created_at": item.created_at,
-                    "updated_at": item.updated_at,
-                    "verified": item.verified,
-                    "mention_count": item.mention_count,
+                    "event_id": e.event_id,
+                    "user_id": e.user_id,
+                    "category": e.category,
+                    "summary": e.summary,
+                    "confidence": e.confidence,
+                    "evidence_samples": e.evidence_samples,
+                    "created_at": e.created_at,
+                    "updated_at": e.updated_at,
+                    "mention_count": e.mention_count,
+                    "verified": e.verified,
                 }
-                for item in self.entries
-            ]
+                for e in self.entries
+            ],
+            "buffer": {
+                uid: list(msgs)
+                for uid, msgs in self._buffer.items()
+                if msgs
+            },
         }
 
     @classmethod
-    def from_dict(cls, payload: dict[str, Any]) -> "EventMemoryManager":
-        """Deserialize from dictionary."""
+    def from_dict(cls, payload: dict[str, Any]) -> EventMemoryManager:
+        version = payload.get("version", 1)
+        if version < 2:
+            return cls._migrate_v1(payload)
         manager = cls()
-        raw = payload.get("entries", [])
-        if not isinstance(raw, list):
-            return manager
-        for item in raw:
+        for item in payload.get("entries", []):
+            if not isinstance(item, dict):
+                continue
+            event_id = str(item.get("event_id", "")).strip()
+            if not event_id:
+                continue
+            manager.entries.append(EventMemoryEntry(
+                event_id=event_id,
+                user_id=str(item.get("user_id", "")),
+                category=str(item.get("category", "custom")),
+                summary=str(item.get("summary", "")),
+                confidence=float(item.get("confidence", 0.5)),
+                evidence_samples=list(item.get("evidence_samples", [])),
+                created_at=str(item.get("created_at", "")),
+                updated_at=str(item.get("updated_at", "")),
+                mention_count=int(item.get("mention_count", 0)),
+                verified=bool(item.get("verified", False)),
+            ))
+        for uid, msgs in payload.get("buffer", {}).items():
+            if isinstance(msgs, list):
+                manager._buffer[uid] = [str(m) for m in msgs]
+        return manager
+
+    @classmethod
+    def _migrate_v1(cls, payload: dict[str, Any]) -> EventMemoryManager:
+        """Migrate v1 events.json (keyword-based entries) → v2 observations."""
+        manager = cls()
+        for item in payload.get("entries", []):
             if not isinstance(item, dict):
                 continue
             event_id = str(item.get("event_id", "")).strip()
             summary = str(item.get("summary", "")).strip()
             if not event_id or not summary:
                 continue
-            manager.entries.append(
-                EventMemoryEntry(
-                    event_id=event_id,
-                    summary=summary,
-                    keywords=list(item.get("keywords", [])),
-                    role_slots=list(item.get("role_slots", [])),
-                    entities=list(item.get("entities", [])),
-                    time_hints=list(item.get("time_hints", [])),
-                    emotion_tags=list(item.get("emotion_tags", [])),
-                    evidence_samples=list(item.get("evidence_samples", [])),
-                    hit_count=int(item.get("hit_count", 0)),
-                    created_at=str(item.get("created_at", "")),
-                    updated_at=str(item.get("updated_at", "")),
-                    verified=bool(item.get("verified", False)),
-                    mention_count=int(item.get("mention_count", 0)),
-                )
-            )
+            manager.entries.append(EventMemoryEntry(
+                event_id=event_id,
+                user_id="",           # v1 had no user_id
+                category="custom",    # cannot infer from v1
+                summary=summary,
+                confidence=0.7 if item.get("verified") else 0.4,
+                evidence_samples=list(item.get("evidence_samples", [])),
+                created_at=str(item.get("created_at", "")),
+                updated_at=str(item.get("updated_at", "")),
+                mention_count=int(item.get("mention_count", 0)),
+                verified=bool(item.get("verified", False)),
+            ))
+        logger.info("事件记忆 v1→v2 迁移完成，共迁移 %d 条记录", len(manager.entries))
         return manager
+
+    # ── parsing helpers ────────────────────────────────────────
+
+    @staticmethod
+    def _parse_extraction_response(raw: str) -> list[dict[str, Any]]:
+        """Parse LLM JSON array response, tolerating markdown fences."""
+        text = raw.strip()
+        if "```" in text:
+            parts = text.split("```")
+            if len(parts) >= 3:
+                text = parts[1]
+                if text.startswith("json"):
+                    text = text[4:]
+                text = text.strip()
+        try:
+            result = json.loads(text)
+        except (json.JSONDecodeError, ValueError):
+            logger.warning("观察提取响应 JSON 解析失败")
+            return []
+        if isinstance(result, list):
+            return [item for item in result if isinstance(item, dict)]
+        return []

@@ -19,7 +19,6 @@ from sirius_chat.memory import (
     UserMemoryFileStore,
 )
 from sirius_chat.async_engine.utils import (
-    build_event_hit_system_note,
     record_task_stat,
     estimate_tokens,
     extract_json_payload,
@@ -27,6 +26,8 @@ from sirius_chat.async_engine.utils import (
 )
 from sirius_chat.async_engine.prompts import build_system_prompt
 from sirius_chat.exceptions import OrchestrationConfigError
+from sirius_chat.skills.registry import SkillRegistry
+from sirius_chat.skills.executor import SkillExecutor, parse_skill_calls, strip_skill_calls
 
 AsyncOnMessage = Callable[[Message], None]
 logger = logging.getLogger(__name__)
@@ -66,6 +67,8 @@ class LiveSessionContext:
     known_by_id: dict[str, Participant] = field(default_factory=dict)
     known_by_label: dict[str, str] = field(default_factory=dict)
     pending_turn: _PendingTurn | None = None
+    skill_registry: SkillRegistry | None = None
+    skill_executor: SkillExecutor | None = None
 
 
 @dataclass(slots=True)
@@ -256,6 +259,19 @@ class AsyncRolePlayEngine:
             known_by_id=known_by_id,
             known_by_label=known_by_label,
         )
+
+        # Initialize skill system if enabled
+        if config.orchestration.enable_skills:
+            skills_dir = config.work_path / "skills"
+            registry = SkillRegistry()
+            loaded_count = registry.load_from_directory(skills_dir)
+            if loaded_count > 0:
+                created.skill_registry = registry
+                created.skill_executor = SkillExecutor(config.work_path)
+                logger.info("SKILL系统已初始化，已加载 %d 个SKILL", loaded_count)
+            else:
+                logger.debug("SKILL系统已启用但未找到任何SKILL文件: %s", skills_dir)
+
         self._live_session_contexts[key] = created
         return created
 
@@ -375,6 +391,8 @@ class AsyncRolePlayEngine:
 
         context.file_store.save_all(transcript.user_memory)
         context.event_file_store.save(context.event_store)
+        if context.skill_executor is not None:
+            context.skill_executor.save_all_stores()
 
     @staticmethod
     def _parse_runtime_datetime(raw: str) -> datetime | None:
@@ -395,9 +413,19 @@ class AsyncRolePlayEngine:
         """Record a task statistic in the transcript."""
         record_task_stat(transcript, task_name, metric, increment)
 
-    def _build_system_prompt(self, config: SessionConfig, transcript: Transcript) -> str:
+    def _build_system_prompt(
+        self,
+        config: SessionConfig,
+        transcript: Transcript,
+        skill_descriptions: str = "",
+        environment_context: str = "",
+    ) -> str:
         """Delegate to the prompts module for system prompt building."""
-        return build_system_prompt(config, transcript)
+        return build_system_prompt(
+            config, transcript,
+            skill_descriptions=skill_descriptions,
+            environment_context=environment_context,
+        )
 
     async def _call_provider(self, request_payload: GenerationRequest) -> str:
         generate_async = getattr(self.provider, "generate_async", None)
@@ -672,88 +700,95 @@ class AsyncRolePlayEngine:
         content: str,
         task_token_usage: dict[str, int],
     ) -> dict[str, object] | None:
+        """Legacy per-message event extraction — kept for external callers.
+
+        In v2 the engine uses ``_run_batch_event_extract`` instead.
+        """
+        return None
+
+    async def _run_batch_event_extract(
+        self,
+        *,
+        config: SessionConfig,
+        transcript: Transcript,
+        participant: Participant,
+        task_token_usage: dict[str, int],
+        event_store: EventMemoryManager,
+    ) -> list[object]:
+        """Batch-extract user observations from buffered messages.
+
+        Observations are directly written into user memory facts.
+        """
         task_name = self._TASK_EVENT_EXTRACT
-        # 检查任务是否启用
         if not config.orchestration.task_enabled.get(task_name, True):
-            return None  # 任务被禁用
-        
+            return []
+
         model = self.get_model_for_task(config, task_name)
-
         self._record_task_stat(transcript, task_name, "attempted")
-        system_prompt = (
-            "你是事件提取器。请基于输入提取结构化事件信息，严格输出 JSON 对象，"
-            "只允许字段：summary(string)、keywords(array[string])、role_slots(array[string])、"
-            "entities(array[string])、time_hints(array[string])、emotion_tags(array[string])。"
-        )
-        task_input = (
-            f"user_id={participant.user_id}\n"
-            f"speaker={participant.name}\n"
-            f"content={content}"
-        )
-        estimated_cost = self._estimate_tokens(system_prompt + task_input)
 
+        # Budget check
+        estimated_cost = 512  # conservative estimate for batch extraction
         used = task_token_usage.get(task_name, 0)
         budget = int(config.orchestration.task_budgets.get(task_name, 0))
         if budget > 0 and used + estimated_cost > budget:
             self._record_task_stat(transcript, task_name, "skipped_budget")
-            return None
+            return []
 
-        request_payload = GenerationRequest(
-            model=model,
-            system_prompt=system_prompt,
-            messages=[{"role": "user", "content": task_input}],
-            temperature=float(config.orchestration.task_temperatures.get(task_name, 0.1)),
-            max_tokens=int(config.orchestration.task_max_tokens.get(task_name, 192)),
-            purpose=task_name,
-        )
-        retry_times = int(config.orchestration.task_retries.get(task_name, 0))
+        class _ProviderAdapter:
+            def __init__(self, engine: AsyncRolePlayEngine) -> None:
+                self._engine = engine
+
+            async def generate_async(self, request: GenerationRequest) -> str:
+                return await self._engine._call_provider(request)
+
         try:
-            raw = await self._call_provider_with_retry(
-                request_payload=request_payload,
-                retry_times=retry_times,
-                transcript=transcript,
-                task_name=task_name,
-                actor_id=participant.user_id,
+            new_observations = await event_store.extract_observations(
+                user_id=participant.user_id,
+                user_name=participant.name,
+                provider_async=_ProviderAdapter(self),
+                model_name=model,
+                temperature=float(config.orchestration.task_temperatures.get(task_name, 0.3)),
+                max_tokens=int(config.orchestration.task_max_tokens.get(task_name, 512)),
             )
-        except RuntimeError:
+        except Exception as exc:
+            logger.warning("批量事件提取失败 (user=%s): %s", participant.user_id, exc)
             self._record_task_stat(transcript, task_name, "failed_provider")
-            return None
-
-        if retry_times > 0:
-            self._record_task_stat(transcript, task_name, "retry_enabled")
+            return []
 
         task_token_usage[task_name] = used + estimated_cost
-        parsed = self._extract_json_payload(raw)
-        if parsed is None:
-            self._record_task_stat(transcript, task_name, "failed_parse")
-            return None
 
-        keywords_raw = parsed.get("keywords")
-        role_slots_raw = parsed.get("role_slots")
-        entities_raw = parsed.get("entities")
-        time_hints_raw = parsed.get("time_hints")
-        emotion_tags_raw = parsed.get("emotion_tags")
+        if not new_observations:
+            self._record_task_stat(transcript, task_name, "no_observations")
+            return []
 
-        cleaned = {
-            "summary": str(parsed.get("summary", "")).strip(),
-            "keywords": [str(item).strip() for item in keywords_raw if str(item).strip()]
-            if isinstance(keywords_raw, list)
-            else [],
-            "role_slots": [str(item).strip() for item in role_slots_raw if str(item).strip()]
-            if isinstance(role_slots_raw, list)
-            else [],
-            "entities": [str(item).strip() for item in entities_raw if str(item).strip()]
-            if isinstance(entities_raw, list)
-            else [],
-            "time_hints": [str(item).strip() for item in time_hints_raw if str(item).strip()]
-            if isinstance(time_hints_raw, list)
-            else [],
-            "emotion_tags": [str(item).strip() for item in emotion_tags_raw if str(item).strip()]
-            if isinstance(emotion_tags_raw, list)
-            else [],
+        # ── 将观察直接写入用户记忆 ──
+        category_to_memory = {
+            "preference": ("preference_tag", "preference"),
+            "trait": ("inferred_trait", "identity"),
+            "relationship": ("social_context", "event"),
+            "experience": ("summary", "event"),
+            "emotion": ("emotional_pattern", "emotion"),
+            "goal": ("summary", "event"),
+            "custom": ("summary", "custom"),
         }
+        for obs in new_observations:
+            fact_type, mem_cat = category_to_memory.get(obs.category, ("summary", "custom"))
+            transcript.user_memory.add_memory_fact(
+                user_id=participant.user_id,
+                fact_type=fact_type,
+                value=obs.summary,
+                source="event_observation",
+                confidence=obs.confidence,
+                memory_category=mem_cat,
+                source_event_id=obs.event_id,
+            )
+
         self._record_task_stat(transcript, task_name, "succeeded")
-        return cleaned
+        logger.info(
+            "事件观察提取完成 | user=%s | observations=%d",
+            participant.user_id, len(new_observations),
+        )
+        return list(new_observations)
 
     async def _run_memory_manager_task(
         self,
@@ -1232,8 +1267,14 @@ class AsyncRolePlayEngine:
         *,
         config: SessionConfig,
         transcript: Transcript,
+        skill_descriptions: str = "",
+        environment_context: str = "",
     ) -> tuple[str, list[dict[str, str]]]:
-        system_prompt = self._build_system_prompt(config, transcript)
+        system_prompt = self._build_system_prompt(
+            config, transcript,
+            skill_descriptions=skill_descriptions,
+            environment_context=environment_context,
+        )
         internal_notes = self._collect_internal_system_notes(transcript)
         if internal_notes:
             system_prompt = (
@@ -1285,18 +1326,32 @@ class AsyncRolePlayEngine:
             f"{context_text}"
         )
 
-    async def _generate_assistant_message(self, config: SessionConfig, transcript: Transcript) -> Message:
+    async def _generate_assistant_message(
+        self,
+        config: SessionConfig,
+        transcript: Transcript,
+        skill_registry: SkillRegistry | None = None,
+        skill_executor: SkillExecutor | None = None,
+        environment_context: str = "",
+    ) -> Message:
         if config.enable_auto_compression:
             transcript.compress_for_budget(
                 max_messages=config.history_max_messages,
                 max_chars=config.history_max_chars,
             )
         
+        # Build skill descriptions if available
+        skill_descriptions = ""
+        if skill_registry is not None:
+            skill_descriptions = skill_registry.build_tool_descriptions()
+
         # 动态选择模型：有多模态输入时自动升级到多模态模型
         model = self._get_model_for_chat(config, transcript)
         system_prompt, chat_history = self._build_chat_main_request_context(
             config=config,
             transcript=transcript,
+            skill_descriptions=skill_descriptions,
+            environment_context=environment_context,
         )
         
         request_payload = GenerationRequest(
@@ -1325,6 +1380,83 @@ class AsyncRolePlayEngine:
                 content = content[bracket_end + 2:]
 
         content = self._sanitize_assistant_content(content)
+
+        # --- Skill call detection and execution ---
+        if skill_registry is not None and skill_executor is not None:
+            max_rounds = max(1, config.orchestration.max_skill_rounds)
+            for _round in range(max_rounds):
+                calls = parse_skill_calls(content)
+                if not calls:
+                    break
+                # Execute the first skill call found
+                skill_name, skill_params = calls[0]
+                skill_def = skill_registry.get(skill_name)
+                if skill_def is None:
+                    # Unknown skill — inject error note and let AI continue
+                    transcript.add(Message(
+                        role="system",
+                        content=f"[SKILL系统] 未找到名为 '{skill_name}' 的SKILL，请使用可用SKILL列表中的名称。",
+                    ))
+                    content = strip_skill_calls(content)
+                    break
+
+                logger.info("执行SKILL: %s | 参数: %s", skill_name, skill_params)
+                skill_result = await skill_executor.execute_async(
+                    skill_def,
+                    skill_params,
+                    timeout=float(config.orchestration.skill_execution_timeout),
+                )
+                result_text = skill_result.to_display_text()
+
+                # Add skill result as system message for AI context
+                transcript.add(Message(
+                    role="system",
+                    content=f"[SKILL执行结果: {skill_name}]\n{result_text}",
+                ))
+
+                # Strip the skill call from the content and keep the rest
+                remaining_content = strip_skill_calls(content)
+
+                # If there's remaining content, add it as a partial assistant message
+                if remaining_content.strip():
+                    transcript.add(Message(
+                        role="assistant",
+                        content=remaining_content.strip(),
+                        speaker=speaker,
+                    ))
+
+                # Re-generate response with skill result in context
+                if config.enable_auto_compression:
+                    transcript.compress_for_budget(
+                        max_messages=config.history_max_messages,
+                        max_chars=config.history_max_chars,
+                    )
+                system_prompt, chat_history = self._build_chat_main_request_context(
+                    config=config,
+                    transcript=transcript,
+                    skill_descriptions=skill_descriptions,
+                    environment_context=environment_context,
+                )
+                request_payload = GenerationRequest(
+                    model=model,
+                    system_prompt=system_prompt,
+                    messages=chat_history,
+                    temperature=config.agent.temperature,
+                    max_tokens=config.agent.max_tokens,
+                    purpose="chat_main",
+                )
+                content = await self._call_provider_with_retry(
+                    request_payload=request_payload,
+                    retry_times=retry_times,
+                    transcript=transcript,
+                    task_name="chat_main",
+                    actor_id=config.agent.name,
+                )
+                if content.startswith("["):
+                    bracket_end = content.find("] ", 1)
+                    if bracket_end != -1 and bracket_end < 40:
+                        content = content[bracket_end + 2:]
+                content = self._sanitize_assistant_content(content)
         
         last_message: Message | None = None
         
@@ -1422,16 +1554,20 @@ class AsyncRolePlayEngine:
         else:
             user_message_count_since_extract[participant.user_id] = current_count + 1
 
-        event_task: asyncio.Task[dict[str, object] | None] | None = asyncio.create_task(
-            self._run_event_extract_task(
-                config=config,
-                transcript=transcript,
-                participant=participant,
-                content=content,
-                task_token_usage=task_token_usage,
-            )
+        # ============================================================================
+        # 事件系统 v2：缓冲消息 + 批量提取观察
+        # ============================================================================
+        event_enabled = config.orchestration.task_enabled.get(self._TASK_EVENT_EXTRACT, True)
+        if event_enabled:
+            event_store.buffer_message(user_id=participant.user_id, content=content)
+
+        event_batch_size = int(getattr(config.orchestration, 'event_extract_batch_size', 5))
+        should_run_event_extract = (
+            event_enabled
+            and event_store.should_extract(participant.user_id, batch_size=event_batch_size)
         )
 
+        # 并行启动可并行的任务
         memory_extract_task: asyncio.Task[None] | None = None
         if should_run_memory_extract:
             memory_extract_task = asyncio.create_task(
@@ -1455,15 +1591,26 @@ class AsyncRolePlayEngine:
             )
         )
 
+        event_extract_task: asyncio.Task[list[object]] | None = None
+        if should_run_event_extract:
+            event_extract_task = asyncio.create_task(
+                self._run_batch_event_extract(
+                    config=config,
+                    transcript=transcript,
+                    participant=participant,
+                    task_token_usage=task_token_usage,
+                    event_store=event_store,
+                )
+            )
+
         pending_tasks: list[asyncio.Task[object]] = [multimodal_task]
         if memory_extract_task is not None:
             pending_tasks.append(cast(asyncio.Task[object], memory_extract_task))
-        if event_task is not None:
-            pending_tasks.append(cast(asyncio.Task[object], event_task))
+        if event_extract_task is not None:
+            pending_tasks.append(cast(asyncio.Task[object], event_extract_task))
         await asyncio.gather(*pending_tasks)
 
         evidence = multimodal_task.result()
-        extracted_event_features = event_task.result() if event_task is not None else None
         if evidence:
             transcript.add(
                 Message(
@@ -1477,37 +1624,11 @@ class AsyncRolePlayEngine:
                 source="multimodal_parse",
                 confidence=0.75,
             )
-        hit_payload = event_store.absorb_mention(
-            content=content,
-            known_entities=known_entities,
-            extracted_features=extracted_event_features,
+
+        # 获取事件相关度（用于回复意愿评估），不需要 LLM 调用
+        hit_payload = event_store.check_relevance(
+            user_id=participant.user_id, content=content,
         )
-        transcript.add(
-            Message(
-                role="system",
-                content=build_event_hit_system_note(speaker=participant.name, hit_payload=hit_payload),
-            )
-        )
-        event_entry = hit_payload.get("entry")
-        if event_entry is not None and extracted_event_features is not None:
-            summary = str(getattr(event_entry, "summary", "")).strip()
-            if summary:
-                transcript.user_memory.apply_ai_runtime_update(
-                    user_id=participant.user_id,
-                    summary_note=f"事件摘要：{summary[:48]}",
-                    source="event_extract",
-                    confidence=0.65,
-                )
-            
-            # ✨ 新增：方案C - 事件到用户记忆的双向适配
-            # 1. 将事件特征转化为用户记忆事实
-            if extracted_event_features:
-                transcript.user_memory.apply_event_insights(
-                    user_id=participant.user_id,
-                    event_features=extracted_event_features,
-                    source="event_extract",
-                    base_confidence=0.65,
-                )
 
         # 运行 memory_manager 任务汇聚、去重、标注、验证记忆
         await self._run_memory_manager_task(
@@ -1554,6 +1675,7 @@ class AsyncRolePlayEngine:
         transcript: Transcript | None = None,
         session_reply_mode: str | None = None,
         finalize_and_persist: bool = True,
+        environment_context: str = "",
     ) -> Transcript:
         self.validate_orchestration_config(config)
 
@@ -1596,6 +1718,7 @@ class AsyncRolePlayEngine:
                         finalize_and_persist=finalize_and_persist,
                         context=context,
                         participant=participant,
+                        environment_context=environment_context,
                     )
                 return transcript
             else:
@@ -1620,6 +1743,7 @@ class AsyncRolePlayEngine:
                         finalize_and_persist=False,
                         context=context,
                         participant=old_participant,
+                        environment_context=environment_context,
                     )
                 # Buffer new turn
                 context.pending_turn = _PendingTurn(
@@ -1644,6 +1768,7 @@ class AsyncRolePlayEngine:
                         finalize_and_persist=finalize_and_persist,
                         context=context,
                         participant=participant,
+                        environment_context=environment_context,
                     )
                 return transcript
 
@@ -1657,6 +1782,7 @@ class AsyncRolePlayEngine:
             finalize_and_persist=finalize_and_persist,
             context=context,
             participant=participant,
+            environment_context=environment_context,
         )
 
     @staticmethod
@@ -1690,6 +1816,7 @@ class AsyncRolePlayEngine:
         finalize_and_persist: bool,
         context: LiveSessionContext,
         participant: Participant,
+        environment_context: str = "",
     ) -> Transcript:
         """Core processing logic for a single user turn (after debounce)."""
         known_entities = self._build_known_entities(context.known_by_id)
@@ -1783,7 +1910,13 @@ class AsyncRolePlayEngine:
                     willingness.reply_probability,
                     willingness.probability_roll,
                 )
-            assistant_message = await self._generate_assistant_message(config, transcript)
+            assistant_message = await self._generate_assistant_message(
+                config,
+                transcript,
+                skill_registry=context.skill_registry,
+                skill_executor=context.skill_executor,
+                environment_context=environment_context,
+            )
             last_assistant_reply_at = datetime.now(timezone.utc)
             if on_message:
                 on_message(assistant_message)

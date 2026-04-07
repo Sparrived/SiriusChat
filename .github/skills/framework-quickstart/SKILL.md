@@ -35,7 +35,8 @@ description: "当你需要在不通读全部代码的情况下快速理解 Siriu
 14. `sirius_chat/providers/middleware/retry.py` ✨
 15. `sirius_chat/providers/middleware/cost_metrics.py` ✨
 16. `sirius_chat/cache/` ✨ (P2-001 缓存框架)
-17. `sirius_chat/providers/mock.py`
+18. `sirius_chat/skills/` ✨ (SKILL系统)
+19. `sirius_chat/providers/mock.py`
 18. `sirius_chat/providers/openai_compatible.py`
 19. `sirius_chat/providers/siliconflow.py`
 20. `sirius_chat/providers/volcengine_ark.py`
@@ -64,6 +65,7 @@ description: "当你需要在不通读全部代码的情况下快速理解 Siriu
   - 检测到多媒体数据时自动升级至 `agent.metadata["multimodal_model"]`
   - 提供便捷配置：`create_agent_with_multimodal(...)` 一次性创建，或 `auto_configure_multimodal_agent(...)` 灵活配置
 - `run_live_session` 负责会话初始化；动态参与者与逐条消息处理通过 `run_live_message` 完成。
+- `run_live_message` 新增 `environment_context: str = ""` 参数（v0.8.0），允许外部注入环境信息（群名、在线人数等），自动写入系统提示词 `<environment_context>` 段。
 - `Message.reply_mode` 可按消息控制回复策略：`always`（默认）/`never`（仅写入记忆与 transcript）/`auto`（自动推断是否回复）。
 - 推荐在实时流式接入时使用 `run_live_message` 逐条处理消息；`run_live_session(...)` 用于一次性会话初始化。
 - `run_live_message` 默认使用会话级 `session_reply_mode`，将回复策略从消息级提升为 session 级。
@@ -111,6 +113,14 @@ description: "当你需要在不通读全部代码的情况下快速理解 Siriu
   - `metrics.py`：ExecutionMetrics 和 MetricsCollector 用户执行指标收集
   - `profiler.py`：PerformanceProfiler 上下文管理器和 @profile_sync/@profile_async 装饰器
   - `benchmarks.py`：Benchmark 和 BenchmarkSuite 用于性能基准测试
+- ✨ **SKILL系统**：`skills/` 模块允许 AI 通过 `[SKILL_CALL: name | {params}]` 调用外部代码
+  - `models.py`：SkillDefinition、SkillParameter、SkillResult 数据模型
+  - `registry.py`：从 `{work_path}/skills/` 自动发现和加载 SKILL 文件
+  - `executor.py`：参数校验、类型转换和安全执行，支持 `skill_execution_timeout`（默认 30 秒）
+  - `data_store.py`：每个 SKILL 独立的 JSON 持久化存储（`{work_path}/skill_data/`）
+  - 启用：`OrchestrationPolicy(enable_skills=True, skill_execution_timeout=30.0)`
+  - SKILL 文件需导出 `SKILL_META` 字典和 `run(**kwargs)` 函数
+  - 持久化数据通过 `data_store` 参数自动注入到 `run()` 中
 - `providers/base.py` 定义 provider 协议。
 - `providers/middleware/` 是 Provider 功能扩展层（✨ 新增 P1-003）：
   - `base.py`：Middleware ABC，支持链式组合

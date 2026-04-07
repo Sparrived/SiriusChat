@@ -32,9 +32,10 @@ TASK_MULTIMODAL_PARSE_SYSTEM_PROMPT = (
 )
 
 TASK_EVENT_EXTRACT_SYSTEM_PROMPT = (
-    "你是事件提取器。请分析输入内容并提取事件，输出 JSON 对象，"
-    "字段仅包含 event_category(string)、event_description(string)、"
-    "event_severity(string: low/medium/high)、timestamp(string)。"
+    "你是用户画像分析器。请分析参与者的对话消息并提取有长期参考价值的观察信息，"
+    "严格输出 JSON 数组，每个元素包含 category(string: preference|trait|relationship|"
+    "experience|emotion|goal)、content(string, 不超过50字)、"
+    "confidence(float: 0.0-1.0)。如无有价值信息，返回 []。"
 )
 
 TASK_MEMORY_MANAGER_SYSTEM_PROMPT = (

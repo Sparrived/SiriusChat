@@ -102,6 +102,9 @@ class OrchestrationPolicy:
     memory_extract_batch_size: int = 1  # 每隔N条消息执行一次提取（1=每次，3=每3条）
     memory_extract_min_content_length: int = 0  # 最小内容长度阈值（字符数），0=无限制
 
+    # Event Extract batch size (v2: 每N条消息批量提取一次用户观察)
+    event_extract_batch_size: int = 5  # 每隔N条消息执行一次事件观察提取
+
     # Reply willingness configuration (auto reply mode)
     session_reply_mode: str = "always"  # auto|always|never
     auto_reply_base_score: float = 0.22
@@ -122,6 +125,12 @@ class OrchestrationPolicy:
     
     # Memory policy (centralized memory system configuration)
     memory: MemoryPolicy = field(default_factory=MemoryPolicy)
+
+    # Skill system: allow AI to invoke external code via SKILL_CALL
+    enable_skills: bool = False
+    skill_call_marker: str = "[SKILL_CALL:"
+    max_skill_rounds: int = 3  # max consecutive skill call rounds per turn
+    skill_execution_timeout: float = 30.0  # max seconds per SKILL execution, 0 = no limit
     
     def validate(self) -> None:
         """Validate configuration legitimacy."""
@@ -142,6 +151,9 @@ class OrchestrationPolicy:
             raise ValueError("memory_extract_batch_size 必须大于 0。")
         if self.memory_extract_min_content_length < 0:
             raise ValueError("memory_extract_min_content_length 不能小于 0。")
+
+        if self.event_extract_batch_size <= 0:
+            raise ValueError("event_extract_batch_size 必须大于 0。")
 
         normalized_reply_mode = self.session_reply_mode.strip().lower()
         if normalized_reply_mode not in {
