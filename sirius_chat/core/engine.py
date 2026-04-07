@@ -49,6 +49,14 @@ class ReplyWillingnessDecision:
 
 
 @dataclass(slots=True)
+class _PendingTurn:
+    """Buffered user turn for debounce/batching."""
+    participant_user_id: str
+    messages: list[Message] = field(default_factory=list)
+    timer_task: asyncio.Task[None] | None = None
+
+
+@dataclass(slots=True)
 class LiveSessionContext:
     file_store: UserMemoryFileStore
     event_file_store: EventMemoryFileStore
@@ -57,6 +65,7 @@ class LiveSessionContext:
     user_message_count_since_extract: dict[str, int] = field(default_factory=dict)
     known_by_id: dict[str, Participant] = field(default_factory=dict)
     known_by_label: dict[str, str] = field(default_factory=dict)
+    pending_turn: _PendingTurn | None = None
 
 
 @dataclass(slots=True)
@@ -1308,16 +1317,12 @@ class AsyncRolePlayEngine:
         )
         
         # 清理：移除模型响应中可能的 speaker 前缀（防止重复前缀化）
-        # 如果响应以 "[{speaker_name}] " 开头，移除之
+        # 匹配 "[任意名字] " 开头的格式，统一移除
         speaker = str(config.agent.metadata.get("alias", "")).strip() or config.agent.name
-        speaker_prefix_patterns = [
-            f"[{speaker}] ",  # 当前配置的 speaker
-        ]
-        # 也检查是否有其他常见的前缀格式
-        for pattern in speaker_prefix_patterns:
-            if content.startswith(pattern):
-                content = content[len(pattern):]
-                break
+        if content.startswith("["):
+            bracket_end = content.find("] ", 1)
+            if bracket_end != -1 and bracket_end < 40:
+                content = content[bracket_end + 2:]
 
         content = self._sanitize_assistant_content(content)
         
@@ -1325,11 +1330,17 @@ class AsyncRolePlayEngine:
         
         if config.orchestration.enable_prompt_driven_splitting:
             marker = config.orchestration.split_marker
+            # 仅在 marker 精确出现时才分割，避免其他 [...] 模式的误判
             if marker in content:
                 # 识别到分割标记，拆分消息
                 parts = content.split(marker)
                 for part in parts:
+                    # 每个分割段也移除可能的 speaker 前缀
                     part_stripped = part.strip()
+                    if part_stripped.startswith("["):
+                        pb_end = part_stripped.find("] ", 1)
+                        if pb_end != -1 and pb_end < 40:
+                            part_stripped = part_stripped[pb_end + 2:].strip()
                     if part_stripped:  # 跳过空白部分
                         msg = Message(
                             role="assistant",
@@ -1556,6 +1567,131 @@ class AsyncRolePlayEngine:
             turn=turn,
             context=context,
         )
+
+        debounce_seconds = float(config.orchestration.message_debounce_seconds)
+        if debounce_seconds > 0:
+            pending = context.pending_turn
+            if pending is not None and pending.participant_user_id == participant.user_id:
+                # Same user — append to buffer, reset timer
+                pending.messages.append(turn)
+                if pending.timer_task is not None and not pending.timer_task.done():
+                    pending.timer_task.cancel()
+                pending.timer_task = None
+                # Wait for debounce window
+                try:
+                    await asyncio.sleep(debounce_seconds)
+                except asyncio.CancelledError:
+                    return transcript
+                # After sleep, check if we are still the latest (no newer message appended)
+                if context.pending_turn is pending and pending.messages[-1] is turn:
+                    # Timer expired and we are still the latest → flush
+                    merged_turn = self._merge_pending_turns(pending.messages)
+                    context.pending_turn = None
+                    return await self._process_live_turn(
+                        config=config,
+                        turn=merged_turn,
+                        on_message=on_message,
+                        transcript=transcript,
+                        session_reply_mode=session_reply_mode,
+                        finalize_and_persist=finalize_and_persist,
+                        context=context,
+                        participant=participant,
+                    )
+                return transcript
+            else:
+                # Different user or first message — flush pending if any, then buffer new
+                if pending is not None and pending.messages:
+                    # Cancel any pending timer
+                    if pending.timer_task is not None and not pending.timer_task.done():
+                        pending.timer_task.cancel()
+                    old_participant = self._resolve_participant_for_turn(
+                        transcript=transcript,
+                        turn=pending.messages[0],
+                        context=context,
+                    )
+                    merged_old = self._merge_pending_turns(pending.messages)
+                    context.pending_turn = None
+                    await self._process_live_turn(
+                        config=config,
+                        turn=merged_old,
+                        on_message=on_message,
+                        transcript=transcript,
+                        session_reply_mode=session_reply_mode,
+                        finalize_and_persist=False,
+                        context=context,
+                        participant=old_participant,
+                    )
+                # Buffer new turn
+                context.pending_turn = _PendingTurn(
+                    participant_user_id=participant.user_id,
+                    messages=[turn],
+                )
+                # Wait for debounce window
+                try:
+                    await asyncio.sleep(debounce_seconds)
+                except asyncio.CancelledError:
+                    return transcript
+                # After sleep, check if still the latest
+                if context.pending_turn is not None and context.pending_turn.participant_user_id == participant.user_id and context.pending_turn.messages[-1] is turn:
+                    merged_turn = self._merge_pending_turns(context.pending_turn.messages)
+                    context.pending_turn = None
+                    return await self._process_live_turn(
+                        config=config,
+                        turn=merged_turn,
+                        on_message=on_message,
+                        transcript=transcript,
+                        session_reply_mode=session_reply_mode,
+                        finalize_and_persist=finalize_and_persist,
+                        context=context,
+                        participant=participant,
+                    )
+                return transcript
+
+        # No debounce — process immediately
+        return await self._process_live_turn(
+            config=config,
+            turn=turn,
+            on_message=on_message,
+            transcript=transcript,
+            session_reply_mode=session_reply_mode,
+            finalize_and_persist=finalize_and_persist,
+            context=context,
+            participant=participant,
+        )
+
+    @staticmethod
+    def _merge_pending_turns(messages: list[Message]) -> Message:
+        """Merge multiple buffered messages from the same user into one."""
+        if len(messages) == 1:
+            return messages[0]
+        merged_content = "\n".join(m.content for m in messages if m.content.strip())
+        # Collect all multimodal inputs
+        merged_multimodal: list[dict[str, str]] = []
+        for m in messages:
+            merged_multimodal.extend(m.multimodal_inputs)
+        first = messages[0]
+        return Message(
+            role=first.role,
+            content=merged_content,
+            speaker=first.speaker,
+            channel=first.channel,
+            channel_user_id=first.channel_user_id,
+            multimodal_inputs=merged_multimodal,
+            reply_mode=first.reply_mode,
+        )
+
+    async def _process_live_turn(
+        self,
+        config: SessionConfig,
+        turn: Message,
+        on_message: AsyncOnMessage | None,
+        transcript: Transcript,
+        session_reply_mode: str | None,
+        finalize_and_persist: bool,
+        context: LiveSessionContext,
+        participant: Participant,
+    ) -> Transcript:
+        """Core processing logic for a single user turn (after debounce)."""
         known_entities = self._build_known_entities(context.known_by_id)
 
         user_last_turn_at: dict[str, datetime] = {}

@@ -6,6 +6,7 @@ from sirius_chat.api import (
     EventMemoryManager,
     JsonPersistentSessionRunner,
     JsonSessionStore,
+    MemoryPolicy,
     Message,
     MockProvider,
     OpenAICompatibleProvider,
@@ -89,6 +90,7 @@ __all__ = [
     "TokenUsageRecord",
     "TokenUsageBaseline",
     "SessionConfig",
+    "MemoryPolicy",
     "OrchestrationPolicy",
     "Transcript",
     # Constants & Enums

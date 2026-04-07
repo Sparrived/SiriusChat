@@ -248,3 +248,97 @@ def test_ensure_provider_platform_supported_normalizes_alias() -> None:
     assert ensure_provider_platform_supported("ark") == "volcengine-ark"
 
 
+def test_auto_routing_provider_matches_model_from_models_list() -> None:
+    """When a model is in a provider's explicit models list, it should route there."""
+    routing = AutoRoutingProvider(
+        {
+            "siliconflow": ProviderConfig(
+                provider_type="siliconflow",
+                api_key="sf-key",
+                base_url="",
+                healthcheck_model="deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
+                models=["deepseek-ai/DeepSeek-R1-Distill-Qwen-7B", "doubao-seed-2-0-lite-260215"],
+            ),
+            "volcengine-ark": ProviderConfig(
+                provider_type="volcengine-ark",
+                api_key="ark-key",
+                base_url="",
+                healthcheck_model="",
+            ),
+        }
+    )
+
+    # "doubao-seed-2-0-lite-260215" is in SiliconFlow's models list,
+    # so it should route to SiliconFlow, NOT volcengine-ark (which would be the heuristic).
+    with patch("sirius_chat.providers.routing.SiliconFlowProvider.generate", return_value="sf-ok") as sf_generate:
+        output = routing.generate(_request("doubao-seed-2-0-lite-260215"))
+
+    assert output == "sf-ok"
+    assert sf_generate.call_count == 1
+
+
+def test_auto_routing_models_list_takes_priority_over_heuristic() -> None:
+    """Explicit models list should override heuristic-based routing."""
+    routing = AutoRoutingProvider(
+        {
+            "openai-compatible": ProviderConfig(
+                provider_type="openai-compatible",
+                api_key="openai-key",
+                base_url="",
+                healthcheck_model="gpt-4o-mini",
+                models=["gpt-4o-mini", "deepseek-chat"],
+            ),
+            "deepseek": ProviderConfig(
+                provider_type="deepseek",
+                api_key="deepseek-key",
+                base_url="",
+                healthcheck_model="",
+            ),
+        }
+    )
+
+    # "deepseek-chat" is in openai-compatible's models list,
+    # so it should NOT fall through to the deepseek heuristic.
+    with patch("sirius_chat.providers.routing.OpenAICompatibleProvider.generate", return_value="openai-ok") as gen:
+        output = routing.generate(_request("deepseek-chat"))
+
+    assert output == "openai-ok"
+    assert gen.call_count == 1
+
+
+def test_provider_registry_persists_models_list(tmp_path: Path) -> None:
+    """Models list should survive save/load round-trip in ProviderRegistry."""
+    registry = ProviderRegistry(tmp_path)
+    models = ["model-a", "model-b", "model-c"]
+    providers = {
+        "siliconflow": ProviderConfig(
+            provider_type="siliconflow",
+            api_key="sf-key",
+            base_url="",
+            healthcheck_model="model-a",
+            models=models,
+        )
+    }
+    registry.save(providers)
+
+    loaded = registry.load()
+    assert loaded["siliconflow"].models == models
+
+
+def test_merge_provider_sources_carries_models_from_session_config(tmp_path: Path) -> None:
+    """Models field from session JSON providers should propagate."""
+    merged = merge_provider_sources(
+        work_path=tmp_path,
+        providers_config=[
+            {
+                "type": "siliconflow",
+                "api_key": "sf-key",
+                "healthcheck_model": "model-a",
+                "models": ["model-a", "model-b"],
+            }
+        ],
+    )
+
+    assert merged["siliconflow"].models == ["model-a", "model-b"]
+
+

@@ -28,6 +28,28 @@ class AgentPreset:
 
 
 @dataclass(slots=True)
+class MemoryPolicy:
+    """Centralized memory system configuration.
+    
+    Controls memory fact limits, confidence thresholds, decay behaviour,
+    observed-set caps and prompt-injection budget.
+    """
+    max_facts_per_user: int = 50
+    transient_confidence_threshold: float = 0.85
+    event_dedup_window_minutes: int = 5
+    max_observed_set_size: int = 100
+    max_summary_facts_per_type: int = 5
+    max_summary_total_chars: int = 2000
+    decay_schedule: dict[int, float] = field(default_factory=lambda: {
+        7: 0.95,
+        30: 0.80,
+        60: 0.55,
+        90: 0.30,
+        180: 0.05,
+    })
+
+
+@dataclass(slots=True)
 class OrchestrationPolicy:
     """Multi-model orchestration strategy (required).
     
@@ -94,6 +116,13 @@ class OrchestrationPolicy:
     auto_reply_group_penalty_start_count: int = 2
     auto_reply_assistant_cooldown_seconds: float = 12.0
     
+    # Message debounce: buffer same-user messages within this window (seconds).
+    # 0 = disabled (immediate reply). Recommended: 3.0~5.0 for group chat.
+    message_debounce_seconds: float = 5.0
+    
+    # Memory policy (centralized memory system configuration)
+    memory: MemoryPolicy = field(default_factory=MemoryPolicy)
+    
     def validate(self) -> None:
         """Validate configuration legitimacy."""
         if not self.unified_model and not self.task_models:
@@ -152,6 +181,8 @@ class OrchestrationPolicy:
             raise ValueError("auto_reply_group_penalty_start_count 不能小于 0。")
         if self.auto_reply_assistant_cooldown_seconds <= 0:
             raise ValueError("auto_reply_assistant_cooldown_seconds 必须大于 0。")
+        if self.message_debounce_seconds < 0:
+            raise ValueError("message_debounce_seconds 不能小于 0。")
 
 
 @dataclass(slots=True)

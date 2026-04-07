@@ -266,5 +266,15 @@ class Transcript:
                 content = f"[{message.speaker}] {message.content}"
             else:
                 content = message.content
+            # Append multimodal input descriptions so the model is aware of them
+            if message.multimodal_inputs:
+                parts: list[str] = []
+                for item in message.multimodal_inputs:
+                    mtype = item.get("type", "unknown")
+                    mvalue = item.get("value", "")
+                    if mvalue:
+                        parts.append(f"[{mtype}: {mvalue}]")
+                if parts:
+                    content = f"{content}\n附件: {' '.join(parts)}"
             history.append({"role": message.role, "content": content})
         return history

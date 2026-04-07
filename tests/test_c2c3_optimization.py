@@ -32,8 +32,8 @@ class TestC2ResidentTransientSeparation:
         )
         
         fact = manager.entries["user1"].runtime.memory_facts[0]
-        assert hasattr(fact, "is_transient")
-        assert hasattr(fact, "created_at")
+        assert hasattr(fact, "is_transient")  # now a method
+        assert hasattr(fact, "observed_at")
 
     def test_fact_with_high_confidence_is_resident(self):
         """测试高置信度facts被标记为RESIDENT"""
@@ -51,8 +51,7 @@ class TestC2ResidentTransientSeparation:
         )
         
         fact = manager.entries["user1"].runtime.memory_facts[0]
-        assert fact.is_transient == False  # RESIDENT
-        assert fact.created_at == ""  # RESIDENT没有created_at
+        assert fact.is_transient() == False  # RESIDENT (high confidence)
 
     def test_fact_with_low_confidence_is_transient(self):
         """测试低置信度facts被标记为TRANSIENT"""
@@ -70,8 +69,7 @@ class TestC2ResidentTransientSeparation:
         )
         
         fact = manager.entries["user1"].runtime.memory_facts[0]
-        assert fact.is_transient == True  # TRANSIENT
-        assert fact.created_at != ""  # TRANSIENT有创建时间
+        assert fact.is_transient() == True  # TRANSIENT (low confidence)
 
     def test_get_resident_facts(self):
         """测试get_resident_facts方法"""
@@ -141,9 +139,9 @@ class TestC2ResidentTransientSeparation:
         )
         
         fact = manager.entries["user1"].runtime.memory_facts[0]
-        # 修改created_at为过期时间（1小时前）
+        # 修改observed_at为过期时间（1小时前）
         old_time = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
-        fact.created_at = old_time
+        fact.observed_at = old_time
         
         # 添加一个新的transient fact
         manager.add_memory_fact(
@@ -184,8 +182,8 @@ class TestC2ResidentTransientSeparation:
         manager2 = UserMemoryManager.from_dict(data)
         
         fact = manager2.entries["user1"].runtime.memory_facts[0]
-        assert fact.is_transient == True
-        assert fact.created_at != ""
+        assert fact.is_transient() == True
+        assert fact.observed_at != ""
 
 
 class TestC3MemoryCompression:

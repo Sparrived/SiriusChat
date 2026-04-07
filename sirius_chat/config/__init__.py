@@ -10,6 +10,7 @@ from __future__ import annotations
 from sirius_chat.config.models import (
     Agent,
     AgentPreset,
+    MemoryPolicy,
     OrchestrationPolicy,
     SessionConfig,
     TokenUsageRecord,
@@ -33,6 +34,7 @@ __all__ = [
     # Models
     "Agent",
     "AgentPreset",
+    "MemoryPolicy",
     "OrchestrationPolicy",
     "SessionConfig",
     "TokenUsageRecord",

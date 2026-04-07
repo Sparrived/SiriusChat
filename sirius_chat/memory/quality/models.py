@@ -259,14 +259,14 @@ class MemoryQualityAssessor:
 class MemoryForgetEngine:
     """智能遗忘引擎。"""
     
-    # 衰退策略配置
+    # 衰退策略配置 (与 MemoryPolicy.decay_schedule 默认值保持一致)
     DEFAULT_DECAY_SCHEDULE = {
         # 天数 -> 置信度衰减比例
         7: 0.95,    # 7天后保留95%置信度
-        30: 0.85,   # 30天后保留85%
-        60: 0.70,   # 60天后保留70%
-        90: 0.50,   # 90天后保留50%
-        180: 0.20,  # 180天后保留20%
+        30: 0.80,   # 30天后保留80%
+        60: 0.55,   # 60天后保留55%
+        90: 0.30,   # 90天后保留30%
+        180: 0.05,  # 180天后保留5%
     }
     
     @staticmethod
@@ -296,21 +296,32 @@ class MemoryForgetEngine:
         return False
     
     @staticmethod
-    def apply_decay(fact: MemoryFact, days_since_update: float | None = None) -> MemoryFact:
+    def apply_decay(
+        fact: MemoryFact,
+        days_since_update: float | None = None,
+        decay_schedule: dict[int, float] | None = None,
+    ) -> MemoryFact:
         """对记忆应用时间衰退。
         
         基于记忆的年龄和原始置信度，计算衰退后的置信度。
+        
+        Args:
+            fact: 要衰退的记忆
+            days_since_update: 距更新的天数 (None=自动计算)
+            decay_schedule: 自定义衰退时间表 (None=DEFAULT_DECAY_SCHEDULE)
         """
         if days_since_update is None:
             days_since_update = MemoryQualityAssessor._calculate_age_days(fact.observed_at)
         
+        schedule = decay_schedule or MemoryForgetEngine.DEFAULT_DECAY_SCHEDULE
+        
         # 根据时间表计算衰减比例
         decay_ratio = 1.0
-        sorted_days = sorted(MemoryForgetEngine.DEFAULT_DECAY_SCHEDULE.keys())
+        sorted_days = sorted(schedule.keys())
         
         for day_threshold in sorted_days:
             if days_since_update >= day_threshold:
-                decay_ratio = MemoryForgetEngine.DEFAULT_DECAY_SCHEDULE[day_threshold]
+                decay_ratio = schedule[day_threshold]
             else:
                 break
         
@@ -322,16 +333,21 @@ class MemoryForgetEngine:
         new_confidence = fact.confidence * decay_ratio
         new_confidence = max(0.0, min(1.0, new_confidence))
         
-        # 返回衰退后的记忆副本
+        # 返回衰退后的记忆副本 (preserve all fields)
         return MemoryFact(
             fact_type=fact.fact_type,
             value=fact.value,
             source=fact.source,
             confidence=new_confidence,
             observed_at=fact.observed_at,
+            observed_time_desc=fact.observed_time_desc,
             memory_category=fact.memory_category,
             validated=fact.validated,
-            conflict_with=list(fact.conflict_with),  # 保持冲突列表
+            conflict_with=list(fact.conflict_with),
+            context_channel=fact.context_channel,
+            context_topic=fact.context_topic,
+            mention_count=fact.mention_count,
+            source_event_id=fact.source_event_id,
         )
     
     @staticmethod

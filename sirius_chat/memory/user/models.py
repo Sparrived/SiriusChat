@@ -33,9 +33,9 @@ class MemoryFact:
     - context_channel: Where the information came from (e.g. "qq", "wechat", "cli")
     - context_topic: Conversation topic or domain (e.g. "work", "travel", "hobby")
     
-    Confidence tiers:
-    - confidence > 0.85: High confidence, persistent storage
-    - confidence <= 0.85: Low confidence, transient (cleaned after session)
+    Confidence tiers (dynamic derivation via MemoryPolicy.transient_confidence_threshold):
+    - confidence > threshold: High confidence (RESIDENT), persistent storage
+    - confidence <= threshold: Low confidence (TRANSIENT), session-only
     """
 
     fact_type: str
@@ -47,13 +47,20 @@ class MemoryFact:
     memory_category: str = "custom"  # identity|preference|emotion|event|custom
     validated: bool = False  # Whether verified by memory_manager
     conflict_with: list[str] = field(default_factory=list)  # List of conflicting memory IDs
-    # C2: RESIDENT vs TRANSIENT separation marker
-    is_transient: bool = False  # Whether this is a transient fact (confidence ≤ 0.85)
-    created_at: str = ""  # Creation time (ISO format), for expiry judgment
     # Rich context fields
     context_channel: str = ""  # Source channel (qq, wechat, cli, etc.)
     context_topic: str = ""  # Conversation topic or domain
     context_metadata: dict[str, str] = field(default_factory=dict)  # Additional context
+    # Activity tracking
+    mention_count: int = 0  # Number of times this fact has been mentioned/reinforced
+    source_event_id: str = ""  # Link back to originating event (if any)
+
+    def __post_init__(self) -> None:
+        self.confidence = max(0.0, min(1.0, float(self.confidence)))
+
+    def is_transient(self, threshold: float = 0.85) -> bool:
+        """Dynamically derive transient status from confidence."""
+        return self.confidence <= threshold
 
 
 @dataclass(slots=True)

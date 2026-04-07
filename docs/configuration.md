@@ -169,6 +169,33 @@ Agent 配置定义 AI 助手的身份和行为。
 - **含义**: 用于内存管理的模型（空字符串表示禁用）
 - **示例**: `"gpt-4-mini"`
 
+#### orchestration.memory
+- **类型**: `MemoryPolicy` 对象
+- **含义**: 记忆系统集中配置（V2 新增）
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `max_facts_per_user` | int | 50 | 每用户最大记忆条目数 |
+| `transient_confidence_threshold` | float | 0.85 | RESIDENT/TRANSIENT 分界阈值 |
+| `event_dedup_window_minutes` | int | 5 | 事件去重时间窗口（分钟） |
+| `max_observed_set_size` | int | 100 | observed_* 集合最大元素数 |
+| `max_summary_facts_per_type` | int | 5 | 摘要中每类型最多事实数 |
+| `max_summary_total_chars` | int | 2000 | 摘要总字符上限 |
+| `decay_schedule` | dict | `{7:0.95, 30:0.80, ...}` | 衰退时间表 |
+
+**JSON 示例**:
+```json
+{
+  "orchestration": {
+    "memory": {
+      "max_facts_per_user": 100,
+      "transient_confidence_threshold": 0.7,
+      "max_observed_set_size": 200
+    }
+  }
+}
+```
+
 ## 环境变量替换
 
 支持在配置文件中使用环境变量，使用 `${VAR_NAME}` 语法：

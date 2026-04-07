@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from sirius_chat.providers.base import GenerationRequest, LLMProvider
@@ -51,6 +51,7 @@ class ProviderConfig:
     base_url: str
     healthcheck_model: str = ""
     enabled: bool = True
+    models: list[str] = field(default_factory=list)
 
 
 def normalize_provider_type(provider_type: str) -> str:
@@ -92,12 +93,15 @@ class ProviderRegistry:
             base_url = str(payload.get("base_url", "")).strip()
             healthcheck_model = str(payload.get("healthcheck_model", "")).strip()
             enabled = bool(payload.get("enabled", True))
+            models_raw = payload.get("models", [])
+            models = [str(m).strip() for m in models_raw if str(m).strip()] if isinstance(models_raw, list) else []
             results[provider_type] = ProviderConfig(
                 provider_type=provider_type,
                 api_key=api_key,
                 base_url=base_url,
                 healthcheck_model=healthcheck_model,
                 enabled=enabled,
+                models=models,
             )
         return results
 
@@ -105,13 +109,16 @@ class ProviderRegistry:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         providers_payload: dict[str, dict[str, object]] = {}
         for provider_type, config in providers.items():
-            providers_payload[provider_type] = {
+            entry: dict[str, object] = {
                 "type": config.provider_type,
                 "api_key": config.api_key,
                 "base_url": config.base_url,
                 "healthcheck_model": config.healthcheck_model,
                 "enabled": config.enabled,
             }
+            if config.models:
+                entry["models"] = config.models
+            providers_payload[provider_type] = entry
         payload: dict[str, object] = {"providers": providers_payload}
         tmp = self.path.with_suffix(self.path.suffix + ".tmp")
         tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -167,12 +174,15 @@ def merge_provider_sources(
         if not provider_type or not api_key:
             continue
         base_url = str(item.get("base_url", "")).strip()
+        models_raw = item.get("models", [])
+        models = [str(m).strip() for m in models_raw if str(m).strip()] if isinstance(models_raw, list) else []
         merged[provider_type] = ProviderConfig(
             provider_type=provider_type,
             api_key=api_key,
             base_url=base_url,
             healthcheck_model=str(item.get("healthcheck_model", "")).strip(),
             enabled=bool(item.get("enabled", True)),
+            models=models,
         )
 
     return merged
@@ -185,8 +195,13 @@ class AutoRoutingProvider(LLMProvider):
         self._providers = {key: value for key, value in providers.items() if value.enabled}
 
     def _provider_matches_model(self, provider: ProviderConfig, model: str) -> bool:
+        model_stripped = model.strip()
+        # Check explicit models list first
+        if provider.models and model_stripped in provider.models:
+            return True
+        # Fallback to healthcheck_model exact match
         expected = provider.healthcheck_model.strip()
-        return bool(expected) and model.strip() == expected
+        return bool(expected) and model_stripped == expected
 
     def _create_provider(self, config: ProviderConfig) -> LLMProvider:
         if config.provider_type in _SILICONFLOW_PROVIDER_TYPES:

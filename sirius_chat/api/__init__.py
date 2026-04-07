@@ -17,6 +17,7 @@ from sirius_chat.api.memory import (
 from sirius_chat.api.models import (
     Agent,
     AgentPreset,
+    MemoryPolicy,
     Message,
     OrchestrationPolicy,
     Participant,

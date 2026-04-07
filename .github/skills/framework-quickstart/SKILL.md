@@ -74,6 +74,9 @@ description: "当你需要在不通读全部代码的情况下快速理解 Siriu
 - `runtime.memory_facts` 是结构化分类记忆，每个记忆包含：
   - `fact_type`、`value`、`source`（来源：memory_extract/event_extract/multimodal_parse/memory_manager）、`confidence`
   - `memory_category`（分类：identity/preference/emotion/event/custom）、`validated`（验证标记）、`conflict_with`（冲突列表）
+  - V2 新增：`mention_count`（去重提频）、`source_event_id`（事件来源）、`context_channel`/`context_topic`（渠道/主题）
+  - V2 变更：`is_transient` 从字段改为方法 (`fact.is_transient(threshold)`)，`created_at` 已移除（使用 `observed_at`）
+- ✨ V2 新增 `MemoryPolicy`（在 `OrchestrationPolicy.memory` 中配置）：集中管理记忆阈值、衰退曲线、集合上限、摘要限长。
 - ✨ **新架构**：启发式正则提取已舍弃（高误率）；所有 AI 推断改由 LLM 任务（memory_extract）提供，质量 confidence 0.8。
 - ✨ **新增**：`memory_manager` LLM 任务可选启用，自动汇聚/去重/标注/验证所有候选记忆，置信度 0.9+。
 - 引擎在运行时会主动维护 `runtime` 记忆（通过 memory_extract 等任务），用于增强拟人化连续对话。

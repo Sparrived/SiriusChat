@@ -1126,6 +1126,7 @@ def test_run_live_session_reply_runtime_persists_across_calls() -> None:
                 },
                 auto_reply_threshold=0.30,
                 auto_reply_threshold_min=0.30,
+                message_debounce_seconds=0.0,
             ),
         )
 

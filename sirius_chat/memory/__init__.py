@@ -6,6 +6,7 @@ Unified memory system for user profiles, runtime states, and event tracking.
 # User memory exports
 from sirius_chat.memory.user import (
     MAX_MEMORY_FACTS,
+    MAX_OBSERVED_SET_SIZE,
     EVENT_DEDUP_WINDOW_MINUTES,
     MemoryFact,
     UserMemoryEntry,
@@ -43,6 +44,7 @@ from sirius_chat.trait_taxonomy import TRAIT_TAXONOMY
 __all__ = [
     # Constants
     "MAX_MEMORY_FACTS",
+    "MAX_OBSERVED_SET_SIZE",
     "EVENT_DEDUP_WINDOW_MINUTES",
     # User memory
     "UserProfile",

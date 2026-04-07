@@ -57,6 +57,14 @@ class UserMemoryFileStore:
                         "source": item.source,
                         "confidence": item.confidence,
                         "observed_at": item.observed_at,
+                        "observed_time_desc": item.observed_time_desc,
+                        "memory_category": item.memory_category,
+                        "validated": item.validated,
+                        "conflict_with": item.conflict_with,
+                        "context_channel": item.context_channel,
+                        "context_topic": item.context_topic,
+                        "mention_count": item.mention_count,
+                        "source_event_id": item.source_event_id,
                     }
                     for item in entry.runtime.memory_facts
                 ],
@@ -125,6 +133,14 @@ class UserMemoryFileStore:
                     source=str(item.get("source", "unknown")).strip() or "unknown",
                     confidence=float(item.get("confidence", 0.5)),
                     observed_at=str(item.get("observed_at", "")).strip(),
+                    observed_time_desc=str(item.get("observed_time_desc", "")).strip(),
+                    memory_category=str(item.get("memory_category", "custom")).strip() or "custom",
+                    validated=bool(item.get("validated", False)),
+                    conflict_with=list(item.get("conflict_with", [])),
+                    context_channel=str(item.get("context_channel", "")).strip(),
+                    context_topic=str(item.get("context_topic", "")).strip(),
+                    mention_count=int(item.get("mention_count", 0)),
+                    source_event_id=str(item.get("source_event_id", "")).strip(),
                 )
                 for item in list(runtime_data.get("memory_facts", []))
                 if isinstance(item, dict) and str(item.get("value", "")).strip()

@@ -12,7 +12,7 @@ from sirius_chat.trait_taxonomy import TRAIT_TAXONOMY
 logger = logging.getLogger(__name__)
 
 # ============================================================================
-# Performance optimization constants
+# Performance optimization constants (defaults, overridden by MemoryPolicy)
 # ============================================================================
 
 # C1: Memory Facts upper limit management
@@ -20,6 +20,9 @@ MAX_MEMORY_FACTS = 50  # Maximum memory facts per user
 
 # A1: Time window deduplication (minutes)
 EVENT_DEDUP_WINDOW_MINUTES = 5
+
+# Observed sets upper limit
+MAX_OBSERVED_SET_SIZE = 100
 
 
 class UserMemoryManager:
@@ -111,6 +114,10 @@ class UserMemoryManager:
         confidence: float,
         observed_at: str | None = None,
         max_facts: int | None = None,
+        memory_category: str = "custom",
+        context_channel: str = "",
+        context_topic: str = "",
+        source_event_id: str = "",
     ) -> None:
         """Add memory fact with trait normalization and intelligent upper limit management.
         
@@ -138,33 +145,31 @@ class UserMemoryManager:
         timestamp = observed_at or self._now_iso()
         normalized = self._normalize_summary_note(text)
         
-        # Check if similar fact exists, update confidence if found
+        # Check if similar fact exists, update confidence and increment mention_count
         for item in entry.runtime.memory_facts:
             if item.fact_type != fact_type:
                 continue
             if self._normalize_summary_note(item.value) != normalized:
                 continue
+            item.mention_count += 1
             if confidence > item.confidence:
-                item.confidence = confidence
+                item.confidence = max(0.0, min(1.0, confidence))
                 item.source = source
                 item.observed_at = timestamp
             return
         
         # Add new fact
-        final_confidence = max(0.0, min(1.0, float(confidence)))
-        # C2 approach: Auto-mark is_transient and created_at
-        is_transient_fact = final_confidence <= 0.85
-        created_at_time = timestamp if is_transient_fact else ""
-        
         entry.runtime.memory_facts.append(
             MemoryFact(
                 fact_type=fact_type,
                 value=text,
                 source=source,
-                confidence=final_confidence,
+                confidence=confidence,
                 observed_at=timestamp,
-                is_transient=is_transient_fact,
-                created_at=created_at_time,
+                memory_category=memory_category,
+                context_channel=context_channel,
+                context_topic=context_topic,
+                source_event_id=source_event_id,
             )
         )
         
@@ -427,6 +432,7 @@ class UserMemoryManager:
         event_features: dict[str, object],
         source: str = "event_extract",
         base_confidence: float = 0.65,
+        source_event_id: str = "",
     ) -> None:
         """Convert event features to user memory facts and feature signals.
         
@@ -437,11 +443,14 @@ class UserMemoryManager:
         if entry is None:
             return
 
+        max_set = MAX_OBSERVED_SET_SIZE
+
         # 1. Emotion recognition → user feature signals and memory facts
         emotions = event_features.get("emotion_tags", [])
         if isinstance(emotions, list) and emotions:
             clean_emotions = [str(e).strip() for e in emotions if str(e).strip()]
             entry.runtime.observed_emotions.update(clean_emotions)
+            self._cap_set(entry.runtime.observed_emotions, max_set)
             
             emotion_str = ", ".join(clean_emotions[:3])
             self.add_memory_fact(
@@ -450,6 +459,8 @@ class UserMemoryManager:
                 value=f"Expressed emotions: {emotion_str}",
                 source=source,
                 confidence=base_confidence - 0.05,
+                memory_category="emotion",
+                source_event_id=source_event_id,
             )
 
         # 2. Keyword accumulation → user interests and memory facts
@@ -457,6 +468,7 @@ class UserMemoryManager:
         if isinstance(keywords, list) and keywords:
             clean_keywords = [str(k).strip() for k in keywords if str(k).strip()]
             entry.runtime.observed_keywords.update(clean_keywords)
+            self._cap_set(entry.runtime.observed_keywords, max_set)
             
             # Take top 5 keywords to avoid length
             keywords_str = ", ".join(clean_keywords[:5])
@@ -466,6 +478,8 @@ class UserMemoryManager:
                 value=f"Topics of interest: {keywords_str}",
                 source=source,
                 confidence=base_confidence - 0.1,
+                memory_category="preference",
+                source_event_id=source_event_id,
             )
 
         # 3. Role recognition → social network and feature lifting
@@ -473,6 +487,7 @@ class UserMemoryManager:
         if isinstance(roles, list) and roles:
             clean_roles = [str(r).strip() for r in roles if str(r).strip()]
             entry.runtime.observed_roles.update(clean_roles)
+            self._cap_set(entry.runtime.observed_roles, max_set)
             
             roles_str = ", ".join(set(clean_roles))
             self.add_memory_fact(
@@ -481,6 +496,8 @@ class UserMemoryManager:
                 value=f"Interacts with roles: {roles_str}",
                 source=source,
                 confidence=base_confidence - 0.05,
+                memory_category="event",
+                source_event_id=source_event_id,
             )
             
             # Feature lifting: detect leadership-related roles
@@ -494,11 +511,18 @@ class UserMemoryManager:
         if isinstance(entities, list) and entities:
             clean_entities = [str(e).strip() for e in entities if str(e).strip()]
             entry.runtime.observed_entities.update(clean_entities)
+            self._cap_set(entry.runtime.observed_entities, max_set)
 
-    def get_resident_facts(self, user_id: str) -> list[MemoryFact]:
+    @staticmethod
+    def _cap_set(s: set[str], max_size: int) -> None:
+        """Cap a set to max_size by removing arbitrary excess elements."""
+        while len(s) > max_size:
+            s.pop()
+
+    def get_resident_facts(self, user_id: str, threshold: float = 0.85) -> list[MemoryFact]:
         """Get high-confidence RESIDENT facts (only for persistence to user.json).
         
-        RESIDENT: confidence > 0.85, representing core, stable user traits and preferences.
+        RESIDENT: confidence > threshold, representing core, stable user traits and preferences.
         These facts should be persisted to storage.
         """
         entry = self.entries.get(user_id)
@@ -507,13 +531,13 @@ class UserMemoryManager:
         
         return [
             fact for fact in entry.runtime.memory_facts
-            if fact.confidence > 0.85
+            if fact.confidence > threshold
         ]
 
-    def get_transient_facts(self, user_id: str) -> list[MemoryFact]:
+    def get_transient_facts(self, user_id: str, threshold: float = 0.85) -> list[MemoryFact]:
         """Get low-confidence TRANSIENT facts (stored in session memory).
         
-        TRANSIENT: confidence ≤ 0.85, representing recently observed uncertain information.
+        TRANSIENT: confidence <= threshold, representing recently observed uncertain information.
         These facts should be stored in session memory and auto-cleaned after 30 minutes.
         """
         entry = self.entries.get(user_id)
@@ -522,7 +546,7 @@ class UserMemoryManager:
         
         return [
             fact for fact in entry.runtime.memory_facts
-            if fact.confidence <= 0.85
+            if fact.confidence <= threshold
         ]
 
     def get_user_by_id(self, user_id: str) -> UserMemoryEntry | None:
@@ -570,6 +594,7 @@ class UserMemoryManager:
         self, 
         user_id: str, 
         include_transient: bool = True,
+        max_facts_per_type: int = 5,
     ) -> dict[str, Any]:
         """Generate a model-friendly user summary with rich context.
         
@@ -579,6 +604,7 @@ class UserMemoryManager:
         Args:
             user_id: The user ID to generate summary for
             include_transient: Whether to include low-confidence transient facts
+            max_facts_per_type: Maximum number of facts per type in the summary
         
         Returns:
             Dict with keys: profile, summary, traits, interests, recent_facts, 
@@ -600,7 +626,7 @@ class UserMemoryManager:
         if include_transient:
             facts_to_include.extend(transient_facts)
         
-        # Group facts by type for organized summary
+        # Group facts by type for organized summary (sorted by confidence desc, capped)
         facts_by_type: dict[str, list[dict[str, Any]]] = {}
         for fact in facts_to_include:
             fact_type = fact.fact_type
@@ -618,6 +644,14 @@ class UserMemoryManager:
             # Clean up empty fields
             fact_info = {k: v for k, v in fact_info.items() if v}
             facts_by_type[fact_type].append(fact_info)
+        
+        # Sort each type by confidence and cap at max_facts_per_type
+        for fact_type in facts_by_type:
+            facts_by_type[fact_type] = sorted(
+                facts_by_type[fact_type],
+                key=lambda f: f.get("confidence", 0),
+                reverse=True,
+            )[:max_facts_per_type]
         
         # Extract key traits and interests
         key_traits = []
@@ -703,11 +737,12 @@ class UserMemoryManager:
         self,
         user_id: str,
         max_age_minutes: int = 30,
+        transient_threshold: float = 0.85,
     ) -> int:
         """Clean up expired TRANSIENT facts.
         
-        TRANSIENT facts are deleted after max_age_minutes (default 30) from creation.
-        Returns number of deleted facts.
+        TRANSIENT facts (confidence <= threshold) are deleted after max_age_minutes
+        from their observed_at time. Returns number of deleted facts.
         """
         entry = self.entries.get(user_id)
         if entry is None:
@@ -718,21 +753,20 @@ class UserMemoryManager:
         facts_to_keep = []
         
         for fact in entry.runtime.memory_facts:
-            # Only check transient facts
-            if not fact.is_transient:
+            # Only check transient facts (dynamic derivation)
+            if not fact.is_transient(transient_threshold):
                 facts_to_keep.append(fact)
                 continue
             
-            # Check expiry
-            if fact.created_at:
+            # Check expiry based on observed_at
+            if fact.observed_at:
                 try:
-                    created_time = datetime.fromisoformat(fact.created_at)
-                    age_minutes = (now - created_time).total_seconds() / 60
+                    observed_time = datetime.fromisoformat(fact.observed_at)
+                    age_minutes = (now - observed_time).total_seconds() / 60
                     if age_minutes > max_age_minutes:
                         deleted_count += 1
                         continue  # Delete this fact
                 except (ValueError, TypeError):
-                    # Parse error, keep this fact
                     pass
             
             facts_to_keep.append(fact)
@@ -836,12 +870,14 @@ class UserMemoryManager:
                                 "source": item.source,
                                 "confidence": item.confidence,
                                 "observed_at": item.observed_at,
+                                "observed_time_desc": item.observed_time_desc,
                                 "memory_category": item.memory_category,
                                 "validated": item.validated,
                                 "conflict_with": item.conflict_with,
-                                # C2: RESIDENT/TRANSIENT marker
-                                "is_transient": item.is_transient,
-                                "created_at": item.created_at,
+                                "context_channel": item.context_channel,
+                                "context_topic": item.context_topic,
+                                "mention_count": item.mention_count,
+                                "source_event_id": item.source_event_id,
                             }
                             for item in entry.runtime.memory_facts
                         ],
@@ -903,12 +939,14 @@ class UserMemoryManager:
                             source=str(item.get("source", "unknown")).strip() or "unknown",
                             confidence=float(item.get("confidence", 0.5)),
                             observed_at=str(item.get("observed_at", "")).strip(),
+                            observed_time_desc=str(item.get("observed_time_desc", "")).strip(),
                             memory_category=str(item.get("memory_category", "custom")).strip() or "custom",
                             validated=bool(item.get("validated", False)),
                             conflict_with=list(item.get("conflict_with", [])),
-                            # C2: Deserialize RESIDENT/TRANSIENT marker
-                            is_transient=bool(item.get("is_transient", False)),
-                            created_at=str(item.get("created_at", "")).strip(),
+                            context_channel=str(item.get("context_channel", "")).strip(),
+                            context_topic=str(item.get("context_topic", "")).strip(),
+                            mention_count=int(item.get("mention_count", 0)),
+                            source_event_id=str(item.get("source_event_id", "")).strip(),
                         )
                         for item in list(runtime_data.get("memory_facts", []))
                         if isinstance(item, dict) and str(item.get("value", "")).strip()
