@@ -4,6 +4,45 @@
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-04-08
+
+### Breaking Changes
+- **MemoryFact 模型重构**
+  - 删除 `is_transient` 字段，改为 `is_transient(threshold=0.85)` 动态方法
+  - 删除 `created_at` 字段，统一使用 `observed_at`
+  - 新增 `__post_init__` 自动钳位 confidence 到 [0.0, 1.0]
+- **衰退曲线更新**：`MemoryForgetEngine.DEFAULT_DECAY_SCHEDULE` 更为激进（180天: 0.20→0.05）
+
+### Added
+- **MemoryPolicy 集中配置** (`OrchestrationPolicy.memory`)
+  - `max_facts_per_user`：每用户最大记忆条目数（默认50）
+  - `transient_confidence_threshold`：RESIDENT/TRANSIENT 分界线（默认0.85）
+  - `event_dedup_window_minutes`：事件去重窗口（默认5分钟）
+  - `max_observed_set_size`：observed_* 集合大小上限（默认100）
+  - `max_summary_facts_per_type`：摘要每类型限制（默认5）
+  - `decay_schedule`：可配置衰退时间表
+- **MemoryFact 富上下文字段**
+  - `mention_count`：去重提频计数
+  - `source_event_id`：事件来源追踪
+  - `context_channel` / `context_topic`：渠道与主题上下文
+  - `observed_time_desc`：人类友好时间描述
+- **UserMemoryManager 增强**
+  - `add_memory_fact()` 自动去重提频（同 fact_type+value 递增 mention_count）
+  - `get_resident_facts()` / `get_transient_facts()` 支持自定义 threshold
+  - `get_rich_user_summary()` 支持 `max_facts_per_type` 限长
+  - `apply_event_insights()` 支持 `source_event_id`，observed_* 集合自动 cap
+- **序列化完整性**：UserMemoryFileStore 从 5 字段升级到 12 字段，向后兼容旧格式
+- **apply_decay 自定义 schedule**：`MemoryForgetEngine.apply_decay()` 新增 `decay_schedule` 参数
+- 新增迁移文档 `docs/migration-memory-v2.md`
+- 新增 26 个记忆系统 V2 专项测试
+
+### Changed
+- `message_debounce_seconds` 默认值从 0.0 调整为 5.0
+
+### Fixed
+- 修复 `_cap_set()` 方法内残余的重复代码块导致 `NameError: event_features`
+- 修复 `test_run_live_session_reply_runtime_persists_across_calls` 未显式设置 debounce 导致的测试失败
+
 ## [0.5.11] - 2026-04-07
 
 ### Changed
