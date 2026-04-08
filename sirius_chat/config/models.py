@@ -105,6 +105,17 @@ class OrchestrationPolicy:
     # Event Extract batch size (v2: 每N条消息批量提取一次用户观察)
     event_extract_batch_size: int = 5  # 每隔N条消息执行一次事件观察提取
 
+    # Intent analysis (意图分析器)
+    enable_intent_analysis: bool = True  # 是否启用 LLM 意图分析
+    intent_analysis_model: str = ""  # 意图分析使用的模型（为空则使用 unified_model）
+
+    # Background memory consolidation (后台记忆归纳)
+    consolidation_enabled: bool = True  # 是否启用定时记忆归纳
+    consolidation_interval_seconds: int = 7200  # 归纳间隔（秒）
+    consolidation_min_entries: int = 6  # 事件最少条数
+    consolidation_min_notes: int = 4   # 摘要最少条数
+    consolidation_min_facts: int = 15  # 事实最少条数
+
     # Reply willingness configuration (auto reply mode)
     session_reply_mode: str = "always"  # auto|always|never
     auto_reply_base_score: float = 0.22

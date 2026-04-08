@@ -4,6 +4,21 @@
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-04-09
+
+### Added
+- **意图分析系统** (`sirius_chat/core/intent.py`)：LLM-based 用户意图分析器，支持 question/request/chat/reaction/information_share/command 六种意图分类。LLM 路径默认启用（`enable_intent_analysis=True`）；可显式设为 `False` 退回关键词回退路径（零 LLM 开销）。
+- **系统提示词段落跳过** (`skip_sections`)：意图分析可判定当前消息是否需要参与者记忆或会话摘要，跳过不需要的段落以减少 token 消耗。
+- **事件归纳** (`EventMemoryManager.consolidate_entries`)：按 category 分组使用 LLM 归纳合并冗余观察记录。
+- **摘要归纳** (`UserMemoryManager.consolidate_summary_notes`)：LLM 合并冗余摘要为精炼条目。
+- **事实归纳** (`UserMemoryManager.consolidate_memory_facts`)：LLM 按 fact_type 合并冗余事实，保留最高 confidence 与累加 mention_count。
+- **后台归纳循环** (`BackgroundTaskManager`)：新增记忆归纳定时循环，支持异步回调注入与 `trigger_consolidation_now()` 即时触发。
+- **`OrchestrationPolicy` 新增配置字段**：`enable_intent_analysis`、`intent_analysis_model`、`consolidation_enabled`、`consolidation_interval_seconds`、`consolidation_min_entries`、`consolidation_min_notes`、`consolidation_min_facts`。
+- **公共 API 导出**：`IntentAnalysis`、`IntentAnalyzer`、`BackgroundTaskConfig`、`BackgroundTaskManager`。
+
+### Fixed
+- **意图分析意愿修正隔离**：关键词回退路径（`enable_intent_analysis=False` 时）不再修改 willingness score，避免低阈值配置下误拒回复。
+
 ## [0.9.4] - 2026-04-08
 
 ### Fixed

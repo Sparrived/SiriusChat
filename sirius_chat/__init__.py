@@ -52,6 +52,10 @@ from sirius_chat.api import (
     SkillRegistry,
     SkillExecutor,
     SkillDataStore,
+    IntentAnalysis,
+    IntentAnalyzer,
+    BackgroundTaskConfig,
+    BackgroundTaskManager,
 )
 from sirius_chat.exceptions import (
     ConfigError,
@@ -141,6 +145,11 @@ __all__ = [
     "SkillRegistry",
     "SkillExecutor",
     "SkillDataStore",
+    # Intent Analysis & Background Tasks
+    "IntentAnalysis",
+    "IntentAnalyzer",
+    "BackgroundTaskConfig",
+    "BackgroundTaskManager",
     # API Functions
     "create_async_engine",
     "ainit_live_session",

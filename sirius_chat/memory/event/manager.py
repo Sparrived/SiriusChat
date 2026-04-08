@@ -367,6 +367,118 @@ class EventMemoryManager:
         logger.info("事件记忆 v1→v2 迁移完成，共迁移 %d 条记录", len(manager.entries))
         return manager
 
+    # ── consolidation ──────────────────────────────────────────
+
+    async def consolidate_entries(
+        self,
+        *,
+        user_id: str,
+        provider_async: Any,
+        model_name: str,
+        min_entries: int = 6,
+        temperature: float = 0.3,
+        max_tokens: int = 512,
+    ) -> int:
+        """Consolidate observations for a user into fewer, more refined entries.
+
+        Groups observations by category, uses LLM to merge and summarize them,
+        then replaces old entries with consolidated ones.
+
+        Returns the number of entries removed (net reduction).
+        """
+        from sirius_chat.providers.base import GenerationRequest
+
+        user_entries = [e for e in self.entries if e.user_id == user_id]
+        if len(user_entries) < min_entries:
+            return 0
+
+        # Group by category
+        by_category: dict[str, list[EventMemoryEntry]] = {}
+        for entry in user_entries:
+            by_category.setdefault(entry.category, []).append(entry)
+
+        total_removed = 0
+        now_iso = datetime.now().isoformat(timespec="seconds")
+
+        for category, entries in by_category.items():
+            if len(entries) < 3:
+                continue
+
+            entries_json = [
+                {"summary": e.summary, "confidence": e.confidence, "mention_count": e.mention_count}
+                for e in entries
+            ]
+
+            system_prompt = (
+                "你是记忆归纳器。请将以下同类别的观察记录归纳合并为更少、更精炼的条目。\n"
+                "规则：\n"
+                "- 合并含义相似或重复的观察\n"
+                "- 保留关键细节，去除冗余\n"
+                "- 每条归纳结果不超过50字\n"
+                "- confidence 取合并条目中的最高值\n"
+                "- mention_count 取合并条目的总和\n"
+                "严格输出 JSON 数组，每个元素包含：summary(string), confidence(float), mention_count(int)"
+            )
+            user_prompt = (
+                f"类别: {category}\n"
+                f"观察列表:\n{json.dumps(entries_json, ensure_ascii=False, indent=2)}"
+            )
+
+            request = GenerationRequest(
+                model=model_name,
+                system_prompt=system_prompt,
+                messages=[{"role": "user", "content": user_prompt}],
+                temperature=temperature,
+                max_tokens=max_tokens,
+                purpose="event_consolidation",
+            )
+
+            try:
+                raw = await provider_async.generate_async(request)
+            except Exception as exc:
+                logger.warning("事件归纳 LLM 调用失败 (user=%s, cat=%s): %s", user_id, category, exc)
+                continue
+
+            parsed = self._parse_extraction_response(raw)
+            if not parsed:
+                continue
+
+            # Remove old entries for this category
+            old_ids = {e.event_id for e in entries}
+            self.entries = [e for e in self.entries if e.event_id not in old_ids]
+
+            # Add consolidated entries
+            for item in parsed:
+                summary = str(item.get("summary", "")).strip()[:100]
+                if not summary:
+                    continue
+                confidence = max(0.0, min(1.0, float(item.get("confidence", 0.5))))
+                mention_count = max(1, int(item.get("mention_count", 1)))
+
+                new_entry = EventMemoryEntry(
+                    event_id=self._next_event_id(),
+                    user_id=user_id,
+                    category=category,
+                    summary=summary,
+                    confidence=confidence,
+                    evidence_samples=[],
+                    created_at=now_iso,
+                    updated_at=now_iso,
+                    mention_count=mention_count,
+                    verified=True,
+                )
+                self.entries.append(new_entry)
+
+            total_removed += len(entries) - len(parsed)
+
+        if total_removed > 0:
+            logger.info("事件归纳完成 | user=%s | 净减少=%d条", user_id, total_removed)
+        return total_removed
+
+    def get_all_user_ids(self) -> set[str]:
+        """Return all unique user IDs present in entries."""
+        return {e.user_id for e in self.entries if e.user_id}
+
     # ── parsing helpers ────────────────────────────────────────
 
     @staticmethod

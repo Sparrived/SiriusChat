@@ -29,6 +29,8 @@ from sirius_chat.api.models import (
     Transcript,
     User,
 )
+from sirius_chat.core.intent import IntentAnalysis, IntentAnalyzer
+from sirius_chat.background_tasks import BackgroundTaskConfig, BackgroundTaskManager
 from sirius_chat.api.prompting import (
     GENERATED_AGENTS_FILE_NAME,
     GeneratedSessionPreset,
@@ -169,4 +171,9 @@ __all__ = [
     "SkillRegistry",
     "SkillExecutor",
     "SkillDataStore",
+    # Intent analysis & background tasks
+    "IntentAnalysis",
+    "IntentAnalyzer",
+    "BackgroundTaskConfig",
+    "BackgroundTaskManager",
 ]

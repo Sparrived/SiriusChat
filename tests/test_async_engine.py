@@ -696,6 +696,7 @@ def test_run_live_session_reply_mode_auto_infers_when_to_reply() -> None:
             orchestration=OrchestrationPolicy(
                 unified_model="mock-model",
                 auto_reply_probability_coefficient=0.0,
+                enable_intent_analysis=False,
                 task_enabled={
                     "memory_extract": False,
                     "multimodal_parse": False,
@@ -775,6 +776,7 @@ def test_run_live_session_reply_mode_auto_probability_fallback_can_trigger_reply
                     "multimodal_parse": False,
                     "event_extract": False,
                 },
+                enable_intent_analysis=False,
                 auto_reply_base_score=0.0,
                 auto_reply_threshold=0.95,
                 auto_reply_threshold_min=0.95,
@@ -1071,6 +1073,7 @@ def test_run_live_session_reply_mode_auto_threshold_is_configurable() -> None:
                     "multimodal_parse": False,
                     "event_extract": False,
                 },
+                enable_intent_analysis=False,
                 auto_reply_threshold=0.20,
                 auto_reply_threshold_min=0.10,
             ),
@@ -1191,6 +1194,7 @@ def test_run_live_message_uses_session_level_auto_reply_mode() -> None:
             orchestration=OrchestrationPolicy(
                 unified_model="mock-model",
                 session_reply_mode="auto",
+                enable_intent_analysis=False,
                 task_enabled={
                     "memory_extract": False,
                     "multimodal_parse": False,

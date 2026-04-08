@@ -29,6 +29,8 @@ from sirius_chat.exceptions import OrchestrationConfigError
 from sirius_chat.skills.registry import SkillRegistry
 from sirius_chat.skills.executor import SkillExecutor, parse_skill_calls, strip_skill_calls
 from sirius_chat.core.events import SessionEvent, SessionEventBus, SessionEventType
+from sirius_chat.core.intent import IntentAnalysis, IntentAnalyzer
+from sirius_chat.background_tasks import BackgroundTaskConfig, BackgroundTaskManager
 logger = logging.getLogger(__name__)
 
 
@@ -69,6 +71,7 @@ class LiveSessionContext:
     skill_registry: SkillRegistry | None = None
     skill_executor: SkillExecutor | None = None
     event_bus: SessionEventBus = field(default_factory=SessionEventBus)
+    bg_task_manager: BackgroundTaskManager | None = None
 
 
 @dataclass(slots=True)
@@ -81,6 +84,7 @@ class AsyncRolePlayEngine:
     _TASK_MULTIMODAL_PARSE = "multimodal_parse"
     _TASK_EVENT_EXTRACT = "event_extract"
     _TASK_MEMORY_MANAGER = "memory_manager"
+    _TASK_INTENT_ANALYSIS = "intent_analysis"
     _TASK_TIMEOUT_SECONDS_DEFAULT = 45.0
     _TASK_TIMEOUT_SECONDS_CHAT_MAIN = 90.0
     _SUPPORTED_MULTIMODAL_TYPES = {"image", "video", "audio", "text"}
@@ -279,6 +283,69 @@ class AsyncRolePlayEngine:
         else:
             logger.debug("SKILL系统已禁用，但已初始化SKILL目录: %s", skills_dir)
 
+        # ── Background consolidation task ──
+        if config.orchestration.consolidation_enabled:
+            bg_config = BackgroundTaskConfig(
+                consolidation_enabled=True,
+                consolidation_interval_seconds=config.orchestration.consolidation_interval_seconds,
+                consolidation_min_entries=config.orchestration.consolidation_min_entries,
+                consolidation_min_notes=config.orchestration.consolidation_min_notes,
+                consolidation_min_facts=config.orchestration.consolidation_min_facts,
+                compression_enabled=False,
+                cleanup_enabled=False,
+            )
+            bg_manager = BackgroundTaskManager(config=bg_config)
+
+            async def _consolidation_callback(
+                _engine: AsyncRolePlayEngine = self,
+                _config: SessionConfig = config,
+                _transcript: Transcript = transcript,
+                _ctx: LiveSessionContext = created,
+            ) -> None:
+                """Periodically consolidate events + notes + facts for all users."""
+                class _Adapter:
+                    def __init__(self, engine: AsyncRolePlayEngine) -> None:
+                        self._engine = engine
+                    async def generate_async(self, request: GenerationRequest) -> str:
+                        return await self._engine._call_provider(request)
+
+                adapter = _Adapter(_engine)
+                try:
+                    model = _engine.get_model_for_task(_config, _engine._TASK_EVENT_EXTRACT)
+                except ValueError:
+                    model = _config.agent.model
+
+                # Consolidate events
+                for uid in _ctx.event_store.get_all_user_ids():
+                    await _ctx.event_store.consolidate_entries(
+                        user_id=uid,
+                        provider_async=adapter,
+                        model_name=model,
+                        min_entries=bg_config.consolidation_min_entries,
+                    )
+
+                # Consolidate user summaries and facts
+                for uid in list(_transcript.user_memory.entries.keys()):
+                    await _transcript.user_memory.consolidate_summary_notes(
+                        user_id=uid,
+                        provider_async=adapter,
+                        model_name=model,
+                        min_notes=bg_config.consolidation_min_notes,
+                    )
+                    await _transcript.user_memory.consolidate_memory_facts(
+                        user_id=uid,
+                        provider_async=adapter,
+                        model_name=model,
+                        min_facts=bg_config.consolidation_min_facts,
+                    )
+
+                # Persist after consolidation
+                _ctx.file_store.save_all(_transcript.user_memory)
+                _ctx.event_file_store.save(_ctx.event_store)
+
+            bg_manager.set_consolidation_callback(_consolidation_callback)
+            created.bg_task_manager = bg_manager
+
         self._live_session_contexts[key] = created
         return created
 
@@ -373,6 +440,10 @@ class AsyncRolePlayEngine:
         transcript: Transcript,
         context: LiveSessionContext,
     ) -> None:
+        # Stop background tasks gracefully
+        if context.bg_task_manager is not None:
+            await context.bg_task_manager.stop()
+
         # 最终化事件记忆：对积累的事件进行 LLM 验证
         try:
             class ProviderAdapter:
@@ -426,12 +497,14 @@ class AsyncRolePlayEngine:
         transcript: Transcript,
         skill_descriptions: str = "",
         environment_context: str = "",
+        skip_sections: list[str] | None = None,
     ) -> str:
         """Delegate to the prompts module for system prompt building."""
         return build_system_prompt(
             config, transcript,
             skill_descriptions=skill_descriptions,
             environment_context=environment_context,
+            skip_sections=skip_sections or [],
         )
 
     async def _call_provider(self, request_payload: GenerationRequest) -> str:
@@ -923,6 +996,46 @@ class AsyncRolePlayEngine:
 
         self._record_task_stat(transcript, task_name, "succeeded")
 
+    async def _run_intent_analysis(
+        self,
+        *,
+        config: SessionConfig,
+        transcript: Transcript,
+        content: str,
+    ) -> IntentAnalysis:
+        """Run LLM-based intent analysis on a user message.
+
+        Falls back to keyword-based analysis if LLM call fails or is disabled.
+        """
+        if not config.orchestration.enable_intent_analysis:
+            agent_alias = str(config.agent.metadata.get("alias", "")).strip()
+            return IntentAnalyzer.fallback_analysis(content, config.agent.name, agent_alias)
+
+        # Determine model: intent_analysis_model > unified_model > agent.model
+        model = config.orchestration.intent_analysis_model.strip()
+        if not model:
+            try:
+                model = self.get_model_for_task(config, self._TASK_INTENT_ANALYSIS)
+            except ValueError:
+                model = config.agent.model
+
+        agent_alias = str(config.agent.metadata.get("alias", "")).strip()
+
+        # Build recent context from transcript
+        recent_messages: list[dict[str, str]] = []
+        for msg in transcript.messages[-6:]:
+            if msg.role in ("user", "assistant"):
+                recent_messages.append({"role": msg.role, "content": msg.content})
+
+        return await IntentAnalyzer.analyze(
+            content=content,
+            agent_name=config.agent.name,
+            agent_alias=agent_alias,
+            recent_messages=recent_messages,
+            call_provider=self._call_provider,
+            model=model,
+        )
+
     def _has_multimodal_inputs(self, transcript: Transcript) -> bool:
         """检测 transcript 中最后的用户消息是否包含多模态输入。
         
@@ -1276,11 +1389,13 @@ class AsyncRolePlayEngine:
         transcript: Transcript,
         skill_descriptions: str = "",
         environment_context: str = "",
+        skip_sections: list[str] | None = None,
     ) -> tuple[str, list[dict[str, str]]]:
         system_prompt = self._build_system_prompt(
             config, transcript,
             skill_descriptions=skill_descriptions,
             environment_context=environment_context,
+            skip_sections=skip_sections or [],
         )
         internal_notes = self._collect_internal_system_notes(transcript)
         if internal_notes:
@@ -1341,6 +1456,7 @@ class AsyncRolePlayEngine:
         skill_executor: SkillExecutor | None = None,
         environment_context: str = "",
         event_bus: SessionEventBus | None = None,
+        skip_sections: list[str] | None = None,
     ) -> Message:
         if config.enable_auto_compression:
             transcript.compress_for_budget(
@@ -1360,6 +1476,7 @@ class AsyncRolePlayEngine:
             transcript=transcript,
             skill_descriptions=skill_descriptions,
             environment_context=environment_context,
+            skip_sections=skip_sections,
         )
         
         request_payload = GenerationRequest(
@@ -1483,6 +1600,7 @@ class AsyncRolePlayEngine:
                     transcript=transcript,
                     skill_descriptions=skill_descriptions,
                     environment_context=environment_context,
+                    skip_sections=skip_sections,
                 )
                 request_payload = GenerationRequest(
                     model=model,
@@ -1721,7 +1839,12 @@ class AsyncRolePlayEngine:
         self.validate_orchestration_config(config)
 
         transcript = self._prepare_transcript(config, transcript)
-        _ = self._get_or_create_live_context(config=config, transcript=transcript)
+        context = self._get_or_create_live_context(config=config, transcript=transcript)
+
+        # Start background consolidation if configured
+        if context.bg_task_manager is not None and not context.bg_task_manager.is_running():
+            await context.bg_task_manager.start()
+
         return transcript
 
     async def subscribe(
@@ -1975,6 +2098,26 @@ class AsyncRolePlayEngine:
             assistant_interval_seconds=assistant_interval_seconds,
         )
 
+        # ── Intent analysis: refine willingness and determine context optimization ──
+        intent: IntentAnalysis | None = None
+        if resolved_session_mode in ("auto", "smart"):
+            intent = await self._run_intent_analysis(
+                config=config,
+                transcript=transcript,
+                content=turn.content,
+            )
+            # Apply willingness modifier only when LLM-based intent analysis is enabled
+            if (
+                config.orchestration.enable_intent_analysis
+                and willingness is not None
+                and intent.willingness_modifier != 0.0
+            ):
+                adjusted_score = willingness.score + intent.willingness_modifier
+                adjusted_score = max(0.0, min(1.0, adjusted_score))
+                should_reply = adjusted_score >= willingness.threshold
+                if not should_reply and willingness.reply_probability > 0:
+                    should_reply = willingness.probability_roll < willingness.reply_probability
+
         # Emit user message event
         await context.event_bus.emit(SessionEvent(
             type=SessionEventType.MESSAGE_ADDED,
@@ -2013,6 +2156,7 @@ class AsyncRolePlayEngine:
                 skill_executor=context.skill_executor,
                 environment_context=environment_context,
                 event_bus=context.event_bus,
+                skip_sections=intent.skip_sections if intent else [],
             )
             last_assistant_reply_at = datetime.now(timezone.utc)
 

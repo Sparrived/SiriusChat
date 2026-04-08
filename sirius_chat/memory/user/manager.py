@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime, timezone
 from typing import Any
@@ -779,6 +780,184 @@ class UserMemoryManager:
             )
         
         return deleted_count
+
+    async def consolidate_summary_notes(
+        self,
+        user_id: str,
+        provider_async: Any,
+        model_name: str,
+        min_notes: int = 4,
+        temperature: float = 0.3,
+        max_tokens: int = 256,
+    ) -> int:
+        """Consolidate summary notes for a user into fewer, more refined notes.
+
+        Uses LLM to merge and summarize multiple notes into concise summaries.
+        Returns the number of notes removed (net reduction).
+        """
+        from sirius_chat.providers.base import GenerationRequest
+
+        entry = self.entries.get(user_id)
+        if entry is None:
+            return 0
+
+        notes = entry.runtime.summary_notes
+        if len(notes) < min_notes:
+            return 0
+
+        system_prompt = (
+            "你是摘要归纳器。请将以下用户摘要合并为更少、更精炼的条目。\n"
+            "规则：\n- 保留关键信息，去除重复\n- 每条不超过50字\n- 合并含义相似的条目\n"
+            "严格输出 JSON 数组，每个元素为 string（归纳后的摘要）。"
+        )
+        user_prompt = f"摘要列表:\n{json.dumps(notes, ensure_ascii=False, indent=2)}"
+
+        request = GenerationRequest(
+            model=model_name,
+            system_prompt=system_prompt,
+            messages=[{"role": "user", "content": user_prompt}],
+            temperature=temperature,
+            max_tokens=max_tokens,
+            purpose="summary_consolidation",
+        )
+
+        try:
+            raw = await provider_async.generate_async(request)
+        except Exception as exc:
+            logger.warning("摘要归纳 LLM 调用失败 (user=%s): %s", user_id, exc)
+            return 0
+
+        parsed = self._parse_string_array(raw)
+        if not parsed:
+            return 0
+
+        old_count = len(notes)
+        entry.runtime.summary_notes = [s[:100] for s in parsed if s.strip()][:8]
+        removed = old_count - len(entry.runtime.summary_notes)
+        if removed > 0:
+            logger.info("摘要归纳完成 | user=%s | %d→%d条", user_id, old_count, len(entry.runtime.summary_notes))
+        return removed
+
+    async def consolidate_memory_facts(
+        self,
+        user_id: str,
+        provider_async: Any,
+        model_name: str,
+        min_facts: int = 15,
+        temperature: float = 0.3,
+        max_tokens: int = 512,
+    ) -> int:
+        """Consolidate memory facts for a user using LLM-based merging.
+
+        Group facts by type, merge similar ones, and produce refined facts.
+        Returns the number of facts removed (net reduction).
+        """
+        from sirius_chat.providers.base import GenerationRequest
+
+        entry = self.entries.get(user_id)
+        if entry is None:
+            return 0
+
+        facts = entry.runtime.memory_facts
+        if len(facts) < min_facts:
+            return 0
+
+        facts_json = [
+            {"fact_type": f.fact_type, "value": f.value, "confidence": f.confidence,
+             "category": f.memory_category, "mention_count": f.mention_count}
+            for f in facts
+        ]
+
+        system_prompt = (
+            "你是记忆事实归纳器。将以下用户记忆事实合并为更少、更精炼的条目。\n"
+            "规则：\n- 合并含义相似或重复的事实\n- 保留关键信息\n- 每条 value 不超过50字\n"
+            "- confidence 取合并条目中的最高值\n- mention_count 取合并条目的总和\n"
+            "严格输出 JSON 数组，每个元素包含：fact_type, value, confidence, category, mention_count"
+        )
+        user_prompt = f"记忆事实:\n{json.dumps(facts_json, ensure_ascii=False, indent=2)}"
+
+        request = GenerationRequest(
+            model=model_name,
+            system_prompt=system_prompt,
+            messages=[{"role": "user", "content": user_prompt}],
+            temperature=temperature,
+            max_tokens=max_tokens,
+            purpose="fact_consolidation",
+        )
+
+        try:
+            raw = await provider_async.generate_async(request)
+        except Exception as exc:
+            logger.warning("事实归纳 LLM 调用失败 (user=%s): %s", user_id, exc)
+            return 0
+
+        parsed = self._parse_dict_array(raw)
+        if not parsed:
+            return 0
+
+        old_count = len(facts)
+        now_iso = self._now_iso()
+        new_facts = []
+        for item in parsed:
+            value = str(item.get("value", "")).strip()[:100]
+            if not value:
+                continue
+            new_facts.append(MemoryFact(
+                fact_type=str(item.get("fact_type", "summary")).strip() or "summary",
+                value=value,
+                source="consolidation",
+                confidence=max(0.0, min(1.0, float(item.get("confidence", 0.5)))),
+                observed_at=now_iso,
+                memory_category=str(item.get("category", "custom")).strip() or "custom",
+                validated=True,
+                mention_count=max(1, int(item.get("mention_count", 1))),
+            ))
+
+        if new_facts:
+            entry.runtime.memory_facts = new_facts
+            removed = old_count - len(new_facts)
+            if removed > 0:
+                logger.info("事实归纳完成 | user=%s | %d→%d条", user_id, old_count, len(new_facts))
+            return removed
+        return 0
+
+    @staticmethod
+    def _parse_string_array(raw: str) -> list[str]:
+        """Parse LLM response as JSON string array."""
+        text = raw.strip()
+        if "```" in text:
+            parts = text.split("```")
+            if len(parts) >= 3:
+                text = parts[1]
+                if text.startswith("json"):
+                    text = text[4:]
+                text = text.strip()
+        try:
+            result = json.loads(text)
+        except (json.JSONDecodeError, ValueError):
+            return []
+        if isinstance(result, list):
+            return [str(item).strip() for item in result if isinstance(item, str) and item.strip()]
+        return []
+
+    @staticmethod
+    def _parse_dict_array(raw: str) -> list[dict[str, Any]]:
+        """Parse LLM response as JSON dict array."""
+        text = raw.strip()
+        if "```" in text:
+            parts = text.split("```")
+            if len(parts) >= 3:
+                text = parts[1]
+                if text.startswith("json"):
+                    text = text[4:]
+                text = text.strip()
+        try:
+            result = json.loads(text)
+        except (json.JSONDecodeError, ValueError):
+            return []
+        if isinstance(result, list):
+            return [item for item in result if isinstance(item, dict)]
+        return []
 
     def compress_memory_facts(
         self,

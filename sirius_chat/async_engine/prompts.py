@@ -15,12 +15,22 @@ def build_system_prompt(
     transcript: Transcript,
     skill_descriptions: str = "",
     environment_context: str = "",
+    skip_sections: list[str] | None = None,
 ) -> str:
     """Build the system prompt for an AI agent session.
 
     Uses XML-like section tags to provide clear structural boundaries,
     helping the model distinguish different types of information.
+
+    Args:
+        config: Session configuration.
+        transcript: Current conversation transcript.
+        skill_descriptions: Available skill descriptions.
+        environment_context: Externally injected context.
+        skip_sections: Section names to skip (e.g. 'participant_memory', 'session_summary',
+                       'environment_context') based on intent analysis.
     """
+    _skip = set(skip_sections or [])
     agent_alias = str(config.agent.metadata.get("alias", "")).strip()
     now_text = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -42,19 +52,19 @@ def build_system_prompt(
     )
 
     # --- Section 3: Environment context (externally injected) ---
-    if environment_context.strip():
+    if environment_context.strip() and "environment_context" not in _skip:
         sections.append(
             f"<environment_context>\n{environment_context.strip()}\n</environment_context>"
         )
 
     # --- Section 4: Session summary (long-term compressed history) ---
-    if transcript.session_summary:
+    if transcript.session_summary and "session_summary" not in _skip:
         sections.append(
             f"<session_summary>\n{transcript.session_summary}\n</session_summary>"
         )
 
     # --- Section 5: Participant memory (long-term knowledge) ---
-    if transcript.user_memory.entries:
+    if transcript.user_memory.entries and "participant_memory" not in _skip:
         memory_lines: list[str] = []
         memory_lines.append("以下为参与者结构化参考，用自然对话回复，禁止仿写字段格式。")
         for user_id in transcript.user_memory.entries.keys():
@@ -132,7 +142,7 @@ def build_system_prompt(
         marker = config.orchestration.split_marker
         sections.append(
             f"<splitting_instruction>\n"
-            f"这是群聊场景，每条消息应简短自然，通常1-2句话，最多不超过3-4句。\n"
+            f"这是群聊场景，每条消息应简短自然，通常1-2句话，最多不超过3句。\n"
             f"当要表达多个独立内容、话题转换或停顿时，必须在该位置插入 '{marker}' 作为消息分割点，"
             f"系统会自动拆分为多条独立消息依次发送。\n"
             f"禁止用连续换行（\\n\\n 或多个空行）来表示不同消息——换行只在单条消息内使用。"

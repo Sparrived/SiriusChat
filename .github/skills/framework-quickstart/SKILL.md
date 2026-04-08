@@ -123,6 +123,8 @@ description: "当你需要在不通读全部代码的情况下快速理解 Siriu
   - SKILL 文件需导出 `SKILL_META` 字典和 `run(**kwargs)` 函数
   - `SKILL_META["dependencies"]`：可选显式声明第三方包名列表，框架自动安装
   - 持久化数据通过 `data_store` 参数自动注入到 `run()` 中
+- ✨ **意图分析** (`core/intent.py`)：分析用户消息意图（question/request/chat/reaction/information_share/command），优化回复意愿评分与系统提示词段落。LLM 路径通过 `enable_intent_analysis=True` 启用；默认使用零开销关键词回退路径。
+- ✨ **后台任务** (`background_tasks.py`)：轻量级 asyncio 定时循环管理器，支持记忆压缩、临时清理和记忆归纳三类后台任务。记忆归纳循环定时调用 LLM 合并冗余事件/摘要/事实。
 - `providers/base.py` 定义 provider 协议。
 - `providers/middleware/` 是 Provider 功能扩展层（✨ 新增 P1-003）：
   - `base.py`：Middleware ABC，支持链式组合

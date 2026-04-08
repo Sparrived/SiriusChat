@@ -6,9 +6,12 @@
 
 from sirius_chat.core.engine import AsyncRolePlayEngine
 from sirius_chat.core.events import SessionEvent, SessionEventBus, SessionEventType
+from sirius_chat.core.intent import IntentAnalysis, IntentAnalyzer
 
 __all__ = [
     "AsyncRolePlayEngine",
+    "IntentAnalysis",
+    "IntentAnalyzer",
     "SessionEvent",
     "SessionEventBus",
     "SessionEventType",
