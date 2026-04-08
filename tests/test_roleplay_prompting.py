@@ -6,14 +6,18 @@ from sirius_chat.api import (
     Agent,
     AgentPreset,
     Message,
+    PersonaSpec,
     RolePlayAnswer,
     agenerate_agent_prompts_from_answers,
+    agenerate_from_persona_spec,
+    aupdate_agent_prompt,
     create_session_config_from_selected_agent,
     SessionConfig,
     abuild_roleplay_prompt_from_answers_and_apply,
     create_async_engine,
     generate_humanized_roleplay_questions,
     load_generated_agent_library,
+    load_persona_spec,
     persist_generated_agent_profile,
     select_generated_agent_profile,
 )
@@ -128,8 +132,7 @@ def test_agenerate_agent_prompts_from_answers_includes_agent_name() -> None:
             answers=[RolePlayAnswer(question="风格", answer="先倾听，再行动")],
         )
         payload = provider.requests[0].messages[0]["content"]
-        assert "name=阿星" in payload  # 改为检查新的格式
-        assert "【Agent 基础配置】" in payload  # 验证新增的配置信息部分
+        assert "name=阿星" in payload  # 新格式中的 name 字段
         assert prompts.agent.persona == "冷静执行派"
         assert "阿星" in prompts.global_system_prompt
         assert prompts.agent.temperature == 0.5
@@ -246,4 +249,192 @@ def test_prompt_generation_applies_agent_alias_to_metadata() -> None:
     asyncio.run(_run())
 
 
+# ────────────────────────────────────────────────────────────
+# PersonaSpec / agenerate_from_persona_spec
+# ────────────────────────────────────────────────────────────
+
+
+def test_agenerate_from_persona_spec_tag_based() -> None:
+    """Tag-only path: no Q&A needed, persona = compact keywords."""
+    async def _run() -> None:
+        provider = MockProvider(
+            responses=[
+                '{"agent_persona":"热情/直接/逻辑清晰","global_system_prompt":"你是北辰，热情直接。","temperature":0.7,"max_tokens":512}'
+            ]
+        )
+        spec = PersonaSpec(
+            agent_name="北辰",
+            trait_keywords=["热情", "直接", "逻辑清晰"],
+        )
+        preset = await agenerate_from_persona_spec(
+            provider, spec, model="test-model"
+        )
+        payload = provider.requests[0].messages[0]["content"]
+        assert "keywords=热情/直接/逻辑清晰" in payload
+        assert "name=北辰" in payload
+        assert preset.agent.persona == "热情/直接/逻辑清晰"
+        assert "北辰" in preset.global_system_prompt
+
+    asyncio.run(_run())
+
+
+def test_agenerate_from_persona_spec_hybrid_includes_both_inputs() -> None:
+    """Hybrid path: keywords anchor traits, Q&A enriches the result."""
+    async def _run() -> None:
+        provider = MockProvider(
+            responses=[
+                '{"agent_persona":"沉稳/共情/决断","global_system_prompt":"混合路径生成","temperature":0.6,"max_tokens":600}'
+            ]
+        )
+        spec = PersonaSpec(
+            agent_name="南星",
+            trait_keywords=["沉稳", "共情"],
+            answers=[RolePlayAnswer(question="压力下表现", answer="先冷静，再行动")],
+            background="曾在医疗行业工作",
+        )
+        preset = await agenerate_from_persona_spec(
+            provider, spec, model="test-model"
+        )
+        payload = provider.requests[0].messages[0]["content"]
+        assert "keywords=沉稳/共情" in payload
+        assert "[Q&A]" in payload
+        assert "background=曾在医疗行业工作" in payload
+        assert preset.agent.persona == "沉稳/共情/决断"
+
+    asyncio.run(_run())
+
+
+def test_agenerate_from_persona_spec_raises_on_empty_spec() -> None:
+    async def _run() -> None:
+        provider = MockProvider(responses=["irrelevant"])
+        spec = PersonaSpec(agent_name="X")  # no keywords or answers
+        try:
+            await agenerate_from_persona_spec(provider, spec, model="m")
+            assert False, "should have raised ValueError"
+        except ValueError:
+            pass
+
+    asyncio.run(_run())
+
+
+def test_abuild_accepts_trait_keywords_without_answers() -> None:
+    """Builder must work with only trait_keywords (no answers)."""
+    async def _run() -> None:
+        provider = MockProvider(
+            responses=[
+                '{"agent_persona":"高效/简洁/务实","global_system_prompt":"你是效率助手","temperature":0.5,"max_tokens":400}'
+            ]
+        )
+        config = SessionConfig(
+            work_path=Path("data/tests/roleplay_tag_path"),
+            preset=AgentPreset(
+                agent=Agent(name="效率助手", persona="默认", model="mock-model"),
+                global_system_prompt="测试",
+            ),
+        )
+        prompt = await abuild_roleplay_prompt_from_answers_and_apply(
+            provider,
+            config=config,
+            model="test-model",
+            trait_keywords=["高效", "简洁", "务实"],
+            persona_key="tag_only",
+        )
+        assert prompt == "你是效率助手"
+        assert config.agent.persona == "高效/简洁/务实"
+        assert (config.work_path / GENERATED_AGENTS_FILE_NAME).exists()
+
+    asyncio.run(_run())
+
+
+def test_persona_spec_persisted_along_with_output() -> None:
+    """PersonaSpec must be saved alongside the generated preset."""
+    async def _run() -> None:
+        provider = MockProvider(
+            responses=[
+                '{"agent_persona":"温柔/体贴","global_system_prompt":"我是体贴助手","temperature":0.6,"max_tokens":512}'
+            ]
+        )
+        config = SessionConfig(
+            work_path=Path("data/tests/roleplay_spec_persist"),
+            preset=AgentPreset(
+                agent=Agent(name="体贴助手", persona="默认", model="mock-model"),
+                global_system_prompt="初始提示词",
+            ),
+        )
+        await abuild_roleplay_prompt_from_answers_and_apply(
+            provider,
+            config=config,
+            model="test-model",
+            answers=[RolePlayAnswer(question="风格", answer="温柔体贴")],
+            persona_key="spec_persist_test",
+        )
+        saved_spec = load_persona_spec(config.work_path, "spec_persist_test")
+        assert saved_spec is not None
+        assert len(saved_spec.answers) == 1
+        assert saved_spec.answers[0].question == "风格"
+        assert saved_spec.agent_name == "体贴助手"
+
+    asyncio.run(_run())
+
+
+def test_aupdate_agent_prompt_partial_update() -> None:
+    """aupdate_agent_prompt patches spec and regenerates without full rewrite."""
+    async def _run() -> None:
+        provider = MockProvider(
+            responses=[
+                # Initial generation
+                '{"agent_persona":"温和/耐心","global_system_prompt":"原始描述","temperature":0.6,"max_tokens":512}',
+                # Partial update generation
+                '{"agent_persona":"温和/耐心/幽默","global_system_prompt":"更新后描述带幽默感","temperature":0.6,"max_tokens":512}',
+            ]
+        )
+        work_path = Path("data/tests/roleplay_update_test")
+        config = SessionConfig(
+            work_path=work_path,
+            preset=AgentPreset(
+                agent=Agent(name="北辰", persona="默认", model="mock-model"),
+                global_system_prompt="初始",
+            ),
+        )
+        # Initial generation
+        await abuild_roleplay_prompt_from_answers_and_apply(
+            provider,
+            config=config,
+            model="test-model",
+            answers=[RolePlayAnswer(question="性格", answer="温和耐心")],
+            persona_key="update_test",
+        )
+        assert config.agent.persona == "温和/耐心"
+
+        # Partial update: add background only, keep original answers
+        updated = await aupdate_agent_prompt(
+            provider,
+            work_path=work_path,
+            agent_key="update_test",
+            model="test-model",
+            background="最近变得更幽默了",
+        )
+        assert updated.agent.persona == "温和/耐心/幽默"
+        assert "更新后描述带幽默感" in updated.global_system_prompt
+
+        # Spec should reflect merged patch
+        spec = load_persona_spec(work_path, "update_test")
+        assert spec is not None
+        assert spec.background == "最近变得更幽默了"
+        # Original answers still preserved
+        assert len(spec.answers) == 1
+
+    asyncio.run(_run())
+
+
+def test_persona_spec_merge_ignores_none_values() -> None:
+    spec = PersonaSpec(
+        agent_name="测试",
+        trait_keywords=["热情"],
+        background="原始背景",
+    )
+    merged = spec.merge(background="新背景", trait_keywords=None)
+    assert merged.background == "新背景"
+    assert merged.trait_keywords == ["热情"]  # None not applied
+    assert merged.agent_name == "测试"  # unchanged
 

@@ -4,7 +4,24 @@
 
 ## [Unreleased]
 
-## [0.8.1] - 2026-04-08
+## [0.8.2] - 2026-04-08
+
+### Added
+- **`PersonaSpec` 持久化生成规格**：新增 `PersonaSpec` dataclass，封装角色生成的全部输入（keywords、answers、background 等），随生成结果一起写入 `generated_agents.json`，支持增量微调
+- **Tag-based 构建路径**：`PersonaSpec(trait_keywords=[...])` 仅凭关键词列表即可生成完整角色，无需完整问卷访谈
+- **Hybrid 构建路径**：同时提供 `trait_keywords` + `answers`，关键词锚定特质、问答丰富细节
+- **`agenerate_from_persona_spec()`**：统一生成入口，支持 tag-only / Q&A / hybrid 三条路径
+- **`aupdate_agent_prompt()`**：增量微调已生成的 agent，仅更新指定字段（背景/关键词/答案），无需全量重写
+- **`load_persona_spec()`**：加载已持久化的 `PersonaSpec`
+- 迁移文档：`docs/migration-roleplay-v082.md`
+- 7 个新测试覆盖 PersonaSpec/tag-based/hybrid/update 路径
+
+### Changed
+- **`Agent.persona` 语义**：由 200-400 字描述性文本改为 3-5 个关键词标签（'/' 分隔，≤30 字）；完整角色指南移至 `global_system_prompt`
+- **`abuild_roleplay_prompt_from_answers_and_apply`** 的 `answers` 参数由必填改为可选，新增 `trait_keywords` 和 `persona_spec` 参数
+- **LLM 提示词精简**：生成提示词（system + user prompt）总长减少约 60%，结构更清晰
+
+
 
 ### Added
 - **SKILL 依赖自动安装**：加载 SKILL 文件前自动检测并安装缺失的第三方依赖
