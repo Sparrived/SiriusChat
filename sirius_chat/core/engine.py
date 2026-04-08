@@ -1463,9 +1463,14 @@ class AsyncRolePlayEngine:
                             speaker=speaker,
                         )
                         transcript.add(partial_msg)
-                        # 不向事件总线发送 partial_msg：
-                        # SKILL 执行前的中间内容不对外暴露，避免外部平台将其识别为特殊消息类型。
-                        # 外部订阅者只会收到 SKILL 执行完成后重新生成的最终消息。
+                        # 此时 remaining_content 已经过 strip_skill_calls 清理，
+                        # 不含任何 SKILL_CALL 标记，直接发送给外部订阅者。
+                        if event_bus is not None:
+                            await event_bus.emit(SessionEvent(
+                                type=SessionEventType.MESSAGE_ADDED,
+                                message=partial_msg,
+                            ))
+                        await asyncio.sleep(0.01)
 
                 # Re-generate response with skill result in context
                 if config.enable_auto_compression:
