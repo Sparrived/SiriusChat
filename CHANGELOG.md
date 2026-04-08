@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+## [0.9.2] - 2026-04-08
+
+### Fixed
+- **`<MSG_SPLIT>` 明文输出**：当模型在同一回复中同时输出 `<MSG_SPLIT>` 和 `[SKILL_CALL: ...]` 时，SKILL 执行前提取的 `remaining_content` 未走分割逻辑，导致标记被原样输出。现在 `partial_msg` 路径也会对分割标记进行拆分处理。
+- **`[SKILL_CALL: ...]` 残留输出**：当 SKILL 调用轮次达到 `max_skill_rounds` 上限后强制退出循环，此时 `content` 中可能仍残留 `[SKILL_CALL: ...]` 文本。现在循环退出后统一执行 `strip_skill_calls` 清理。
+
 ## [0.9.1] - 2026-04-08
 
 ### Changed

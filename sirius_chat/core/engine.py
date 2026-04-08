@@ -1440,19 +1440,34 @@ class AsyncRolePlayEngine:
                 # Strip the skill call from the content and keep the rest
                 remaining_content = strip_skill_calls(content)
 
-                # If there's remaining content, add it as a partial assistant message
+                # If there's remaining content, add it as partial assistant message(s).
+                # Also apply MSG_SPLIT splitting here so the marker never leaks to output.
                 if remaining_content.strip():
-                    partial_msg = Message(
-                        role="assistant",
-                        content=remaining_content.strip(),
-                        speaker=speaker,
+                    _split_marker = (
+                        config.orchestration.split_marker
+                        if config.orchestration.enable_prompt_driven_splitting
+                        else None
                     )
-                    transcript.add(partial_msg)
-                    if event_bus is not None:
-                        await event_bus.emit(SessionEvent(
-                            type=SessionEventType.MESSAGE_ADDED,
-                            message=partial_msg,
-                        ))
+                    _partial_parts = (
+                        remaining_content.split(_split_marker)
+                        if _split_marker and _split_marker in remaining_content
+                        else [remaining_content]
+                    )
+                    for _partial_part in _partial_parts:
+                        _partial_stripped = _partial_part.strip()
+                        if not _partial_stripped:
+                            continue
+                        partial_msg = Message(
+                            role="assistant",
+                            content=_partial_stripped,
+                            speaker=speaker,
+                        )
+                        transcript.add(partial_msg)
+                        if event_bus is not None:
+                            await event_bus.emit(SessionEvent(
+                                type=SessionEventType.MESSAGE_ADDED,
+                                message=partial_msg,
+                            ))
 
                 # Re-generate response with skill result in context
                 if config.enable_auto_compression:
@@ -1486,9 +1501,12 @@ class AsyncRolePlayEngine:
                     if bracket_end != -1 and bracket_end < 40:
                         content = content[bracket_end + 2:]
                 content = self._sanitize_assistant_content(content)
-        
+
+        # Safety: strip any SKILL_CALL markers left in content (e.g. max_skill_rounds exhausted)
+        content = strip_skill_calls(content)
+
         last_message: Message | None = None
-        
+
         if config.orchestration.enable_prompt_driven_splitting:
             marker = config.orchestration.split_marker
             # 仅在 marker 精确出现时才分割，避免其他 [...] 模式的误判
