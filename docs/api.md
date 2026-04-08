@@ -27,9 +27,13 @@ Create an async roleplay engine for non-blocking integration.
 
 Async facade for live session initialization.
 
-#### `async arun_live_message(engine: AsyncRolePlayEngine, config: SessionConfig, turn: Message, on_message: OnMessage | None, transcript: Transcript | None) -> Transcript`
+#### `async arun_live_message(engine: AsyncRolePlayEngine, config: SessionConfig, turn: Message, transcript: Transcript | None) -> Transcript`
 
 Async facade for single-message live processing.
+
+#### `async asubscribe(engine: AsyncRolePlayEngine, transcript: Transcript, *, max_queue_size: int = 256) -> AsyncIterator[SessionEvent]`
+
+Subscribe to real-time session events. Returns an async iterator of `SessionEvent` objects.
 
 #### `find_user_by_channel_uid(transcript: Transcript, channel: str, uid: str) -> UserMemoryEntry | None`
 

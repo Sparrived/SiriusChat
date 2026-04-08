@@ -4,6 +4,22 @@
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-04-08
+
+### Added
+- **Session 级事件流**：新增 `SessionEventBus`、`SessionEvent`、`SessionEventType`，提供实时 pub/sub 事件推送
+- **`engine.subscribe(transcript)`**：返回 `AsyncIterator[SessionEvent]`，外部可持续接听会话事件
+- **`asubscribe()` API 门面**：高层异步订阅接口
+- 7 种事件类型：`MESSAGE_ADDED`、`PROCESSING_STARTED`、`PROCESSING_COMPLETED`、`SKILL_STARTED`、`SKILL_COMPLETED`、`REPLY_SKIPPED`、`ERROR`
+- 迁移文档：`docs/migration-event-stream.md`
+
+### Removed
+- **`on_message` 回调参数**（破坏性变更）：从 `run_live_message()`、`arun_live_message()`、`run_session()` 移除
+- **`OnMessage` 类型别名**：已由 `SessionEvent` 替代
+
+### Changed
+- 消息投递模型从回调式改为 pub/sub 事件流，外部消费者通过 `subscribe()` 获取实时事件
+
 ## [0.8.4] - 2026-04-08
 
 ### Added

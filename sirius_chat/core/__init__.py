@@ -5,5 +5,11 @@
 """
 
 from sirius_chat.core.engine import AsyncRolePlayEngine
+from sirius_chat.core.events import SessionEvent, SessionEventBus, SessionEventType
 
-__all__ = ["AsyncRolePlayEngine"]
+__all__ = [
+    "AsyncRolePlayEngine",
+    "SessionEvent",
+    "SessionEventBus",
+    "SessionEventType",
+]

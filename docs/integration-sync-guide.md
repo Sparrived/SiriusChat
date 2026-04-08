@@ -39,13 +39,14 @@ async def run_live_message(
     self,
     config: SessionConfig,
     turn: Message,
-    on_message: OnMessage | None = None,
     transcript: Transcript | None = None,
     session_reply_mode: str | None = None,
     finalize_and_persist: bool = True,
     environment_context: str = "",       # v0.8.0 新增
 ) -> Transcript:
 ```
+
+> v0.9.0 破坏性变更：`on_message` 参数已移除。使用 `engine.subscribe(transcript)` 事件流替代。
 
 ## arun_live_message 当前签名
 
@@ -54,10 +55,31 @@ async def arun_live_message(
     engine: AsyncRolePlayEngine,
     config: SessionConfig,
     turn: Message,
-    on_message: OnMessage | None = None,
     transcript: Transcript | None = None,
     environment_context: str = "",       # v0.8.0 新增
 ) -> Transcript:
+```
+
+## subscribe 事件流签名 (v0.9.0 新增)
+
+```python
+async def subscribe(
+    self,
+    transcript: Transcript,
+    *,
+    max_queue_size: int = 256,
+) -> AsyncIterator[SessionEvent]:
+```
+
+## asubscribe facade 签名 (v0.9.0 新增)
+
+```python
+async def asubscribe(
+    engine: AsyncRolePlayEngine,
+    transcript: Transcript,
+    *,
+    max_queue_size: int = 256,
+) -> AsyncIterator[SessionEvent]:
 ```
 
 ## OrchestrationPolicy 关键字段

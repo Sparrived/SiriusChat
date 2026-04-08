@@ -64,8 +64,52 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
-> 破坏性变更提示：`run_live_session` 现在只做会话初始化，不再接收 `human_turns`。
-> 迁移请参考 `docs/migration-live-message.md`。
+> 破坏性变更提示 (v0.9.0)：`on_message` 回调已移除，改用 `engine.subscribe()` 事件流。
+> 迁移请参考 `docs/migration-event-stream.md`。
+
+#### 实时事件订阅（推荐用于外部投递）
+
+```python
+import asyncio
+from sirius_chat.api import (
+    AsyncRolePlayEngine,
+    Message,
+    SessionEventType,
+    OpenAICompatibleProvider,
+    create_session_config_from_selected_agent,
+)
+from pathlib import Path
+
+provider = OpenAICompatibleProvider(base_url="https://api.openai.com", api_key="KEY")
+engine = AsyncRolePlayEngine(provider=provider)
+config = create_session_config_from_selected_agent(work_path=Path("data/demo"), agent_key="main_agent")
+
+async def main() -> None:
+    transcript = await engine.run_live_session(config=config)
+
+    # 启动事件监听（后台任务）
+    async def listener():
+        async for event in engine.subscribe(transcript):
+            if event.type == SessionEventType.MESSAGE_ADDED:
+                msg = event.message
+                if msg and msg.role == "assistant":
+                    print(f"[实时] [{msg.speaker}] {msg.content}")
+            elif event.type == SessionEventType.SKILL_STARTED:
+                print(f"[实时] SKILL 执行中: {event.data['skill_name']}")
+
+    task = asyncio.create_task(listener())
+
+    # 正常发送消息
+    transcript = await engine.run_live_message(
+        config=config,
+        transcript=transcript,
+        turn=Message(role="user", speaker="校务主任", content="查一下明天的天气"),
+    )
+
+    task.cancel()
+
+asyncio.run(main())
+```
 
 #### Agent 配置：多模态模型（动态模型路由）
 

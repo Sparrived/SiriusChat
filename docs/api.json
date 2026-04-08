@@ -60,11 +60,6 @@
               "kind": "positional"
             },
             {
-              "name": "on_message",
-              "annotation": "OnMessage | None",
-              "kind": "positional"
-            },
-            {
               "name": "transcript",
               "annotation": "Transcript | None",
               "kind": "positional"
@@ -72,6 +67,29 @@
           ],
           "return_type": "Transcript",
           "docstring": "Async facade for single-message live processing."
+        },
+        {
+          "name": "asubscribe",
+          "is_async": true,
+          "params": [
+            {
+              "name": "engine",
+              "annotation": "AsyncRolePlayEngine",
+              "kind": "positional"
+            },
+            {
+              "name": "transcript",
+              "annotation": "Transcript",
+              "kind": "positional"
+            },
+            {
+              "name": "max_queue_size",
+              "annotation": "int",
+              "kind": "keyword-only"
+            }
+          ],
+          "return_type": "AsyncIterator[SessionEvent]",
+          "docstring": "Subscribe to real-time session events for the given transcript."
         },
         {
           "name": "find_user_by_channel_uid",

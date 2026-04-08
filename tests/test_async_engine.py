@@ -16,14 +16,12 @@ async def _run_live_turns(
     config: SessionConfig,
     human_turns: list[Message],
     transcript=None,
-    on_message=None,
 ):
     transcript = await engine.run_live_session(config=config, transcript=transcript)
     for index, turn in enumerate(human_turns):
         transcript = await engine.run_live_message(
             config=config,
             turn=turn,
-            on_message=on_message,
             transcript=transcript,
             session_reply_mode=turn.reply_mode,
             finalize_and_persist=index == len(human_turns) - 1,

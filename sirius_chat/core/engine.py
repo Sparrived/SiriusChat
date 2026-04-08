@@ -8,7 +8,7 @@ import json
 import logging
 import math
 import re
-from typing import Awaitable, Callable, cast
+from typing import AsyncIterator, Awaitable, Callable, cast
 
 from sirius_chat.config import SessionConfig, TokenUsageRecord
 from sirius_chat.models import Message, Participant, Transcript
@@ -28,8 +28,7 @@ from sirius_chat.async_engine.prompts import build_system_prompt
 from sirius_chat.exceptions import OrchestrationConfigError
 from sirius_chat.skills.registry import SkillRegistry
 from sirius_chat.skills.executor import SkillExecutor, parse_skill_calls, strip_skill_calls
-
-AsyncOnMessage = Callable[[Message], None]
+from sirius_chat.core.events import SessionEvent, SessionEventBus, SessionEventType
 logger = logging.getLogger(__name__)
 
 
@@ -69,6 +68,7 @@ class LiveSessionContext:
     pending_turn: _PendingTurn | None = None
     skill_registry: SkillRegistry | None = None
     skill_executor: SkillExecutor | None = None
+    event_bus: SessionEventBus = field(default_factory=SessionEventBus)
 
 
 @dataclass(slots=True)
@@ -1340,6 +1340,7 @@ class AsyncRolePlayEngine:
         skill_registry: SkillRegistry | None = None,
         skill_executor: SkillExecutor | None = None,
         environment_context: str = "",
+        event_bus: SessionEventBus | None = None,
     ) -> Message:
         if config.enable_auto_compression:
             transcript.compress_for_budget(
@@ -1408,29 +1409,50 @@ class AsyncRolePlayEngine:
                     break
 
                 logger.info("执行SKILL: %s | 参数: %s", skill_name, skill_params)
+                if event_bus is not None:
+                    await event_bus.emit(SessionEvent(
+                        type=SessionEventType.SKILL_STARTED,
+                        data={"skill_name": skill_name, "params": skill_params},
+                    ))
                 skill_result = await skill_executor.execute_async(
                     skill_def,
                     skill_params,
                     timeout=float(config.orchestration.skill_execution_timeout),
                 )
                 result_text = skill_result.to_display_text()
+                if event_bus is not None:
+                    await event_bus.emit(SessionEvent(
+                        type=SessionEventType.SKILL_COMPLETED,
+                        data={
+                            "skill_name": skill_name,
+                            "success": skill_result.success,
+                            "result_preview": result_text[:200],
+                        },
+                    ))
 
                 # Add skill result as system message for AI context
-                transcript.add(Message(
+                skill_result_msg = Message(
                     role="system",
                     content=f"[SKILL执行结果: {skill_name}]\n{result_text}",
-                ))
+                )
+                transcript.add(skill_result_msg)
 
                 # Strip the skill call from the content and keep the rest
                 remaining_content = strip_skill_calls(content)
 
                 # If there's remaining content, add it as a partial assistant message
                 if remaining_content.strip():
-                    transcript.add(Message(
+                    partial_msg = Message(
                         role="assistant",
                         content=remaining_content.strip(),
                         speaker=speaker,
-                    ))
+                    )
+                    transcript.add(partial_msg)
+                    if event_bus is not None:
+                        await event_bus.emit(SessionEvent(
+                            type=SessionEventType.MESSAGE_ADDED,
+                            message=partial_msg,
+                        ))
 
                 # Re-generate response with skill result in context
                 if config.enable_auto_compression:
@@ -1488,6 +1510,11 @@ class AsyncRolePlayEngine:
                         )
                         transcript.add(msg)
                         last_message = msg
+                        if event_bus is not None:
+                            await event_bus.emit(SessionEvent(
+                                type=SessionEventType.MESSAGE_ADDED,
+                                message=msg,
+                            ))
                         # 在消息之间增加小延迟，模拟实时聊天
                         if part != parts[-1]:  # 不是最后一条
                             await asyncio.sleep(0.01)
@@ -1500,6 +1527,11 @@ class AsyncRolePlayEngine:
                 speaker=speaker,
             )
             transcript.add(assistant_message)
+            if event_bus is not None:
+                await event_bus.emit(SessionEvent(
+                    type=SessionEventType.MESSAGE_ADDED,
+                    message=assistant_message,
+                ))
             return assistant_message
         
         return last_message
@@ -1649,13 +1681,10 @@ class AsyncRolePlayEngine:
     async def run_session(
         self,
         config: SessionConfig,
-        on_message: AsyncOnMessage | None = None,
         transcript: Transcript | None = None,
     ) -> Transcript:
         # 验证多模型协同配置
         self.validate_orchestration_config(config)
-        
-        _ = on_message
         return self._prepare_transcript(config, transcript)
 
     async def run_live_session(
@@ -1674,11 +1703,41 @@ class AsyncRolePlayEngine:
         _ = self._get_or_create_live_context(config=config, transcript=transcript)
         return transcript
 
+    async def subscribe(
+        self,
+        transcript: Transcript,
+        *,
+        max_queue_size: int = 256,
+    ) -> AsyncIterator[SessionEvent]:
+        """Subscribe to real-time session events for the given transcript.
+
+        Returns an async iterator that yields :class:`SessionEvent` objects
+        as they are produced by the engine (new messages, SKILL status,
+        processing lifecycle, etc.).
+
+        The iterator terminates when the session's event bus is closed.
+
+        Args:
+            transcript: The transcript (session) to subscribe to.
+            max_queue_size: Maximum buffered events per subscriber.
+
+        Yields:
+            SessionEvent instances in chronological order.
+        """
+        key = id(transcript)
+        context = self._live_session_contexts.get(key)
+        if context is None:
+            raise ValueError(
+                "未找到与此 transcript 关联的活跃会话。"
+                "请先调用 run_live_session() 初始化会话。"
+            )
+        async for event in context.event_bus.subscribe(max_queue_size=max_queue_size):
+            yield event
+
     async def run_live_message(
         self,
         config: SessionConfig,
         turn: Message,
-        on_message: AsyncOnMessage | None = None,
         transcript: Transcript | None = None,
         session_reply_mode: str | None = None,
         finalize_and_persist: bool = True,
@@ -1719,7 +1778,6 @@ class AsyncRolePlayEngine:
                     return await self._process_live_turn(
                         config=config,
                         turn=merged_turn,
-                        on_message=on_message,
                         transcript=transcript,
                         session_reply_mode=session_reply_mode,
                         finalize_and_persist=finalize_and_persist,
@@ -1744,7 +1802,6 @@ class AsyncRolePlayEngine:
                     await self._process_live_turn(
                         config=config,
                         turn=merged_old,
-                        on_message=on_message,
                         transcript=transcript,
                         session_reply_mode=session_reply_mode,
                         finalize_and_persist=False,
@@ -1769,7 +1826,6 @@ class AsyncRolePlayEngine:
                     return await self._process_live_turn(
                         config=config,
                         turn=merged_turn,
-                        on_message=on_message,
                         transcript=transcript,
                         session_reply_mode=session_reply_mode,
                         finalize_and_persist=finalize_and_persist,
@@ -1783,7 +1839,6 @@ class AsyncRolePlayEngine:
         return await self._process_live_turn(
             config=config,
             turn=turn,
-            on_message=on_message,
             transcript=transcript,
             session_reply_mode=session_reply_mode,
             finalize_and_persist=finalize_and_persist,
@@ -1817,7 +1872,6 @@ class AsyncRolePlayEngine:
         self,
         config: SessionConfig,
         turn: Message,
-        on_message: AsyncOnMessage | None,
         transcript: Transcript,
         session_reply_mode: str | None,
         finalize_and_persist: bool,
@@ -1899,6 +1953,14 @@ class AsyncRolePlayEngine:
             group_recent_count=group_recent_count,
             assistant_interval_seconds=assistant_interval_seconds,
         )
+
+        # Emit user message event
+        await context.event_bus.emit(SessionEvent(
+            type=SessionEventType.MESSAGE_ADDED,
+            message=turn,
+            data={"participant_user_id": participant.user_id},
+        ))
+
         if should_reply:
             if willingness is not None:
                 reply_trigger = (
@@ -1917,16 +1979,26 @@ class AsyncRolePlayEngine:
                     willingness.reply_probability,
                     willingness.probability_roll,
                 )
+
+            await context.event_bus.emit(SessionEvent(
+                type=SessionEventType.PROCESSING_STARTED,
+                data={"speaker": turn.speaker},
+            ))
+
             assistant_message = await self._generate_assistant_message(
                 config,
                 transcript,
                 skill_registry=context.skill_registry,
                 skill_executor=context.skill_executor,
                 environment_context=environment_context,
+                event_bus=context.event_bus,
             )
             last_assistant_reply_at = datetime.now(timezone.utc)
-            if on_message:
-                on_message(assistant_message)
+
+            await context.event_bus.emit(SessionEvent(
+                type=SessionEventType.PROCESSING_COMPLETED,
+                message=assistant_message,
+            ))
         else:
             if willingness is None:
                 logger.info(
@@ -1957,6 +2029,10 @@ class AsyncRolePlayEngine:
                     user_interval_seconds or -1.0,
                     group_recent_count,
                 )
+            await context.event_bus.emit(SessionEvent(
+                type=SessionEventType.REPLY_SKIPPED,
+                data={"speaker": turn.speaker},
+            ))
 
         transcript.reply_runtime.user_last_turn_at = {
             user_id: timestamp.isoformat()
