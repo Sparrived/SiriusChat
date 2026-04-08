@@ -127,7 +127,7 @@ class OrchestrationPolicy:
     memory: MemoryPolicy = field(default_factory=MemoryPolicy)
 
     # Skill system: allow AI to invoke external code via SKILL_CALL
-    enable_skills: bool = False
+    enable_skills: bool = True
     skill_call_marker: str = "[SKILL_CALL:"
     max_skill_rounds: int = 3  # max consecutive skill call rounds per turn
     skill_execution_timeout: float = 30.0  # max seconds per SKILL execution, 0 = no limit

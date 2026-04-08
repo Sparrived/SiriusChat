@@ -66,7 +66,7 @@ async def arun_live_message(
 @dataclass
 class OrchestrationPolicy:
     unified_model: str = ""
-    enable_skills: bool = False
+    enable_skills: bool = True
     skill_call_marker: str = "SKILL_CALL"
     max_skill_rounds: int = 3
     skill_execution_timeout: float = 30.0   # v0.8.0 新增，0=不限制

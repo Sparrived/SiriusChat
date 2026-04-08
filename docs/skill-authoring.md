@@ -31,7 +31,7 @@ def run(username: str, data_store: Any = None, **kwargs: Any) -> dict[str, Any]:
 
 | 约定 | 说明 |
 |------|------|
-| 存放位置 | `{work_path}/skills/` 目录下的 `.py` 文件 |
+| 存放位置 | `{work_path}/skills/` 目录下的 `.py` 文件；目录与 `README.md` 会由框架自动创建 |
 | 必须导出 | `SKILL_META` 字典 + `run()` 函数 |
 | 命名规则 | 文件名建议与 `SKILL_META["name"]` 一致（如 `hello.py`） |
 | 编码 | UTF-8 |
@@ -236,7 +236,7 @@ OrchestrationPolicy(
 
 ## 启用 SKILL 系统
 
-在 `SessionConfig` 中配置：
+在 `SessionConfig` 中配置。`enable_skills` 默认就是开启状态，只有需要关闭时才显式设为 `False`：
 
 ```python
 from sirius_chat import SessionConfig, OrchestrationPolicy
@@ -252,7 +252,7 @@ config = SessionConfig(
 )
 ```
 
-将 SKILL 文件放入 `{work_path}/skills/` 目录即可自动加载。
+框架会先创建 `{work_path}/skills/` 与 `README.md`，随后自动加载该目录中的 SKILL 文件；即使关闭 SKILL 执行，目录引导结构仍会保留。
 
 ## 检查清单
 

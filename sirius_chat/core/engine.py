@@ -260,9 +260,11 @@ class AsyncRolePlayEngine:
             known_by_label=known_by_label,
         )
 
+        skills_dir = config.work_path / "skills"
+        SkillRegistry.ensure_skills_directory(skills_dir)
+
         # Initialize skill system if enabled
         if config.orchestration.enable_skills:
-            skills_dir = config.work_path / "skills"
             registry = SkillRegistry()
             loaded_count = registry.load_from_directory(
                 skills_dir,
@@ -274,6 +276,8 @@ class AsyncRolePlayEngine:
                 logger.info("SKILL系统已初始化，已加载 %d 个SKILL", loaded_count)
             else:
                 logger.debug("SKILL系统已启用但未找到任何SKILL文件: %s", skills_dir)
+        else:
+            logger.debug("SKILL系统已禁用，但已初始化SKILL目录: %s", skills_dir)
 
         self._live_session_contexts[key] = created
         return created

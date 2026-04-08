@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+## [0.8.4] - 2026-04-08
+
+### Added
+- 引擎会在 `run_live_session` 初始化阶段始终创建 `{work_path}/skills/` 目录及 `README.md`，即使 `enable_skills=False` 也保留目录引导结构。
+
+### Changed
+- `OrchestrationPolicy.enable_skills` 默认值调整为 `True`，SKILL 系统改为默认开启。
+
 ## [0.8.3] - 2026-04-08
 
 ### Added

@@ -115,11 +115,11 @@ description: "当你需要在不通读全部代码的情况下快速理解 Siriu
   - `benchmarks.py`：Benchmark 和 BenchmarkSuite 用于性能基准测试
 - ✨ **SKILL系统**：`skills/` 模块允许 AI 通过 `[SKILL_CALL: name | {params}]` 调用外部代码
   - `models.py`：SkillDefinition、SkillParameter、SkillResult 数据模型
-  - `registry.py`：从 `{work_path}/skills/` 自动发现和加载 SKILL 文件
+  - `registry.py`：从 `{work_path}/skills/` 自动发现和加载 SKILL 文件，并自动补齐目录与 `README.md` 引导文件
   - `executor.py`：参数校验、类型转换和安全执行，支持 `skill_execution_timeout`（默认 30 秒）
   - `dependency_resolver.py`：加载前自动检测并安装缺失的第三方依赖（`uv pip install`，回退 `pip`）
   - `data_store.py`：每个 SKILL 独立的 JSON 持久化存储（`{work_path}/skill_data/`）
-  - 启用：`OrchestrationPolicy(enable_skills=True, skill_execution_timeout=30.0, auto_install_skill_deps=True)`
+  - 默认：`OrchestrationPolicy.enable_skills=True`；即使显式关闭，`run_live_session` 仍会先创建 `{work_path}/skills/`
   - SKILL 文件需导出 `SKILL_META` 字典和 `run(**kwargs)` 函数
   - `SKILL_META["dependencies"]`：可选显式声明第三方包名列表，框架自动安装
   - 持久化数据通过 `data_store` 参数自动注入到 `run()` 中

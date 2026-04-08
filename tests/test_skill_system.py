@@ -476,11 +476,41 @@ class TestSkillEngineIntegration:
         assert policy.skill_call_marker == "[SKILL_CALL:"
         assert policy.max_skill_rounds == 3
 
-    def test_orchestration_policy_skills_default_off(self):
+    def test_orchestration_policy_skills_default_on(self):
         from sirius_chat.config.models import OrchestrationPolicy
 
         policy = OrchestrationPolicy(unified_model="test-model")
-        assert policy.enable_skills is False
+        assert policy.enable_skills is True
+
+    @pytest.mark.asyncio
+    async def test_run_live_session_creates_skills_dir_even_when_disabled(self, tmp_path: Path):
+        from sirius_chat.api import Agent, AgentPreset, AsyncRolePlayEngine, OrchestrationPolicy, SessionConfig
+        from sirius_chat.providers.mock import MockProvider
+
+        work_path = tmp_path / "runtime"
+        config = SessionConfig(
+            work_path=work_path,
+            preset=AgentPreset(
+                agent=Agent(name="Bot", persona="helper", model="mock-model"),
+                global_system_prompt="Be helpful",
+            ),
+            orchestration=OrchestrationPolicy(
+                unified_model="mock-model",
+                enable_skills=False,
+                task_enabled={
+                    "memory_extract": False,
+                    "multimodal_parse": False,
+                    "event_extract": False,
+                },
+            ),
+        )
+
+        engine = AsyncRolePlayEngine(MockProvider())
+        await engine.run_live_session(config=config)
+
+        skills_dir = work_path / "skills"
+        assert skills_dir.exists()
+        assert (skills_dir / "README.md").exists()
 
     def test_skill_system_prompt_section(self):
         """Verify the system prompt includes skill descriptions when enabled."""

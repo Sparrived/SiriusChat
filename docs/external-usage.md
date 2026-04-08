@@ -161,7 +161,7 @@ orchestration = OrchestrationPolicy(
     memory_extract_min_content_length=50,  # 消息内容需≥50字符才触发
     
     # === SKILL 系统 ===
-    enable_skills=True,                    # 启用 SKILL 系统
+    enable_skills=True,                    # SKILL 默认已启用；仅在需要关闭时显式设为 False
     skill_execution_timeout=30.0,          # SKILL 最大执行时长（秒），0=不限制
     max_skill_rounds=3,                    # AI 单轮最多调用 SKILL 次数
     
@@ -174,6 +174,7 @@ orchestration = OrchestrationPolicy(
 **配置说明**：
 - 若 `unified_model` 设置，则覆盖所有 `task_models` 配置
 - 频率控制：当消息数达到批次大小且内容长度满足时，执行任务
+- SKILL 目录：框架会始终先创建 `{work_path}/skills/` 与 `README.md`；关闭 SKILL 仅影响调用，不影响目录引导文件生成
 - 提示词分割：当 `enable_prompt_driven_splitting=True` 时，系统提示会带分割指令，AI 会在适当位置输出 `<MSG_SPLIT>` 标记
 
 若使用 SiliconFlow，可直接替换 provider：
