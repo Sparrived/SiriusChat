@@ -1459,15 +1459,13 @@ class AsyncRolePlayEngine:
                             continue
                         partial_msg = Message(
                             role="assistant",
-                            content=_partial_stripped,
+                            content=_partial_stripped.rstrip(),
                             speaker=speaker,
                         )
                         transcript.add(partial_msg)
-                        if event_bus is not None:
-                            await event_bus.emit(SessionEvent(
-                                type=SessionEventType.MESSAGE_ADDED,
-                                message=partial_msg,
-                            ))
+                        # 不向事件总线发送 partial_msg：
+                        # SKILL 执行前的中间内容不对外暴露，避免外部平台将其识别为特殊消息类型。
+                        # 外部订阅者只会收到 SKILL 执行完成后重新生成的最终消息。
 
                 # Re-generate response with skill result in context
                 if config.enable_auto_compression:
@@ -1523,7 +1521,7 @@ class AsyncRolePlayEngine:
                     if part_stripped:  # 跳过空白部分
                         msg = Message(
                             role="assistant",
-                            content=part_stripped,
+                            content=part_stripped.rstrip(),
                             speaker=speaker,
                         )
                         transcript.add(msg)
@@ -1541,7 +1539,7 @@ class AsyncRolePlayEngine:
         if last_message is None:
             assistant_message = Message(
                 role="assistant",
-                content=content,
+                content=content.rstrip(),
                 speaker=speaker,
             )
             transcript.add(assistant_message)
