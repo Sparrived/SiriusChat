@@ -132,8 +132,11 @@ def build_system_prompt(
         marker = config.orchestration.split_marker
         sections.append(
             f"<splitting_instruction>\n"
-            f"需分割长回复时，在合适位置插入 '{marker}'，尽量使用该方式分割长回复，避免单个回复过长。"
-            f"系统自动拆分为多条消息。仅使用此标记，不要用其他标记分割。\n"
+            f"这是群聊场景，每条消息应简短自然，通常1-2句话，最多不超过3-4句。\n"
+            f"当要表达多个独立内容、话题转换或停顿时，必须在该位置插入 '{marker}' 作为消息分割点，"
+            f"系统会自动拆分为多条独立消息依次发送。\n"
+            f"禁止用连续换行（\\n\\n 或多个空行）来表示不同消息——换行只在单条消息内使用。"
+            f"每当你想【换一条消息】时，就插入 '{marker}'。\n"
             f"</splitting_instruction>"
         )
 

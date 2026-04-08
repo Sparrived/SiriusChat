@@ -279,7 +279,7 @@ def test_prompt_splitting_instruction_tag() -> None:
     assert "<splitting_instruction>" in prompt
     assert "</splitting_instruction>" in prompt
     assert "<MSG_SPLIT>" in prompt
-    assert "仅使用此标记" in prompt
+    assert "群聊" in prompt
 
 
 def test_prompt_no_splitting_tag_when_disabled() -> None:

@@ -127,7 +127,8 @@
 
 提示词驱动分割：
 
-- `enable_prompt_driven_splitting = true` 时，系统提示会注入分割规则。
+- `enable_prompt_driven_splitting = true` 时，系统提示会注入分割规则，告知模型当前为群聊场景。
+- 分割规则要求：每条消息简短（通常 1-2 句，最多 3-4 句）；要表达多个独立内容时必须插入 `split_marker`；禁止用连续换行代替分割符。
 - 模型输出中出现 `split_marker` 后，引擎按标记拆分为多条 assistant 消息。
 
 记忆管理器：
