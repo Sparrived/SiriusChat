@@ -18,6 +18,36 @@ from sirius_chat.skills.dependency_resolver import resolve_skill_dependencies
 
 logger = logging.getLogger(__name__)
 
+_SKILLS_README = """# skills 目录说明
+
+此目录用于存放 Sirius Chat 在当前 work_path 下可自动发现的外部 SKILL 文件。
+
+- 每个 SKILL 使用单独的 Python 文件。
+- 文件需导出 SKILL_META 字典和 run() 函数。
+- 文件名建议使用英文、数字、下划线，避免以下划线开头。
+- 当会话启用 SKILL 系统时，框架会自动扫描此目录。
+
+最小示例：
+
+```python
+SKILL_META = {
+    "name": "hello_skill",
+    "description": "返回简单问候语",
+    "parameters": {
+        "name": {
+            "type": "str",
+            "description": "要问候的名字",
+            "required": True,
+        }
+    },
+}
+
+
+def run(name: str, **kwargs):
+    return {"message": f"你好，{name}"}
+```
+"""
+
 
 class SkillRegistry:
     """Discovers and manages skill definitions from a directory."""
@@ -39,6 +69,14 @@ class SkillRegistry:
         """Manually register a skill definition."""
         self._skills[skill.name] = skill
 
+    @staticmethod
+    def ensure_skills_directory(skills_dir: Path) -> None:
+        """Ensure the skills directory and its README bootstrap file exist."""
+        skills_dir.mkdir(parents=True, exist_ok=True)
+        readme_path = skills_dir / "README.md"
+        if not readme_path.exists():
+            readme_path.write_text(_SKILLS_README, encoding="utf-8")
+
     def load_from_directory(self, skills_dir: Path, *, auto_install_deps: bool = True) -> int:
         """Load all *.py skill files from a directory.
 
@@ -50,9 +88,7 @@ class SkillRegistry:
 
         Returns the number of skills successfully loaded.
         """
-        if not skills_dir.is_dir():
-            logger.debug("SKILL目录不存在: %s", skills_dir)
-            return 0
+        self.ensure_skills_directory(skills_dir)
 
         loaded = 0
         for py_file in sorted(skills_dir.glob("*.py")):

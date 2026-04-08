@@ -169,6 +169,20 @@ def run(a: int, b: int, **kwargs):
 
 
 class TestSkillRegistry:
+    def test_load_from_directory_bootstraps_skills_dir_and_readme(self, tmp_path: Path):
+        skills_dir = tmp_path / "skills"
+
+        registry = SkillRegistry()
+        count = registry.load_from_directory(skills_dir)
+
+        assert count == 0
+        assert skills_dir.exists()
+        readme_path = skills_dir / "README.md"
+        assert readme_path.exists()
+        readme_text = readme_path.read_text(encoding="utf-8")
+        assert "SKILL_META" in readme_text
+        assert "run()" in readme_text
+
     def test_load_from_directory(self, tmp_path: Path):
         skills_dir = tmp_path / "skills"
         skills_dir.mkdir()
@@ -203,6 +217,8 @@ class TestSkillRegistry:
         registry = SkillRegistry()
         count = registry.load_from_directory(tmp_path / "nonexistent")
         assert count == 0
+        assert (tmp_path / "nonexistent").exists()
+        assert (tmp_path / "nonexistent" / "README.md").exists()
 
     def test_skip_underscore_files(self, tmp_path: Path):
         skills_dir = tmp_path / "skills"

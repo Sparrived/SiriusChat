@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+## [0.8.3] - 2026-04-08
+
+### Added
+- 启用 SKILL 系统时，框架会自动在当前 `work_path` 下创建 `skills/` 目录，并生成 `README.md` 引导文档。
+
+### Changed
+- `SkillRegistry.load_from_directory()` 不再在目录缺失时直接返回，而是先完成 SKILL 目录初始化再继续扫描。
+
 ## [0.8.2] - 2026-04-08
 
 ### Added
