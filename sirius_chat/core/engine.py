@@ -264,7 +264,10 @@ class AsyncRolePlayEngine:
         if config.orchestration.enable_skills:
             skills_dir = config.work_path / "skills"
             registry = SkillRegistry()
-            loaded_count = registry.load_from_directory(skills_dir)
+            loaded_count = registry.load_from_directory(
+                skills_dir,
+                auto_install_deps=config.orchestration.auto_install_skill_deps,
+            )
             if loaded_count > 0:
                 created.skill_registry = registry
                 created.skill_executor = SkillExecutor(config.work_path)

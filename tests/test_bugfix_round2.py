@@ -26,7 +26,7 @@ def test_split_strips_generic_speaker_prefix() -> None:
     async def _run() -> None:
         provider = MockProvider(
             responses=[
-                "[Sirius] 你好[MSG_BREAK][星辰] 再见",  # chat_main
+                "[Sirius] 你好<MSG_SPLIT>[星辰] 再见",  # chat_main
             ],
         )
         engine = AsyncRolePlayEngine(provider=provider)
@@ -39,7 +39,7 @@ def test_split_strips_generic_speaker_prefix() -> None:
             orchestration=OrchestrationPolicy(
                 unified_model="mock-model",
                 enable_prompt_driven_splitting=True,
-                split_marker="[MSG_BREAK]",
+                split_marker="<MSG_SPLIT>",
                 task_enabled={
                     "memory_extract": False,
                     "multimodal_parse": False,
@@ -71,7 +71,7 @@ def test_split_no_false_positive_on_short_brackets() -> None:
     async def _run() -> None:
         provider = MockProvider(
             responses=[
-                "[1] 列表项一[MSG_BREAK][2] 列表项二",  # chat_main
+                "[1] 列表项一<MSG_SPLIT>[2] 列表项二",  # chat_main
             ],
         )
         engine = AsyncRolePlayEngine(provider=provider)
@@ -84,7 +84,7 @@ def test_split_no_false_positive_on_short_brackets() -> None:
             orchestration=OrchestrationPolicy(
                 unified_model="mock-model",
                 enable_prompt_driven_splitting=True,
-                split_marker="[MSG_BREAK]",
+                split_marker="<MSG_SPLIT>",
                 task_enabled={
                     "memory_extract": False,
                     "multimodal_parse": False,
@@ -272,13 +272,13 @@ def test_prompt_splitting_instruction_tag() -> None:
         orchestration=OrchestrationPolicy(
             unified_model="mock-model",
             enable_prompt_driven_splitting=True,
-            split_marker="[MSG_BREAK]",
+            split_marker="<MSG_SPLIT>",
         ),
     )
     prompt = build_system_prompt(config, transcript)
     assert "<splitting_instruction>" in prompt
     assert "</splitting_instruction>" in prompt
-    assert "[MSG_BREAK]" in prompt
+    assert "<MSG_SPLIT>" in prompt
     assert "仅使用此标记" in prompt
 
 

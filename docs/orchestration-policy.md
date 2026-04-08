@@ -40,7 +40,7 @@
 - `max_multimodal_inputs_per_turn`: `4`
 - `max_multimodal_value_length`: `4096`
 - `enable_prompt_driven_splitting`: `true`
-- `split_marker`: `[MSG_BREAK]`
+- `split_marker`: `<MSG_SPLIT>`
 - `memory_manager_model`: 空字符串（不启用）
 - `memory_manager_temperature`: `0.3`
 - `memory_manager_max_tokens`: `512`
@@ -89,7 +89,7 @@
     "max_multimodal_inputs_per_turn": 4,
     "max_multimodal_value_length": 4096,
     "enable_prompt_driven_splitting": true,
-    "split_marker": "[MSG_BREAK]",
+    "split_marker": "<MSG_SPLIT>",
     "memory_manager_model": "gpt-4o-mini",
     "memory_manager_temperature": 0.3,
     "memory_manager_max_tokens": 512,

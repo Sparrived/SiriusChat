@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from sirius_chat.skills.models import SkillDefinition, SkillParameter
+from sirius_chat.skills.dependency_resolver import resolve_skill_dependencies
 
 logger = logging.getLogger(__name__)
 
@@ -38,8 +39,14 @@ class SkillRegistry:
         """Manually register a skill definition."""
         self._skills[skill.name] = skill
 
-    def load_from_directory(self, skills_dir: Path) -> int:
+    def load_from_directory(self, skills_dir: Path, *, auto_install_deps: bool = True) -> int:
         """Load all *.py skill files from a directory.
+
+        Args:
+            skills_dir: Directory containing SKILL Python files.
+            auto_install_deps: If True, automatically install missing
+                third-party dependencies declared in SKILL_META or
+                detected from import statements (uses ``uv`` / ``pip``).
 
         Returns the number of skills successfully loaded.
         """
@@ -52,6 +59,12 @@ class SkillRegistry:
             if py_file.name.startswith("_"):
                 continue
             try:
+                # Resolve dependencies before loading the module
+                if auto_install_deps:
+                    installed = resolve_skill_dependencies(py_file, auto_install=True)
+                    if installed:
+                        logger.info("SKILL '%s': 已自动安装依赖: %s", py_file.stem, ", ".join(installed))
+
                 skill = self._load_skill_file(py_file)
                 if skill is not None:
                     self._skills[skill.name] = skill

@@ -20,7 +20,7 @@
       "event_extract": true
     },
     "enable_prompt_driven_splitting": true,
-    "split_marker": "[MSG_BREAK]"
+    "split_marker": "<MSG_SPLIT>"
   },
   "work_path": "./data"
 }

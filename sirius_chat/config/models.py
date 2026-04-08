@@ -91,7 +91,7 @@ class OrchestrationPolicy:
     
     # Prompt-driven content splitting (AI autonomously decides granularity)
     enable_prompt_driven_splitting: bool = True
-    split_marker: str = "[MSG_BREAK]"
+    split_marker: str = "<MSG_SPLIT>"
     
     # Memory Manager configuration (enabled when memory_manager_model is set)
     memory_manager_model: str = ""
@@ -131,6 +131,7 @@ class OrchestrationPolicy:
     skill_call_marker: str = "[SKILL_CALL:"
     max_skill_rounds: int = 3  # max consecutive skill call rounds per turn
     skill_execution_timeout: float = 30.0  # max seconds per SKILL execution, 0 = no limit
+    auto_install_skill_deps: bool = True  # auto-install missing SKILL dependencies via uv/pip
     
     def validate(self) -> None:
         """Validate configuration legitimacy."""

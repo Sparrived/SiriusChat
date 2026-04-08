@@ -50,6 +50,9 @@ SKILL_META = {
     # [可选] 版本号，默认 "1.0.0"
     "version": "1.0.0",
 
+    # [可选] 第三方依赖列表，框架在加载时自动安装缺失的包
+    "dependencies": ["requests", "beautifulsoup4"],
+
     # [可选] 参数定义，dict 或 list 格式均可
     "parameters": { ... },
 }
@@ -196,6 +199,41 @@ def run(city: str, data_store: Any = None, **kwargs: Any) -> dict[str, Any]:
     return weather_data
 ```
 
+## 依赖自动安装
+
+框架在加载 SKILL 时会自动检测并安装缺失的第三方依赖。
+
+### 工作机制
+
+1. 扫描 `SKILL_META["dependencies"]` 中显式声明的包名（优先）。
+2. 扫描文件顶层 `import` / `from ... import` 语句（补充推断）。
+3. 过滤标准库和已安装的包。
+4. 使用 `uv pip install` 安装缺失包（若 `uv` 不可用则回退到 `pip`）。
+
+### 推荐做法
+
+**始终显式声明 `dependencies`**，尤其是 import 名与包名不一致的库：
+
+```python
+SKILL_META = {
+    "name": "web_scraper",
+    "description": "网页内容抓取",
+    "dependencies": ["requests", "beautifulsoup4"],  # beautifulsoup4 的 import 名是 bs4
+    "parameters": { ... },
+}
+```
+
+### 关闭自动安装
+
+在受限环境中可通过配置禁用：
+
+```python
+OrchestrationPolicy(
+    enable_skills=True,
+    auto_install_skill_deps=False,
+)
+```
+
 ## 启用 SKILL 系统
 
 在 `SessionConfig` 中配置：
@@ -206,9 +244,10 @@ from sirius_chat import SessionConfig, OrchestrationPolicy
 config = SessionConfig(
     # ...其他配置...
     orchestration=OrchestrationPolicy(
-        enable_skills=True,          # 启用 SKILL 系统
-        max_skill_rounds=3,          # 每轮最多连续调用次数
-        skill_execution_timeout=30,  # SKILL 最大执行秒数
+        enable_skills=True,              # 启用 SKILL 系统
+        max_skill_rounds=3,              # 每轮最多连续调用次数
+        skill_execution_timeout=30,      # SKILL 最大执行秒数
+        auto_install_skill_deps=True,    # 自动安装 SKILL 依赖（默认开启）
     ),
 )
 ```
@@ -226,5 +265,5 @@ config = SessionConfig(
 - [ ] `run()` 函数存在且参数名与 `parameters` 定义匹配
 - [ ] `run()` 包含 `data_store=None` 和 `**kwargs` 参数
 - [ ] 返回值为 `dict` 或可序列化对象
-- [ ] 不依赖未安装的第三方库（或在运行时优雅降级）
+- [ ] 不依赖未安装的第三方库（或在 `dependencies` 中显式声明）
 - [ ] 不包含长时间阻塞操作（注意 30 秒超时限制）

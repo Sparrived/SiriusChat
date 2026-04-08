@@ -30,8 +30,14 @@ flowchart TD
     I --> K
     J --> K
 
-    K --> L["构建系统提示词<br/>主 AI + 参与者记忆<br/>+ 会话摘要<br/>分割指令（可选）"]
-    L --> M["调用 Provider<br/>自动路由或指定<br/>生成 assistant 回复"]
+    K --> K2{skills<br/>enabled?}
+    K2 -- 是 --> K3["SKILL 加载<br/>dependency_resolver<br/>自动安装缺失依赖"]
+    K3 --> K4["SKILL 执行<br/>SkillExecutor<br/>timeout 限制"]
+    K2 -- 否 --> L
+    K4 --> L
+
+    L --> L2["构建系统提示词<br/>主 AI + 参与者记忆<br/>+ 会话摘要 + 环境上下文<br/>分割指令（可选）"]
+    L2 --> M["调用 Provider<br/>自动路由或指定<br/>生成 assistant 回复"]
     M --> N["token_usage_records<br/>按 actor/task/model<br/>聚合"]
     N --> O["自动压缩历史<br/>session_summary<br/>超过长度阈值时"]
     O --> P["输出更新后<br/>Transcript"]
@@ -59,6 +65,7 @@ flowchart LR
       UserMemory[user_memory.py]
       TokenUsage[token_usage.py]
       Memory[memory/]
+      Skills[skills/]
     end
 
     subgraph Infra[基础设施层]
@@ -82,6 +89,7 @@ flowchart LR
     Engine --> UserMemory
     Engine --> TokenUsage
     Engine --> ProviderBase
+    Engine --> Skills
     Routing --> ProviderImpl
     ProviderImpl --> ProviderBase
     Middleware --> ProviderBase
@@ -137,6 +145,7 @@ flowchart LR
 | `sirius_chat/providers/volcengine_ark.py` | `GenerationRequest` | 模型文本回复、token 使用统计 |
 | `sirius_chat/providers/mock.py` | `GenerationRequest` | 可预测测试回复 |
 | `sirius_chat/cache/` | 缓存 key、模型响应值 | 缓存命中/未命中、LRU 淘汰、TTL 过期管理 |
+| `sirius_chat/skills/` | SKILL 目录路径、SKILL 文件（`.py`）、`OrchestrationPolicy` 配置 | SKILL 注册表、依赖自动安装日志、`SkillResult`（执行结果/超时错误） |
 | `sirius_chat/performance/` | 代码块/函数调用记录、基准参数 | 执行指标（时间、内存）、性能统计聚合、基准对比结果 |
 
 ## 4. 关键运行产物说明

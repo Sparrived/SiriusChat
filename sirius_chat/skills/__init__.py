@@ -19,6 +19,7 @@ from sirius_chat.skills.models import (
 from sirius_chat.skills.registry import SkillRegistry
 from sirius_chat.skills.executor import SkillExecutor
 from sirius_chat.skills.data_store import SkillDataStore
+from sirius_chat.skills.dependency_resolver import resolve_skill_dependencies
 
 __all__ = [
     "SkillDefinition",
@@ -27,4 +28,5 @@ __all__ = [
     "SkillRegistry",
     "SkillExecutor",
     "SkillDataStore",
+    "resolve_skill_dependencies",
 ]

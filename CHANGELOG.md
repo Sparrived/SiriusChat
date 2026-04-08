@@ -4,6 +4,24 @@
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-04-08
+
+### Added
+- **SKILL 依赖自动安装**：加载 SKILL 文件前自动检测并安装缺失的第三方依赖
+  - 新增 `sirius_chat/skills/dependency_resolver.py`：AST 扫描 `SKILL_META["dependencies"]` 和 import 语句
+  - 优先使用 `uv pip install`，回退到 `pip install`
+  - `OrchestrationPolicy` 新增 `auto_install_skill_deps`（默认 True），可在受限环境关闭
+  - `SKILL_META` 新增可选 `dependencies` 字段用于显式声明包名
+- **迁移文档**：新增 `docs/migration-v0.8.md`，提供 v0.7→v0.8 全量变更指南（供 AI 查阅）
+
+### Changed
+- **测试套件瘦身与整合**：36 个测试文件整合为 27 个，删除 9 个冗余/微型文件
+  - 4 个独立 provider 测试 + mock + middleware → 统一 `test_providers.py`（参数化基准测试）
+  - `test_token_usage.py` → 并入 `test_token_utils.py`
+  - `test_session_store.py` → 并入 `test_session_runner.py`
+  - `test_main_resume.py` → 并入 `test_main_bootstrap.py`
+  - Provider 测试改为参数化基准模式，新增 provider 只需扩展注册表
+
 ## [0.8.0] - 2026-04-10
 
 ### Added

@@ -167,14 +167,14 @@ orchestration = OrchestrationPolicy(
     
     # === 提示词驱动分割（可选） ===
     enable_prompt_driven_splitting=True,   # 启用AI主动分割消息
-    split_marker="[MSG_BREAK]",            # 分割标记
+    split_marker="<MSG_SPLIT>",            # 分割标记
 )
 ```
 
 **配置说明**：
 - 若 `unified_model` 设置，则覆盖所有 `task_models` 配置
 - 频率控制：当消息数达到批次大小且内容长度满足时，执行任务
-- 提示词分割：当 `enable_prompt_driven_splitting=True` 时，系统提示会带分割指令，AI 会在适当位置输出 `[MSG_BREAK]` 标记
+- 提示词分割：当 `enable_prompt_driven_splitting=True` 时，系统提示会带分割指令，AI 会在适当位置输出 `<MSG_SPLIT>` 标记
 
 若使用 SiliconFlow，可直接替换 provider：
 

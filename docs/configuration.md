@@ -42,7 +42,7 @@ Sirius Chat 提供灵活的配置管理系统，支持：
     "max_multimodal_inputs_per_turn": 4,
     "max_multimodal_value_length": 4096,
     "enable_prompt_driven_splitting": true,
-    "split_marker": "[MSG_BREAK]",
+    "split_marker": "<MSG_SPLIT>",
     "memory_manager_model": "",
     "memory_manager_temperature": 0.3,
     "memory_manager_max_tokens": 512

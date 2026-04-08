@@ -226,7 +226,7 @@ class ConfigManager:
                 orch_dict.get("max_multimodal_value_length", 4096)
             ),
             enable_prompt_driven_splitting=orch_dict.get("enable_prompt_driven_splitting", True),
-            split_marker=orch_dict.get("split_marker", "[MSG_BREAK]"),
+            split_marker=orch_dict.get("split_marker", "<MSG_SPLIT>"),
             memory_manager_model=orch_dict.get("memory_manager_model", ""),
             memory_manager_temperature=float(orch_dict.get("memory_manager_temperature", 0.3)),
             memory_manager_max_tokens=int(orch_dict.get("memory_manager_max_tokens", 512)),

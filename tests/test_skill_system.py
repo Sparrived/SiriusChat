@@ -834,3 +834,129 @@ class TestSystemPromptSlimming:
         # Old separate sections should not exist
         assert "<output_constraints>" not in prompt
         assert "<security_constraints>" not in prompt
+
+
+class TestDependencyResolver:
+    """Test SKILL dependency resolution and auto-install logic."""
+
+    def test_extract_declared_dependencies(self, tmp_path: Path):
+        from sirius_chat.skills.dependency_resolver import _extract_declared_dependencies
+
+        skill_file = tmp_path / "my_skill.py"
+        skill_file.write_text(
+            'SKILL_META = {\n'
+            '    "name": "test",\n'
+            '    "description": "demo",\n'
+            '    "dependencies": ["requests", "beautifulsoup4"],\n'
+            '}\n'
+            'def run(**kw): pass\n',
+            encoding="utf-8",
+        )
+        deps = _extract_declared_dependencies(skill_file)
+        assert deps == {"requests", "beautifulsoup4"}
+
+    def test_extract_declared_dependencies_missing_key(self, tmp_path: Path):
+        from sirius_chat.skills.dependency_resolver import _extract_declared_dependencies
+
+        skill_file = tmp_path / "my_skill.py"
+        skill_file.write_text(
+            'SKILL_META = {"name": "test", "description": "demo"}\n'
+            'def run(**kw): pass\n',
+            encoding="utf-8",
+        )
+        deps = _extract_declared_dependencies(skill_file)
+        assert deps == set()
+
+    def test_extract_imported_packages(self, tmp_path: Path):
+        from sirius_chat.skills.dependency_resolver import _extract_imported_packages
+
+        skill_file = tmp_path / "my_skill.py"
+        skill_file.write_text(
+            'import os\nimport json\nimport requests\n'
+            'from bs4 import BeautifulSoup\n'
+            'from pathlib import Path\n'
+            'def run(**kw): pass\n',
+            encoding="utf-8",
+        )
+        pkgs = _extract_imported_packages(skill_file)
+        assert "os" in pkgs
+        assert "requests" in pkgs
+        assert "bs4" in pkgs
+        assert "pathlib" in pkgs
+
+    def test_find_missing_filters_stdlib(self):
+        from sirius_chat.skills.dependency_resolver import _find_missing
+
+        candidates = {"os", "json", "sys", "pathlib", "collections"}
+        missing = _find_missing(candidates)
+        assert len(missing) == 0
+
+    def test_find_missing_detects_nonexistent(self):
+        from sirius_chat.skills.dependency_resolver import _find_missing
+
+        candidates = {"os", "_nonexistent_pkg_abc123_"}
+        missing = _find_missing(candidates)
+        assert "_nonexistent_pkg_abc123_" in missing
+
+    def test_pick_installer_returns_valid(self):
+        from sirius_chat.skills.dependency_resolver import _pick_installer
+
+        label, cmd = _pick_installer()
+        assert label in ("uv", "pip")
+        assert len(cmd) >= 3
+
+    def test_resolve_no_deps_needed(self, tmp_path: Path):
+        from sirius_chat.skills.dependency_resolver import resolve_skill_dependencies
+
+        skill_file = tmp_path / "simple.py"
+        skill_file.write_text(
+            'import os\nimport json\n'
+            'SKILL_META = {"name": "simple", "description": "test"}\n'
+            'def run(**kw): return {}\n',
+            encoding="utf-8",
+        )
+        installed = resolve_skill_dependencies(skill_file, auto_install=False)
+        assert installed == []
+
+    def test_resolve_with_auto_install_off(self, tmp_path: Path):
+        from sirius_chat.skills.dependency_resolver import resolve_skill_dependencies
+
+        skill_file = tmp_path / "needs_dep.py"
+        skill_file.write_text(
+            'import _nonexistent_pkg_xyz_\n'
+            'SKILL_META = {"name": "needs", "description": "test"}\n'
+            'def run(**kw): return {}\n',
+            encoding="utf-8",
+        )
+        installed = resolve_skill_dependencies(skill_file, auto_install=False)
+        assert installed == []
+
+    def test_orchestration_policy_auto_install_field(self):
+        from sirius_chat.config.models import OrchestrationPolicy
+
+        policy = OrchestrationPolicy(unified_model="m", enable_skills=True)
+        assert policy.auto_install_skill_deps is True
+
+        policy2 = OrchestrationPolicy(
+            unified_model="m",
+            enable_skills=True,
+            auto_install_skill_deps=False,
+        )
+        assert policy2.auto_install_skill_deps is False
+
+    def test_registry_load_passes_auto_install(self, tmp_path: Path):
+        """Verify load_from_directory accepts auto_install_deps kwarg."""
+        from sirius_chat.skills.registry import SkillRegistry
+
+        skills_dir = tmp_path / "skills"
+        skills_dir.mkdir()
+        (skills_dir / "demo.py").write_text(
+            'import os\n'
+            'SKILL_META = {"name": "demo", "description": "test"}\n'
+            'def run(**kw): return {"ok": True}\n',
+            encoding="utf-8",
+        )
+        reg = SkillRegistry()
+        count = reg.load_from_directory(skills_dir, auto_install_deps=False)
+        assert count == 1
+        assert "demo" in reg.skill_names
