@@ -1562,6 +1562,8 @@ class AsyncRolePlayEngine:
             )
 
         # --- Skill call detection and execution ---
+        skill_executed = False
+        last_skill_name = ""
         if skill_registry is not None and skill_executor is not None:
             max_rounds = max(1, config.orchestration.max_skill_rounds)
             for _round in range(max_rounds):
@@ -1654,6 +1656,8 @@ class AsyncRolePlayEngine:
                     skill_params,
                     timeout=float(config.orchestration.skill_execution_timeout),
                 )
+                skill_executed = True
+                last_skill_name = skill_name
                 result_text = skill_result.to_display_text()
                 if event_bus is not None:
                     await event_bus.emit(SessionEvent(
@@ -1736,8 +1740,53 @@ class AsyncRolePlayEngine:
                         content = content[bracket_end + 2:]
                 content = self._sanitize_assistant_content(content)
 
+        # If SKILL was executed but final content is empty (or only markers),
+        # force one extra generation round that must produce a direct answer.
+        if skill_executed and not strip_skill_calls(content).strip():
+            transcript.add(Message(
+                role="system",
+                content=(
+                    "[SKILL系统] 你已经拿到技能执行结果。"
+                    "请直接给用户最终答复，不要再次调用SKILL。"
+                ),
+            ))
+            if config.enable_auto_compression:
+                transcript.compress_for_budget(
+                    max_messages=config.history_max_messages,
+                    max_chars=config.history_max_chars,
+                )
+            system_prompt, chat_history = self._build_chat_main_request_context(
+                config=config,
+                transcript=transcript,
+                skill_descriptions=skill_descriptions,
+                environment_context=environment_context,
+                skip_sections=skip_sections,
+            )
+            request_payload = GenerationRequest(
+                model=model,
+                system_prompt=system_prompt,
+                messages=chat_history,
+                temperature=config.agent.temperature,
+                max_tokens=config.agent.max_tokens,
+                purpose="chat_main",
+            )
+            content = await self._call_provider_with_retry(
+                request_payload=request_payload,
+                retry_times=retry_times,
+                transcript=transcript,
+                task_name="chat_main",
+                actor_id=config.agent.name,
+            )
+            if content.startswith("["):
+                bracket_end = content.find("] ", 1)
+                if bracket_end != -1 and bracket_end < 40:
+                    content = content[bracket_end + 2:]
+            content = self._sanitize_assistant_content(content)
+
         # Safety: strip any SKILL_CALL markers left in content (e.g. max_skill_rounds exhausted)
         content = strip_skill_calls(content)
+        if not content.strip() and skill_executed:
+            content = f"已执行 {last_skill_name or 'SKILL'}，但暂未生成可用回复，请稍后重试。"
 
         last_message: Message | None = None
 

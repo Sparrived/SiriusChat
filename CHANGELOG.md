@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+## [0.12.4] - 2026-04-09
+
+### Fixed
+- **SKILL 轮次耗尽导致空回复**：当模型在 SKILL 执行后持续返回 `SKILL_CALL` 或最终内容被清理为空时，engine 会强制触发一次“仅生成最终答复”的再生成，避免落地空 assistant 消息。
+- **最终回复兜底**：若再生成后仍为空，返回明确兜底文本，确保外部回调始终可收到可用回复。
+
+### Added
+- **回归测试**：新增 `test_skill_rounds_exhausted_still_returns_final_answer`，覆盖 transcript 中出现的“多次 SKILL 结果后 assistant 为空”场景。
+
 ## [0.12.3] - 2026-04-09
 
 ### Fixed

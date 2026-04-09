@@ -880,3 +880,72 @@ def run(x: int, **kwargs):
 
     asyncio.run(_run())
 
+
+def test_skill_rounds_exhausted_still_returns_final_answer(tmp_path) -> None:
+    """When model keeps returning SKILL_CALL, engine should force one final plain reply."""
+    async def _run() -> None:
+        work_path = tmp_path / "skill_rounds_exhausted"
+        skills_dir = work_path / "skills"
+        skills_dir.mkdir(parents=True, exist_ok=True)
+        (skills_dir / "system_info.py").write_text(
+            """
+SKILL_META = {"name": "system_info", "description": "sys", "parameters": {}}
+def run(**kwargs):
+    return {"cpu": "ok"}
+""".strip(),
+            encoding="utf-8",
+        )
+
+        provider = MockProvider(
+            responses=[
+                "[SKILL_CALL: system_info]\\n\\n正在检查中",
+                "[SKILL_CALL: system_info]",
+                "[SKILL_CALL: system_info]",
+                "检查完成：主机状态正常。",
+            ]
+        )
+
+        engine = AsyncRolePlayEngine(provider=provider)
+        config = SessionConfig(
+            work_path=work_path,
+            preset=AgentPreset(
+                agent=Agent(name="主助手", persona="skill轮次耗尽测试", model="mock-model"),
+                global_system_prompt="测试",
+            ),
+            orchestration=OrchestrationPolicy(
+                unified_model="mock-model",
+                session_reply_mode="always",
+                enable_skills=True,
+                max_skill_rounds=3,
+                task_enabled={
+                    "memory_extract": False,
+                    "multimodal_parse": False,
+                    "event_extract": False,
+                },
+            ),
+        )
+
+        received: list[str] = []
+
+        async def _on_reply(msg: Message) -> None:
+            received.append(msg.content)
+
+        transcript = await engine.run_live_session(config=config)
+        await engine.run_live_message(
+            config=config,
+            turn=Message(role="user", speaker="小明", content="查主机"),
+            transcript=transcript,
+            on_reply=_on_reply,
+            timeout=15,
+        )
+
+        assert len(provider.requests) == 4
+        assert received
+        assert received[-1] == "检查完成：主机状态正常。"
+        assert not any(
+            m.role == "assistant" and not m.content.strip()
+            for m in transcript.messages
+        )
+
+    asyncio.run(_run())
+
