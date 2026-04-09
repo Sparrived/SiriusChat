@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-04-09
+
+### Fixed
+- **on_reply 回调订阅竞态**：修复 `run_live_message(..., on_reply=...)` 在高并发时可能在订阅建立前开始处理消息，导致首批事件丢失的问题；该问题会在外部插件的 SKILL 场景中表现为回复未正确投递。
+- **SKILL 回调链路稳定性**：确保 `on_reply` 模式下 SKILL 执行后的 assistant 消息稳定送达回调，避免出现“技能执行了但外部未收到回复”的现象。
+
+### Added
+- **回归测试**：新增 `test_on_reply_callback_with_skill_execution`，覆盖 `on_reply + SKILL` 组合路径，验证 SKILL_CALL 标记不外泄且最终回复可达。
+
 ## [0.12.0] - 2026-04-10
 
 ### Added
