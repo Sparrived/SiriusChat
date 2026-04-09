@@ -1572,13 +1572,76 @@ class AsyncRolePlayEngine:
                 skill_name, skill_params = calls[0]
                 skill_def = skill_registry.get(skill_name)
                 if skill_def is None:
+                    # Skill registry can be stale when context is reused or
+                    # skill files are updated after initial session startup.
+                    try:
+                        reloaded = skill_registry.load_from_directory(
+                            config.work_path / "skills",
+                            auto_install_deps=config.orchestration.auto_install_skill_deps,
+                        )
+                        if reloaded > 0:
+                            logger.info(
+                                "检测到SKILL_CALL未命中，已重载技能目录后重试: loaded=%d | skill=%s",
+                                reloaded,
+                                skill_name,
+                            )
+                    except Exception:
+                        logger.warning(
+                            "重载SKILL目录失败，继续按未知SKILL处理: skill=%s",
+                            skill_name,
+                            exc_info=True,
+                        )
+                    skill_def = skill_registry.get(skill_name)
+                if skill_def is None:
                     # Unknown skill — inject error note and let AI continue
                     transcript.add(Message(
                         role="system",
                         content=f"[SKILL系统] 未找到名为 '{skill_name}' 的SKILL，请使用可用SKILL列表中的名称。",
                     ))
-                    content = strip_skill_calls(content)
-                    break
+                    if event_bus is not None:
+                        await event_bus.emit(SessionEvent(
+                            type=SessionEventType.SKILL_COMPLETED,
+                            data={
+                                "skill_name": skill_name,
+                                "success": False,
+                                "result_preview": "SKILL未找到",
+                            },
+                        ))
+                    # Re-generate with the injected system hint instead of
+                    # returning partial pre-skill content to external consumers.
+                    if config.enable_auto_compression:
+                        transcript.compress_for_budget(
+                            max_messages=config.history_max_messages,
+                            max_chars=config.history_max_chars,
+                        )
+                    system_prompt, chat_history = self._build_chat_main_request_context(
+                        config=config,
+                        transcript=transcript,
+                        skill_descriptions=skill_descriptions,
+                        environment_context=environment_context,
+                        skip_sections=skip_sections,
+                    )
+                    request_payload = GenerationRequest(
+                        model=model,
+                        system_prompt=system_prompt,
+                        messages=chat_history,
+                        temperature=config.agent.temperature,
+                        max_tokens=config.agent.max_tokens,
+                        purpose="chat_main",
+                    )
+                    content = await self._call_provider_with_retry(
+                        request_payload=request_payload,
+                        retry_times=retry_times,
+                        transcript=transcript,
+                        task_name="chat_main",
+                        actor_id=config.agent.name,
+                    )
+                    if content.startswith("["):
+                        bracket_end = content.find("] ", 1)
+                        if bracket_end != -1 and bracket_end < 40:
+                            content = content[bracket_end + 2:]
+                    content = self._sanitize_assistant_content(content)
+                    continue
 
                 logger.info("执行SKILL: %s | 参数: %s", skill_name, skill_params)
                 if event_bus is not None:
@@ -1635,13 +1698,8 @@ class AsyncRolePlayEngine:
                             speaker=speaker,
                         )
                         transcript.add(partial_msg)
-                        # 此时 remaining_content 已经过 strip_skill_calls 清理，
-                        # 不含任何 SKILL_CALL 标记，直接发送给外部订阅者。
-                        if event_bus is not None:
-                            await event_bus.emit(SessionEvent(
-                                type=SessionEventType.MESSAGE_ADDED,
-                                message=partial_msg,
-                            ))
+                        # SKILL 轮次中的中间消息仅保留在 transcript 中作为上下文，
+                        # 不通过事件总线对外发送，避免外部消费者提前收到中间态文本。
                         await asyncio.sleep(0.01)
 
                 # Re-generate response with skill result in context

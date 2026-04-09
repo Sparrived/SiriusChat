@@ -679,3 +679,204 @@ def run(**kwargs):
 
     asyncio.run(_run())
 
+
+def test_on_reply_does_not_emit_partial_skill_content(tmp_path) -> None:
+    """When SKILL is called, on_reply should receive only final message, not partial pre-skill text."""
+    async def _run() -> None:
+        work_path = tmp_path / "on_reply_no_partial"
+        skills_dir = work_path / "skills"
+        skills_dir.mkdir(parents=True, exist_ok=True)
+        (skills_dir / "echo.py").write_text(
+            """
+SKILL_META = {
+    "name": "echo",
+    "description": "Return text",
+    "parameters": {
+        "text": {"type": "str", "description": "text", "required": True}
+    },
+}
+
+def run(text: str, **kwargs):
+    return {"echo": text}
+""".strip(),
+            encoding="utf-8",
+        )
+
+        provider = MockProvider(
+            responses=[
+                '[SKILL_CALL: echo | {"text": "系统正常"}]\n\n正在检查中...',
+                "检查完成：系统正常。",
+            ]
+        )
+        engine = AsyncRolePlayEngine(provider=provider)
+        config = SessionConfig(
+            work_path=work_path,
+            preset=AgentPreset(
+                agent=Agent(name="主助手", persona="中间态测试", model="mock-model"),
+                global_system_prompt="测试",
+            ),
+            orchestration=OrchestrationPolicy(
+                unified_model="mock-model",
+                session_reply_mode="always",
+                enable_skills=True,
+                task_enabled={
+                    "memory_extract": False,
+                    "multimodal_parse": False,
+                    "event_extract": False,
+                },
+            ),
+        )
+
+        received: list[str] = []
+
+        async def _on_reply(msg: Message) -> None:
+            received.append(msg.content)
+
+        transcript = await engine.run_live_session(config=config)
+        await engine.run_live_message(
+            config=config,
+            turn=Message(role="user", speaker="小明", content="查下系统"),
+            transcript=transcript,
+            on_reply=_on_reply,
+            timeout=10,
+        )
+
+        assert len(provider.requests) == 2
+        assert received == ["检查完成：系统正常。"]
+
+    asyncio.run(_run())
+
+
+def test_unknown_skill_triggers_regeneration_instead_of_partial_output(tmp_path) -> None:
+    """Unknown SKILL should trigger a regeneration pass and return final output."""
+    async def _run() -> None:
+        work_path = tmp_path / "unknown_skill_regen"
+        provider = MockProvider(
+            responses=[
+                "[SKILL_CALL: missing_skill]\n\n先处理中...",
+                "我暂时没有这个技能，但我可以手动给你结论。",
+            ]
+        )
+        engine = AsyncRolePlayEngine(provider=provider)
+        config = SessionConfig(
+            work_path=work_path,
+            preset=AgentPreset(
+                agent=Agent(name="主助手", persona="未知技能回退", model="mock-model"),
+                global_system_prompt="测试",
+            ),
+            orchestration=OrchestrationPolicy(
+                unified_model="mock-model",
+                session_reply_mode="always",
+                enable_skills=True,
+                task_enabled={
+                    "memory_extract": False,
+                    "multimodal_parse": False,
+                    "event_extract": False,
+                },
+            ),
+        )
+
+        received: list[str] = []
+
+        async def _on_reply(msg: Message) -> None:
+            received.append(msg.content)
+
+        transcript = await engine.run_live_session(config=config)
+        await engine.run_live_message(
+            config=config,
+            turn=Message(role="user", speaker="小明", content="执行一下未知技能"),
+            transcript=transcript,
+            on_reply=_on_reply,
+            timeout=10,
+        )
+
+        assert len(provider.requests) == 2
+        assert received == ["我暂时没有这个技能，但我可以手动给你结论。"]
+
+    asyncio.run(_run())
+
+
+def test_skill_reload_on_miss_when_registry_non_empty(tmp_path) -> None:
+    """If registry is non-empty but missing target skill, engine should reload and execute it."""
+    async def _run() -> None:
+        work_path = tmp_path / "skill_reload_on_miss"
+        skills_dir = work_path / "skills"
+        skills_dir.mkdir(parents=True, exist_ok=True)
+
+        # Initial skill to make registry non-empty
+        (skills_dir / "alpha.py").write_text(
+            """
+SKILL_META = {"name": "alpha", "description": "alpha", "parameters": {}}
+def run(**kwargs):
+    return {"alpha": True}
+""".strip(),
+            encoding="utf-8",
+        )
+
+        provider = MockProvider(
+            responses=[
+                "普通回复",
+                '[SKILL_CALL: beta | {"x": 1}]',
+                "beta 已执行完成。",
+            ]
+        )
+        engine = AsyncRolePlayEngine(provider=provider)
+        config = SessionConfig(
+            work_path=work_path,
+            preset=AgentPreset(
+                agent=Agent(name="主助手", persona="重载测试", model="mock-model"),
+                global_system_prompt="测试",
+            ),
+            orchestration=OrchestrationPolicy(
+                unified_model="mock-model",
+                session_reply_mode="always",
+                enable_skills=True,
+                task_enabled={
+                    "memory_extract": False,
+                    "multimodal_parse": False,
+                    "event_extract": False,
+                },
+            ),
+        )
+
+        transcript = await engine.run_live_session(config=config)
+        # First turn initializes context and loads only alpha
+        transcript = await engine.run_live_message(
+            config=config,
+            turn=Message(role="user", speaker="小明", content="第一句"),
+            transcript=transcript,
+        )
+
+        # Add beta after context was already created and registry is non-empty
+        (skills_dir / "beta.py").write_text(
+            """
+SKILL_META = {
+    "name": "beta",
+    "description": "beta",
+    "parameters": {"x": {"type": "int", "description": "x", "required": True}},
+}
+def run(x: int, **kwargs):
+    return {"beta": x}
+""".strip(),
+            encoding="utf-8",
+        )
+
+        transcript = await engine.run_live_message(
+            config=config,
+            turn=Message(role="user", speaker="小明", content="第二句调用beta"),
+            transcript=transcript,
+        )
+
+        assert len(provider.requests) == 3
+        assert any(
+            "SKILL执行结果: beta" in message.content
+            for message in transcript.messages
+            if message.role == "system"
+        )
+        assert any(
+            message.role == "assistant" and "beta 已执行完成" in message.content
+            for message in transcript.messages
+        )
+
+    asyncio.run(_run())
+
