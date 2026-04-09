@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+## [0.12.6] - 2026-04-09
+
+### Fixed
+- **恢复 v0.9.4 语义**：当模型在同一轮同时输出 `SKILL_CALL` 与普通用户可见文本时，engine 会继续将清理后的普通文本通过事件总线发送给外部消费者，而不会泄露 `SKILL_CALL` 标记本身。
+- **on_reply 同轮提示恢复**：修复此前过度抑制中间文本导致外部插件收不到“正在查询中”等正常提示文案的问题。
+
+### Added
+- **回归测试**：新增 `test_on_reply_emits_plain_text_alongside_skill_call`，覆盖 `SKILL_CALL + 普通文本` 同轮输出场景。
+
 ## [0.12.5] - 2026-04-09
 
 ### Fixed

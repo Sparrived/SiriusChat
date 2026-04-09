@@ -1707,8 +1707,15 @@ class AsyncRolePlayEngine:
                         transcript.add(partial_msg)
                         if not first_partial_content:
                             first_partial_content = partial_msg.content
-                        # SKILL 轮次中的中间消息仅保留在 transcript 中作为上下文，
-                        # 不通过事件总线对外发送，避免外部消费者提前收到中间态文本。
+                        # 仅发送 strip_skill_calls 后的普通文本，保持 v0.9.4 语义：
+                        # 如果模型在同一轮同时输出 SKILL_CALL 和用户可见文案，
+                        # 外部消费者应立即收到该文案，但永远不会看到 SKILL_CALL 标记本身。
+                        if event_bus is not None:
+                            await event_bus.emit(SessionEvent(
+                                type=SessionEventType.MESSAGE_ADDED,
+                                message=partial_msg,
+                                data={"intermediate": True, "source": "skill_partial"},
+                            ))
                         await asyncio.sleep(0.01)
 
                 # Re-generate response with skill result in context

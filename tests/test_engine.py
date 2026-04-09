@@ -680,8 +680,8 @@ def run(**kwargs):
     asyncio.run(_run())
 
 
-def test_on_reply_does_not_emit_partial_skill_content(tmp_path) -> None:
-    """When SKILL is called, on_reply should receive only final message, not partial pre-skill text."""
+def test_on_reply_emits_plain_text_alongside_skill_call(tmp_path) -> None:
+    """When model outputs SKILL_CALL + plain text, on_reply should receive the plain text and final reply."""
     async def _run() -> None:
         work_path = tmp_path / "on_reply_no_partial"
         skills_dir = work_path / "skills"
@@ -742,7 +742,7 @@ def run(text: str, **kwargs):
         )
 
         assert len(provider.requests) == 2
-        assert received == ["检查完成：系统正常。"]
+        assert received == ["正在检查中...", "检查完成：系统正常。"]
 
     asyncio.run(_run())
 
