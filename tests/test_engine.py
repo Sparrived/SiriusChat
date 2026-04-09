@@ -939,9 +939,82 @@ def run(**kwargs):
             timeout=15,
         )
 
+        # 3 轮 SKILL 再生成，第 4 次返回最终文案，无需额外强制总结请求
         assert len(provider.requests) == 4
         assert received
         assert received[-1] == "检查完成：主机状态正常。"
+        assert not any(
+            m.role == "assistant" and not m.content.strip()
+            for m in transcript.messages
+        )
+
+    asyncio.run(_run())
+
+
+def test_skill_rounds_exhausted_fallback_uses_skill_result_summary(tmp_path) -> None:
+    """If model never produces final text, fallback should include skill result summary."""
+    async def _run() -> None:
+        work_path = tmp_path / "skill_rounds_summary_fallback"
+        skills_dir = work_path / "skills"
+        skills_dir.mkdir(parents=True, exist_ok=True)
+        (skills_dir / "system_info.py").write_text(
+            """
+SKILL_META = {"name": "system_info", "description": "sys", "parameters": {}}
+def run(**kwargs):
+    return {"cpu": "12%", "memory": "70%"}
+""".strip(),
+            encoding="utf-8",
+        )
+
+        provider = MockProvider(
+            responses=[
+                "[SKILL_CALL: system_info]\\n\\n正在检查中",
+                "[SKILL_CALL: system_info]",
+                "[SKILL_CALL: system_info]",
+                "[SKILL_CALL: system_info]",
+                "",
+            ]
+        )
+
+        engine = AsyncRolePlayEngine(provider=provider)
+        config = SessionConfig(
+            work_path=work_path,
+            preset=AgentPreset(
+                agent=Agent(name="主助手", persona="skill兜底摘要测试", model="mock-model"),
+                global_system_prompt="测试",
+            ),
+            orchestration=OrchestrationPolicy(
+                unified_model="mock-model",
+                session_reply_mode="always",
+                enable_skills=True,
+                max_skill_rounds=3,
+                task_enabled={
+                    "memory_extract": False,
+                    "multimodal_parse": False,
+                    "event_extract": False,
+                },
+            ),
+        )
+
+        received: list[str] = []
+
+        async def _on_reply(msg: Message) -> None:
+            received.append(msg.content)
+
+        transcript = await engine.run_live_session(config=config)
+        await engine.run_live_message(
+            config=config,
+            turn=Message(role="user", speaker="小明", content="查主机"),
+            transcript=transcript,
+            on_reply=_on_reply,
+            timeout=15,
+        )
+
+        # 3 轮 SKILL 再生成后仍无最终文案，会触发 1 次强制总结再生成，共 5 次请求
+        assert len(provider.requests) == 5
+        assert received
+        assert "system_info 已执行，结果摘要" in received[-1]
+        assert "暂未生成可用回复" not in received[-1]
         assert not any(
             m.role == "assistant" and not m.content.strip()
             for m in transcript.messages

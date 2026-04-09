@@ -1564,6 +1564,8 @@ class AsyncRolePlayEngine:
         # --- Skill call detection and execution ---
         skill_executed = False
         last_skill_name = ""
+        last_skill_result_text = ""
+        first_partial_content = ""
         if skill_registry is not None and skill_executor is not None:
             max_rounds = max(1, config.orchestration.max_skill_rounds)
             for _round in range(max_rounds):
@@ -1659,6 +1661,7 @@ class AsyncRolePlayEngine:
                 skill_executed = True
                 last_skill_name = skill_name
                 result_text = skill_result.to_display_text()
+                last_skill_result_text = result_text
                 if event_bus is not None:
                     await event_bus.emit(SessionEvent(
                         type=SessionEventType.SKILL_COMPLETED,
@@ -1702,6 +1705,8 @@ class AsyncRolePlayEngine:
                             speaker=speaker,
                         )
                         transcript.add(partial_msg)
+                        if not first_partial_content:
+                            first_partial_content = partial_msg.content
                         # SKILL 轮次中的中间消息仅保留在 transcript 中作为上下文，
                         # 不通过事件总线对外发送，避免外部消费者提前收到中间态文本。
                         await asyncio.sleep(0.01)
@@ -1786,7 +1791,18 @@ class AsyncRolePlayEngine:
         # Safety: strip any SKILL_CALL markers left in content (e.g. max_skill_rounds exhausted)
         content = strip_skill_calls(content)
         if not content.strip() and skill_executed:
-            content = f"已执行 {last_skill_name or 'SKILL'}，但暂未生成可用回复，请稍后重试。"
+            summary_lines: list[str] = []
+            if first_partial_content.strip():
+                summary_lines.append(first_partial_content.strip())
+            if last_skill_result_text.strip():
+                compact = " ".join(last_skill_result_text.split())
+                summary_lines.append(
+                    f"{last_skill_name or 'SKILL'} 已执行，结果摘要：{compact[:220]}"
+                )
+            if summary_lines:
+                content = "\n".join(summary_lines)
+            else:
+                content = f"已执行 {last_skill_name or 'SKILL'}，但暂未生成可用回复，请稍后重试。"
 
         last_message: Message | None = None
 

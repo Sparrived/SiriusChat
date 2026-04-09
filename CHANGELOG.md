@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+## [0.12.5] - 2026-04-09
+
+### Fixed
+- **SKILL 空回复兜底优化**：当 SKILL 已执行但模型未生成最终自然语言答复时，engine 不再直接输出固定报错，而是优先基于前置文案和最后一次 SKILL 结果生成可用摘要回复。
+- **外部 on_reply 可用性提升**：避免外部消费者收到“已执行 skill 但没有任何有用内容”的低质量兜底消息。
+
+### Added
+- **回归测试**：新增 `test_skill_rounds_exhausted_fallback_uses_skill_result_summary`，覆盖“多次 SKILL_CALL 后仅能依赖 skill 结果摘要输出”的场景。
+
 ## [0.12.4] - 2026-04-09
 
 ### Fixed
