@@ -4,6 +4,22 @@
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-04-10
+
+### Added
+- **`arun_live_message` 新增三个可选参数**：
+  - `on_reply: Callable[[Message], Awaitable[None]]`：engine 自动管理事件订阅与消费，每条 AI 回复触发回调，外部无需操作 `asubscribe`/事件总线。
+  - `user_profile: UserProfile | None`：自动注册用户到记忆系统，免去外部手动 `register_user` 调用。
+  - `timeout: float`：engine 级超时，超时后自动清理内部资源并抛出 `TimeoutError`。
+- **内部方法 `_run_live_message_with_callback`**：封装事件订阅、回调消费、超时清理的完整流程。
+
+### Fixed
+- **debounce `CancelledError` 吞没外部超时**：修复 `_run_live_message_core` 中 debounce sleep 的 `except CancelledError: return transcript` 错误地拦截了外部 `asyncio.wait_for` 的超时取消信号。移除该捕获，使外部超时与关停取消能正确传播。
+
+### Changed
+- **外部插件样板代码精简**：`sirius_chat_group` 插件的 `_chat_once_locked` 和 `_chat_private_once_locked` 各减少约 45 行手动事件订阅/消费/清理代码，改为使用 `on_reply` + `timeout` 参数。
+- **迁移指南**：`docs/migration-v0.12.md`。
+
 ## [0.11.0] - 2026-04-09
 
 ### Added

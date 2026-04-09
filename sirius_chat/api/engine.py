@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from typing import AsyncIterator
+from typing import AsyncIterator, Awaitable, Callable
 
 from sirius_chat.async_engine import AsyncRolePlayEngine
 from sirius_chat.config import SessionConfig
 from sirius_chat.core.events import SessionEvent, SessionEventBus, SessionEventType
 from sirius_chat.models import Message, Transcript
 from sirius_chat.providers.base import AsyncLLMProvider, LLMProvider
-from sirius_chat.memory import UserMemoryEntry
+from sirius_chat.memory import UserMemoryEntry, UserProfile
 
 
 def create_async_engine(provider: LLMProvider | AsyncLLMProvider) -> AsyncRolePlayEngine:
@@ -33,8 +33,17 @@ async def arun_live_message(
     turn: Message,
     transcript: Transcript | None = None,
     environment_context: str = "",
+    user_profile: UserProfile | None = None,
+    on_reply: Callable[[Message], Awaitable[None]] | None = None,
+    timeout: float = 0,
 ) -> Transcript:
     """Async facade for single-message live processing.
+
+    .. versionchanged:: 0.12.0
+       Added *user_profile*, *on_reply* and *timeout* parameters.
+       When *on_reply* is provided the engine subscribes to the event stream
+       internally and calls back for each assistant message — no external
+       ``asubscribe`` boilerplate needed.
 
     .. versionchanged:: 0.9.0
        The ``on_message`` callback has been removed.  Use
@@ -45,6 +54,9 @@ async def arun_live_message(
         turn=turn,
         transcript=transcript,
         environment_context=environment_context,
+        user_profile=user_profile,
+        on_reply=on_reply,
+        timeout=timeout,
     )
 
 

@@ -2,6 +2,7 @@
 
 from sirius_chat.async_engine import AsyncRolePlayEngine
 from sirius_chat.config import Agent, AgentPreset, SessionConfig, OrchestrationPolicy
+from sirius_chat.memory import UserProfile
 from sirius_chat.models import Message, Transcript
 from sirius_chat.providers.mock import MockProvider
 from sirius_chat.session.store import JsonSessionStore
@@ -316,4 +317,198 @@ def test_user_memory_is_persisted_per_user_file_across_new_sessions(tmp_path) ->
     asyncio.run(_run())
 
 
+def test_on_reply_callback_receives_assistant_messages() -> None:
+    """on_reply callback should be invoked for each assistant reply."""
+    async def _run() -> None:
+        provider = MockProvider(responses=["你好 A", "你好 B"])
+        engine = AsyncRolePlayEngine(provider=provider)
+        config = SessionConfig(
+            work_path=Path("data/tests/on_reply_cb"),
+            preset=AgentPreset(
+                agent=Agent(name="主助手", persona="回调测试", model="mock-model"),
+                global_system_prompt="测试",
+            ),
+            orchestration=OrchestrationPolicy(
+                unified_model="mock-model",
+                task_enabled={
+                    "memory_extract": False,
+                    "multimodal_parse": False,
+                    "event_extract": False,
+                },
+            ),
+        )
+
+        received: list[str] = []
+
+        async def _on_reply(msg: Message) -> None:
+            received.append(msg.content)
+
+        transcript = await engine.run_live_session(config=config)
+        transcript = await engine.run_live_message(
+            config=config,
+            turn=Message(role="user", speaker="小明", content="第一句"),
+            transcript=transcript,
+            on_reply=_on_reply,
+        )
+        assert len(received) == 1
+        assert received[0] == "你好 A"
+
+        transcript = await engine.run_live_message(
+            config=config,
+            turn=Message(role="user", speaker="小明", content="第二句"),
+            transcript=transcript,
+            on_reply=_on_reply,
+        )
+        assert len(received) == 2
+        assert received[1] == "你好 B"
+
+    asyncio.run(_run())
+
+
+def test_user_profile_auto_registration() -> None:
+    """user_profile parameter should auto-register user before processing."""
+    async def _run() -> None:
+        provider = MockProvider(responses=["收到"])
+        engine = AsyncRolePlayEngine(provider=provider)
+        config = SessionConfig(
+            work_path=Path("data/tests/user_profile_auto"),
+            preset=AgentPreset(
+                agent=Agent(name="主助手", persona="注册测试", model="mock-model"),
+                global_system_prompt="测试",
+            ),
+            orchestration=OrchestrationPolicy(
+                unified_model="mock-model",
+                task_enabled={
+                    "memory_extract": False,
+                    "multimodal_parse": False,
+                    "event_extract": False,
+                },
+            ),
+        )
+
+        profile = UserProfile(
+            user_id="qq_12345",
+            name="测试用户",
+            persona="产品经理",
+            identities={"qq": "12345"},
+            aliases=["小测"],
+        )
+
+        transcript = await engine.run_live_session(config=config)
+        transcript = await engine.run_live_message(
+            config=config,
+            turn=Message(role="user", speaker="测试用户", content="你好"),
+            transcript=transcript,
+            user_profile=profile,
+        )
+
+        entry = transcript.user_memory.entries.get("qq_12345")
+        assert entry is not None
+        assert entry.profile.name == "测试用户"
+        assert entry.profile.persona == "产品经理"
+
+    asyncio.run(_run())
+
+
+def test_timeout_raises_on_expiry() -> None:
+    """timeout parameter should raise asyncio.TimeoutError when exceeded."""
+    async def _run() -> None:
+
+        class SlowProvider:
+            """Provider that delays long enough to trigger timeout."""
+            def __init__(self) -> None:
+                self.requests: list = []
+                self.model_id = "slow-model"
+
+            async def generate_async(self, request) -> str:
+                await asyncio.sleep(30)
+                return "太慢了"
+
+        engine = AsyncRolePlayEngine(provider=SlowProvider())
+        config = SessionConfig(
+            work_path=Path("data/tests/timeout_test"),
+            preset=AgentPreset(
+                agent=Agent(name="主助手", persona="超时测试", model="slow-model"),
+                global_system_prompt="测试",
+            ),
+            orchestration=OrchestrationPolicy(
+                unified_model="slow-model",
+                session_reply_mode="always",
+                task_enabled={
+                    "memory_extract": False,
+                    "multimodal_parse": False,
+                    "event_extract": False,
+                },
+            ),
+        )
+
+        transcript = await engine.run_live_session(config=config)
+        timed_out = False
+        try:
+            await engine.run_live_message(
+                config=config,
+                turn=Message(role="user", speaker="小明", content="等很久"),
+                transcript=transcript,
+                timeout=0.5,
+            )
+        except (asyncio.TimeoutError, RuntimeError):
+            timed_out = True
+
+        assert timed_out, "Should have raised TimeoutError or RuntimeError"
+
+    asyncio.run(_run())
+
+
+def test_on_reply_with_timeout_cleans_up_on_expiry() -> None:
+    """on_reply + timeout: consumer task should be cancelled on timeout."""
+    async def _run() -> None:
+        class SlowProvider:
+            def __init__(self) -> None:
+                self.requests: list = []
+                self.model_id = "slow-model"
+
+            async def generate_async(self, request) -> str:
+                await asyncio.sleep(30)
+                return "太慢了"
+
+        received: list[str] = []
+
+        async def _on_reply(msg: Message) -> None:
+            received.append(msg.content)
+
+        engine = AsyncRolePlayEngine(provider=SlowProvider())
+        config = SessionConfig(
+            work_path=Path("data/tests/on_reply_timeout"),
+            preset=AgentPreset(
+                agent=Agent(name="主助手", persona="超时回调测试", model="slow-model"),
+                global_system_prompt="测试",
+            ),
+            orchestration=OrchestrationPolicy(
+                unified_model="slow-model",
+                session_reply_mode="always",
+                task_enabled={
+                    "memory_extract": False,
+                    "multimodal_parse": False,
+                    "event_extract": False,
+                },
+            ),
+        )
+
+        transcript = await engine.run_live_session(config=config)
+        timed_out = False
+        try:
+            await engine.run_live_message(
+                config=config,
+                turn=Message(role="user", speaker="小明", content="等"),
+                transcript=transcript,
+                on_reply=_on_reply,
+                timeout=0.5,
+            )
+        except (asyncio.TimeoutError, RuntimeError):
+            timed_out = True
+
+        assert timed_out, "Should have raised TimeoutError or RuntimeError"
+        assert len(received) == 0, "No replies expected before timeout"
+
+    asyncio.run(_run())
 

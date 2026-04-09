@@ -17,6 +17,7 @@ from sirius_chat.memory import (
     EventMemoryFileStore,
     EventMemoryManager,
     UserMemoryFileStore,
+    UserProfile,
 )
 from sirius_chat.async_engine.utils import (
     record_task_stat,
@@ -1894,12 +1895,145 @@ class AsyncRolePlayEngine:
         session_reply_mode: str | None = None,
         finalize_and_persist: bool = True,
         environment_context: str = "",
+        user_profile: UserProfile | None = None,
+        on_reply: Callable[[Message], Awaitable[None]] | None = None,
+        timeout: float = 0,
     ) -> Transcript:
         self.validate_orchestration_config(config)
 
         transcript = self._prepare_transcript(config, transcript)
         if turn.role != "user" or not turn.speaker:
             raise ValueError("run_live_message 仅接受带 speaker 的单条 user 消息。")
+
+        # Auto-register user profile if provided
+        if user_profile is not None:
+            transcript.user_memory.register_user(user_profile)
+
+        if on_reply is not None:
+            return await self._run_live_message_with_callback(
+                config=config,
+                turn=turn,
+                transcript=transcript,
+                session_reply_mode=session_reply_mode,
+                finalize_and_persist=finalize_and_persist,
+                environment_context=environment_context,
+                on_reply=on_reply,
+                timeout=timeout,
+            )
+
+        if timeout > 0:
+            return await asyncio.wait_for(
+                self._run_live_message_core(
+                    config=config,
+                    turn=turn,
+                    transcript=transcript,
+                    session_reply_mode=session_reply_mode,
+                    finalize_and_persist=finalize_and_persist,
+                    environment_context=environment_context,
+                ),
+                timeout=timeout,
+            )
+
+        return await self._run_live_message_core(
+            config=config,
+            turn=turn,
+            transcript=transcript,
+            session_reply_mode=session_reply_mode,
+            finalize_and_persist=finalize_and_persist,
+            environment_context=environment_context,
+        )
+
+    async def _run_live_message_with_callback(
+        self,
+        config: SessionConfig,
+        turn: Message,
+        transcript: Transcript,
+        session_reply_mode: str | None,
+        finalize_and_persist: bool,
+        environment_context: str,
+        on_reply: Callable[[Message], Awaitable[None]],
+        timeout: float,
+    ) -> Transcript:
+        """Process a message while delivering assistant replies via *on_reply*.
+
+        Internally subscribes to the session event bus and calls *on_reply*
+        for every assistant ``MESSAGE_ADDED`` event.  The subscription and
+        tear-down are fully managed so that callers don't need to deal with
+        ``asyncio.create_task`` / ``asubscribe`` boilerplate.
+        """
+
+        async def _consume_events() -> None:
+            try:
+                async for evt in self.subscribe(transcript):
+                    if evt.type in (
+                        SessionEventType.PROCESSING_COMPLETED,
+                        SessionEventType.REPLY_SKIPPED,
+                        SessionEventType.ERROR,
+                    ):
+                        break
+                    if evt.type == SessionEventType.MESSAGE_ADDED:
+                        msg = evt.message
+                        if msg is not None and msg.role == "assistant":
+                            content = (msg.content or "").strip()
+                            if content:
+                                try:
+                                    await on_reply(msg)
+                                except Exception:
+                                    logger.error(
+                                        "on_reply callback error", exc_info=True,
+                                    )
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                logger.error("Event consume error in on_reply path", exc_info=True)
+
+        consume_task = asyncio.create_task(_consume_events())
+        # Yield control so the consumer registers its subscription queue
+        await asyncio.sleep(0)
+
+        try:
+            core_coro = self._run_live_message_core(
+                config=config,
+                turn=turn,
+                transcript=transcript,
+                session_reply_mode=session_reply_mode,
+                finalize_and_persist=finalize_and_persist,
+                environment_context=environment_context,
+            )
+            if timeout > 0:
+                transcript = await asyncio.wait_for(core_coro, timeout=timeout)
+            else:
+                transcript = await core_coro
+        except asyncio.TimeoutError:
+            consume_task.cancel()
+            try:
+                await consume_task
+            except asyncio.CancelledError:
+                pass
+            raise
+
+        # Wait for the consumer to finish flushing the last event(s).
+        try:
+            await asyncio.wait_for(consume_task, timeout=120.0)
+        except asyncio.TimeoutError:
+            logger.warning("on_reply consumer timed out; cancelling")
+            consume_task.cancel()
+            try:
+                await consume_task
+            except asyncio.CancelledError:
+                pass
+
+        return transcript
+
+    async def _run_live_message_core(
+        self,
+        config: SessionConfig,
+        turn: Message,
+        transcript: Transcript,
+        session_reply_mode: str | None,
+        finalize_and_persist: bool,
+        environment_context: str,
+    ) -> Transcript:
 
         context = self._get_or_create_live_context(config=config, transcript=transcript)
         participant = self._resolve_participant_for_turn(
@@ -1917,11 +2051,9 @@ class AsyncRolePlayEngine:
                 if pending.timer_task is not None and not pending.timer_task.done():
                     pending.timer_task.cancel()
                 pending.timer_task = None
-                # Wait for debounce window
-                try:
-                    await asyncio.sleep(debounce_seconds)
-                except asyncio.CancelledError:
-                    return transcript
+                # Wait for debounce window.  CancelledError must propagate
+                # so that external timeout (asyncio.wait_for) works correctly.
+                await asyncio.sleep(debounce_seconds)
                 # After sleep, check if we are still the latest (no newer message appended)
                 if context.pending_turn is pending and pending.messages[-1] is turn:
                     # Timer expired and we are still the latest → flush
@@ -1966,11 +2098,9 @@ class AsyncRolePlayEngine:
                     participant_user_id=participant.user_id,
                     messages=[turn],
                 )
-                # Wait for debounce window
-                try:
-                    await asyncio.sleep(debounce_seconds)
-                except asyncio.CancelledError:
-                    return transcript
+                # Wait for debounce window.  CancelledError must propagate
+                # so that external timeout (asyncio.wait_for) works correctly.
+                await asyncio.sleep(debounce_seconds)
                 # After sleep, check if still the latest
                 if context.pending_turn is not None and context.pending_turn.participant_user_id == participant.user_id and context.pending_turn.messages[-1] is turn:
                     merged_turn = self._merge_pending_turns(context.pending_turn.messages)

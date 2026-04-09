@@ -146,6 +146,7 @@ description: "当你需要在不通读全部代码的情况下快速理解 Siriu
 - 提示词流程：`generate_humanized_roleplay_questions` 产出问题，`agenerate_agent_prompts_from_answers`（输入 `agent_name`）生成完整 `GeneratedSessionPreset`；推荐将生成结果作为 agent 资产持久化（`generated_agents.json`），再通过 `select_generated_agent_profile` + `create_session_config_from_selected_agent` 按 key 创建会话配置。
 - 内部实现允许重构；当前未发布阶段若影响外部接口，可直接升级 `api/`，并同步文档与示例。
 - 内部新增能力需同步在 `api/` 提供对外入口。
+- ✨ **(v0.12.0)** `arun_live_message` 新增 `on_reply`（引擎管理事件订阅回调）、`user_profile`（消息处理前自动注册用户）、`timeout`（引擎管理超时与清理）参数，大幅减少外部集成样板代码。详见 `docs/migration-v0.12.md`。
 - `main.py` 是仓库级测试/业务入口，承载主用户档案初始化、provider 管理命令与持续会话流程。
 - ✨ **开发工具链** (P1-004)：
   - `.github/workflows/ci.yml`：GitHub Actions 多版本 Python 自动化测试与代码质量检查

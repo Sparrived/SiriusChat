@@ -111,6 +111,32 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
+#### 简化回调模式（v0.12.0 推荐）
+
+对于最常见的"实时投递 assistant 回复"场景，可使用 `on_reply` 参数替代手动事件订阅：
+
+```python
+from sirius_chat.api import Message, UserProfile, arun_live_message
+
+async def on_reply(msg: Message) -> None:
+    """引擎为每条 assistant 回复调用此回调。"""
+    print(f"[实时] {msg.content}")
+
+transcript = await arun_live_message(
+    engine, config,
+    turn=Message(role="user", speaker="用户A", content="你好"),
+    transcript=transcript,
+    on_reply=on_reply,                    # 引擎内部管理事件订阅
+    user_profile=UserProfile(             # 可选：自动注册用户
+        user_id="u001", name="用户A",
+        identities={"qq": "12345"},
+    ),
+    timeout=45.0,                         # 可选：超时自动清理
+)
+```
+
+> `asubscribe` 原始事件流仍然可用，适合需要监听 `SKILL_STARTED` 等更多事件类型的场景。
+
 #### Agent 配置：多模态模型（动态模型路由）
 
 当需要在有图像时自动升级模型（例如使用廉价模型处理纯文本，但遇到图像时自动升级到多模态模型）时，可以为 Agent 配置 `multimodal_model`：
