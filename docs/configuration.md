@@ -394,6 +394,23 @@ from pathlib import Path
 Path(config.work_path).mkdir(parents=True, exist_ok=True)
 ```
 
+## Token 使用持久化
+
+v0.11.0 起，引擎在初始化会话时自动创建 `{work_path}/token_usage.db`（SQLite），每次模型调用后同步写入。无需额外配置。
+
+```python
+from sirius_chat.api import TokenUsageStore, compute_baseline, full_report
+
+store = TokenUsageStore("./data/token_usage.db")
+report = full_report(store)
+```
+
+产物文件：
+
+| 文件 | 说明 |
+|------|------|
+| `{work_path}/token_usage.db` | SQLite 数据库，包含全量历史 token 记录 |
+
 ## 故障排查
 
 ### 环境变量未被替换

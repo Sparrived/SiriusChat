@@ -275,9 +275,10 @@ DeepSeek 配置示例：
 
 Token 消耗全量归档与基准分析：
 
-- 引擎会将每次模型调用写入 `Transcript.token_usage_records`，记录 `actor_id`、`task_name`、`model`、`prompt/completion/total tokens`、字符量与重试次数。
+- 引擎会将每次模型调用写入 `Transcript.token_usage_records`（内存）和 `{work_path}/token_usage.db`（SQLite 持久化）。记录包含 `actor_id`、`task_name`、`model`、`prompt/completion/total tokens`、字符量与重试次数。
 - 可通过 `sirius_chat.api` 的 `summarize_token_usage(transcript)` 获取按人/任务/模型聚合结果。
 - 可通过 `build_token_usage_baseline(transcript.token_usage_records)` 获取会话级基准指标（平均 token、重试率、completion/prompt 比值）。
+- **(v0.11.0)** 跨会话分析：通过 `TokenUsageStore` + `compute_baseline` / `group_by_actor` / `group_by_task` / `group_by_model` / `group_by_session` / `time_series` / `full_report` 实现全局多维度分析。
 
 角色扮演前置内容生成与提示词生成器：
 

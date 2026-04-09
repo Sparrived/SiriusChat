@@ -16,7 +16,7 @@ flowchart TD
     C --> D["会话执行<br/>AsyncRolePlayEngine<br/>.run_live_session"]
 
     D --> E["参与者解析<br/>channel identity<br/>-&gt; speaker"]
-    E --> F["当前轮消息写入<br/>Transcript.messages"]
+    E --> F["当前轮消息写入<br/>Transcript.messages<br/>（自动去除尾部空白）"]
     F --> G["用户识别与记忆更新<br/>UserMemoryManager"]
     G --> G2["事件命中与落盘<br/>EventMemoryManager"]
     
@@ -24,11 +24,14 @@ flowchart TD
     G3 --> G4["事件特征→用户事实<br/>emotional_pattern<br/>user_interest<br/>social_context"]
 
     G4 --> H{orchestration<br/>enabled?}
-    H -- 支持多模型 --> I["memory_extract 任务<br/>按配置模型/预算/重试"]
-    H -- 支持多模型 --> J["multimodal_parse 任务<br/>多模态证据提取"]
-    H -- 仅单模型 --> K["跳过编排<br/>直接主模型回复"]
+    H -- 并行辅助任务 --> I["memory_extract<br/>用户画像提取<br/>（携带上下文）"]
+    H -- 并行辅助任务 --> J["multimodal_parse<br/>多模态证据提取"]
+    H -- 并行辅助任务 --> J2["event_extract<br/>事件特征提取"]
+    H -- 并行辅助任务 --> J3["intent_analysis<br/>意图分类<br/>reason / evidence_span"]
     I --> K
     J --> K
+    J2 --> K
+    J3 --> K["意图分析结果<br/>skip_sections 判定<br/>willingness score 调整"]
 
     K --> K2{skills<br/>enabled?}
     K2 -- 是 --> K3["SKILL 加载<br/>dependency_resolver<br/>自动安装缺失依赖"]
@@ -36,9 +39,8 @@ flowchart TD
     K2 -- 否 --> L
     K4 --> L
 
-    L --> L2["构建系统提示词<br/>主 AI + 参与者记忆<br/>+ 会话摘要 + 环境上下文<br/>分割指令（可选）"]
-    L2 --> M["调用 Provider<br/>自动路由或指定<br/>生成 assistant 回复"]
-    M --> N["token_usage_records<br/>按 actor/task/model<br/>聚合"]
+    L["构建系统提示词<br/>主 AI + 参与者记忆<br/>+ 会话摘要 + 环境上下文<br/>分割指令（可选）<br/>安全提醒注入"] --> M["调用 Provider<br/>自动路由或指定<br/>生成 assistant 回复"]
+    M --> N["Token 记录双写<br/>① Transcript.token_usage_records 内存<br/>② TokenUsageStore → token_usage.db SQLite"]
     N --> O["自动压缩历史<br/>session_summary<br/>超过长度阈值时"]
     O --> P["输出更新后<br/>Transcript"]
 
@@ -46,6 +48,9 @@ flowchart TD
     P --> Q2["事件落盘<br/>work_path/events<br/>events.json"]
     Q --> R["可选会话恢复<br/>resume flag"]
     R --> D
+
+    D -. 后台循环<br/>consolidation_enabled=True .-> BG["BackgroundTaskManager<br/>定时归纳事件/摘要/事实<br/>consolidate_entries<br/>consolidate_summary_notes<br/>consolidate_memory_facts"]
+    BG -. 写回 .-> Q
 ```
 
 ## 2. 模块分层图
@@ -59,23 +64,27 @@ flowchart LR
     end
 
     subgraph Domain[领域与编排层]
-      Models[models.py]
-      Engine[async_engine.py]
+      Models[models/models.py]
+      Engine[core/engine.py]
+      Intent[core/intent.py]
+      Events[core/events.py]
       Prompting[roleplay_prompting.py]
-      UserMemory[user_memory.py]
-      TokenUsage[token_usage.py]
+      BgTasks[background_tasks.py]
+      TokenUsage[token/usage.py]
+      TokenStore[token/store.py]
+      TokenAnalytics[token/analytics.py]
       Memory[memory/]
       Skills[skills/]
     end
 
     subgraph Infra[基础设施层]
-      SessionStore[session_store.py]
-      SessionRunner[session_runner.py]
+      SessionStore[session/store.py]
+      SessionRunner[session/runner.py]
       Routing[providers/routing.py]
       ProviderBase[providers/base.py]
-      Middleware["providers/middleware"]
+      Middleware["providers/middleware/"]
       ProviderImpl[providers/implementations]
-      ConfigMgr[config_manager.py]
+      ConfigMgr[config/manager.py]
       Cache[cache/]
       Perf[performance/]
     end
@@ -86,8 +95,12 @@ flowchart LR
     PublicAPI --> Prompting
     Engine --> Models
     Engine --> Memory
-    Engine --> UserMemory
+    Engine --> Intent
+    Engine --> Events
+    Engine --> BgTasks
     Engine --> TokenUsage
+    Engine --> TokenStore
+    TokenAnalytics --> TokenStore
     Engine --> ProviderBase
     Engine --> Skills
     Routing --> ProviderImpl
@@ -129,14 +142,18 @@ flowchart LR
 | `sirius_chat/cli.py` | `config.json`（含 `providers` 列表）、单轮用户输入 | 单轮 `Transcript`、`transcript.json` |
 | `sirius_chat/api/` | 外部程序调用参数、`work_path` | 稳定对外函数与类型、`Transcript` |
 | `sirius_chat/models/models.py` | 配置与消息数据 | 统一数据契约（`Message`、`Participant`、`Transcript` 等） |
-| `sirius_chat/async_engine/core.py` | 初始化：`SessionConfig` + 可选已有 `Transcript`；逐条处理：`Message` + `Transcript` | 更新后的 `Transcript`、assistant 回复、编排统计与 token 记录 |
-| `sirius_chat/user_memory.py` | speaker/channel identity、用户消息文本 | 用户档案与运行时记忆（profile/runtime）、事件记忆（命中/新增） |
+| `sirius_chat/core/engine.py` | 初始化：`SessionConfig` + 可选已有 `Transcript`；逐条处理：`Message` + `Transcript` | 更新后的 `Transcript`、assistant 回复、编排统计与 token 记录 |
+| `sirius_chat/core/intent.py` | 用户消息文本、LLM provider | `IntentAnalysis`（意图类型 + reason + evidence_span）、skip_sections 建议、willingness 调整 |
+| `sirius_chat/core/events.py` | 对话上下文、事件特征原始数据 | 事件摘要、`SessionEvent` 数据结构 |
+| `sirius_chat/background_tasks.py` | `BackgroundTaskConfig`、归纳回调函数 | 定时触发事件/摘要/事实归纳任务，写回持久化 |
 | `sirius_chat/memory/` | 用户信息、对话历史、事件数据 | 记忆库、事件落盘、用户档案提取 |
 | `sirius_chat/roleplay_prompting.py` | 角色问答、agent 名称、模型 | `GeneratedSessionPreset`、`generated_agents.json`、可直接创建的 `SessionConfig` |
-| `sirius_chat/token/usage.py` | `Transcript.token_usage_records` | baseline 与按 actor/task/model 聚合报表 |
+| `sirius_chat/token/usage.py` | `Transcript.token_usage_records` | baseline 与按 actor/task/model 聚合报表（内存级） |
+| `sirius_chat/token/store.py` | `TokenUsageRecord`、`session_id` | SQLite 持久化（`{work_path}/token_usage.db`）、跨会话查询 |
+| `sirius_chat/token/analytics.py` | `TokenUsageStore` | 全局/会话/用户/任务/模型/时间维度分析报告 |
 | `sirius_chat/session/store.py` | `Transcript` | JSON/SQLite 持久化状态文件 |
 | `sirius_chat/session/runner.py` | `SessionConfig`、Provider、主用户输入、`work_path` | 自动持久化会话循环、主用户档案维护、恢复状态管理 |
-| `sirius_chat/config_manager.py` | JSON 配置文件、环境变量 | 合并配置、环境变量覆盖、配置验证 |
+| `sirius_chat/config/manager.py` | JSON 配置文件、环境变量 | 合并配置、环境变量覆盖、配置验证 |
 | `sirius_chat/providers/base.py` | `GenerationRequest` | Provider 协议（同步/异步生成契约） |
 | `sirius_chat/providers/middleware/` | `GenerationRequest`、中间件链配置 | 透明的 Provider 功能扩展（流控、重试、成本计量） |
 | `sirius_chat/providers/routing.py` | `work_path`、`providers_config` 列表 | ProviderRegistry、`provider_keys.json`、最终路由选择 |
@@ -150,11 +167,12 @@ flowchart LR
 
 ## 4. 关键运行产物说明
 
-- `Transcript.messages`: 会话全量消息（system/user/assistant）。
+- `Transcript.messages`: 会话全量消息（system/user/assistant），写入时自动去除尾部空白。
 - `Transcript.user_memory`: 识人记忆状态（跨轮次延续）。
 - `Transcript.session_summary`: 自动压缩后的历史摘要。
 - `Transcript.orchestration_stats`: 任务级统计（attempted/succeeded/failed 等）。
-- `Transcript.token_usage_records`: 每次模型调用的 token 归档。
+- `Transcript.token_usage_records`: 每次模型调用的 token 内存归档（与 SQLite 并行写入）。
+- `{work_path}/token_usage.db`: SQLite 持久化的全量 token 使用记录（跨会话累计，由 `TokenUsageStore` 写入）。
 - `generated_agents.json`: 由提示词生成器输出并持久化的 agent 资产库。
 - `session_state.json` / `session_state.db`: 会话持久化与恢复状态。
 - `events/events.json`: 事件记忆持久化文件（用于跨会话事件命中）。

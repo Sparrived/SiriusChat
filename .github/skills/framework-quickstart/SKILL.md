@@ -99,6 +99,8 @@ description: "当你需要在不通读全部代码的情况下快速理解 Siriu
 - `session/store.py` ✨ **（包重构）** 提供会话持久化与重启恢复（`SessionStore`、`JsonSessionStore`、`SqliteSessionStore`）。
 - `session/runner.py` ✨ **（包重构）** 提供上层封装的会话运行器（`JsonPersistentSessionRunner`），自动维护用户档案与持久化。
 - `Transcript.token_usage_records` 全量归档每次模型调用的 token 消耗信息（通过 `token/usage.py` 提供的 `summarize_token_usage` 与 `build_token_usage_baseline` 汇总）。
+- ✨ `token/store.py` **(v0.11.0)** 提供 SQLite 持久化后端（`TokenUsageStore`），自动写入 `{work_path}/token_usage.db`，支持跨会话查询。
+- ✨ `token/analytics.py` **(v0.11.0)** 基于 SQLite 的多维度分析：`compute_baseline`、`group_by_session/actor/task/model`、`time_series`、`full_report`。
 - `token/utils.py` ✨ **（包重构）** 提供 Token 估算工具（启发式估算、Tiktoken 精确计算、统计辅助函数）。
 - 引擎支持自动记忆压缩（`session_summary` + 历史预算）。
 - ✨ **配置管理** (P1-006)：`config_manager.py` 提供多环境配置管理能力

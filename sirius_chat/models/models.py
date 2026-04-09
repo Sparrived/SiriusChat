@@ -19,6 +19,18 @@ class Message:
     # 回复策略：always(默认总是回复) / never(只记忆不回复) / auto(自动判断是否需要回复)
     reply_mode: str = "always"
 
+    @staticmethod
+    def _trim_content_tail(content: str) -> str:
+        if not content:
+            return content
+        end = len(content)
+        while end > 0 and content[end - 1] in (" ", "\n"):
+            end -= 1
+        return content[:end]
+
+    def __post_init__(self) -> None:
+        self.content = self._trim_content_tail(self.content)
+
 
 @dataclass(slots=True)
 class ReplyRuntimeState:
@@ -87,6 +99,7 @@ class Transcript:
     token_usage_records: list[TokenUsageRecord] = field(default_factory=list)
 
     def add(self, message: Message) -> None:
+        message.content = Message._trim_content_tail(message.content)
         self.messages.append(message)
 
     def add_token_usage_record(self, record: TokenUsageRecord) -> None:

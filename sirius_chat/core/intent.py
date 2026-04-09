@@ -30,12 +30,16 @@ _INTENT_SYSTEM_PROMPT = (
     '"directed_at_ai":bool,'
     '"importance":float(0-1),'
     '"needs_memory":bool,'
-    '"needs_summary":bool}\n'
+    '"needs_summary":bool,'
+    '"reason":string,'
+    '"evidence_span":string}\n'
     "- intent_type: 消息意图类型\n"
     "- directed_at_ai: 是否指向AI\n"
     "- importance: 需要AI回复的紧迫程度(0-1)\n"
     "- needs_memory: 回复是否需要参考参与者记忆\n"
     "- needs_summary: 回复是否需要会话摘要上下文\n"
+    "- reason: 1 句话解释判断依据\n"
+    "- evidence_span: 从用户原话中摘取的关键短语\n"
     "不要输出任何额外文字。"
 )
 
@@ -49,6 +53,8 @@ class IntentAnalysis:
     directed_at_ai: bool = True
     willingness_modifier: float = 0.0
     skip_sections: list[str] = field(default_factory=list)
+    reason: str = ""
+    evidence_span: str = ""
 
 
 class IntentAnalyzer:
@@ -129,9 +135,14 @@ class IntentAnalyzer:
         try:
             data = json.loads(text)
         except (json.JSONDecodeError, ValueError):
+            logger.warning(
+                "意图分析响应解析失败（非 JSON）: %s",
+                text[:200].replace("\n", " "),
+            )
             return IntentAnalysis()
 
         if not isinstance(data, dict):
+            logger.warning("意图分析响应解析失败（JSON 非对象）: %s", type(data).__name__)
             return IntentAnalysis()
 
         intent_type = str(data.get("intent_type", "chat")).strip().lower()
@@ -142,6 +153,13 @@ class IntentAnalyzer:
         importance = max(0.0, min(1.0, float(data.get("importance", 0.5))))
         needs_memory = bool(data.get("needs_memory", True))
         needs_summary = bool(data.get("needs_summary", True))
+        reason = str(data.get("reason", "")).strip()
+        evidence_span = str(data.get("evidence_span", "")).strip()
+
+        if len(reason) > 200:
+            reason = reason[:200]
+        if len(evidence_span) > 120:
+            evidence_span = evidence_span[:120]
 
         # Compute willingness modifier
         willingness_modifier = 0.0
@@ -170,12 +188,15 @@ class IntentAnalyzer:
             directed_at_ai=directed_at_ai,
             willingness_modifier=willingness_modifier,
             skip_sections=skip_sections,
+            reason=reason,
+            evidence_span=evidence_span,
         )
 
     @staticmethod
     def fallback_analysis(content: str, agent_name: str, agent_alias: str) -> IntentAnalysis:
         """Fast keyword-based fallback when LLM is unavailable."""
         text = content.strip().lower()
+        original_text = content.strip()
 
         directed = False
         for name in (agent_name.lower(), agent_alias.lower()):
@@ -187,25 +208,45 @@ class IntentAnalyzer:
 
         intent_type = "chat"
         willingness_modifier = 0.0
+        reason = "未命中特殊规则，按普通聊天处理。"
+        evidence_span = ""
 
         if "?" in content or "？" in content:
             intent_type = "question"
             willingness_modifier = 0.15
+            reason = "消息包含疑问符号，判定为提问。"
+            evidence_span = "?" if "?" in content else "？"
         elif any(m in text for m in ("请", "帮我", "帮忙", "麻烦", "please", "can you", "could you")):
             intent_type = "request"
             willingness_modifier = 0.2
+            reason = "消息包含请求关键词，判定为请求。"
+            for marker in ("请", "帮我", "帮忙", "麻烦", "please", "can you", "could you"):
+                if marker in text:
+                    evidence_span = marker
+                    break
         elif len(text) < 10 and any(m in text for m in ("好", "嗯", "ok", "哈", "哦", "噢", "行")):
             intent_type = "reaction"
             willingness_modifier = -0.1
+            reason = "短文本且命中反馈词，判定为反应类消息。"
+            for marker in ("好", "嗯", "ok", "哈", "哦", "噢", "行"):
+                if marker in text:
+                    evidence_span = marker
+                    break
 
         if not directed:
             willingness_modifier -= 0.1
+            if reason == "未命中特殊规则，按普通聊天处理。":
+                reason = "未检测到明确指向 AI 的线索，降低回复意愿。"
+        elif not evidence_span and original_text:
+            evidence_span = original_text[:24]
 
         return IntentAnalysis(
             intent_type=intent_type,
             confidence=0.5,
             directed_at_ai=directed,
             willingness_modifier=max(-0.2, min(0.3, willingness_modifier)),
+            reason=reason,
+            evidence_span=evidence_span,
         )
 
 

@@ -67,7 +67,23 @@ from sirius_chat.api.providers import (
     run_provider_detection_flow,
 )
 from sirius_chat.api.session import JsonPersistentSessionRunner, JsonSessionStore, SqliteSessionStore
-from sirius_chat.api.token_usage import TokenUsageBaseline, build_token_usage_baseline, summarize_token_usage
+from sirius_chat.api.token_usage import (
+    AnalyticsReport,
+    BaselineDict,
+    BucketDict,
+    TimeSliceDict,
+    TokenUsageBaseline,
+    TokenUsageStore,
+    build_token_usage_baseline,
+    compute_baseline,
+    full_report,
+    group_by_actor,
+    group_by_model,
+    group_by_session,
+    group_by_task,
+    summarize_token_usage,
+    time_series,
+)
 from sirius_chat.api.orchestration import (
     MultiModelConfig,
     create_multimodel_config,
@@ -156,6 +172,19 @@ __all__ = [
     "abuild_roleplay_prompt_from_answers_and_apply",
     "build_token_usage_baseline",
     "summarize_token_usage",
+    # Token analytics & storage
+    "TokenUsageStore",
+    "AnalyticsReport",
+    "BaselineDict",
+    "BucketDict",
+    "TimeSliceDict",
+    "compute_baseline",
+    "full_report",
+    "group_by_actor",
+    "group_by_model",
+    "group_by_session",
+    "group_by_task",
+    "time_series",
     # 多模型协同配置函数
     "configure_orchestration_models",
     "configure_orchestration_budgets",

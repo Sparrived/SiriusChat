@@ -412,6 +412,7 @@ token 消耗分析示例：
 ```python
 from sirius_chat.api import build_token_usage_baseline, summarize_token_usage
 
+# 单会话内存分析（基于 Transcript）
 summary = summarize_token_usage(transcript)
 baseline = build_token_usage_baseline(transcript.token_usage_records)
 
@@ -419,10 +420,47 @@ print(summary["by_task"])
 print(baseline.to_dict())
 ```
 
+**跨会话 SQLite 持久化分析**（v0.11.0 新增）：
+
+```python
+from sirius_chat.api import (
+    TokenUsageStore,
+    compute_baseline,
+    full_report,
+    group_by_actor,
+    group_by_task,
+    group_by_model,
+    group_by_session,
+    time_series,
+)
+
+# 打开持久化存储（引擎运行时自动写入 {work_path}/token_usage.db）
+store = TokenUsageStore("./data/token_usage.db", session_id="my_session")
+
+# 全局基线
+bl = compute_baseline(store)
+print(bl["total_calls"], bl["total_tokens"])
+
+# 按维度聚合
+print(group_by_actor(store))          # 按用户
+print(group_by_task(store))           # 按任务
+print(group_by_model(store))          # 按模型
+print(group_by_session(store))        # 按会话
+print(time_series(store, bucket_seconds=3600))  # 按小时时间桶
+
+# 完整报告（包含 baseline + 所有维度）
+report = full_report(store)
+
+# 过滤查询
+bl_user = compute_baseline(store, actor_id="alice")
+tasks_in_session = group_by_task(store, session_id="sess_1")
+```
+
 说明：
 
-- 每次模型调用都会归档到 `transcript.token_usage_records`。
+- 每次模型调用都会归档到 `transcript.token_usage_records`（内存）和 `{work_path}/token_usage.db`（SQLite）。
 - 记录包含调用者（actor）、任务名、模型、token 估算与重试次数，可用于成本和损耗评估。
+- SQLite 存储在引擎初始化会话时自动创建，无需额外配置。
 
 #### Transcript 对象 API 参考
 

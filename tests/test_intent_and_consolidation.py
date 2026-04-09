@@ -94,6 +94,11 @@ class TestFallbackAnalysis:
         assert result.willingness_modifier >= -0.2
         assert result.willingness_modifier <= 0.3
 
+    def test_fallback_has_reason_and_evidence(self):
+        result = IntentAnalyzer.fallback_analysis("请帮我看看这个", "助手", "")
+        assert result.reason
+        assert result.evidence_span
+
 
 # ── IntentAnalyzer._parse_response tests ────────────────────────────
 
@@ -108,6 +113,8 @@ class TestParseResponse:
             "importance": 0.8,
             "needs_memory": False,
             "needs_summary": True,
+            "reason": "用户在询问天气",
+            "evidence_span": "天气怎么样",
         })
         result = IntentAnalyzer._parse_response(raw)
         assert result.intent_type == "question"
@@ -115,6 +122,8 @@ class TestParseResponse:
         assert result.willingness_modifier > 0
         assert "participant_memory" in result.skip_sections
         assert "session_summary" not in result.skip_sections
+        assert result.reason == "用户在询问天气"
+        assert result.evidence_span == "天气怎么样"
 
     def test_markdown_fenced_json(self):
         raw = '```json\n{"intent_type":"request","directed_at_ai":true,"importance":0.6,"needs_memory":true,"needs_summary":false}\n```'
@@ -126,6 +135,25 @@ class TestParseResponse:
         result = IntentAnalyzer._parse_response("not valid json at all")
         assert result.intent_type == "chat"
         assert result.willingness_modifier == 0.0
+
+    def test_invalid_json_logs_warning(self, caplog):
+        caplog.set_level("WARNING")
+        _ = IntentAnalyzer._parse_response("not valid json at all")
+        assert any("意图分析响应解析失败" in rec.message for rec in caplog.records)
+
+    def test_reason_and_evidence_span_are_truncated(self):
+        raw = json.dumps({
+            "intent_type": "request",
+            "directed_at_ai": True,
+            "importance": 0.9,
+            "needs_memory": True,
+            "needs_summary": True,
+            "reason": "r" * 300,
+            "evidence_span": "e" * 200,
+        })
+        result = IntentAnalyzer._parse_response(raw)
+        assert len(result.reason) == 200
+        assert len(result.evidence_span) == 120
 
     def test_unknown_intent_type_defaults_to_chat(self):
         raw = json.dumps({"intent_type": "unknown_type", "directed_at_ai": True, "importance": 0.5})

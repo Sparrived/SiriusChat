@@ -31,6 +31,7 @@ from sirius_chat.skills.executor import SkillExecutor, parse_skill_calls, strip_
 from sirius_chat.core.events import SessionEvent, SessionEventBus, SessionEventType
 from sirius_chat.core.intent import IntentAnalysis, IntentAnalyzer
 from sirius_chat.background_tasks import BackgroundTaskConfig, BackgroundTaskManager
+from sirius_chat.token.store import TokenUsageStore
 logger = logging.getLogger(__name__)
 
 
@@ -72,6 +73,7 @@ class LiveSessionContext:
     skill_executor: SkillExecutor | None = None
     event_bus: SessionEventBus = field(default_factory=SessionEventBus)
     bg_task_manager: BackgroundTaskManager | None = None
+    token_store: TokenUsageStore | None = None
 
 
 @dataclass(slots=True)
@@ -262,6 +264,10 @@ class AsyncRolePlayEngine:
             event_store=event_store,
             known_by_id=known_by_id,
             known_by_label=known_by_label,
+            token_store=TokenUsageStore(
+                config.work_path / "token_usage.db",
+                session_id=str(config.work_path),
+            ),
         )
 
         skills_dir = config.work_path / "skills"
@@ -541,19 +547,21 @@ class AsyncRolePlayEngine:
                 )
                 prompt_tokens = self._estimate_tokens(prompt_text)
                 completion_tokens = self._estimate_tokens(content)
-                transcript.add_token_usage_record(
-                    TokenUsageRecord(
-                        actor_id=actor_id,
-                        task_name=task_name,
-                        model=request_payload.model,
-                        prompt_tokens=prompt_tokens,
-                        completion_tokens=completion_tokens,
-                        total_tokens=prompt_tokens + completion_tokens,
-                        input_chars=len(prompt_text),
-                        output_chars=len(content),
-                        retries_used=index,
-                    )
+                record = TokenUsageRecord(
+                    actor_id=actor_id,
+                    task_name=task_name,
+                    model=request_payload.model,
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    total_tokens=prompt_tokens + completion_tokens,
+                    input_chars=len(prompt_text),
+                    output_chars=len(content),
+                    retries_used=index,
                 )
+                transcript.add_token_usage_record(record)
+                ctx = self._live_session_contexts.get(id(transcript))
+                if ctx is not None and ctx.token_store is not None:
+                    ctx.token_store.add(record)
                 return content
             except asyncio.TimeoutError as exc:
                 last_error = RuntimeError(

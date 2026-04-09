@@ -4,6 +4,25 @@
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-04-09
+
+### Added
+- **Token 使用 SQLite 持久化** (`sirius_chat/token/store.py`)：新增 `TokenUsageStore` 类，每次模型调用自动将 `TokenUsageRecord` 写入 `{work_path}/token_usage.db`。基于 Python 标准库 `sqlite3`，无新依赖。支持 WAL 模式、批量写入、跨会话查询与多条件筛选。
+- **多维度 Token 分析模块** (`sirius_chat/token/analytics.py`)：基于 SQLite 的全量分析函数集：
+  - `compute_baseline()`：全局/筛选级基线统计（总调用数、token 合计、均值、重试率、completion/prompt 比值）
+  - `group_by_session()`：按会话聚合
+  - `group_by_actor()`：按用户聚合
+  - `group_by_task()`：按任务类型聚合
+  - `group_by_model()`：按模型聚合
+  - `time_series()`：按固定时间桶聚合（默认 1 小时）
+  - `full_report()`：一次性输出包含 baseline + 所有维度的完整报告
+- **引擎自动集成**：`AsyncRolePlayEngine` 在初始化 live session 时自动创建 `TokenUsageStore`，每次 `_call_provider_with_retry` 成功后同步写入 SQLite，与现有 `Transcript.token_usage_records` 内存归档并行，向后兼容。
+- **公共 API 导出**：`TokenUsageStore`、`AnalyticsReport`、`BaselineDict`、`BucketDict`、`TimeSliceDict`、`compute_baseline`、`full_report`、`group_by_actor`、`group_by_model`、`group_by_session`、`group_by_task`、`time_series`。
+- **意图分析增强**：`IntentAnalysis` 新增 `reason` 和 `evidence_span` 字段，LLM 路径和关键词回退路径均填充解释信息；JSON 解析失败时记录 `WARNING` 级日志。
+
+### Fixed
+- **消息尾部空白清理**：所有 `Message` 在创建时和通过 `Transcript.add()` 添加时，自动去除尾部 `\n` 和空格。
+
 ## [0.10.0] - 2026-04-09
 
 ### Added

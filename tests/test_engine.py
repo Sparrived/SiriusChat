@@ -2,7 +2,7 @@
 
 from sirius_chat.async_engine import AsyncRolePlayEngine
 from sirius_chat.config import Agent, AgentPreset, SessionConfig, OrchestrationPolicy
-from sirius_chat.models import Message
+from sirius_chat.models import Message, Transcript
 from sirius_chat.providers.mock import MockProvider
 from sirius_chat.session.store import JsonSessionStore
 from pathlib import Path
@@ -77,6 +77,15 @@ def test_roleplay_engine_multi_human_single_ai_transcript() -> None:
         assert assistant_messages[-1].content == "主助手回复 B-2"
 
     asyncio.run(_run())
+
+
+def test_transcript_add_trims_trailing_newlines_and_spaces() -> None:
+    transcript = Transcript()
+    transcript.add(Message(role="assistant", content="hello\n\n   ", speaker="主助手"))
+    transcript.add(Message(role="user", content="line1\nline2  \n ", speaker="用户"))
+
+    assert transcript.messages[0].content == "hello"
+    assert transcript.messages[1].content == "line1\nline2"
 
 
 def test_run_live_session_supports_dynamic_participants_and_memory() -> None:
