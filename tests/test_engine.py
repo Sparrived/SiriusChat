@@ -512,3 +512,77 @@ def test_on_reply_with_timeout_cleans_up_on_expiry() -> None:
 
     asyncio.run(_run())
 
+
+def test_on_reply_callback_with_skill_execution(tmp_path) -> None:
+    """on_reply callback should still receive assistant output when SKILL is executed."""
+    async def _run() -> None:
+        work_path = tmp_path / "on_reply_skill"
+        skills_dir = work_path / "skills"
+        skills_dir.mkdir(parents=True, exist_ok=True)
+        (skills_dir / "echo.py").write_text(
+            """
+SKILL_META = {
+    "name": "echo",
+    "description": "Return the given text",
+    "parameters": {
+        "text": {"type": "str", "description": "text to return", "required": True}
+    },
+}
+
+def run(text: str, **kwargs):
+    return {"echo": text}
+""".strip(),
+            encoding="utf-8",
+        )
+
+        provider = MockProvider(
+            responses=[
+                '[SKILL_CALL: echo | {"text": "苹果"}]',
+                "已执行技能，结果是苹果。",
+            ]
+        )
+        engine = AsyncRolePlayEngine(provider=provider)
+        config = SessionConfig(
+            work_path=work_path,
+            preset=AgentPreset(
+                agent=Agent(name="主助手", persona="技能回调测试", model="mock-model"),
+                global_system_prompt="测试",
+            ),
+            orchestration=OrchestrationPolicy(
+                unified_model="mock-model",
+                session_reply_mode="always",
+                enable_skills=True,
+                task_enabled={
+                    "memory_extract": False,
+                    "multimodal_parse": False,
+                    "event_extract": False,
+                },
+            ),
+        )
+
+        received: list[str] = []
+
+        async def _on_reply(msg: Message) -> None:
+            received.append(msg.content)
+
+        transcript = await engine.run_live_session(config=config)
+        transcript = await engine.run_live_message(
+            config=config,
+            turn=Message(role="user", speaker="小明", content="帮我调用技能"),
+            transcript=transcript,
+            on_reply=_on_reply,
+            timeout=10,
+        )
+
+        assert len(provider.requests) == 2
+        assert received
+        assert any("已执行技能" in content for content in received)
+        assert all("SKILL_CALL" not in content for content in received)
+        assert any(
+            "SKILL执行结果: echo" in message.content
+            for message in transcript.messages
+            if message.role == "system"
+        )
+
+    asyncio.run(_run())
+

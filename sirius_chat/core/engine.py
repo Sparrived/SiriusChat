@@ -1962,9 +1962,11 @@ class AsyncRolePlayEngine:
         ``asyncio.create_task`` / ``asubscribe`` boilerplate.
         """
 
+        context = self._get_or_create_live_context(config=config, transcript=transcript)
+
         async def _consume_events() -> None:
             try:
-                async for evt in self.subscribe(transcript):
+                async for evt in context.event_bus.subscribe():
                     if evt.type in (
                         SessionEventType.PROCESSING_COMPLETED,
                         SessionEventType.REPLY_SKIPPED,
@@ -1988,8 +1990,13 @@ class AsyncRolePlayEngine:
                 logger.error("Event consume error in on_reply path", exc_info=True)
 
         consume_task = asyncio.create_task(_consume_events())
-        # Yield control so the consumer registers its subscription queue
-        await asyncio.sleep(0)
+        # Wait until subscription is registered to avoid missing early events.
+        for _ in range(100):
+            if consume_task.done() or context.event_bus.subscriber_count > 0:
+                break
+            await asyncio.sleep(0)
+        if context.event_bus.subscriber_count == 0:
+            logger.warning("on_reply consumer was not subscribed before processing")
 
         try:
             core_coro = self._run_live_message_core(
