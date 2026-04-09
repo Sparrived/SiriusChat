@@ -4,6 +4,16 @@
 
 ## [Unreleased]
 
+## [0.12.2] - 2026-04-09
+
+### Fixed
+- **SKILL 运行时懒挂载**：修复 live context 复用场景下，`enable_skills` 后置开启或 `skills/` 目录后置就绪时 `skill_registry/skill_executor` 可能为空，导致 `SKILL_CALL` 被解析但未进入执行分支的问题。
+- **on_reply + SKILL 回调可达性**：增强 `run_live_message(..., on_reply=...)` 路径，确保技能执行后 assistant 内容可稳定通过回调送达外部插件。
+- **可观测性增强**：当检测到 `SKILL_CALL` 但技能运行时未就绪时输出明确 warning，便于外部插件快速定位配置/挂载问题。
+
+### Added
+- **回归测试**：新增 context 复用下技能懒挂载测试 `test_skill_runtime_lazy_attach_when_context_reused`，覆盖“先无技能再启用技能”的真实插件路径。
+
 ## [0.12.1] - 2026-04-09
 
 ### Fixed

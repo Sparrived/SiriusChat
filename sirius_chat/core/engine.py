@@ -356,6 +356,44 @@ class AsyncRolePlayEngine:
         self._live_session_contexts[key] = created
         return created
 
+    def _ensure_skill_runtime(
+        self,
+        *,
+        config: SessionConfig,
+        context: LiveSessionContext,
+    ) -> None:
+        """Ensure SKILL runtime is available for the current session context.
+
+        This covers context-reuse cases where the context was created before
+        SKILL files existed or before ``enable_skills`` became True.
+        """
+        if not config.orchestration.enable_skills:
+            return
+
+        skills_dir = config.work_path / "skills"
+        SkillRegistry.ensure_skills_directory(skills_dir)
+
+        registry = context.skill_registry
+        executor = context.skill_executor
+
+        # Initialize missing components, then (re)load skill files.
+        if registry is None:
+            registry = SkillRegistry()
+            context.skill_registry = registry
+        if executor is None:
+            executor = SkillExecutor(config.work_path)
+            context.skill_executor = executor
+
+        if not registry.all_skills():
+            loaded_count = registry.load_from_directory(
+                skills_dir,
+                auto_install_deps=config.orchestration.auto_install_skill_deps,
+            )
+            if loaded_count > 0:
+                logger.info("SKILL系统懒加载完成，已加载 %d 个SKILL", loaded_count)
+            else:
+                logger.debug("SKILL系统已启用，但当前未加载到任何SKILL: %s", skills_dir)
+
     @staticmethod
     def _build_known_entities(known_by_id: dict[str, Participant]) -> list[str]:
         known_entities: list[str] = []
@@ -1515,6 +1553,14 @@ class AsyncRolePlayEngine:
 
         content = self._sanitize_assistant_content(content)
 
+        # Diagnose SKILL_CALL output even when skill runtime is not ready.
+        initial_skill_calls = parse_skill_calls(content)
+        if initial_skill_calls and (skill_registry is None or skill_executor is None):
+            logger.warning(
+                "检测到SKILL_CALL，但技能运行时未就绪；将跳过执行。calls=%s",
+                [name for name, _ in initial_skill_calls],
+            )
+
         # --- Skill call detection and execution ---
         if skill_registry is not None and skill_executor is not None:
             max_rounds = max(1, config.orchestration.max_skill_rounds)
@@ -2169,6 +2215,8 @@ class AsyncRolePlayEngine:
         environment_context: str = "",
     ) -> Transcript:
         """Core processing logic for a single user turn (after debounce)."""
+        self._ensure_skill_runtime(config=config, context=context)
+
         known_entities = self._build_known_entities(context.known_by_id)
 
         user_last_turn_at: dict[str, datetime] = {}

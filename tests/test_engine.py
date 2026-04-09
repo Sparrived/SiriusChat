@@ -586,3 +586,96 @@ def run(text: str, **kwargs):
 
     asyncio.run(_run())
 
+
+def test_skill_runtime_lazy_attach_when_context_reused(tmp_path) -> None:
+    """Context created without skills should still execute skills after enabling later."""
+    async def _run() -> None:
+        work_path = tmp_path / "lazy_skill_attach"
+        skills_dir = work_path / "skills"
+        skills_dir.mkdir(parents=True, exist_ok=True)
+        (skills_dir / "system_info.py").write_text(
+            """
+SKILL_META = {
+    "name": "system_info",
+    "description": "Return fake system info",
+    "parameters": {},
+}
+
+def run(**kwargs):
+    return {"status": "ok"}
+""".strip(),
+            encoding="utf-8",
+        )
+
+        provider = MockProvider(
+            responses=[
+                "普通回复",
+                "[SKILL_CALL: system_info]\n\n开始检查中",
+                "检查完成，系统状态正常。",
+            ]
+        )
+        engine = AsyncRolePlayEngine(provider=provider)
+
+        config_without_skills = SessionConfig(
+            work_path=work_path,
+            preset=AgentPreset(
+                agent=Agent(name="主助手", persona="懒挂载测试", model="mock-model"),
+                global_system_prompt="测试",
+            ),
+            orchestration=OrchestrationPolicy(
+                unified_model="mock-model",
+                session_reply_mode="always",
+                enable_skills=False,
+                task_enabled={
+                    "memory_extract": False,
+                    "multimodal_parse": False,
+                    "event_extract": False,
+                },
+            ),
+        )
+
+        config_with_skills = SessionConfig(
+            work_path=work_path,
+            preset=AgentPreset(
+                agent=Agent(name="主助手", persona="懒挂载测试", model="mock-model"),
+                global_system_prompt="测试",
+            ),
+            orchestration=OrchestrationPolicy(
+                unified_model="mock-model",
+                session_reply_mode="always",
+                enable_skills=True,
+                task_enabled={
+                    "memory_extract": False,
+                    "multimodal_parse": False,
+                    "event_extract": False,
+                },
+            ),
+        )
+
+        transcript = await engine.run_live_session(config=config_without_skills)
+        transcript = await engine.run_live_message(
+            config=config_without_skills,
+            turn=Message(role="user", speaker="小明", content="第一句"),
+            transcript=transcript,
+        )
+
+        transcript = await engine.run_live_message(
+            config=config_with_skills,
+            turn=Message(role="user", speaker="小明", content="第二句，调用技能"),
+            transcript=transcript,
+        )
+
+        # one request for first turn + two requests for skill round in second turn
+        assert len(provider.requests) == 3
+        assert any(
+            "SKILL执行结果: system_info" in message.content
+            for message in transcript.messages
+            if message.role == "system"
+        )
+        assert any(
+            message.role == "assistant" and "检查完成" in message.content
+            for message in transcript.messages
+        )
+
+    asyncio.run(_run())
+
