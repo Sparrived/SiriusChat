@@ -12,6 +12,8 @@
 - 提示词驱动消息分割（`split_marker`）。
 - 记忆管理器任务（`memory_manager_model`）。
 - `reply_mode="auto"` 下的回复意愿参数。
+- AI 自身记忆系统（日记 + 名词解释）。
+- 回复频率限制（滑动窗口）。
 
 注意：没有 `orchestration.enabled` 字段。
 
@@ -47,6 +49,13 @@
 - `memory_extract_batch_size`: `1`
 - `memory_extract_min_content_length`: `0`
 - `session_reply_mode`: `always`
+- `enable_self_memory`: `true`
+- `self_memory_extract_batch_size`: `3`
+- `self_memory_max_diary_prompt_entries`: `6`
+- `self_memory_max_glossary_prompt_terms`: `15`
+- `reply_frequency_window_seconds`: `60.0`
+- `reply_frequency_max_replies`: `8`
+- `reply_frequency_exempt_on_mention`: `true`
 
 ## 完整示例
 
@@ -95,6 +104,13 @@
     "memory_manager_max_tokens": 512,
     "memory_extract_batch_size": 3,
     "memory_extract_min_content_length": 30,
+    "enable_self_memory": true,
+    "self_memory_extract_batch_size": 3,
+    "self_memory_max_diary_prompt_entries": 6,
+    "self_memory_max_glossary_prompt_terms": 15,
+    "reply_frequency_window_seconds": 60.0,
+    "reply_frequency_max_replies": 8,
+    "reply_frequency_exempt_on_mention": true,
     "session_reply_mode": "auto",
     "auto_reply_base_score": 0.22,
     "auto_reply_threshold": 0.58,
@@ -159,6 +175,21 @@
 - `auto_reply_group_window_seconds`
 - `auto_reply_group_penalty_start_count`
 - `auto_reply_assistant_cooldown_seconds`
+
+## AI 自身记忆参数
+
+- `enable_self_memory`: 是否启用 AI 自身记忆系统（日记 + 名词解释），默认 `true`。
+- `self_memory_extract_batch_size`: 每 N 条 AI 回复后触发一次 LLM 提取（日记条目和名词），默认 `3`。
+- `self_memory_max_diary_prompt_entries`: 系统提示词中包含的日记条目上限，默认 `6`。
+- `self_memory_max_glossary_prompt_terms`: 系统提示词中包含的名词解释上限，默认 `15`。
+
+## 回复频率限制参数
+
+- `reply_frequency_window_seconds`: 滑动窗口长度（秒），默认 `60.0`。
+- `reply_frequency_max_replies`: 窗口内最大回复次数，默认 `8`。超出后跳过回复。
+- `reply_frequency_exempt_on_mention`: 消息中提及 AI 名字或别名时是否免除频率限制，默认 `true`。
+
+设置 `reply_frequency_max_replies <= 0` 或 `reply_frequency_window_seconds <= 0` 可禁用频率限制。
 
 ## 校验约束
 

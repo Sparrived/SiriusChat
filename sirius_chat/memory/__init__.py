@@ -38,6 +38,15 @@ from sirius_chat.memory.quality import (
     print_console_report,
 )
 
+# Self-memory (diary + glossary) exports
+from sirius_chat.memory.self import (
+    DiaryEntry,
+    GlossaryTerm,
+    SelfMemoryState,
+    SelfMemoryManager,
+    SelfMemoryFileStore,
+)
+
 # Trait taxonomy (originally from sirius_chat.trait_taxonomy)
 from sirius_chat.trait_taxonomy import TRAIT_TAXONOMY
 
@@ -69,6 +78,12 @@ __all__ = [
     "apply_decay_to_workspace",
     "save_quality_report",
     "print_console_report",
+    # Self-memory
+    "DiaryEntry",
+    "GlossaryTerm",
+    "SelfMemoryState",
+    "SelfMemoryManager",
+    "SelfMemoryFileStore",
     # Trait taxonomy
     "TRAIT_TAXONOMY",
 ]

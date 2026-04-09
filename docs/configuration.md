@@ -45,7 +45,12 @@ Sirius Chat 提供灵活的配置管理系统，支持：
     "split_marker": "<MSG_SPLIT>",
     "memory_manager_model": "",
     "memory_manager_temperature": 0.3,
-    "memory_manager_max_tokens": 512
+    "memory_manager_max_tokens": 512,
+    "enable_self_memory": true,
+    "self_memory_extract_batch_size": 3,
+    "reply_frequency_window_seconds": 60.0,
+    "reply_frequency_max_replies": 8,
+    "reply_frequency_exempt_on_mention": true
   }
 }
 ```

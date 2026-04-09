@@ -48,6 +48,7 @@ def test_roleplay_engine_multi_human_single_ai_transcript() -> None:
             ),
             orchestration=OrchestrationPolicy(
                 unified_model="mock-model",
+                enable_self_memory=False,
                 task_enabled={
                     "memory_extract": False,
                     "multimodal_parse": False,
@@ -107,6 +108,7 @@ def test_run_live_session_supports_dynamic_participants_and_memory() -> None:
             ),
             orchestration=OrchestrationPolicy(
                 unified_model="mock-model",
+                enable_self_memory=False,
                 task_enabled={
                     "memory_extract": False,
                     "multimodal_parse": False,

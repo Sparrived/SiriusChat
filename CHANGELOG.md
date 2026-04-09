@@ -4,6 +4,26 @@
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-04-10
+
+### Added
+- **AI 自身记忆系统**（`sirius_chat/memory/self/`）：独立于用户记忆的 AI 自主记忆子系统。
+  - **日记子系统 (Diary)**：AI 自主决定需要记忆的内容，每条日记携带重要性评分、关键词标签和分类（reflection/observation/decision/emotion/milestone）。基于时间的遗忘曲线自动衰退置信度（3天95%→180天5%），高重要性条目衰退减缓40%，被提及的条目获得保留加成。
+  - **名词解释子系统 (Glossary)**：在对话中收集 AI 不理解的名词，逐步建立定义库。支持多来源（conversation/user_explained/inferred）和多领域（tech/daily/culture/game/custom），相同术语自动合并。
+  - **提示词集成**：日记和名词解释分别以 `<self_diary>` 和 `<glossary>` XML 段注入系统提示词，紧凑格式减少 token 消耗。
+  - **LLM 自动提取**：每 N 条回复后（`self_memory_extract_batch_size`，默认3）自动触发 LLM 提取日记和名词，fire-and-forget 不阻塞主流程。
+  - **持久化**：`SelfMemoryFileStore` 将自身记忆序列化为 `{work_path}/self_memory.json`。
+- **回复频率限制器**：基于滑动窗口的 AI 回复频率控制。
+  - `reply_frequency_window_seconds`（默认60秒）窗口内超过 `reply_frequency_max_replies`（默认8次）时跳过回复。
+  - 对主动提及 AI 名字或别名的消息免除限制（`reply_frequency_exempt_on_mention=True`）。
+  - 回复时间戳存储在 `Transcript.reply_runtime.assistant_reply_timestamps` 中。
+- **OrchestrationPolicy 新配置项**：`enable_self_memory`、`self_memory_extract_batch_size`、`self_memory_max_diary_prompt_entries`、`self_memory_max_glossary_prompt_terms`、`reply_frequency_window_seconds`、`reply_frequency_max_replies`、`reply_frequency_exempt_on_mention`。
+- **测试**：新增 56 条测试覆盖日记/名词解释/衰退/持久化/提示词集成/频率限制器（`test_self_memory.py`）。
+
+### Changed
+- **提示词优化**：精简系统提示词文本，缩短 splitting_instruction、skill 规则和 constraints 段，减少 token 消耗。
+- **会话后台任务**：归纳周期中同步执行日记衰退与自身记忆持久化。
+
 ## [0.12.6] - 2026-04-09
 
 ### Fixed

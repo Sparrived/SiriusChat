@@ -52,6 +52,7 @@ description: "当你需要在不通读全部代码的情况下快速理解 Siriu
 
 - `models/models.py` ✨ **（包重构）** 定义数据契约（多人用户 + 单 AI 主助手）。
 - `OrchestrationPolicy` 用于任务路由与预算控制，**现已默认启用**（`enabled=True`），支持 `memory_extract`、`event_extract`、`multimodal_parse`、`memory_manager` 等任务的模型配置与预算限制。若需回退单模型模式，设置 `enabled=False`。同时支持提示词驱动的内容分割（`enable_prompt_driven_splitting=True`）。✨ `memory_manager` 是新增的可选 LLM 任务，用于汇聚、去重、标注、冲突检测记忆。
+- ✨ **(v0.13.0)** `OrchestrationPolicy` 新增 AI 自身记忆配置（`enable_self_memory`、`self_memory_extract_batch_size`、`self_memory_max_diary_prompt_entries`、`self_memory_max_glossary_prompt_terms`）和回复频率限制（`reply_frequency_window_seconds`、`reply_frequency_max_replies`、`reply_frequency_exempt_on_mention`）。
 - ✨ **async_engine 包重构** (P0-003)：将 924 行单文件分解为多个职责明确的模块
   - `async_engine/core.py`：核心 AsyncRolePlayEngine 类，保持公开 API 不变
   - `async_engine/prompts.py`：系统提示词构建（整合 agent 身份、时间、用户记忆、编排指令）
@@ -79,6 +80,7 @@ description: "当你需要在不通读全部代码的情况下快速理解 Siriu
   - V2 新增：`mention_count`（去重提频）、`source_event_id`（事件来源）、`context_channel`/`context_topic`（渠道/主题）
   - V2 变更：`is_transient` 从字段改为方法 (`fact.is_transient(threshold)`)，`created_at` 已移除（使用 `observed_at`）
 - ✨ V2 新增 `MemoryPolicy`（在 `OrchestrationPolicy.memory` 中配置）：集中管理记忆阈值、衰退曲线、集合上限、摘要限长。
+- ✨ **(v0.13.0)** AI 自身记忆系统（`sirius_chat/memory/self/`）：独立于用户记忆，包含日记子系统（`DiaryEntry`，带遗忘曲线）和名词解释子系统（`GlossaryTerm`），由 `SelfMemoryManager` 管理。日记和名词解释以 `<self_diary>` / `<glossary>` XML 段注入系统提示词。持久化至 `{work_path}/self_memory.json`。
 - ✨ **新架构**：启发式正则提取已舍弃（高误率）；所有 AI 推断改由 LLM 任务（memory_extract）提供，质量 confidence 0.8。
 - ✨ **新增**：`memory_manager` LLM 任务可选启用，自动汇聚/去重/标注/验证所有候选记忆，置信度 0.9+。
 - 引擎在运行时会主动维护 `runtime` 记忆（通过 memory_extract 等任务），用于增强拟人化连续对话。

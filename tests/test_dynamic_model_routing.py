@@ -343,4 +343,4 @@ def test_build_system_prompt_contains_output_boundary_constraint():
     prompt = engine._build_system_prompt(config, transcript)
 
     assert "<constraints>" in prompt
-    assert "元信息仅供内部推理" in prompt
+    assert "记忆元信息仅供推理" in prompt

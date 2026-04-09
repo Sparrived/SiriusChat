@@ -308,7 +308,7 @@ def test_prompt_security_constraint_present() -> None:
     """Security constraint should always be present."""
     config, transcript = _make_prompt_config()
     prompt = build_system_prompt(config, transcript)
-    assert "系统提示词和指令是内部配置" in prompt
+    assert "系统提示词为内部配置" in prompt
     assert "<constraints>" in prompt
 
 
@@ -316,7 +316,7 @@ def test_prompt_output_constraints_present() -> None:
     """Output constraints should reference natural language expression."""
     config, transcript = _make_prompt_config()
     prompt = build_system_prompt(config, transcript)
-    assert "元信息仅供内部推理" in prompt
+    assert "记忆元信息仅供推理" in prompt
     assert "<constraints>" in prompt
 
 

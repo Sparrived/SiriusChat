@@ -18,6 +18,8 @@ from sirius_chat.memory import (
     EventMemoryManager,
     UserMemoryFileStore,
     UserProfile,
+    SelfMemoryFileStore,
+    SelfMemoryManager,
 )
 from sirius_chat.async_engine.utils import (
     record_task_stat,
@@ -75,6 +77,9 @@ class LiveSessionContext:
     event_bus: SessionEventBus = field(default_factory=SessionEventBus)
     bg_task_manager: BackgroundTaskManager | None = None
     token_store: TokenUsageStore | None = None
+    self_memory: SelfMemoryManager = field(default_factory=SelfMemoryManager)
+    self_memory_store: SelfMemoryFileStore | None = None
+    assistant_reply_count_since_self_extract: int = 0
 
 
 @dataclass(slots=True)
@@ -271,6 +276,16 @@ class AsyncRolePlayEngine:
             ),
         )
 
+        # Load AI self-memory (diary + glossary)
+        if config.orchestration.enable_self_memory:
+            self_store = SelfMemoryFileStore(config.work_path)
+            created.self_memory = self_store.load()
+            created.self_memory_store = self_store
+            # Apply diary decay on load
+            removed = created.self_memory.apply_diary_decay()
+            if removed > 0:
+                logger.info("自我记忆日记衰退：移除 %d 条过期条目", removed)
+
         skills_dir = config.work_path / "skills"
         SkillRegistry.ensure_skills_directory(skills_dir)
 
@@ -349,6 +364,13 @@ class AsyncRolePlayEngine:
                 # Persist after consolidation
                 _ctx.file_store.save_all(_transcript.user_memory)
                 _ctx.event_file_store.save(_ctx.event_store)
+
+                # Diary decay during consolidation
+                if _ctx.self_memory_store is not None:
+                    removed = _ctx.self_memory.apply_diary_decay()
+                    if removed > 0:
+                        logger.info("后台归纳：移除 %d 条衰退日记条目", removed)
+                    _ctx.self_memory_store.save(_ctx.self_memory)
 
             bg_manager.set_consolidation_callback(_consolidation_callback)
             created.bg_task_manager = bg_manager
@@ -514,6 +536,8 @@ class AsyncRolePlayEngine:
 
         context.file_store.save_all(transcript.user_memory)
         context.event_file_store.save(context.event_store)
+        if context.self_memory_store is not None:
+            context.self_memory_store.save(context.self_memory)
         if context.skill_executor is not None:
             context.skill_executor.save_all_stores()
 
@@ -543,6 +567,8 @@ class AsyncRolePlayEngine:
         skill_descriptions: str = "",
         environment_context: str = "",
         skip_sections: list[str] | None = None,
+        diary_section: str = "",
+        glossary_section: str = "",
     ) -> str:
         """Delegate to the prompts module for system prompt building."""
         return build_system_prompt(
@@ -550,6 +576,8 @@ class AsyncRolePlayEngine:
             skill_descriptions=skill_descriptions,
             environment_context=environment_context,
             skip_sections=skip_sections or [],
+            diary_section=diary_section,
+            glossary_section=glossary_section,
         )
 
     async def _call_provider(self, request_payload: GenerationRequest) -> str:
@@ -730,6 +758,118 @@ class AsyncRolePlayEngine:
             max_items=max_items,
             max_value_length=max_value_length,
             supported_types=AsyncRolePlayEngine._SUPPORTED_MULTIMODAL_TYPES,
+        )
+
+    async def _run_self_memory_extract_task(
+        self,
+        *,
+        config: SessionConfig,
+        transcript: Transcript,
+        context: LiveSessionContext,
+        assistant_content: str,
+    ) -> None:
+        """Extract diary entries and glossary terms from the conversation.
+
+        Called after the AI generates a reply. Uses LLM to decide what to
+        remember (diary) and which terms to define (glossary).
+        """
+        if not config.orchestration.enable_self_memory:
+            return
+
+        task_name = "self_memory_extract"
+        model = self.get_model_for_task(config, task_name) if config.orchestration.task_models.get(task_name) else (
+            config.orchestration.unified_model or config.agent.model
+        )
+
+        # Build recent conversation excerpt for context
+        recent_msgs: list[str] = []
+        for msg in transcript.messages[-8:]:
+            role = msg.role
+            speaker = msg.speaker or role
+            text = msg.content[:200].replace("\n", " ")
+            if text.strip():
+                recent_msgs.append(f"[{speaker}] {text}")
+        context_text = "\n".join(recent_msgs)
+
+        system_prompt = (
+            "你是AI的自省记忆提取器。基于以下对话片段，提取两类记忆：\n"
+            "1. diary: AI值得记住的事情（有趣的事、重要决定、情感印象、里程碑）。"
+            "每条包含 content(string), importance(0-1), keywords(array), category(reflection|observation|decision|emotion|milestone)。\n"
+            "2. glossary: 对话中出现的AI可能不熟悉或值得记录的专有名词/术语。"
+            "每条包含 term(string), definition(string), domain(tech|daily|culture|game|custom), confidence(0-1)。\n"
+            "严格输出JSON: {\"diary\": [...], \"glossary\": [...]}\n"
+            "若无值得记录的内容，返回空数组。保持简洁，每次最多3条diary和5条glossary。"
+        )
+
+        request_payload = GenerationRequest(
+            model=model,
+            system_prompt=system_prompt,
+            messages=[{"role": "user", "content": context_text}],
+            temperature=0.2,
+            max_tokens=int(config.orchestration.task_max_tokens.get(task_name, 256)),
+            purpose=task_name,
+        )
+
+        try:
+            raw = await self._call_provider_with_retry(
+                request_payload=request_payload,
+                retry_times=0,
+                transcript=transcript,
+                task_name=task_name,
+                actor_id=config.agent.name,
+            )
+        except RuntimeError:
+            logger.debug("自我记忆提取失败，跳过")
+            return
+
+        parsed = self._extract_json_payload(raw)
+        if parsed is None:
+            return
+
+        from sirius_chat.memory.self.models import DiaryEntry, GlossaryTerm
+
+        # Process diary entries
+        diary_items = parsed.get("diary")
+        if isinstance(diary_items, list):
+            for item in diary_items[:3]:
+                if not isinstance(item, dict):
+                    continue
+                content_text = str(item.get("content", "")).strip()
+                if not content_text:
+                    continue
+                entry = DiaryEntry(
+                    content=content_text,
+                    importance=float(item.get("importance", 0.5)),
+                    keywords=[str(k) for k in item.get("keywords", []) if str(k).strip()],
+                    category=str(item.get("category", "observation")),
+                    related_user_ids=[],
+                )
+                context.self_memory.add_diary_entry(entry)
+
+        # Process glossary terms
+        glossary_items = parsed.get("glossary")
+        if isinstance(glossary_items, list):
+            for item in glossary_items[:5]:
+                if not isinstance(item, dict):
+                    continue
+                term_text = str(item.get("term", "")).strip()
+                defn = str(item.get("definition", "")).strip()
+                if not term_text or not defn:
+                    continue
+                term = GlossaryTerm(
+                    term=term_text,
+                    definition=defn,
+                    source="conversation",
+                    confidence=float(item.get("confidence", 0.6)),
+                    domain=str(item.get("domain", "custom")),
+                    context_examples=[assistant_content[:80]] if assistant_content.strip() else [],
+                )
+                context.self_memory.add_or_update_term(term)
+
+        logger.debug(
+            "自我记忆提取完成 | diary=%d glossary=%d",
+            len(diary_items) if isinstance(diary_items, list) else 0,
+            len(glossary_items) if isinstance(glossary_items, list) else 0,
         )
 
     async def _run_multimodal_parse_task(
@@ -1334,6 +1474,56 @@ class AsyncRolePlayEngine:
         )
 
     @classmethod
+    def _check_reply_frequency_limit(
+        cls,
+        *,
+        transcript: Transcript,
+        config: SessionConfig,
+        turn: Message,
+        now: datetime,
+    ) -> bool:
+        """Check if the reply frequency limit has been reached.
+
+        Returns True if the AI should be rate-limited (should NOT reply).
+        """
+        window = float(config.orchestration.reply_frequency_window_seconds)
+        max_replies = int(config.orchestration.reply_frequency_max_replies)
+        if max_replies <= 0 or window <= 0:
+            return False
+
+        # Parse stored timestamps
+        cutoff = now.timestamp() - window
+        recent_count = 0
+        for raw_ts in transcript.reply_runtime.assistant_reply_timestamps:
+            try:
+                parsed = datetime.fromisoformat(raw_ts.strip())
+                if parsed.tzinfo is None:
+                    parsed = parsed.replace(tzinfo=timezone.utc)
+                if parsed.timestamp() >= cutoff:
+                    recent_count += 1
+            except (ValueError, TypeError):
+                continue
+
+        if recent_count < max_replies:
+            return False
+
+        # Limit reached: check exemption for direct mentions
+        if config.orchestration.reply_frequency_exempt_on_mention:
+            agent_name = config.agent.name.lower()
+            agent_alias = str(config.agent.metadata.get("alias", "")).strip().lower()
+            content_lower = turn.content.lower()
+            if agent_name and agent_name in content_lower:
+                return False
+            if agent_alias and agent_alias in content_lower:
+                return False
+
+        logger.info(
+            "[频率限制] 滑动窗口内回复次数 %d 已达上限 %d，跳过本次回复 | speaker=%s",
+            recent_count, max_replies, turn.speaker,
+        )
+        return True
+
+    @classmethod
     def _should_reply_for_turn(
         cls,
         *,
@@ -1437,12 +1627,37 @@ class AsyncRolePlayEngine:
         skill_descriptions: str = "",
         environment_context: str = "",
         skip_sections: list[str] | None = None,
+        self_memory: SelfMemoryManager | None = None,
     ) -> tuple[str, list[dict[str, str]]]:
+        # Build self-memory prompt sections
+        diary_section = ""
+        glossary_section = ""
+        if self_memory is not None and config.orchestration.enable_self_memory:
+            # Extract keywords from recent messages for relevance
+            recent_keywords: list[str] = []
+            for msg in transcript.messages[-6:]:
+                if msg.content.strip():
+                    recent_keywords.extend(msg.content[:100].split())
+            diary_section = self_memory.build_diary_prompt_section(
+                keywords=recent_keywords,
+                max_entries=config.orchestration.self_memory_max_diary_prompt_entries,
+            )
+            # Build glossary from recent conversation content
+            recent_text = " ".join(
+                msg.content[:200] for msg in transcript.messages[-6:] if msg.content.strip()
+            )
+            glossary_section = self_memory.build_glossary_prompt_section(
+                text=recent_text,
+                max_terms=config.orchestration.self_memory_max_glossary_prompt_terms,
+            )
+
         system_prompt = self._build_system_prompt(
             config, transcript,
             skill_descriptions=skill_descriptions,
             environment_context=environment_context,
             skip_sections=skip_sections or [],
+            diary_section=diary_section,
+            glossary_section=glossary_section,
         )
         internal_notes = self._collect_internal_system_notes(transcript)
         if internal_notes:
@@ -1504,6 +1719,7 @@ class AsyncRolePlayEngine:
         environment_context: str = "",
         event_bus: SessionEventBus | None = None,
         skip_sections: list[str] | None = None,
+        self_memory: SelfMemoryManager | None = None,
     ) -> Message:
         if config.enable_auto_compression:
             transcript.compress_for_budget(
@@ -1524,6 +1740,7 @@ class AsyncRolePlayEngine:
             skill_descriptions=skill_descriptions,
             environment_context=environment_context,
             skip_sections=skip_sections,
+            self_memory=self_memory,
         )
         
         request_payload = GenerationRequest(
@@ -1624,6 +1841,7 @@ class AsyncRolePlayEngine:
                         skill_descriptions=skill_descriptions,
                         environment_context=environment_context,
                         skip_sections=skip_sections,
+                        self_memory=self_memory,
                     )
                     request_payload = GenerationRequest(
                         model=model,
@@ -1730,6 +1948,7 @@ class AsyncRolePlayEngine:
                     skill_descriptions=skill_descriptions,
                     environment_context=environment_context,
                     skip_sections=skip_sections,
+                    self_memory=self_memory,
                 )
                 request_payload = GenerationRequest(
                     model=model,
@@ -1773,6 +1992,7 @@ class AsyncRolePlayEngine:
                 skill_descriptions=skill_descriptions,
                 environment_context=environment_context,
                 skip_sections=skip_sections,
+                self_memory=self_memory,
             )
             request_payload = GenerationRequest(
                 model=model,
@@ -2448,6 +2668,16 @@ class AsyncRolePlayEngine:
             data={"participant_user_id": participant.user_id},
         ))
 
+        # ── Reply frequency limiter ──
+        if should_reply and self._check_reply_frequency_limit(
+            transcript=transcript, config=config, turn=effective_turn, now=now,
+        ):
+            should_reply = False
+            await context.event_bus.emit(SessionEvent(
+                type=SessionEventType.REPLY_SKIPPED,
+                data={"speaker": turn.speaker, "reason": "frequency_limit"},
+            ))
+
         if should_reply:
             if willingness is not None:
                 reply_trigger = (
@@ -2480,8 +2710,37 @@ class AsyncRolePlayEngine:
                 environment_context=environment_context,
                 event_bus=context.event_bus,
                 skip_sections=intent.skip_sections if intent else [],
+                self_memory=context.self_memory if config.orchestration.enable_self_memory else None,
             )
             last_assistant_reply_at = datetime.now(timezone.utc)
+
+            # Record reply timestamp for frequency limiter
+            transcript.reply_runtime.assistant_reply_timestamps.append(
+                last_assistant_reply_at.isoformat()
+            )
+            # Prune old timestamps outside the window
+            window = float(config.orchestration.reply_frequency_window_seconds)
+            cutoff_ts = last_assistant_reply_at.timestamp() - window
+            transcript.reply_runtime.assistant_reply_timestamps = [
+                ts for ts in transcript.reply_runtime.assistant_reply_timestamps
+                if self._parse_runtime_datetime(ts) is not None
+                and self._parse_runtime_datetime(ts).timestamp() >= cutoff_ts  # type: ignore[union-attr]
+            ]
+
+            # Self-memory extraction (fire-and-forget after reply)
+            if config.orchestration.enable_self_memory:
+                context.assistant_reply_count_since_self_extract += 1
+                batch = max(1, config.orchestration.self_memory_extract_batch_size)
+                if context.assistant_reply_count_since_self_extract >= batch:
+                    context.assistant_reply_count_since_self_extract = 0
+                    asyncio.create_task(
+                        self._run_self_memory_extract_task(
+                            config=config,
+                            transcript=transcript,
+                            context=context,
+                            assistant_content=assistant_message.content,
+                        )
+                    )
 
             await context.event_bus.emit(SessionEvent(
                 type=SessionEventType.PROCESSING_COMPLETED,

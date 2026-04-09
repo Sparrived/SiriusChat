@@ -40,6 +40,8 @@ class ReplyRuntimeState:
     group_recent_turn_timestamps: list[str] = field(default_factory=list)
     # 最近一次 AI 回复时间（ISO 8601）
     last_assistant_reply_at: str = ""
+    # 滑动窗口内 AI 回复时间序列（用于频率限制）
+    assistant_reply_timestamps: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -186,6 +188,7 @@ class Transcript:
                 "user_last_turn_at": dict(self.reply_runtime.user_last_turn_at),
                 "group_recent_turn_timestamps": list(self.reply_runtime.group_recent_turn_timestamps),
                 "last_assistant_reply_at": self.reply_runtime.last_assistant_reply_at,
+                "assistant_reply_timestamps": list(self.reply_runtime.assistant_reply_timestamps),
             },
             "session_summary": self.session_summary,
             "orchestration_stats": self.orchestration_stats,
@@ -269,6 +272,7 @@ class Transcript:
                 if isinstance(group_recent_turn_timestamps, list)
                 else [],
                 last_assistant_reply_at=str(reply_runtime_data.get("last_assistant_reply_at", "")).strip(),
+                assistant_reply_timestamps=list(reply_runtime_data.get("assistant_reply_timestamps", [])),
             )
         return transcript
 

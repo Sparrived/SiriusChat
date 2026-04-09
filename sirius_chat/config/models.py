@@ -137,6 +137,17 @@ class OrchestrationPolicy:
     # Memory policy (centralized memory system configuration)
     memory: MemoryPolicy = field(default_factory=MemoryPolicy)
 
+    # Self-memory system (AI diary + glossary)
+    enable_self_memory: bool = True
+    self_memory_extract_batch_size: int = 3  # Extract diary/glossary every N assistant replies
+    self_memory_max_diary_prompt_entries: int = 6  # Max diary entries injected into prompt
+    self_memory_max_glossary_prompt_terms: int = 15  # Max glossary terms injected into prompt
+
+    # Reply frequency limiter (global rate control independent of auto_reply)
+    reply_frequency_window_seconds: float = 60.0  # Sliding window
+    reply_frequency_max_replies: int = 8  # Max replies within the window
+    reply_frequency_exempt_on_mention: bool = True  # Bypass limit when AI is directly mentioned
+
     # Skill system: allow AI to invoke external code via SKILL_CALL
     enable_skills: bool = True
     skill_call_marker: str = "[SKILL_CALL:"
