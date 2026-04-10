@@ -1,7 +1,7 @@
 """参与决策协调器
 
 协调热度分析和意图分析子系统，输出最终的参与决策。
-取代旧的 ReplyWillingnessDecision 多参数评分体系。
+
 
 决策逻辑：
 1. 热度分析（零开销）→ 群聊是否过热
@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass(slots=True)
 class EngagementDecision:
-    """参与决策结果（取代 ReplyWillingnessDecision）。"""
+    """参与决策结果。"""
     should_reply: bool
     engagement_score: float    # 0.0-1.0 综合参与意愿
     reason: str                # 人类可读的决策理由

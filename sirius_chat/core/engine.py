@@ -41,23 +41,6 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
-class ReplyWillingnessDecision:
-    """Legacy dataclass — 向后兼容，内部已由 EngagementDecision 替代。"""
-    should_reply: bool
-    score: float
-    threshold: float
-    reply_probability: float
-    probability_roll: float
-    intent_score: float
-    addressing_score: float
-    event_score: float
-    richness_score: float
-    user_cadence_penalty: float
-    group_cadence_penalty: float
-    assistant_cadence_penalty: float
-
-
-@dataclass(slots=True)
 class _PendingTurn:
     """Buffered user turn for debounce/batching."""
     participant_user_id: str
@@ -1186,46 +1169,6 @@ class AsyncRolePlayEngine:
 
         self._record_task_stat(transcript, task_name, "succeeded")
 
-    async def _run_intent_analysis(
-        self,
-        *,
-        config: SessionConfig,
-        transcript: Transcript,
-        content: str,
-    ) -> IntentAnalysis:
-        """Run LLM-based intent analysis on a user message.
-
-        Falls back to keyword-based analysis if LLM call fails or is disabled.
-        """
-        if not config.orchestration.enable_intent_analysis:
-            agent_alias = str(config.agent.metadata.get("alias", "")).strip()
-            return IntentAnalyzer.fallback_analysis(content, config.agent.name, agent_alias)
-
-        # Determine model: intent_analysis_model > unified_model > agent.model
-        model = config.orchestration.intent_analysis_model.strip()
-        if not model:
-            try:
-                model = self.get_model_for_task(config, self._TASK_INTENT_ANALYSIS)
-            except ValueError:
-                model = config.agent.model
-
-        agent_alias = str(config.agent.metadata.get("alias", "")).strip()
-
-        # Build recent context from transcript
-        recent_messages: list[dict[str, str]] = []
-        for msg in transcript.messages[-6:]:
-            if msg.role in ("user", "assistant"):
-                recent_messages.append({"role": msg.role, "content": msg.content})
-
-        return await IntentAnalyzer.analyze(
-            content=content,
-            agent_name=config.agent.name,
-            agent_alias=agent_alias,
-            recent_messages=recent_messages,
-            call_provider=self._call_provider,
-            model=model,
-        )
-
     def _has_multimodal_inputs(self, transcript: Transcript) -> bool:
         """检测 transcript 中最后的用户消息是否包含多模态输入。
         
@@ -1321,23 +1264,15 @@ class AsyncRolePlayEngine:
             model=model,
         )
 
-    @classmethod
-    def _should_reply_for_turn(
-        cls,
-        *,
-        turn: Message,
-        config: SessionConfig,
-        event_hit_payload: dict[str, object] | None = None,
-        user_interval_seconds: float | None = None,
-        group_recent_count: int = 1,
-        assistant_interval_seconds: float | None = None,
-    ) -> tuple[bool, ReplyWillingnessDecision | None]:
-        """Legacy compatible: handles never/always. auto mode uses new engagement system."""
+    @staticmethod
+    def _should_reply_for_turn(turn: Message) -> bool:
+        """Check reply_mode: never → False, otherwise → True.
+
+        For auto/smart modes the actual decision is made later by
+        the engagement system inside ``_process_live_turn``.
+        """
         mode = str(getattr(turn, "reply_mode", "always") or "always").strip().lower()
-        if mode in {"never", "silent", "none", "no_reply"}:
-            return False, None
-        # auto/smart and always both return True; actual auto decision in _process_live_turn
-        return True, None
+        return mode not in {"never", "silent", "none", "no_reply"}
 
     def _get_model_for_chat(self, config: SessionConfig, transcript: Transcript) -> str:
         """根据是否有多模态输入，动态选择主模型。
@@ -2382,7 +2317,7 @@ class AsyncRolePlayEngine:
         user_last_turn_at[participant.user_id] = now
 
         group_recent_turns.append(now)
-        group_window_start = now.timestamp() - float(config.orchestration.auto_reply_group_window_seconds)
+        group_window_start = now.timestamp() - float(config.orchestration.heat_window_seconds)
         group_recent_turns = [item for item in group_recent_turns if item.timestamp() >= group_window_start]
         group_recent_count = len(group_recent_turns)
 
@@ -2421,12 +2356,9 @@ class AsyncRolePlayEngine:
             multimodal_inputs=list(turn.multimodal_inputs),
             reply_mode=resolved_session_mode,
         )
-        should_reply, _ = self._should_reply_for_turn(
-            turn=effective_turn,
-            config=config,
-        )
+        should_reply = self._should_reply_for_turn(effective_turn)
 
-        # ── New Engagement System: heat + intent → decision ──
+        # ── Engagement System: heat + intent → decision ──
         intent: IntentAnalysis | None = None
         engagement: EngagementDecision | None = None
         if should_reply and resolved_session_mode in ("auto", "smart"):

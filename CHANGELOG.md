@@ -4,7 +4,20 @@
 
 ## [Unreleased]
 
-## [0.14.0] - 2026-04-11
+## [0.14.1] - 2026-04-10
+
+### Removed
+- **彻底移除旧意愿分系统兼容代码**：
+  - 删除 `OrchestrationPolicy` 中全部 11 个 `auto_reply_*` Legacy 参数（传入将引发 `TypeError`）。
+  - 删除 `ReplyWillingnessDecision` dataclass。
+  - 删除旧 `_run_intent_analysis()` 方法（由 `_run_engagement_intent_analysis()` 替代）。
+  - 删除 `sirius_chat/core/intent.py`（由 `core/intent_v2.py` 替代）。
+  - 简化 `_should_reply_for_turn()` 签名为 `(turn: Message) -> bool`。
+
+### Added
+- **迁移指南**：新增 `docs/migration-v0.14.md`，覆盖配置迁移对照表、代码迁移示例和检查清单。
+
+## [0.14.0] - 2026-04-10
 
 ### Added
 - **三级参与决策系统**：完全重写旧意愿分系统（~15 个 auto_reply_* 参数），替换为三个协作子系统：
@@ -14,7 +27,7 @@
 - **简化配置**：仅 `engagement_sensitivity`（0–1，默认 0.5）和 `heat_window_seconds`（默认 60）两个参数。
 
 ### Changed
-- **OrchestrationPolicy**：旧 auto_reply_* 参数保留但标记为 Legacy，新增 `engagement_sensitivity` 和 `heat_window_seconds`。
+- **OrchestrationPolicy**：旧 auto_reply_* 参数已移除（v0.14.1），新增 `engagement_sensitivity` 和 `heat_window_seconds`。
 - **core/engine.py**：`_process_live_turn` 流程重写为 heat → intent v2 → engagement coordinator → frequency limit。
 - **core/__init__.py / api/__init__.py**：导出更新为新模块。
 - **测试**：重写 `test_async_engine.py`、`test_intent_and_consolidation.py`、`test_self_memory.py` 中所有涉及旧意愿系统的用例。

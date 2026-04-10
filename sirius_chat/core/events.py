@@ -32,7 +32,7 @@ class SessionEventType(enum.Enum):
     SKILL_STARTED = "skill_started"
     # A SKILL execution finished (success or failure).
     SKILL_COMPLETED = "skill_completed"
-    # The reply-willingness check decided to skip this turn.
+    # The engagement check decided to skip this turn.
     REPLY_SKIPPED = "reply_skipped"
     # An error occurred during processing.
     ERROR = "error"

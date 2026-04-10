@@ -46,7 +46,6 @@ def test_async_engine_runs_live_session() -> None:
             ),
             orchestration=OrchestrationPolicy(
                 unified_model="mock-model",
-                auto_reply_probability_coefficient=0.0,
                 task_enabled={
                     "memory_extract": False,
                     "multimodal_parse": False,
@@ -655,7 +654,6 @@ def test_run_live_session_reply_mode_never_updates_memory_without_reply() -> Non
             ),
             orchestration=OrchestrationPolicy(
                 unified_model="mock-model",
-                auto_reply_probability_coefficient=0.0,
                 task_enabled={
                     "memory_extract": False,
                     "multimodal_parse": False,
@@ -695,7 +693,6 @@ def test_run_live_session_reply_mode_auto_infers_when_to_reply() -> None:
             ),
             orchestration=OrchestrationPolicy(
                 unified_model="mock-model",
-                auto_reply_probability_coefficient=0.0,
                 enable_intent_analysis=False,
                 task_enabled={
                     "memory_extract": False,

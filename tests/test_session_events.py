@@ -4,7 +4,7 @@ Covers:
 - SessionEventBus subscribe / emit / close lifecycle
 - Event emission during run_live_message (MESSAGE_ADDED, PROCESSING_*)
 - Event emission during SKILL execution (SKILL_STARTED, SKILL_COMPLETED)
-- REPLY_SKIPPED event when willingness check decides not to reply
+- REPLY_SKIPPED event when engagement check decides not to reply
 - Multiple concurrent subscribers
 - Queue-full behavior
 """
@@ -50,7 +50,6 @@ def _make_config(work_path: Path, reply_mode: str = "always") -> SessionConfig:
             unified_model="mock-model",
             session_reply_mode=reply_mode,
             enable_skills=False,
-            auto_reply_probability_coefficient=0.0,
             task_enabled={
                 "memory_extract": False,
                 "multimodal_parse": False,

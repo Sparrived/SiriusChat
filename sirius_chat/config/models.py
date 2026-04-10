@@ -121,18 +121,6 @@ class OrchestrationPolicy:
     engagement_sensitivity: float = 0.5  # 0.0(极度克制) - 1.0(积极参与)
     heat_window_seconds: float = 60.0    # 热度分析滑动窗口（秒）
 
-    # Legacy auto_reply parameters (向后兼容, 内部忽略)
-    auto_reply_base_score: float = 0.22
-    auto_reply_threshold: float = 0.58
-    auto_reply_threshold_min: float = 0.40
-    auto_reply_threshold_max: float = 0.72
-    auto_reply_threshold_boost_start_count: int = 4
-    auto_reply_probability_coefficient: float = 0.35
-    auto_reply_probability_floor: float = 0.05
-    auto_reply_user_cadence_seconds: float = 7.0
-    auto_reply_group_window_seconds: float = 8.0
-    auto_reply_group_penalty_start_count: int = 2
-    auto_reply_assistant_cooldown_seconds: float = 12.0
     
     # Message debounce: buffer same-user messages within this window (seconds).
     # 0 = disabled (immediate reply). Recommended: 3.0~5.0 for group chat.

@@ -383,17 +383,10 @@ for incoming in stream_of_messages:
 
 `run_live_message` 默认使用会话级 `session_reply_mode`（配置于 `OrchestrationPolicy`），外部无需逐条传 `reply_mode`。
 
-`reply_mode="auto"` 的意愿系统可通过 `OrchestrationPolicy` 调参：
+`reply_mode="auto"` 的参与决策系统可通过 `OrchestrationPolicy` 调参：
 
-- `auto_reply_user_cadence_seconds`：单用户发言间隔阈值（默认 7 秒，低于该值会增加“少回复”惩罚）。
-- `auto_reply_group_window_seconds`：群聊密度统计窗口（默认 8 秒）。
-- `auto_reply_group_penalty_start_count`：窗口内从第几条消息开始施加群聊密度惩罚（默认 2）。
-- `auto_reply_assistant_cooldown_seconds`：AI 连续发言冷却时间（默认 12 秒）。
-- `auto_reply_base_score` / `auto_reply_threshold`：基础意愿值与回复阈值。
-- `auto_reply_probability_coefficient`：当分数未过阈值时，按 `score * coefficient` 计算回复概率系数（0 表示关闭概率兜底）。
-- `auto_reply_probability_floor`：概率兜底最小值，避免长期不参与回复。
-- `auto_reply_threshold_min` / `auto_reply_threshold_max`：动态阈值钳制范围。
-- `auto_reply_threshold_boost_start_count`：群聊窗口内达到该消息数后开始上调回复阈值（默认 4）。
+- `engagement_sensitivity`：参与敏感度（0.0=极度克制，1.0=积极参与，默认 0.5）。越高 AI 越主动回复。
+- `heat_window_seconds`：热度分析滑动窗口（默认 60 秒）。
 - `session_reply_mode`：会话级回复策略（`always`/`never`/`auto`），用于 `run_live_message`。
 
 跨多次 `run_live_message` 调用时，若复用同一个 `transcript`，引擎会复用 `transcript.reply_runtime`

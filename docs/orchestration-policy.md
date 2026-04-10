@@ -162,15 +162,7 @@
   - 影响 `target=others` 消息的插话概率
 - `heat_window_seconds`：热度分析的滑动窗口长度（默认 60 秒）。
 
-**旧版参数**（向后兼容，已弃用）：
-
-- `auto_reply_base_score`、`auto_reply_threshold`、`auto_reply_threshold_min`、`auto_reply_threshold_max`
-- `auto_reply_threshold_boost_start_count`
-- `auto_reply_probability_coefficient`、`auto_reply_probability_floor`
-- `auto_reply_user_cadence_seconds`、`auto_reply_group_window_seconds`、`auto_reply_group_penalty_start_count`
-- `auto_reply_assistant_cooldown_seconds`
-
-这些参数仍可设置但不会影响新版参与决策系统。
+> **注意**：v0.14.1 已彻底移除旧版 `auto_reply_*` 参数。迁移详情见 `docs/migration-v0.14.md`。
 
 ## AI 自身记忆参数
 
