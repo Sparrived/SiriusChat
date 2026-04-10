@@ -129,11 +129,10 @@ description: "当你需要在不通读全部代码的情况下快速理解 Siriu
   - SKILL 文件需导出 `SKILL_META` 字典和 `run(**kwargs)` 函数
   - `SKILL_META["dependencies"]`：可选显式声明第三方包名列表，框架自动安装
   - 持久化数据通过 `data_store` 参数自动注入到 `run()` 中
-  - ✨ **(v0.14.3) 链式调用**：AI 可在同一回复中顺序使用多个 `[SKILL_CALL:]`，后续调用的参数可引用前序结果：
-    - `${skill_name}` — 引用前序 SKILL 的全文输出（`SkillResult.display_text`）
-    - `${skill_name.field}` — 引用前序 SKILL 返回 dict 的某字段或 list 第 N 项
-    - `SkillChainContext` 在单轮执行内共享，引擎处理完所有调用后统一重新生成最终回复（减少 LLM 调用）
-    - 遇到未知 SKILL 时链式中止，不影响已执行部分的结果
+  - ✨ **(v0.14.3/v0.14.4) SKILL 执行机制演进**：
+    - v0.14.3 引入 `SkillChainContext` 和 `${template}` 参数占位符（现保留为程序化 API，engine 内部不再使用）
+    - ✨ **(v0.14.4) 迭代反馈循环（当前默认）**：每一轮 AI 回复最多含一个 `[SKILL_CALL:]`，engine 立即执行并将结果注入 transcript，LLM 在看到实际结果后自主决定下一步（继续调用另一 SKILL 或生成最终回复）。参数由模型动态填写，无需预绑定占位符。
+    - N 次 SKILL 调用 = N 次 LLM 轮次；`max_skill_rounds` 控制上限。
 - ✨ **参与决策系统** (`core/heat.py` + `core/intent_v2.py` + `core/engagement.py`)：三级架构替代旧意愿分系统。
   - `HeatAnalyzer`：零 LLM 开销的群聊热度分析（消息密度 / 活跃参与者数 / AI 参与比）
   - `IntentAnalyzer` v2：意图分类 + 显式 `target` 识别（ai/others/everyone/unknown），LLM 路径通过 `enable_intent_analysis=True` 启用

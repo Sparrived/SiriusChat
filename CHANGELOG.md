@@ -4,7 +4,27 @@
 
 ## [Unreleased]
 
-## [0.14.3] - 2026-04-10
+## [0.14.4] - 2026-04-10
+
+### Changed
+- **SKILL 执行模式：模板链 → 迭代反馈循环（Breaking Change for v0.14.3 chain syntax）**
+  - 旧模式（v0.14.3）：AI 在同一回复中放置多个 `[SKILL_CALL:]`，后续参数用 `${skill_name}` 引用前序结果；engine 一次性执行全部调用，结果全部注入后统一重生。
+  - 新模式（v0.14.4）：每轮 AI 只放 **一个** `[SKILL_CALL:]`，engine 立即执行并将结果以 `[SKILL执行结果: skill_name]\n{result}` 注入到对话上下文，然后重新调用 LLM；模型看到真实结果后自主决定下一步（继续调用其他 SKILL、传入新参数，或直接给出最终回复）。
+  - 优点：参数值可完全由模型基于实际结果动态生成，无需预先使用 `${template}` 占位符；适应非结构化/意外结果的能力更强。
+  - 行为变化：N 次 SKILL 调用现需 N 次 LLM 生成轮次（原为 1 次）。`max_skill_rounds` 语义不变：仍为单 turn 内允许的最大 SKILL→重生轮数。
+  - `SkillChainContext`、`SkillResult.get_field()`、`executor.chain_context` 参数仍保留（供高级程序化用途），但 engine 内部不再通过 `chain_context` 进行模板替换。
+  - 系统提示词 `<available_skills>` 段已更新为迭代反馈模式说明，删除 `${template}` 语法示例。
+
+### Migration Guide (v0.14.3 → v0.14.4)
+
+**如果你有配置 SKILL 但未使用 `${template}` 语法：** 无需任何修改，行为兼容。
+
+**如果你的 SKILL 提示词/system prompt 中显式教导模型使用 `${skill_name}` 语法：**
+- 建议删除相关自定义引导，或替换为："每轮只调用一个SKILL，看到结果后决定下一步，参数直接写你想传的值"
+- 模型不再需要预先声明完整调用链，遇到复杂任务可逐步决策
+
+**程序化使用 `SkillExecutor.execute(chain_context=...)` 的代码：** 不受影响，`chain_context` 参数仍然有效（可在自定义流程中继续使用 `${template}` 解析）。
+
 
 ### Added
 - **SKILL 链式调用（Chain Invocation）**：AI 现在可在同一回复中顺序调用多个 SKILL，后续 SKILL 的参数可直接引用前序结果。
