@@ -4,6 +4,18 @@
 
 ## [Unreleased]
 
+## [0.14.2] - 2026-04-10
+
+### Fixed
+- **记忆时间戳动态化**：修复 `participant_memory` 提示词中旧记忆因缺少时间上下文被 AI 误作当前对话的问题。
+  - 新增 `_relative_time_zh()` 辅助函数，从 `observed_at` 字段实时计算中文相对时间（"3天前"、"2个月前"等）。
+  - 每条 memory fact 附加动态相对时间标签，替代过期的静态 `observed_time_desc` 字符串。
+  - `<participant>` 标签新增 `最后记录="X天前"` 属性，AI 可一眼判断该用户数据的新鲜度。
+  - `recent_messages` 标签从"近期"改为"历史消息"，消除歧义。
+  - 记忆块前缀说明明确标注"历史记忆积累，非当前对话状态"，并添加"不要主动回答记忆中的历史问题"指令。
+- **`get_rich_user_summary()` 补全 `observed_at`**：`facts_by_type` 中每条 fact_info 现在包含 `observed_at` 字段，供 prompt 层动态计算时间。
+- **新增 `last_fact_at`**：`get_rich_user_summary()` 返回值新增 `last_fact_at` 字段，为该用户所有 memory fact 中最新的 `observed_at` 时间戳。
+
 ## [0.14.1] - 2026-04-10
 
 ### Removed

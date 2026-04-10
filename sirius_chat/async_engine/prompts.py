@@ -10,6 +10,33 @@ if TYPE_CHECKING:
     from sirius_chat.models import Transcript
 
 
+def _relative_time_zh(iso_str: str) -> str:
+    """Compute a Chinese relative time string from an ISO 8601 timestamp."""
+    if not iso_str:
+        return ""
+    try:
+        observed = datetime.fromisoformat(iso_str)
+        delta = datetime.now() - observed
+        seconds = delta.total_seconds()
+        if seconds < 0:
+            return ""
+        if seconds < 120:
+            return "刚才"
+        if seconds < 3600:
+            return f"{int(seconds / 60)}分钟前"
+        if seconds < 86400:
+            return f"{int(seconds / 3600)}小时前"
+        if seconds < 86400 * 7:
+            return f"{int(seconds / 86400)}天前"
+        if seconds < 86400 * 30:
+            return f"{int(seconds / (86400 * 7))}周前"
+        if seconds < 86400 * 365:
+            return f"{int(seconds / (86400 * 30))}个月前"
+        return f"{int(seconds / (86400 * 365))}年前"
+    except (ValueError, TypeError):
+        return ""
+
+
 def build_system_prompt(
     config: SessionConfig,
     transcript: Transcript,
@@ -68,7 +95,7 @@ def build_system_prompt(
     # --- Section 5: Participant memory (long-term knowledge) ---
     if transcript.user_memory.entries and "participant_memory" not in _skip:
         memory_lines: list[str] = []
-        memory_lines.append("以下为参与者结构化参考，用自然对话回复，禁止仿写字段格式。")
+        memory_lines.append("以下为参与者历史记忆积累（非当前对话状态），仅供个性化参考。优先响应当前消息，不要主动回答记忆中的历史问题。禁止仿写字段格式。")
         for user_id in transcript.user_memory.entries.keys():
             summary = transcript.user_memory.get_rich_user_summary(user_id, include_transient=True)
             if not summary:
@@ -79,10 +106,14 @@ def build_system_prompt(
             persona = summary.get("inferred_persona") or summary.get("persona") or ""
             traits = summary.get("traits", [])
             interests = summary.get("interests", [])
+            last_fact_at = summary.get("last_fact_at", "")
+            last_fact_rel = _relative_time_zh(last_fact_at)
 
             header_parts = [f'id="{user_id}" name="{name}"']
             if aliases:
                 header_parts.append(f'alias="{",".join(aliases[:3])}"')
+            if last_fact_rel:
+                header_parts.append(f'最后记录="{last_fact_rel}"')
             memory_lines.append(f'<participant {" ".join(header_parts)}>')
 
             entry = transcript.user_memory.entries.get(user_id)
@@ -96,7 +127,7 @@ def build_system_prompt(
             if interests:
                 compact_parts.append(f"兴趣={','.join(interests[:5])}")
             if recent_messages:
-                compact_parts.append(f"近期={'；'.join(recent_messages)}")
+                compact_parts.append(f"历史消息={'；'.join(recent_messages)}")
             if compact_parts:
                 memory_lines.append("  " + " | ".join(compact_parts))
 
@@ -115,9 +146,11 @@ def build_system_prompt(
                             continue
                         confidence = fact_info.get("confidence", 0.5)
                         conf_tag = "?" if confidence < 0.6 else ("~" if confidence < 0.8 else "")
-                        time_desc = fact_info.get("time_desc", "")
-                        if time_desc:
-                            fact_strs.append(f"({value}{conf_tag},{time_desc})")
+                        # Prefer dynamic relative time from observed_at over static time_desc
+                        rel_time = _relative_time_zh(fact_info.get("observed_at", ""))
+                        time_tag = rel_time or fact_info.get("time_desc", "")
+                        if time_tag:
+                            fact_strs.append(f"({value}{conf_tag},{time_tag})")
                         else:
                             fact_strs.append(f"{value}{conf_tag}")
                     if fact_strs:
