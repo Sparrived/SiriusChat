@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from sirius_chat.skills.data_store import SkillDataStore
-from sirius_chat.skills.models import SkillDefinition, SkillResult
+from sirius_chat.skills.models import SkillDefinition, SkillResult, SkillChainContext
 
 logger = logging.getLogger(__name__)
 
@@ -67,14 +67,24 @@ class SkillExecutor:
         self,
         skill: SkillDefinition,
         params: dict[str, Any],
+        chain_context: SkillChainContext | None = None,
     ) -> SkillResult:
         """Execute a skill synchronously with parameter validation.
+
+        If *chain_context* is provided, any ``${skill_name}`` / ``${skill_name.field}``
+        placeholders in parameter values are resolved against previously executed
+        skills' results before the skill is called.  After execution the result is
+        stored back into *chain_context* under ``skill.name`` for downstream use.
 
         The data_store is automatically injected as a keyword argument
         if the skill's run() function accepts it.
         """
         if skill._run_func is None:
             return SkillResult(success=False, error=f"SKILL '{skill.name}' 没有可执行的 run() 函数")
+
+        # Resolve chain-context template placeholders before validation
+        if chain_context is not None:
+            params = chain_context.resolve_templates(params)
 
         # Validate required parameters
         for param_def in skill.parameters:
@@ -102,16 +112,23 @@ class SkillExecutor:
             result = skill._run_func(**call_params)
             # Persist data store after execution
             data_store.save()
-            return SkillResult(success=True, data=result)
+            skill_result = SkillResult(success=True, data=result)
         except Exception as exc:
             logger.error("SKILL '%s' 执行异常: %s", skill.name, exc)
-            return SkillResult(success=False, error=str(exc))
+            skill_result = SkillResult(success=False, error=str(exc))
+
+        # Record into chain context so subsequent skills can reference this result
+        if chain_context is not None:
+            chain_context.store(skill.name, skill_result)
+
+        return skill_result
 
     async def execute_async(
         self,
         skill: SkillDefinition,
         params: dict[str, Any],
         timeout: float = 0,
+        chain_context: SkillChainContext | None = None,
     ) -> SkillResult:
         """Execute a skill in a thread pool to avoid blocking the event loop.
 
@@ -119,11 +136,13 @@ class SkillExecutor:
             skill: The skill definition to execute.
             params: Parameters to pass to the skill.
             timeout: Max seconds to wait. 0 means no limit.
+            chain_context: Optional chain context for template resolution and
+                result accumulation across a multi-skill round.
         """
         if timeout > 0:
             try:
                 return await asyncio.wait_for(
-                    asyncio.to_thread(self.execute, skill, params),
+                    asyncio.to_thread(self.execute, skill, params, chain_context),
                     timeout=timeout,
                 )
             except asyncio.TimeoutError:
@@ -132,7 +151,7 @@ class SkillExecutor:
                     success=False,
                     error=f"SKILL执行超时（限制 {timeout:.0f} 秒），请稍后重试或联系管理员",
                 )
-        return await asyncio.to_thread(self.execute, skill, params)
+        return await asyncio.to_thread(self.execute, skill, params, chain_context)
 
     def save_all_stores(self) -> None:
         """Persist all dirty data stores."""

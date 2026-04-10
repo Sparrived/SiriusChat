@@ -120,7 +120,7 @@ description: "当你需要在不通读全部代码的情况下快速理解 Siriu
   - `profiler.py`：PerformanceProfiler 上下文管理器和 @profile_sync/@profile_async 装饰器
   - `benchmarks.py`：Benchmark 和 BenchmarkSuite 用于性能基准测试
 - ✨ **SKILL系统**：`skills/` 模块允许 AI 通过 `[SKILL_CALL: name | {params}]` 调用外部代码
-  - `models.py`：SkillDefinition、SkillParameter、SkillResult 数据模型
+  - `models.py`：SkillDefinition、SkillParameter、SkillResult、**SkillChainContext** 数据模型
   - `registry.py`：从 `{work_path}/skills/` 自动发现和加载 SKILL 文件，并自动补齐目录与 `README.md` 引导文件
   - `executor.py`：参数校验、类型转换和安全执行，支持 `skill_execution_timeout`（默认 30 秒）
   - `dependency_resolver.py`：加载前自动检测并安装缺失的第三方依赖（`uv pip install`，回退 `pip`）
@@ -129,6 +129,11 @@ description: "当你需要在不通读全部代码的情况下快速理解 Siriu
   - SKILL 文件需导出 `SKILL_META` 字典和 `run(**kwargs)` 函数
   - `SKILL_META["dependencies"]`：可选显式声明第三方包名列表，框架自动安装
   - 持久化数据通过 `data_store` 参数自动注入到 `run()` 中
+  - ✨ **(v0.14.3) 链式调用**：AI 可在同一回复中顺序使用多个 `[SKILL_CALL:]`，后续调用的参数可引用前序结果：
+    - `${skill_name}` — 引用前序 SKILL 的全文输出（`SkillResult.display_text`）
+    - `${skill_name.field}` — 引用前序 SKILL 返回 dict 的某字段或 list 第 N 项
+    - `SkillChainContext` 在单轮执行内共享，引擎处理完所有调用后统一重新生成最终回复（减少 LLM 调用）
+    - 遇到未知 SKILL 时链式中止，不影响已执行部分的结果
 - ✨ **参与决策系统** (`core/heat.py` + `core/intent_v2.py` + `core/engagement.py`)：三级架构替代旧意愿分系统。
   - `HeatAnalyzer`：零 LLM 开销的群聊热度分析（消息密度 / 活跃参与者数 / AI 参与比）
   - `IntentAnalyzer` v2：意图分类 + 显式 `target` 识别（ai/others/everyone/unknown），LLM 路径通过 `enable_intent_analysis=True` 启用

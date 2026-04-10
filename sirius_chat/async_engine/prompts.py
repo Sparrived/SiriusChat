@@ -197,10 +197,21 @@ def build_system_prompt(
         marker = config.orchestration.skill_call_marker
         sections.append(
             f"<available_skills>\n"
-            f"调用格式：{marker} skill_name | {{\"param\": \"value\"}}]\n"
-            f"无参数：{marker} skill_name]\n"
+            f"## 单次调用\n"
+            f"  {marker} skill_name | {{\"param\": \"value\"}}]\n"
+            f"  无参数：{marker} skill_name]\n"
+            f"\n"
+            f"## 链式调用（同一回复中依次调用多个SKILL）\n"
+            f"  在同一回复中按顺序放置多个调用标记，后续SKILL的参数可引用前序结果：\n"
+            f"  * `${{skill_name}}` — 引用前序SKILL的完整输出文本\n"
+            f"  * `${{skill_name.field}}` — 引用前序SKILL返回dict的某个字段（或list的索引）\n"
+            f"  示例：\n"
+            f"    {marker} fetch_data | {{\"url\": \"https://example.com\"}}]\n"
+            f"    {marker} summarize | {{\"text\": \"${{fetch_data}}\"}}]\n"
+            f"\n"
             f"可用SKILL：\n{skill_descriptions}\n"
-            f"规则：仅用列出的SKILL；参数JSON；单次一个；标记放行首；结果用自然语言总结。\n"
+            f"\n"
+            f"规则：仅用列出的SKILL；参数JSON；标记放行首；链式调用时前序结果自动可用；最终结果用自然语言总结。\n"
             f"</available_skills>"
         )
 

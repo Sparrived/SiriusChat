@@ -31,6 +31,7 @@ from sirius_chat.async_engine.prompts import build_system_prompt
 from sirius_chat.exceptions import OrchestrationConfigError
 from sirius_chat.skills.registry import SkillRegistry
 from sirius_chat.skills.executor import SkillExecutor, parse_skill_calls, strip_skill_calls
+from sirius_chat.skills.models import SkillChainContext
 from sirius_chat.core.events import SessionEvent, SessionEventBus, SessionEventType
 from sirius_chat.core.intent_v2 import IntentAnalysis, IntentAnalyzer
 from sirius_chat.core.heat import HeatAnalysis, HeatAnalyzer
@@ -45,7 +46,6 @@ class _PendingTurn:
     """Buffered user turn for debounce/batching."""
     participant_user_id: str
     messages: list[Message] = field(default_factory=list)
-    timer_task: asyncio.Task[None] | None = None
 
 
 @dataclass(slots=True)
@@ -1513,120 +1513,97 @@ class AsyncRolePlayEngine:
                 calls = parse_skill_calls(content)
                 if not calls:
                     break
-                # Execute the first skill call found
-                skill_name, skill_params = calls[0]
-                skill_def = skill_registry.get(skill_name)
-                if skill_def is None:
-                    # Skill registry can be stale when context is reused or
-                    # skill files are updated after initial session startup.
-                    try:
-                        reloaded = skill_registry.load_from_directory(
-                            config.work_path / "skills",
-                            auto_install_deps=config.orchestration.auto_install_skill_deps,
-                        )
-                        if reloaded > 0:
-                            logger.info(
-                                "检测到SKILL_CALL未命中，已重载技能目录后重试: loaded=%d | skill=%s",
-                                reloaded,
-                                skill_name,
-                            )
-                    except Exception:
-                        logger.warning(
-                            "重载SKILL目录失败，继续按未知SKILL处理: skill=%s",
-                            skill_name,
-                            exc_info=True,
-                        )
+
+                # One SkillChainContext per LLM-generation round:
+                # results from earlier calls in this round are available as
+                # ${skill_name} / ${skill_name.field} in later calls' params.
+                chain_ctx = SkillChainContext()
+                had_unknown_skill = False
+
+                for skill_name, skill_params in calls:
                     skill_def = skill_registry.get(skill_name)
-                if skill_def is None:
-                    # Unknown skill — inject error note and let AI continue
-                    transcript.add(Message(
-                        role="system",
-                        content=f"[SKILL系统] 未找到名为 '{skill_name}' 的SKILL，请使用可用SKILL列表中的名称。",
-                    ))
+                    if skill_def is None:
+                        # Skill registry can be stale — try reloading once.
+                        try:
+                            reloaded = skill_registry.load_from_directory(
+                                config.work_path / "skills",
+                                auto_install_deps=config.orchestration.auto_install_skill_deps,
+                            )
+                            if reloaded > 0:
+                                logger.info(
+                                    "检测到SKILL_CALL未命中，已重载技能目录后重试: loaded=%d | skill=%s",
+                                    reloaded,
+                                    skill_name,
+                                )
+                        except Exception:
+                            logger.warning(
+                                "重载SKILL目录失败，继续按未知SKILL处理: skill=%s",
+                                skill_name,
+                                exc_info=True,
+                            )
+                        skill_def = skill_registry.get(skill_name)
+
+                    if skill_def is None:
+                        # Unknown skill — inject error and abort the current chain round.
+                        transcript.add(Message(
+                            role="system",
+                            content=f"[SKILL系统] 未找到名为 '{skill_name}' 的SKILL，请使用可用SKILL列表中的名称。",
+                        ))
+                        if event_bus is not None:
+                            await event_bus.emit(SessionEvent(
+                                type=SessionEventType.SKILL_COMPLETED,
+                                data={
+                                    "skill_name": skill_name,
+                                    "success": False,
+                                    "result_preview": "SKILL未找到",
+                                },
+                            ))
+                        had_unknown_skill = True
+                        break  # stop processing further calls in this round
+
+                    logger.info(
+                        "执行SKILL: %s | 参数: %s | 链式轮次: %d/%d",
+                        skill_name, skill_params, _round + 1, max_rounds,
+                    )
+                    if event_bus is not None:
+                        await event_bus.emit(SessionEvent(
+                            type=SessionEventType.SKILL_STARTED,
+                            data={"skill_name": skill_name, "params": skill_params},
+                        ))
+                    skill_result = await skill_executor.execute_async(
+                        skill_def,
+                        skill_params,
+                        timeout=float(config.orchestration.skill_execution_timeout),
+                        chain_context=chain_ctx,
+                    )
+                    skill_executed = True
+                    last_skill_name = skill_name
+                    result_text = skill_result.to_display_text()
+                    last_skill_result_text = result_text
                     if event_bus is not None:
                         await event_bus.emit(SessionEvent(
                             type=SessionEventType.SKILL_COMPLETED,
                             data={
                                 "skill_name": skill_name,
-                                "success": False,
-                                "result_preview": "SKILL未找到",
+                                "success": skill_result.success,
+                                "result_preview": result_text[:200],
                             },
                         ))
-                    # Re-generate with the injected system hint instead of
-                    # returning partial pre-skill content to external consumers.
-                    if config.enable_auto_compression:
-                        transcript.compress_for_budget(
-                            max_messages=config.history_max_messages,
-                            max_chars=config.history_max_chars,
-                        )
-                    system_prompt, chat_history = self._build_chat_main_request_context(
-                        config=config,
-                        transcript=transcript,
-                        skill_descriptions=skill_descriptions,
-                        environment_context=environment_context,
-                        skip_sections=skip_sections,
-                        self_memory=self_memory,
-                    )
-                    request_payload = GenerationRequest(
-                        model=model,
-                        system_prompt=system_prompt,
-                        messages=chat_history,
-                        temperature=config.agent.temperature,
-                        max_tokens=config.agent.max_tokens,
-                        purpose="chat_main",
-                    )
-                    content = await self._call_provider_with_retry(
-                        request_payload=request_payload,
-                        retry_times=retry_times,
-                        transcript=transcript,
-                        task_name="chat_main",
-                        actor_id=config.agent.name,
-                    )
-                    if content.startswith("["):
-                        bracket_end = content.find("] ", 1)
-                        if bracket_end != -1 and bracket_end < 40:
-                            content = content[bracket_end + 2:]
-                    content = self._sanitize_assistant_content(content)
-                    continue
 
-                logger.info("执行SKILL: %s | 参数: %s", skill_name, skill_params)
-                if event_bus is not None:
-                    await event_bus.emit(SessionEvent(
-                        type=SessionEventType.SKILL_STARTED,
-                        data={"skill_name": skill_name, "params": skill_params},
-                    ))
-                skill_result = await skill_executor.execute_async(
-                    skill_def,
-                    skill_params,
-                    timeout=float(config.orchestration.skill_execution_timeout),
-                )
-                skill_executed = True
-                last_skill_name = skill_name
-                result_text = skill_result.to_display_text()
-                last_skill_result_text = result_text
-                if event_bus is not None:
-                    await event_bus.emit(SessionEvent(
-                        type=SessionEventType.SKILL_COMPLETED,
-                        data={
-                            "skill_name": skill_name,
-                            "success": skill_result.success,
-                            "result_preview": result_text[:200],
-                        },
+                    # Add skill result as system message for AI context
+                    transcript.add(Message(
+                        role="system",
+                        content=f"[SKILL执行结果: {skill_name}]\n{result_text}",
                     ))
 
-                # Add skill result as system message for AI context
-                skill_result_msg = Message(
-                    role="system",
-                    content=f"[SKILL执行结果: {skill_name}]\n{result_text}",
-                )
-                transcript.add(skill_result_msg)
-
-                # Strip the skill call from the content and keep the rest
+                # After all calls in this round have been processed:
+                # emit any non-SKILL text in the original content as partial messages,
+                # then re-generate so the AI can produce its final answer (or call more skills).
+                # Skip partial emission when the round aborted early on an unknown skill with
+                # no successful executions — in that case we want clean regeneration only.
                 remaining_content = strip_skill_calls(content)
-
-                # If there's remaining content, add it as partial assistant message(s).
-                # Also apply MSG_SPLIT splitting here so the marker never leaks to output.
-                if remaining_content.strip():
+                round_executed_any = any(chain_ctx.results)
+                if remaining_content.strip() and (round_executed_any or not had_unknown_skill):
                     _split_marker = (
                         config.orchestration.split_marker
                         if config.orchestration.enable_prompt_driven_splitting
@@ -1649,9 +1626,6 @@ class AsyncRolePlayEngine:
                         transcript.add(partial_msg)
                         if not first_partial_content:
                             first_partial_content = partial_msg.content
-                        # 仅发送 strip_skill_calls 后的普通文本，保持 v0.9.4 语义：
-                        # 如果模型在同一轮同时输出 SKILL_CALL 和用户可见文案，
-                        # 外部消费者应立即收到该文案，但永远不会看到 SKILL_CALL 标记本身。
                         if event_bus is not None:
                             await event_bus.emit(SessionEvent(
                                 type=SessionEventType.MESSAGE_ADDED,
@@ -1660,7 +1634,7 @@ class AsyncRolePlayEngine:
                             ))
                         await asyncio.sleep(0.01)
 
-                # Re-generate response with skill result in context
+                # Re-generate response with all skill results in context
                 if config.enable_auto_compression:
                     transcript.compress_for_budget(
                         max_messages=config.history_max_messages,
@@ -2173,17 +2147,18 @@ class AsyncRolePlayEngine:
         if debounce_seconds > 0:
             pending = context.pending_turn
             if pending is not None and pending.participant_user_id == participant.user_id:
-                # Same user — append to buffer, reset timer
+                # Same user — accumulate into buffer, then let the last coroutine flush.
+                # Each coroutine sleeps the full debounce window; only the one whose
+                # `turn` is still at pending.messages[-1] when the sleep ends will merge
+                # all accumulated messages into a single call to _process_live_turn,
+                # ensuring intent analysis and profile extraction fire exactly once.
                 pending.messages.append(turn)
-                if pending.timer_task is not None and not pending.timer_task.done():
-                    pending.timer_task.cancel()
-                pending.timer_task = None
                 # Wait for debounce window.  CancelledError must propagate
                 # so that external timeout (asyncio.wait_for) works correctly.
                 await asyncio.sleep(debounce_seconds)
                 # After sleep, check if we are still the latest (no newer message appended)
                 if context.pending_turn is pending and pending.messages[-1] is turn:
-                    # Timer expired and we are still the latest → flush
+                    # Timer expired and we are still the latest → flush all as one message
                     merged_turn = self._merge_pending_turns(pending.messages)
                     context.pending_turn = None
                     return await self._process_live_turn(

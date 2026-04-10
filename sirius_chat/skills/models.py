@@ -44,6 +44,17 @@ class SkillResult:
             return "\n".join(lines)
         return str(self.data) if self.data is not None else "执行完成（无返回数据）"
 
+    def get_field(self, key: str, default: Any = None) -> Any:
+        """Extract a field from dict/list data by key or index."""
+        if isinstance(self.data, dict):
+            return self.data.get(key, default)
+        if isinstance(self.data, list):
+            try:
+                return self.data[int(key)]
+            except (ValueError, IndexError):
+                return default
+        return default
+
 
 @dataclass(slots=True)
 class SkillDefinition:
@@ -70,3 +81,60 @@ class SkillDefinition:
                 entry["default"] = param.default
             schema.append(entry)
         return schema
+
+
+class SkillChainContext:
+    """Mutable context passed through a single-round skill chain.
+
+    Stores the result of every skill executed in the current round so that
+    subsequent skills can reference earlier results via ``${skill_name}`` or
+    ``${skill_name.field}`` template placeholders in their parameters.
+    """
+
+    def __init__(self) -> None:
+        self._results: dict[str, SkillResult] = {}
+
+    def store(self, skill_name: str, result: SkillResult) -> None:
+        """Record ``result`` under ``skill_name`` for later template lookup."""
+        self._results[skill_name] = result
+
+    def resolve_templates(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Return a copy of *params* with ``${...}`` placeholders substituted.
+
+        Supported template formats (case-sensitive skill name):
+
+        * ``${skill_name}`` — replaced with the skill's full display text.
+        * ``${skill_name.field}`` — replaced with a single field of a dict
+          or list result (list: ``field`` is a 0-based integer index).
+
+        Placeholders that cannot be resolved are left unchanged.
+        """
+        import re as _re
+
+        _PLACEHOLDER = _re.compile(r"\$\{([^}]+)\}")
+
+        def _sub(value: str) -> str:
+            def _replace(m: _re.Match[str]) -> str:
+                expr = m.group(1)
+                if "." in expr:
+                    skill_name, field = expr.split(".", 1)
+                else:
+                    skill_name, field = expr, None
+                result = self._results.get(skill_name)
+                if result is None:
+                    return m.group(0)  # unresolved — leave as-is
+                if field is None:
+                    return result.to_display_text()
+                v = result.get_field(field)
+                return str(v) if v is not None else m.group(0)
+
+            return _PLACEHOLDER.sub(_replace, value)
+
+        resolved: dict[str, Any] = {}
+        for k, v in params.items():
+            resolved[k] = _sub(v) if isinstance(v, str) else v
+        return resolved
+
+    @property
+    def results(self) -> dict[str, SkillResult]:
+        return dict(self._results)

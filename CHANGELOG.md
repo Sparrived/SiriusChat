@@ -4,7 +4,21 @@
 
 ## [Unreleased]
 
-## [0.14.2] - 2026-04-10
+## [0.14.3] - 2026-04-10
+
+### Added
+- **SKILL 链式调用（Chain Invocation）**：AI 现在可在同一回复中顺序调用多个 SKILL，后续 SKILL 的参数可直接引用前序结果。
+  - `SkillChainContext`（`sirius_chat/skills/models.py`）：单轮 SKILL 执行的共享上下文，存储每个 SKILL 的 `SkillResult`。
+  - 参数模板语法：
+    - `${skill_name}` — 引用前序 SKILL 的完整文本输出
+    - `${skill_name.field}` — 引用前序 SKILL 返回 dict 的某字段（或 list 的 0 索引）
+    - 未能解析的占位符保持原样传入，不会导致执行失败
+  - 单轮多调用：引擎在每个生成轮次内按顺序执行当前内容中的**所有** `[SKILL_CALL:]` 标记，而不再仅限于第一个；所有调用共享同一个 `SkillChainContext`。
+  - 一轮所有调用完成后才统一重新生成 AI 最终回复（减少 LLM 调用次数）。
+  - `SkillResult.get_field(key)` 新方法：支持从 dict/list 结果中取值，用于模板解析。
+  - `SkillExecutor.execute()` / `execute_async()` 新增 `chain_context` 可选参数。
+  - 系统提示词（`prompts.py`）更新 `<available_skills>` 章节，文档化链式语法和示例。
+  - 已知 SKILL 中途遇到未知 SKILL 时，当轮链式调用中止，已执行部分的结果仍保留；未知 SKILL 前的文本不再作为 partial 消息提前发出（保持原有语义）。
 
 ### Fixed
 - **记忆时间戳动态化**：修复 `participant_memory` 提示词中旧记忆因缺少时间上下文被 AI 误作当前对话的问题。

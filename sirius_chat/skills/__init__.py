@@ -6,6 +6,7 @@ directory and presented to the AI as callable tools.
 
 Key components:
 - SkillDefinition / SkillParameter / SkillResult: Data models
+- SkillChainContext: Per-round chain context for multi-skill pipelines
 - SkillRegistry: Discovers, loads, and manages skills
 - SkillExecutor: Safely executes skills with parameter validation
 - SkillDataStore: Persistent key-value storage for skills
@@ -15,6 +16,7 @@ from sirius_chat.skills.models import (
     SkillDefinition,
     SkillParameter,
     SkillResult,
+    SkillChainContext,
 )
 from sirius_chat.skills.registry import SkillRegistry
 from sirius_chat.skills.executor import SkillExecutor
@@ -25,6 +27,7 @@ __all__ = [
     "SkillDefinition",
     "SkillParameter",
     "SkillResult",
+    "SkillChainContext",
     "SkillRegistry",
     "SkillExecutor",
     "SkillDataStore",
