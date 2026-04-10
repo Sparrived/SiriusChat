@@ -154,8 +154,8 @@ def build_system_prompt(
         marker = config.orchestration.split_marker
         sections.append(
             f"<splitting_instruction>\n"
-            f"群聊场景聊天，每条消息1-2句话。多个独立内容、话题切换或停顿时插入 '{marker}' 分割。"
-            f"禁止用连续换行代替分割。\n"
+            f"当前处于群聊场景聊天，每条消息至多1-2句话。存在多个独立内容、话题切换、内容过长或停顿时插入 '{marker}' 分割。"
+            f"禁止用连续换行代替分割，一律使用 '{marker}' 分割，外部程序会检测 '{marker}' 并将其分离为多个独立内容。\n"
             f"</splitting_instruction>"
         )
 

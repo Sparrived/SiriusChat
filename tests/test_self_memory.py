@@ -491,116 +491,79 @@ class TestPromptIntegration:
 class TestReplyFrequencyLimiter:
 
     @staticmethod
-    def _make_config(
+    def _check(
+        timestamps: list[str],
+        now: datetime,
         window: float = 60.0,
         max_replies: int = 3,
         exempt_on_mention: bool = True,
-    ) -> SessionConfig:
-        return SessionConfig(
-            preset=AgentPreset(
-                agent=Agent(name="TestBot", persona="p", model="m"),
-                global_system_prompt="test",
-            ),
-            work_path="./data",
-            orchestration=OrchestrationPolicy(
-                unified_model="mock-model",
-                reply_frequency_window_seconds=window,
-                reply_frequency_max_replies=max_replies,
-                reply_frequency_exempt_on_mention=exempt_on_mention,
-            ),
+        is_mentioned: bool = False,
+    ) -> bool:
+        from sirius_chat.core.engagement import EngagementCoordinator
+        return EngagementCoordinator.check_reply_frequency_limit(
+            assistant_reply_timestamps=timestamps,
+            now=now,
+            window_seconds=window,
+            max_replies=max_replies,
+            exempt_on_mention=exempt_on_mention,
+            is_mentioned=is_mentioned,
         )
-
-    @staticmethod
-    def _make_transcript(timestamps: list[str]) -> Transcript:
-        t = Transcript()
-        t.reply_runtime.assistant_reply_timestamps = list(timestamps)
-        return t
 
     def test_under_limit_not_blocked(self):
         now = datetime.now(timezone.utc)
         recent = (now - timedelta(seconds=10)).isoformat()
-        config = self._make_config(max_replies=3)
-        transcript = self._make_transcript([recent, recent])
-        turn = Message(role="user", speaker="User", content="hello")
-        result = AsyncRolePlayEngine._check_reply_frequency_limit(
-            transcript=transcript, config=config, turn=turn, now=now,
-        )
+        result = self._check([recent, recent], now, max_replies=3)
         assert result is False  # not blocked
 
     def test_at_limit_blocked(self):
         now = datetime.now(timezone.utc)
         recent = (now - timedelta(seconds=10)).isoformat()
-        config = self._make_config(max_replies=3)
-        transcript = self._make_transcript([recent, recent, recent])
-        turn = Message(role="user", speaker="User", content="hello")
-        result = AsyncRolePlayEngine._check_reply_frequency_limit(
-            transcript=transcript, config=config, turn=turn, now=now,
-        )
+        result = self._check([recent, recent, recent], now, max_replies=3)
         assert result is True  # blocked
 
     def test_old_timestamps_outside_window_not_counted(self):
         now = datetime.now(timezone.utc)
         old = (now - timedelta(seconds=120)).isoformat()  # outside 60s window
         recent = (now - timedelta(seconds=5)).isoformat()
-        config = self._make_config(window=60.0, max_replies=2)
-        transcript = self._make_transcript([old, old, old, recent])
-        turn = Message(role="user", speaker="User", content="hello")
-        result = AsyncRolePlayEngine._check_reply_frequency_limit(
-            transcript=transcript, config=config, turn=turn, now=now,
-        )
+        result = self._check([old, old, old, recent], now, window=60.0, max_replies=2)
         assert result is False  # only 1 recent, limit is 2
 
     def test_mention_exemption_bypasses_limit(self):
         now = datetime.now(timezone.utc)
         recent = (now - timedelta(seconds=5)).isoformat()
-        config = self._make_config(max_replies=2, exempt_on_mention=True)
-        transcript = self._make_transcript([recent, recent, recent])
-        turn = Message(role="user", speaker="User", content="Hey TestBot what do you think?")
-        result = AsyncRolePlayEngine._check_reply_frequency_limit(
-            transcript=transcript, config=config, turn=turn, now=now,
+        result = self._check(
+            [recent, recent, recent], now, max_replies=2,
+            exempt_on_mention=True, is_mentioned=True,
         )
         assert result is False  # not blocked because of mention
 
     def test_mention_exemption_disabled(self):
         now = datetime.now(timezone.utc)
         recent = (now - timedelta(seconds=5)).isoformat()
-        config = self._make_config(max_replies=2, exempt_on_mention=False)
-        transcript = self._make_transcript([recent, recent, recent])
-        turn = Message(role="user", speaker="User", content="Hey TestBot")
-        result = AsyncRolePlayEngine._check_reply_frequency_limit(
-            transcript=transcript, config=config, turn=turn, now=now,
+        result = self._check(
+            [recent, recent, recent], now, max_replies=2,
+            exempt_on_mention=False, is_mentioned=True,
         )
         assert result is True  # blocked even with mention
 
     def test_zero_max_replies_disables_limiter(self):
         now = datetime.now(timezone.utc)
-        config = self._make_config(max_replies=0)
-        transcript = self._make_transcript(["2025-01-01T00:00:00+00:00"] * 100)
-        turn = Message(role="user", speaker="User", content="hello")
-        result = AsyncRolePlayEngine._check_reply_frequency_limit(
-            transcript=transcript, config=config, turn=turn, now=now,
+        result = self._check(
+            ["2025-01-01T00:00:00+00:00"] * 100, now, max_replies=0,
         )
         assert result is False  # disabled
 
     def test_zero_window_disables_limiter(self):
         now = datetime.now(timezone.utc)
-        config = self._make_config(window=0.0)
-        transcript = self._make_transcript([(now - timedelta(seconds=1)).isoformat()] * 100)
-        turn = Message(role="user", speaker="User", content="hello")
-        result = AsyncRolePlayEngine._check_reply_frequency_limit(
-            transcript=transcript, config=config, turn=turn, now=now,
+        result = self._check(
+            [(now - timedelta(seconds=1)).isoformat()] * 100, now, window=0.0,
         )
         assert result is False  # disabled
 
     def test_invalid_timestamps_ignored(self):
         now = datetime.now(timezone.utc)
         recent = (now - timedelta(seconds=5)).isoformat()
-        config = self._make_config(max_replies=3)
-        transcript = self._make_transcript(["bad", "invalid", recent, recent])
-        turn = Message(role="user", speaker="User", content="hello")
-        result = AsyncRolePlayEngine._check_reply_frequency_limit(
-            transcript=transcript, config=config, turn=turn, now=now,
-        )
+        result = self._check(["bad", "invalid", recent, recent], now, max_replies=3)
         assert result is False  # only 2 valid recent
 
 

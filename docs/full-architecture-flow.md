@@ -27,11 +27,11 @@ flowchart TD
     H -- 并行辅助任务 --> I["memory_extract<br/>用户画像提取<br/>（携带上下文）"]
     H -- 并行辅助任务 --> J["multimodal_parse<br/>多模态证据提取"]
     H -- 并行辅助任务 --> J2["event_extract<br/>事件特征提取"]
-    H -- 并行辅助任务 --> J3["intent_analysis<br/>意图分类<br/>reason / evidence_span"]
+    H -- 并行辅助任务 --> J3["intent_analysis_v2<br/>意图分类 + target 识别<br/>reason / evidence_span / target"]
     I --> K
     J --> K
     J2 --> K
-    J3 --> K["意图分析结果<br/>skip_sections 判定<br/>willingness score 调整"]
+    J3 --> K["参与决策<br/>HeatAnalyzer → IntentAnalyzer v2<br/>→ EngagementCoordinator"]
 
     K --> K2{skills<br/>enabled?}
     K2 -- 是 --> K3["SKILL 加载<br/>dependency_resolver<br/>自动安装缺失依赖"]
@@ -66,7 +66,9 @@ flowchart LR
     subgraph Domain[领域与编排层]
       Models[models/models.py]
       Engine[core/engine.py]
-      Intent[core/intent.py]
+      Heat[core/heat.py]
+      IntentV2[core/intent_v2.py]
+      Engagement[core/engagement.py]
       Events[core/events.py]
       Prompting[roleplay_prompting.py]
       BgTasks[background_tasks.py]
@@ -95,7 +97,9 @@ flowchart LR
     PublicAPI --> Prompting
     Engine --> Models
     Engine --> Memory
-    Engine --> Intent
+    Engine --> Heat
+    Engine --> IntentV2
+    Engine --> Engagement
     Engine --> Events
     Engine --> BgTasks
     Engine --> TokenUsage
@@ -143,7 +147,9 @@ flowchart LR
 | `sirius_chat/api/` | 外部程序调用参数、`work_path` | 稳定对外函数与类型、`Transcript` |
 | `sirius_chat/models/models.py` | 配置与消息数据 | 统一数据契约（`Message`、`Participant`、`Transcript` 等） |
 | `sirius_chat/core/engine.py` | 初始化：`SessionConfig` + 可选已有 `Transcript`；逐条处理：`Message` + `Transcript` | 更新后的 `Transcript`、assistant 回复、编排统计与 token 记录 |
-| `sirius_chat/core/intent.py` | 用户消息文本、LLM provider | `IntentAnalysis`（意图类型 + reason + evidence_span）、skip_sections 建议、willingness 调整 |
+| `sirius_chat/core/heat.py` | 最近 N 条消息、时间窗口 | `HeatAnalysis`（heat_level / heat_score / active_participants / ai_participation_ratio） |
+| `sirius_chat/core/intent_v2.py` | 用户消息文本、参与者列表、LLM provider | `IntentAnalysis`（意图类型 + target + reason + evidence_span）、skip_sections 建议 |
+| `sirius_chat/core/engagement.py` | `HeatAnalysis`、`IntentAnalysis`、`engagement_sensitivity` | `EngagementDecision`（should_reply / engagement_score / reason）、频率限制检查 |
 | `sirius_chat/core/events.py` | 对话上下文、事件特征原始数据 | 事件摘要、`SessionEvent` 数据结构 |
 | `sirius_chat/background_tasks.py` | `BackgroundTaskConfig`、归纳回调函数 | 定时触发事件/摘要/事实归纳任务，写回持久化 |
 | `sirius_chat/memory/` | 用户信息、对话历史、事件数据 | 记忆库、事件落盘、用户档案提取 |

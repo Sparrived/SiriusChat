@@ -32,7 +32,9 @@ from sirius_chat.exceptions import OrchestrationConfigError
 from sirius_chat.skills.registry import SkillRegistry
 from sirius_chat.skills.executor import SkillExecutor, parse_skill_calls, strip_skill_calls
 from sirius_chat.core.events import SessionEvent, SessionEventBus, SessionEventType
-from sirius_chat.core.intent import IntentAnalysis, IntentAnalyzer
+from sirius_chat.core.intent_v2 import IntentAnalysis, IntentAnalyzer
+from sirius_chat.core.heat import HeatAnalysis, HeatAnalyzer
+from sirius_chat.core.engagement import EngagementCoordinator, EngagementDecision
 from sirius_chat.background_tasks import BackgroundTaskConfig, BackgroundTaskManager
 from sirius_chat.token.store import TokenUsageStore
 logger = logging.getLogger(__name__)
@@ -40,6 +42,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass(slots=True)
 class ReplyWillingnessDecision:
+    """Legacy dataclass — 向后兼容，内部已由 EngagementDecision 替代。"""
     should_reply: bool
     score: float
     threshold: float
@@ -1236,292 +1239,87 @@ class AsyncRolePlayEngine:
                 return bool(message.multimodal_inputs)
         return False
 
-    @staticmethod
-    def _compute_intent_score(content: str) -> float:
-        text = content.strip()
-        if not text:
-            return 0.0
+    # ── Engagement Decision System (v0.14.0) ──
 
-        lowered = text.lower()
-        score = 0.0
-        if "?" in text or "？" in text:
-            score += 0.30
-
-        request_markers = (
-            "请",
-            "帮我",
-            "麻烦",
-            "可以",
-            "能不能",
-            "如何",
-            "怎么",
-            "为什么",
-            "总结",
-            "建议",
-            "分析",
-            "please",
-            "could you",
-            "can you",
-            "how",
-            "why",
-        )
-        if any(marker in lowered for marker in request_markers):
-            score += 0.25
-
-        return max(0.0, min(0.5, score))
-
-    @staticmethod
-    def _compute_addressing_score(*, content: str, agent_name: str, agent_alias: str) -> float:
-        text = content.strip()
-        if not text:
-            return 0.0
-
-        lowered = text.lower()
-        names = [agent_name.strip(), agent_alias.strip()]
-        for name in names:
-            if name and name.lower() in lowered:
-                return 0.20
-
-        if "@" in text:
-            return 0.16
-
-        if "你" in text or "您" in text:
-            return 0.08
-        return 0.0
-
-    @staticmethod
-    def _compute_event_relevance_score(event_hit_payload: dict[str, object] | None) -> float:
-        if not event_hit_payload:
-            return 0.0
-        level = str(event_hit_payload.get("level", "")).strip().lower()
-        score = float(event_hit_payload.get("score", 0.0) or 0.0)
-
-        if level == "high":
-            return 0.20
-        if level == "weak":
-            return 0.12
-        if level == "new":
-            return 0.06 + min(0.04, score * 0.04)
-        return min(0.08, max(0.0, score) * 0.10)
-
-    @staticmethod
-    def _compute_richness_score(content: str) -> float:
-        text = content.strip()
-        if not text:
-            return 0.0
-        if len(text) >= 96:
-            return 0.10
-        if len(text) >= 48:
-            return 0.07
-        if len(text) >= 24:
-            return 0.04
-        return 0.0
-
-    @staticmethod
-    def _deterministic_probability_roll(*, turn: Message, group_recent_count: int) -> float:
-        seed = (
-            f"{turn.speaker or ''}|{turn.channel or ''}|{turn.channel_user_id or ''}|"
-            f"{group_recent_count}|{turn.content.strip()}"
-        )
-        digest = hashlib.sha256(seed.encode("utf-8")).digest()
-        return int.from_bytes(digest[:8], "big") / float(2**64)
-
-    @classmethod
-    def _evaluate_reply_willingness(
-        cls,
-        *,
-        turn: Message,
-        config: SessionConfig,
-        event_hit_payload: dict[str, object] | None,
-        user_interval_seconds: float | None,
-        group_recent_count: int,
-        assistant_interval_seconds: float | None,
-    ) -> ReplyWillingnessDecision:
-        content = turn.content
-        if not content.strip():
-            return ReplyWillingnessDecision(
-                should_reply=False,
-                score=0.0,
-                threshold=0.58,
-                reply_probability=0.0,
-                probability_roll=1.0,
-                intent_score=0.0,
-                addressing_score=0.0,
-                event_score=0.0,
-                richness_score=0.0,
-                user_cadence_penalty=0.0,
-                group_cadence_penalty=0.0,
-                assistant_cadence_penalty=0.0,
-            )
-
-        agent_alias = str(config.agent.metadata.get("alias", "")).strip()
-        intent_score = cls._compute_intent_score(content)
-        addressing_score = cls._compute_addressing_score(
-            content=content,
-            agent_name=config.agent.name,
-            agent_alias=agent_alias,
-        )
-        event_score = cls._compute_event_relevance_score(event_hit_payload)
-        richness_score = cls._compute_richness_score(content)
-
-        orchestration = config.orchestration
-        user_cadence_seconds = max(0.5, float(orchestration.auto_reply_user_cadence_seconds))
-        group_penalty_start_count = max(0, int(orchestration.auto_reply_group_penalty_start_count))
-        assistant_cooldown_seconds = max(0.5, float(orchestration.auto_reply_assistant_cooldown_seconds))
-
-        # 用户发言频率因子：默认目标间隔 7 秒（覆盖 6~8 秒需求）
-        user_cadence_penalty = 0.0
-        if user_interval_seconds is not None and user_interval_seconds < user_cadence_seconds:
-            cadence_ratio = max(
-                0.0,
-                min(1.0, (user_cadence_seconds - user_interval_seconds) / user_cadence_seconds),
-            )
-            # 明确请求时降低频率惩罚，让“强请求”仍可能得到回复
-            user_cadence_penalty = 0.35 * cadence_ratio
-            if intent_score >= 0.35:
-                user_cadence_penalty *= 0.35
-
-        # 群聊密度因子：8 秒窗口内消息越多，越倾向潜水
-        group_cadence_penalty = 0.0
-        if group_recent_count > group_penalty_start_count:
-            density_ratio = max(
-                0.0,
-                min(1.0, (group_recent_count - group_penalty_start_count) / 4.0),
-            )
-            group_cadence_penalty = 0.30 * density_ratio
-            if intent_score >= 0.45:
-                group_cadence_penalty *= 0.40
-
-        # AI 刚回复过时，若没有明确请求则降低参与度
-        assistant_cadence_penalty = 0.0
-        if (
-            assistant_interval_seconds is not None
-            and assistant_interval_seconds < assistant_cooldown_seconds
-            and intent_score < 0.35
-        ):
-            assistant_cadence_penalty = 0.15 * max(
-                0.0,
-                min(
-                    1.0,
-                    (assistant_cooldown_seconds - assistant_interval_seconds)
-                    / assistant_cooldown_seconds,
-                ),
-            )
-
-        score = (
-            float(orchestration.auto_reply_base_score)
-            + intent_score
-            + addressing_score
-            + event_score
-            + richness_score
-            - user_cadence_penalty
-            - group_cadence_penalty
-            - assistant_cadence_penalty
-        )
-        score = max(0.0, min(1.0, score))
-
-        threshold = float(orchestration.auto_reply_threshold)
-        if group_recent_count >= int(orchestration.auto_reply_threshold_boost_start_count):
-            threshold += 0.06
-        if intent_score >= 0.35:
-            threshold -= 0.08
-        if event_score >= 0.12:
-            threshold -= 0.03
-        threshold = max(
-            float(orchestration.auto_reply_threshold_min),
-            min(float(orchestration.auto_reply_threshold_max), threshold),
-        )
-
-        should_reply = score >= threshold
-        reply_probability = 1.0 if should_reply else 0.0
-        probability_roll = 1.0
-        if not should_reply:
-            probability_coefficient = max(
-                0.0,
-                min(1.0, float(orchestration.auto_reply_probability_coefficient)),
-            )
-            if probability_coefficient > 0.0:
-                probability_floor = max(
-                    0.0,
-                    min(1.0, float(orchestration.auto_reply_probability_floor)),
-                )
-                reply_probability = max(
-                    probability_floor,
-                    min(1.0, score * probability_coefficient),
-                )
-                # 明确点名主 AI 时，提高兜底回复概率，减少“被叫到但未回应”的体验。
-                if addressing_score >= 0.20:
-                    reply_probability = max(reply_probability, 0.80)
-                probability_roll = cls._deterministic_probability_roll(
-                    turn=turn,
-                    group_recent_count=group_recent_count,
-                )
-                should_reply = probability_roll < reply_probability
-
-        return ReplyWillingnessDecision(
-            should_reply=should_reply,
-            score=score,
-            threshold=threshold,
-            reply_probability=reply_probability,
-            probability_roll=probability_roll,
-            intent_score=intent_score,
-            addressing_score=addressing_score,
-            event_score=event_score,
-            richness_score=richness_score,
-            user_cadence_penalty=user_cadence_penalty,
-            group_cadence_penalty=group_cadence_penalty,
-            assistant_cadence_penalty=assistant_cadence_penalty,
-        )
-
-    @classmethod
-    def _check_reply_frequency_limit(
-        cls,
+    def _build_heat_analysis(
+        self,
         *,
         transcript: Transcript,
         config: SessionConfig,
-        turn: Message,
-        now: datetime,
-    ) -> bool:
-        """Check if the reply frequency limit has been reached.
+        group_recent_count: int,
+    ) -> HeatAnalysis:
+        """构建热度分析所需的数据并执行分析。"""
+        window = float(config.orchestration.heat_window_seconds)
 
-        Returns True if the AI should be rate-limited (should NOT reply).
-        """
-        window = float(config.orchestration.reply_frequency_window_seconds)
-        max_replies = int(config.orchestration.reply_frequency_max_replies)
-        if max_replies <= 0 or window <= 0:
-            return False
+        # 收集窗口内活跃参与者
+        active_ids: set[str] = set()
+        assistant_count = 0
+        for msg in transcript.messages[-(group_recent_count + 10):]:
+            if msg.role == "assistant":
+                assistant_count += 1
+            if msg.role == "user" and msg.speaker:
+                active_ids.add(msg.speaker)
 
-        # Parse stored timestamps
-        cutoff = now.timestamp() - window
-        recent_count = 0
-        for raw_ts in transcript.reply_runtime.assistant_reply_timestamps:
-            try:
-                parsed = datetime.fromisoformat(raw_ts.strip())
-                if parsed.tzinfo is None:
-                    parsed = parsed.replace(tzinfo=timezone.utc)
-                if parsed.timestamp() >= cutoff:
-                    recent_count += 1
-            except (ValueError, TypeError):
-                continue
-
-        if recent_count < max_replies:
-            return False
-
-        # Limit reached: check exemption for direct mentions
-        if config.orchestration.reply_frequency_exempt_on_mention:
-            agent_name = config.agent.name.lower()
-            agent_alias = str(config.agent.metadata.get("alias", "")).strip().lower()
-            content_lower = turn.content.lower()
-            if agent_name and agent_name in content_lower:
-                return False
-            if agent_alias and agent_alias in content_lower:
-                return False
-
-        logger.info(
-            "[频率限制] 滑动窗口内回复次数 %d 已达上限 %d，跳过本次回复 | speaker=%s",
-            recent_count, max_replies, turn.speaker,
+        return HeatAnalyzer.analyze(
+            group_recent_count=group_recent_count,
+            window_seconds=window,
+            active_participant_ids=active_ids,
+            assistant_reply_count_in_window=min(
+                assistant_count,
+                len(transcript.reply_runtime.assistant_reply_timestamps),
+            ),
         )
-        return True
+
+    async def _run_engagement_intent_analysis(
+        self,
+        *,
+        config: SessionConfig,
+        transcript: Transcript,
+        content: str,
+    ) -> IntentAnalysis:
+        """执行新版意图分析（携带参与者上下文）。"""
+        agent_alias = str(config.agent.metadata.get("alias", "")).strip()
+
+        # 从最近消息中提取参与者名称（排除 AI 自身）
+        participant_names: list[str] = []
+        seen: set[str] = set()
+        for msg in reversed(transcript.messages[-20:]):
+            if msg.role == "user" and msg.speaker and msg.speaker not in seen:
+                seen.add(msg.speaker)
+                participant_names.append(msg.speaker)
+
+        if not config.orchestration.enable_intent_analysis:
+            return IntentAnalyzer.fallback_analysis(
+                content, config.agent.name, agent_alias, participant_names,
+            )
+
+        model = config.orchestration.intent_analysis_model.strip()
+        if not model:
+            try:
+                model = self.get_model_for_task(config, self._TASK_INTENT_ANALYSIS)
+            except ValueError:
+                model = config.agent.model
+
+        agent_alias = str(config.agent.metadata.get("alias", "")).strip()
+
+        # 近期上下文（含 speaker）
+        recent_messages: list[dict[str, str]] = []
+        for msg in transcript.messages[-8:]:
+            if msg.role in ("user", "assistant"):
+                entry: dict[str, str] = {"role": msg.role, "content": msg.content}
+                if msg.speaker:
+                    entry["speaker"] = msg.speaker
+                recent_messages.append(entry)
+
+        return await IntentAnalyzer.analyze(
+            content=content,
+            agent_name=config.agent.name,
+            agent_alias=agent_alias,
+            participant_names=participant_names,
+            recent_messages=recent_messages,
+            call_provider=self._call_provider,
+            model=model,
+        )
 
     @classmethod
     def _should_reply_for_turn(
@@ -1534,20 +1332,11 @@ class AsyncRolePlayEngine:
         group_recent_count: int = 1,
         assistant_interval_seconds: float | None = None,
     ) -> tuple[bool, ReplyWillingnessDecision | None]:
+        """Legacy compatible: handles never/always. auto mode uses new engagement system."""
         mode = str(getattr(turn, "reply_mode", "always") or "always").strip().lower()
         if mode in {"never", "silent", "none", "no_reply"}:
             return False, None
-        if mode in {"auto", "smart"}:
-            decision = cls._evaluate_reply_willingness(
-                turn=turn,
-                config=config,
-                event_hit_payload=event_hit_payload,
-                user_interval_seconds=user_interval_seconds,
-                group_recent_count=group_recent_count,
-                assistant_interval_seconds=assistant_interval_seconds,
-            )
-            return decision.should_reply, decision
-        # unknown mode falls back to always
+        # auto/smart and always both return True; actual auto decision in _process_live_turn
         return True, None
 
     def _get_model_for_chat(self, config: SessionConfig, transcript: Transcript) -> str:
@@ -2632,34 +2421,41 @@ class AsyncRolePlayEngine:
             multimodal_inputs=list(turn.multimodal_inputs),
             reply_mode=resolved_session_mode,
         )
-        should_reply, willingness = self._should_reply_for_turn(
+        should_reply, _ = self._should_reply_for_turn(
             turn=effective_turn,
             config=config,
-            event_hit_payload=event_hit_payload,
-            user_interval_seconds=user_interval_seconds,
-            group_recent_count=group_recent_count,
-            assistant_interval_seconds=assistant_interval_seconds,
         )
 
-        # ── Intent analysis: refine willingness and determine context optimization ──
+        # ── New Engagement System: heat + intent → decision ──
         intent: IntentAnalysis | None = None
-        if resolved_session_mode in ("auto", "smart"):
-            intent = await self._run_intent_analysis(
+        engagement: EngagementDecision | None = None
+        if should_reply and resolved_session_mode in ("auto", "smart"):
+            heat = self._build_heat_analysis(
+                transcript=transcript,
+                config=config,
+                group_recent_count=group_recent_count,
+            )
+            intent = await self._run_engagement_intent_analysis(
                 config=config,
                 transcript=transcript,
                 content=turn.content,
             )
-            # Apply willingness modifier only when LLM-based intent analysis is enabled
-            if (
-                config.orchestration.enable_intent_analysis
-                and willingness is not None
-                and intent.willingness_modifier != 0.0
-            ):
-                adjusted_score = willingness.score + intent.willingness_modifier
-                adjusted_score = max(0.0, min(1.0, adjusted_score))
-                should_reply = adjusted_score >= willingness.threshold
-                if not should_reply and willingness.reply_probability > 0:
-                    should_reply = willingness.probability_roll < willingness.reply_probability
+            engagement = EngagementCoordinator.decide(
+                heat=heat,
+                intent=intent,
+                sensitivity=float(config.orchestration.engagement_sensitivity),
+            )
+            should_reply = engagement.should_reply
+            logger.info(
+                "[Engagement] speaker=%s | score=%.3f | heat=%s(%.2f) | "
+                "target=%s | reason=%s",
+                turn.speaker,
+                engagement.engagement_score,
+                engagement.heat.heat_level if engagement.heat else "N/A",
+                engagement.heat.heat_score if engagement.heat else 0.0,
+                engagement.intent.target if engagement.intent else "N/A",
+                engagement.reason,
+            )
 
         # Emit user message event
         await context.event_bus.emit(SessionEvent(
@@ -2669,8 +2465,18 @@ class AsyncRolePlayEngine:
         ))
 
         # ── Reply frequency limiter ──
-        if should_reply and self._check_reply_frequency_limit(
-            transcript=transcript, config=config, turn=effective_turn, now=now,
+        is_mentioned = (
+            intent is not None and intent.directed_at_ai
+        ) if intent else False
+        if should_reply and EngagementCoordinator.check_reply_frequency_limit(
+            assistant_reply_timestamps=list(
+                transcript.reply_runtime.assistant_reply_timestamps
+            ),
+            now=now,
+            window_seconds=float(config.orchestration.reply_frequency_window_seconds),
+            max_replies=int(config.orchestration.reply_frequency_max_replies),
+            exempt_on_mention=bool(config.orchestration.reply_frequency_exempt_on_mention),
+            is_mentioned=is_mentioned,
         ):
             should_reply = False
             await context.event_bus.emit(SessionEvent(
@@ -2679,23 +2485,11 @@ class AsyncRolePlayEngine:
             ))
 
         if should_reply:
-            if willingness is not None:
-                reply_trigger = (
-                    "threshold"
-                    if willingness.score >= willingness.threshold
-                    else "probability_fallback"
-                )
-                logger.info(
-                    "[会话] 触发回复 | speaker=%s | session_reply_mode=%s | trigger=%s | "
-                    "score=%.3f | threshold=%.3f | probability=%.3f | roll=%.3f",
-                    turn.speaker,
-                    resolved_session_mode,
-                    reply_trigger,
-                    willingness.score,
-                    willingness.threshold,
-                    willingness.reply_probability,
-                    willingness.probability_roll,
-                )
+            logger.info(
+                "[会话] 触发回复 | speaker=%s | session_reply_mode=%s",
+                turn.speaker,
+                resolved_session_mode,
+            )
 
             await context.event_bus.emit(SessionEvent(
                 type=SessionEventType.PROCESSING_STARTED,
@@ -2747,35 +2541,12 @@ class AsyncRolePlayEngine:
                 message=assistant_message,
             ))
         else:
-            if willingness is None:
-                logger.info(
-                    "[会话] 跳过回复 | speaker=%s | session_reply_mode=%s",
-                    turn.speaker,
-                    resolved_session_mode,
-                )
-            else:
-                logger.info(
-                    "[会话] 跳过回复 | speaker=%s | session_reply_mode=%s | score=%.3f | threshold=%.3f | "
-                    "probability=%.3f | roll=%.3f | "
-                    "intent=%.3f | addr=%.3f | event=%.3f | richness=%.3f | "
-                    "penalty_user=%.3f | penalty_group=%.3f | penalty_assistant=%.3f | "
-                    "user_interval=%.2fs | group_recent_count=%d",
-                    turn.speaker,
-                    resolved_session_mode,
-                    willingness.score,
-                    willingness.threshold,
-                    willingness.reply_probability,
-                    willingness.probability_roll,
-                    willingness.intent_score,
-                    willingness.addressing_score,
-                    willingness.event_score,
-                    willingness.richness_score,
-                    willingness.user_cadence_penalty,
-                    willingness.group_cadence_penalty,
-                    willingness.assistant_cadence_penalty,
-                    user_interval_seconds or -1.0,
-                    group_recent_count,
-                )
+            logger.info(
+                "[会话] 跳过回复 | speaker=%s | session_reply_mode=%s | engagement=%s",
+                turn.speaker,
+                resolved_session_mode,
+                engagement.reason if engagement else "mode_never",
+            )
             await context.event_bus.emit(SessionEvent(
                 type=SessionEventType.REPLY_SKIPPED,
                 data={"speaker": turn.speaker},

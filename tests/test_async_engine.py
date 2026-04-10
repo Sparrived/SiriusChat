@@ -760,6 +760,7 @@ def test_chat_main_merges_system_messages_into_system_prompt() -> None:
 
 
 def test_run_live_session_reply_mode_auto_probability_fallback_can_trigger_reply() -> None:
+    """With max engagement_sensitivity, even ambient messages should trigger replies."""
     async def _run() -> None:
         provider = MockProvider(responses=["概率兜底触发回复"])
         engine = create_async_engine(provider)
@@ -777,12 +778,7 @@ def test_run_live_session_reply_mode_auto_probability_fallback_can_trigger_reply
                     "event_extract": False,
                 },
                 enable_intent_analysis=False,
-                auto_reply_base_score=0.0,
-                auto_reply_threshold=0.95,
-                auto_reply_threshold_min=0.95,
-                auto_reply_threshold_max=0.95,
-                auto_reply_probability_coefficient=1.0,
-                auto_reply_probability_floor=1.0,
+                engagement_sensitivity=1.0,
             ),
         )
 
@@ -801,52 +797,29 @@ def test_run_live_session_reply_mode_auto_probability_fallback_can_trigger_reply
     asyncio.run(_run())
 
 
-def test_auto_reply_probability_boosts_when_directly_addressed() -> None:
-    config = SessionConfig(
-        work_path=Path("data/tests/reply_mode_auto_addressing_boost"),
-        preset=AgentPreset(
-            agent=Agent(name="月白", persona="异步测试", model="mock-model"),
-            global_system_prompt="测试系统提示词",
-        ),
-        orchestration=OrchestrationPolicy(
-            unified_model="mock-model",
-            auto_reply_base_score=0.0,
-            auto_reply_threshold=0.95,
-            auto_reply_threshold_min=0.95,
-            auto_reply_threshold_max=0.95,
-            auto_reply_probability_coefficient=0.1,
-            auto_reply_probability_floor=0.05,
-            task_enabled={
-                "memory_extract": False,
-                "multimodal_parse": False,
-                "event_extract": False,
-            },
-        ),
+def test_engagement_boosts_when_directly_addressed() -> None:
+    """Verify that directly addressing the AI results in higher engagement than ambient chat."""
+    from sirius_chat.core.heat import HeatAnalyzer
+    from sirius_chat.core.intent_v2 import IntentAnalyzer
+    from sirius_chat.core.engagement import EngagementCoordinator
+
+    heat = HeatAnalyzer.analyze(
+        group_recent_count=3,
+        window_seconds=60.0,
+        active_participant_ids={"小王", "小李"},
+        assistant_reply_count_in_window=1,
     )
 
-    plain_turn = Message(role="user", speaker="小王", content="早上好", reply_mode="auto")
-    addressed_turn = Message(role="user", speaker="小王", content="早上好月白", reply_mode="auto")
+    plain_intent = IntentAnalyzer.fallback_analysis("早上好", "月白", "", ["小王"])
+    addressed_intent = IntentAnalyzer.fallback_analysis("早上好月白", "月白", "", ["小王"])
 
-    plain = type(create_async_engine(MockProvider()))._evaluate_reply_willingness(
-        turn=plain_turn,
-        config=config,
-        event_hit_payload=None,
-        user_interval_seconds=None,
-        group_recent_count=1,
-        assistant_interval_seconds=None,
-    )
-    addressed = type(create_async_engine(MockProvider()))._evaluate_reply_willingness(
-        turn=addressed_turn,
-        config=config,
-        event_hit_payload=None,
-        user_interval_seconds=None,
-        group_recent_count=1,
-        assistant_interval_seconds=None,
-    )
+    plain_decision = EngagementCoordinator.decide(heat=heat, intent=plain_intent, sensitivity=0.5)
+    addressed_decision = EngagementCoordinator.decide(heat=heat, intent=addressed_intent, sensitivity=0.5)
 
-    assert plain.reply_probability <= 0.10
-    assert addressed.addressing_score >= 0.20
-    assert addressed.reply_probability >= 0.60
+    assert addressed_decision.engagement_score > plain_decision.engagement_score
+    assert addressed_decision.should_reply is True
+    assert addressed_intent.directed_at_ai is True
+    assert plain_intent.directed_at_ai is False
 
 
 def test_run_live_session_reply_mode_auto_suppresses_rapid_chatter() -> None:
@@ -1057,6 +1030,7 @@ def test_memory_extract_provider_timeout_does_not_block_live_message() -> None:
 
 
 def test_run_live_session_reply_mode_auto_threshold_is_configurable() -> None:
+    """With high engagement_sensitivity, the engine should reply to addressed messages."""
     async def _run() -> None:
         provider = MockProvider(responses=["低阈值触发的回复"])
         engine = create_async_engine(provider)
@@ -1074,15 +1048,14 @@ def test_run_live_session_reply_mode_auto_threshold_is_configurable() -> None:
                     "event_extract": False,
                 },
                 enable_intent_analysis=False,
-                auto_reply_threshold=0.20,
-                auto_reply_threshold_min=0.10,
+                engagement_sensitivity=0.9,
             ),
         )
 
         transcript = await _run_live_turns(engine=engine, 
             config=config,
             human_turns=[
-                Message(role="user", speaker="小王", content="今天先记录一个状态。", reply_mode="auto"),
+                Message(role="user", speaker="小王", content="主助手，今天先记录一个状态。", reply_mode="auto"),
             ],
         )
 
@@ -1110,8 +1083,8 @@ def test_run_live_session_reply_runtime_persists_across_calls() -> None:
                     "multimodal_parse": False,
                     "event_extract": False,
                 },
-                auto_reply_threshold=0.30,
-                auto_reply_threshold_min=0.30,
+                engagement_sensitivity=0.8,
+                enable_intent_analysis=False,
                 message_debounce_seconds=0.0,
             ),
         )
@@ -1119,14 +1092,14 @@ def test_run_live_session_reply_runtime_persists_across_calls() -> None:
         transcript = await _run_live_turns(engine=engine, 
             config=config,
             human_turns=[
-                Message(role="user", speaker="小王", content="你在吗？", reply_mode="auto"),
+                Message(role="user", speaker="小王", content="主助手，你在吗？", reply_mode="auto"),
             ],
         )
         transcript = await _run_live_turns(engine=engine, 
             config=config,
             transcript=transcript,
             human_turns=[
-                Message(role="user", speaker="小王", content="你在吗？", reply_mode="auto"),
+                Message(role="user", speaker="小王", content="嗯嗯，知道了。", reply_mode="auto"),
             ],
         )
 
@@ -1139,7 +1112,8 @@ def test_run_live_session_reply_runtime_persists_across_calls() -> None:
     asyncio.run(_run())
 
 
-def test_run_live_session_auto_threshold_boost_start_count_is_configurable() -> None:
+def test_run_live_session_auto_engagement_sensitivity_is_configurable() -> None:
+    """With high sensitivity, directly addressed messages should trigger replies."""
     async def _run() -> None:
         provider = MockProvider(responses=["第一条应回复", "第二条也应回复"])
         engine = create_async_engine(provider)
@@ -1156,10 +1130,7 @@ def test_run_live_session_auto_threshold_boost_start_count_is_configurable() -> 
                     "multimodal_parse": False,
                     "event_extract": False,
                 },
-                auto_reply_threshold=0.58,
-                auto_reply_threshold_min=0.40,
-                auto_reply_threshold_max=0.90,
-                auto_reply_threshold_boost_start_count=10,
+                engagement_sensitivity=0.8,
             ),
         )
 

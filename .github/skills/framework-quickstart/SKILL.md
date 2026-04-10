@@ -52,7 +52,8 @@ description: "当你需要在不通读全部代码的情况下快速理解 Siriu
 
 - `models/models.py` ✨ **（包重构）** 定义数据契约（多人用户 + 单 AI 主助手）。
 - `OrchestrationPolicy` 用于任务路由与预算控制，**现已默认启用**（`enabled=True`），支持 `memory_extract`、`event_extract`、`multimodal_parse`、`memory_manager` 等任务的模型配置与预算限制。若需回退单模型模式，设置 `enabled=False`。同时支持提示词驱动的内容分割（`enable_prompt_driven_splitting=True`）。✨ `memory_manager` 是新增的可选 LLM 任务，用于汇聚、去重、标注、冲突检测记忆。
-- ✨ **(v0.13.0)** `OrchestrationPolicy` 新增 AI 自身记忆配置（`enable_self_memory`、`self_memory_extract_batch_size`、`self_memory_max_diary_prompt_entries`、`self_memory_max_glossary_prompt_terms`）和回复频率限制（`reply_frequency_window_seconds`、`reply_frequency_max_replies`、`reply_frequency_exempt_on_mention`）。
+- ✨ **(v0.13.0)** `OrchestrationPolicy` 新增 AI 自身记忆配置（`enable_self_memory`、`self_memory_extract_batch_size`、`self_memory_max_diary_prompt_entries`、`self_memory_max_glossary_prompt_terms`）。
+- ✨ **(v0.14.0)** 回复决策重写：旧意愿分系统（~15 个 auto_reply_* 参数）替换为三级参与决策架构，仅保留 `engagement_sensitivity` 和 `heat_window_seconds` 两个参数。回复频率限制集成到 `EngagementCoordinator` 中。
 - ✨ **async_engine 包重构** (P0-003)：将 924 行单文件分解为多个职责明确的模块
   - `async_engine/core.py`：核心 AsyncRolePlayEngine 类，保持公开 API 不变
   - `async_engine/prompts.py`：系统提示词构建（整合 agent 身份、时间、用户记忆、编排指令）
@@ -70,7 +71,7 @@ description: "当你需要在不通读全部代码的情况下快速理解 Siriu
 - `Message.reply_mode` 可按消息控制回复策略：`always`（默认）/`never`（仅写入记忆与 transcript）/`auto`（自动推断是否回复）。
 - 推荐在实时流式接入时使用 `run_live_message` 逐条处理消息；`run_live_session(...)` 用于一次性会话初始化。
 - `run_live_message` 默认使用会话级 `session_reply_mode`，将回复策略从消息级提升为 session 级。
-- `reply_mode=auto` 已升级为多维意愿分系统，参数由 `OrchestrationPolicy` 提供：`auto_reply_user_cadence_seconds`、`auto_reply_group_window_seconds`、`auto_reply_group_penalty_start_count`、`auto_reply_assistant_cooldown_seconds`、`auto_reply_threshold`、`auto_reply_threshold_boost_start_count` 等。
+- `reply_mode=auto` 已升级为三级参与决策系统（热度 + 意图 + 参与度），参数由 `OrchestrationPolicy` 提供：`engagement_sensitivity`（0–1，默认 0.5）和 `heat_window_seconds`（默认 60）。
 - `run_live_session` 的节奏临时状态已挂载到 `Transcript.reply_runtime`，跨调用复用 transcript 时可保持节奏连续性。
 - `user_memory.py` 负责用户身份识别（user_id/aliases/identities）与结构化用户记忆。
 - 用户记忆分为 `profile`（初始化字段）与 `runtime`（运行时可变字段）。
@@ -127,7 +128,10 @@ description: "当你需要在不通读全部代码的情况下快速理解 Siriu
   - SKILL 文件需导出 `SKILL_META` 字典和 `run(**kwargs)` 函数
   - `SKILL_META["dependencies"]`：可选显式声明第三方包名列表，框架自动安装
   - 持久化数据通过 `data_store` 参数自动注入到 `run()` 中
-- ✨ **意图分析** (`core/intent.py`)：分析用户消息意图（question/request/chat/reaction/information_share/command），优化回复意愿评分与系统提示词段落。LLM 路径通过 `enable_intent_analysis=True` 启用；默认使用零开销关键词回退路径。
+- ✨ **参与决策系统** (`core/heat.py` + `core/intent_v2.py` + `core/engagement.py`)：三级架构替代旧意愿分系统。
+  - `HeatAnalyzer`：零 LLM 开销的群聊热度分析（消息密度 / 活跃参与者数 / AI 参与比）
+  - `IntentAnalyzer` v2：意图分类 + 显式 `target` 识别（ai/others/everyone/unknown），LLM 路径通过 `enable_intent_analysis=True` 启用
+  - `EngagementCoordinator`：融合热度、意图、`engagement_sensitivity` 输出最终回复决策（`EngagementDecision`）
 - ✨ **后台任务** (`background_tasks.py`)：轻量级 asyncio 定时循环管理器，支持记忆压缩、临时清理和记忆归纳三类后台任务。记忆归纳循环定时调用 LLM 合并冗余事件/摘要/事实。
 - `providers/base.py` 定义 provider 协议。
 - `providers/middleware/` 是 Provider 功能扩展层（✨ 新增 P1-003）：

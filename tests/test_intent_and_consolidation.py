@@ -2,7 +2,7 @@
 意图分析与记忆归纳测试
 
 覆盖范围：
-- IntentAnalyzer.fallback_analysis: 关键词匹配、意图分类、willingness_modifier
+- IntentAnalyzer.fallback_analysis: 关键词匹配、意图分类、target 判定
 - IntentAnalyzer._parse_response: LLM JSON 解析、错误容忍
 - EventMemoryManager.consolidate_entries: 归纳合并、阈值跳过
 - UserMemoryManager.consolidate_summary_notes: 摘要归纳
@@ -17,7 +17,7 @@ import pytest
 from datetime import datetime
 from pathlib import Path
 
-from sirius_chat.core.intent import IntentAnalysis, IntentAnalyzer, INTENT_TYPES
+from sirius_chat.core.intent_v2 import IntentAnalysis, IntentAnalyzer, INTENT_TYPES
 from sirius_chat.memory.event.manager import EventMemoryManager
 from sirius_chat.memory.event.models import EventMemoryEntry
 from sirius_chat.memory.user.manager import UserMemoryManager
@@ -52,7 +52,7 @@ class AsyncMockProvider:
 class TestFallbackAnalysis:
     """IntentAnalyzer.fallback_analysis 关键词匹配逻辑."""
 
-    @pytest.mark.parametrize("content,expected_type,mod_positive", [
+    @pytest.mark.parametrize("content,expected_type,is_actionable", [
         ("今天天气怎么样？", "question", True),
         ("What's going on?", "question", True),
         ("请帮我查一下资料", "request", True),
@@ -63,36 +63,44 @@ class TestFallbackAnalysis:
         ("ok", "reaction", False),
         ("今天在公司遇到了很多事情呢", "chat", False),
     ])
-    def test_intent_type_classification(self, content: str, expected_type: str, mod_positive: bool):
+    def test_intent_type_classification(self, content: str, expected_type: str, is_actionable: bool):
         result = IntentAnalyzer.fallback_analysis(content, "助手", "")
         assert result.intent_type == expected_type
-        if mod_positive:
-            assert result.willingness_modifier > 0
-        else:
-            assert result.willingness_modifier <= 0
+        # Actionable intents (question/request) should have importance > 0
+        if is_actionable:
+            assert result.importance > 0
+        # Reaction type should not drive engagement
+        if expected_type == "reaction":
+            assert result.importance <= 0.5
 
     def test_directed_at_ai_by_name(self):
         result = IntentAnalyzer.fallback_analysis("小助手你好", "小助手", "")
         assert result.directed_at_ai is True
+        assert result.target == "ai"
 
     def test_directed_at_ai_by_alias(self):
         result = IntentAnalyzer.fallback_analysis("阿助你好", "助手", "阿助")
         assert result.directed_at_ai is True
+        assert result.target == "ai"
 
-    def test_directed_at_ai_by_pronoun(self):
+    def test_pronoun_maps_to_unknown_not_ai(self):
+        """核心修复：裸代词「你」不再直接指向 AI，而是 unknown。"""
         result = IntentAnalyzer.fallback_analysis("你觉得呢", "助手", "")
-        assert result.directed_at_ai is True
+        assert result.target == "unknown"
+        assert result.directed_at_ai is False
 
-    def test_not_directed_reduces_modifier(self):
+    def test_target_others_when_mentioning_participant(self):
+        """提及其他参与者时 target 应为 others。"""
+        result = IntentAnalyzer.fallback_analysis("小王你觉得呢", "助手", "", ["小王", "小李"])
+        assert result.target == "others"
+        assert result.directed_at_ai is False
+
+    def test_directed_at_ai_engagement_higher_than_ambient(self):
+        """直接提及 AI 的消息 importance 应高于普通消息。"""
         directed = IntentAnalyzer.fallback_analysis("助手你好吗？", "助手", "")
         not_directed = IntentAnalyzer.fallback_analysis("明天有空吗？", "NoMatch", "")
-        # Not-directed should have lower modifier
-        assert not_directed.willingness_modifier < directed.willingness_modifier
-
-    def test_modifier_clamped(self):
-        result = IntentAnalyzer.fallback_analysis("好", "NoMatch", "NoAlias")
-        assert result.willingness_modifier >= -0.2
-        assert result.willingness_modifier <= 0.3
+        assert directed.directed_at_ai is True
+        assert not_directed.directed_at_ai is False
 
     def test_fallback_has_reason_and_evidence(self):
         result = IntentAnalyzer.fallback_analysis("请帮我看看这个", "助手", "")
@@ -109,7 +117,7 @@ class TestParseResponse:
     def test_valid_json(self):
         raw = json.dumps({
             "intent_type": "question",
-            "directed_at_ai": True,
+            "target": "ai",
             "importance": 0.8,
             "needs_memory": False,
             "needs_summary": True,
@@ -119,14 +127,14 @@ class TestParseResponse:
         result = IntentAnalyzer._parse_response(raw)
         assert result.intent_type == "question"
         assert result.directed_at_ai is True
-        assert result.willingness_modifier > 0
+        assert result.target == "ai"
         assert "participant_memory" in result.skip_sections
         assert "session_summary" not in result.skip_sections
         assert result.reason == "用户在询问天气"
         assert result.evidence_span == "天气怎么样"
 
     def test_markdown_fenced_json(self):
-        raw = '```json\n{"intent_type":"request","directed_at_ai":true,"importance":0.6,"needs_memory":true,"needs_summary":false}\n```'
+        raw = '```json\n{"intent_type":"request","target":"ai","importance":0.6,"needs_memory":true,"needs_summary":false}\n```'
         result = IntentAnalyzer._parse_response(raw)
         assert result.intent_type == "request"
         assert "session_summary" in result.skip_sections
@@ -134,7 +142,7 @@ class TestParseResponse:
     def test_invalid_json_returns_default(self):
         result = IntentAnalyzer._parse_response("not valid json at all")
         assert result.intent_type == "chat"
-        assert result.willingness_modifier == 0.0
+        assert result.target == "unknown"
 
     def test_invalid_json_logs_warning(self, caplog):
         caplog.set_level("WARNING")
@@ -156,41 +164,43 @@ class TestParseResponse:
         assert len(result.evidence_span) == 120
 
     def test_unknown_intent_type_defaults_to_chat(self):
-        raw = json.dumps({"intent_type": "unknown_type", "directed_at_ai": True, "importance": 0.5})
+        raw = json.dumps({"intent_type": "unknown_type", "target": "ai", "importance": 0.5})
         result = IntentAnalyzer._parse_response(raw)
         assert result.intent_type == "chat"
 
     def test_importance_clamped(self):
-        raw = json.dumps({"intent_type": "question", "directed_at_ai": True, "importance": 5.0})
+        raw = json.dumps({"intent_type": "question", "target": "ai", "importance": 5.0})
         result = IntentAnalyzer._parse_response(raw)
         assert result.confidence <= 1.0
 
-    def test_reaction_negative_modifier(self):
+    def test_reaction_low_importance(self):
         raw = json.dumps({
             "intent_type": "reaction",
-            "directed_at_ai": True,
+            "target": "ai",
             "importance": 0.2,
             "needs_memory": True,
             "needs_summary": True,
         })
         result = IntentAnalyzer._parse_response(raw)
-        assert result.willingness_modifier < 0
+        assert result.importance <= 0.3
 
-    def test_not_directed_at_ai_reduces_modifier(self):
+    def test_not_directed_at_ai_target(self):
         raw = json.dumps({
             "intent_type": "question",
-            "directed_at_ai": False,
+            "target": "others",
             "importance": 0.5,
         })
         result = IntentAnalyzer._parse_response(raw)
-        # question gives positive, but not-directed subtracts 0.15
+        assert result.directed_at_ai is False
+        assert result.target == "others"
         directed_raw = json.dumps({
             "intent_type": "question",
-            "directed_at_ai": True,
+            "target": "ai",
             "importance": 0.5,
         })
         directed_result = IntentAnalyzer._parse_response(directed_raw)
-        assert result.willingness_modifier < directed_result.willingness_modifier
+        assert directed_result.directed_at_ai is True
+        assert directed_result.target == "ai"
 
 
 # ── IntentAnalyzer.analyze LLM integration ──────────────────────────
@@ -203,7 +213,7 @@ class TestAnalyzeLLM:
         async def _run():
             response = json.dumps({
                 "intent_type": "question",
-                "directed_at_ai": True,
+                "target": "ai",
                 "importance": 0.7,
                 "needs_memory": True,
                 "needs_summary": False,
@@ -217,12 +227,14 @@ class TestAnalyzeLLM:
                 content="你知道明天什么天气吗？",
                 agent_name="助手",
                 agent_alias="",
+                participant_names=["小王"],
                 recent_messages=[{"role": "user", "content": "hello"}],
                 call_provider=call_provider,
                 model="mock-model",
             )
             assert result.intent_type == "question"
             assert result.directed_at_ai is True
+            assert result.target == "ai"
             assert "session_summary" in result.skip_sections
 
         asyncio.run(_run())
@@ -236,6 +248,7 @@ class TestAnalyzeLLM:
                 content="请帮忙看一下",
                 agent_name="助手",
                 agent_alias="",
+                participant_names=[],
                 recent_messages=[],
                 call_provider=failing_provider,
                 model="mock-model",

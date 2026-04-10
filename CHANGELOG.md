@@ -4,6 +4,24 @@
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-04-11
+
+### Added
+- **三级参与决策系统**：完全重写旧意愿分系统（~15 个 auto_reply_* 参数），替换为三个协作子系统：
+  - **HeatAnalyzer** (`core/heat.py`)：零 LLM 开销的群聊热度分析，基于消息密度、活跃参与者数和 AI 参与比计算热度等级（cold/warm/hot/overheated）。
+  - **IntentAnalyzer v2** (`core/intent_v2.py`)：重写意图分析，新增显式 `target` 字段（ai/others/everyone/unknown），解决群聊中 AI 无法正确识别对话对象的问题。LLM 路径增强上下文（参与者列表 + 8 条近期消息）；关键词回退路径支持参与者名称匹配。
+  - **EngagementCoordinator** (`core/engagement.py`)：融合热度、意图和 `engagement_sensitivity` 输出最终回复决策（`EngagementDecision`），内置回复频率限制。
+- **简化配置**：仅 `engagement_sensitivity`（0–1，默认 0.5）和 `heat_window_seconds`（默认 60）两个参数。
+
+### Changed
+- **OrchestrationPolicy**：旧 auto_reply_* 参数保留但标记为 Legacy，新增 `engagement_sensitivity` 和 `heat_window_seconds`。
+- **core/engine.py**：`_process_live_turn` 流程重写为 heat → intent v2 → engagement coordinator → frequency limit。
+- **core/__init__.py / api/__init__.py**：导出更新为新模块。
+- **测试**：重写 `test_async_engine.py`、`test_intent_and_consolidation.py`、`test_self_memory.py` 中所有涉及旧意愿系统的用例。
+
+### Removed
+- 引擎内部方法 `_evaluate_reply_willingness`、`_compute_intent_score`、`_compute_addressing_score`、`_compute_event_relevance_score`、`_compute_richness_score`、`_deterministic_probability_roll`。
+
 ## [0.13.0] - 2026-04-10
 
 ### Added

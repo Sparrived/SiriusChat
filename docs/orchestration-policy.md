@@ -11,7 +11,7 @@
 - 多模态输入限流。
 - 提示词驱动消息分割（`split_marker`）。
 - 记忆管理器任务（`memory_manager_model`）。
-- `reply_mode="auto"` 下的回复意愿参数。
+- `reply_mode="auto"` 下的参与决策参数（热度 + 意图 + engagement_sensitivity）。
 - AI 自身记忆系统（日记 + 名词解释）。
 - 回复频率限制（滑动窗口）。
 
@@ -49,6 +49,8 @@
 - `memory_extract_batch_size`: `1`
 - `memory_extract_min_content_length`: `0`
 - `session_reply_mode`: `always`
+- `engagement_sensitivity`: `0.5`
+- `heat_window_seconds`: `60.0`
 - `enable_self_memory`: `true`
 - `self_memory_extract_batch_size`: `3`
 - `self_memory_max_diary_prompt_entries`: `6`
@@ -112,17 +114,8 @@
     "reply_frequency_max_replies": 8,
     "reply_frequency_exempt_on_mention": true,
     "session_reply_mode": "auto",
-    "auto_reply_base_score": 0.22,
-    "auto_reply_threshold": 0.58,
-    "auto_reply_threshold_min": 0.4,
-    "auto_reply_threshold_max": 0.72,
-    "auto_reply_threshold_boost_start_count": 4,
-    "auto_reply_probability_coefficient": 0.35,
-    "auto_reply_probability_floor": 0.05,
-    "auto_reply_user_cadence_seconds": 7.0,
-    "auto_reply_group_window_seconds": 8.0,
-    "auto_reply_group_penalty_start_count": 2,
-    "auto_reply_assistant_cooldown_seconds": 12.0
+    "engagement_sensitivity": 0.5,
+    "heat_window_seconds": 60.0
   }
 }
 ```
@@ -152,7 +145,7 @@
 - `memory_manager_model` 非空时启用记忆管理任务。
 - 该任务可使用 `task_budgets["memory_manager"]` 与 `task_retries["memory_manager"]`。
 
-## 回复意愿参数（reply_mode=auto）
+## 参与决策参数（reply_mode=auto）
 
 会话级策略由 `session_reply_mode` 控制，可用值：
 
@@ -162,19 +155,22 @@
 - `smart`（等价于 `auto`）
 - `silent` / `none` / `no_reply`（等价于 `never`）
 
-概率与阈值相关参数：
+**新版参与决策系统**（v0.14.0+）：
 
-- `auto_reply_base_score`
-- `auto_reply_threshold`
-- `auto_reply_threshold_min`
-- `auto_reply_threshold_max`
+- `engagement_sensitivity`：参与敏感度（0.0=克制，1.0=积极，默认 0.5）。
+  - 影响 ambient 消息的基线分和决策阈值
+  - 影响 `target=others` 消息的插话概率
+- `heat_window_seconds`：热度分析的滑动窗口长度（默认 60 秒）。
+
+**旧版参数**（向后兼容，已弃用）：
+
+- `auto_reply_base_score`、`auto_reply_threshold`、`auto_reply_threshold_min`、`auto_reply_threshold_max`
 - `auto_reply_threshold_boost_start_count`
-- `auto_reply_probability_coefficient`
-- `auto_reply_probability_floor`
-- `auto_reply_user_cadence_seconds`
-- `auto_reply_group_window_seconds`
-- `auto_reply_group_penalty_start_count`
+- `auto_reply_probability_coefficient`、`auto_reply_probability_floor`
+- `auto_reply_user_cadence_seconds`、`auto_reply_group_window_seconds`、`auto_reply_group_penalty_start_count`
 - `auto_reply_assistant_cooldown_seconds`
+
+这些参数仍可设置但不会影响新版参与决策系统。
 
 ## AI 自身记忆参数
 
@@ -198,6 +194,7 @@
 - 模型路由模式互斥与必填规则。
 - `memory_extract_batch_size > 0`。
 - `memory_extract_min_content_length >= 0`。
-- 回复模式与阈值/概率/时间参数的取值范围合法。
+- `engagement_sensitivity` 在 [0.0, 1.0] 范围内。
+- `heat_window_seconds > 0`。
 
 若配置非法，会在 `SessionConfig` 初始化阶段抛出 `ValueError`。

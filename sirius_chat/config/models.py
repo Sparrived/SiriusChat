@@ -116,8 +116,12 @@ class OrchestrationPolicy:
     consolidation_min_notes: int = 4   # 摘要最少条数
     consolidation_min_facts: int = 15  # 事实最少条数
 
-    # Reply willingness configuration (auto reply mode)
+    # Engagement decision system (参与决策系统, v0.14.0 重写)
     session_reply_mode: str = "always"  # auto|always|never
+    engagement_sensitivity: float = 0.5  # 0.0(极度克制) - 1.0(积极参与)
+    heat_window_seconds: float = 60.0    # 热度分析滑动窗口（秒）
+
+    # Legacy auto_reply parameters (向后兼容, 内部忽略)
     auto_reply_base_score: float = 0.22
     auto_reply_threshold: float = 0.58
     auto_reply_threshold_min: float = 0.40
@@ -192,30 +196,10 @@ class OrchestrationPolicy:
                 "session_reply_mode 仅支持 auto/smart/always/never/silent/none/no_reply。"
             )
 
-        if not 0.0 <= self.auto_reply_base_score <= 1.0:
-            raise ValueError("auto_reply_base_score 必须在 [0,1] 范围内。")
-        if not 0.0 <= self.auto_reply_threshold <= 1.0:
-            raise ValueError("auto_reply_threshold 必须在 [0,1] 范围内。")
-        if not 0.0 <= self.auto_reply_threshold_min <= 1.0:
-            raise ValueError("auto_reply_threshold_min 必须在 [0,1] 范围内。")
-        if not 0.0 <= self.auto_reply_threshold_max <= 1.0:
-            raise ValueError("auto_reply_threshold_max 必须在 [0,1] 范围内。")
-        if self.auto_reply_threshold_min > self.auto_reply_threshold_max:
-            raise ValueError("auto_reply_threshold_min 不能大于 auto_reply_threshold_max。")
-        if self.auto_reply_threshold_boost_start_count < 0:
-            raise ValueError("auto_reply_threshold_boost_start_count 不能小于 0。")
-        if not 0.0 <= self.auto_reply_probability_coefficient <= 1.0:
-            raise ValueError("auto_reply_probability_coefficient 必须在 [0,1] 范围内。")
-        if not 0.0 <= self.auto_reply_probability_floor <= 1.0:
-            raise ValueError("auto_reply_probability_floor 必须在 [0,1] 范围内。")
-        if self.auto_reply_user_cadence_seconds <= 0:
-            raise ValueError("auto_reply_user_cadence_seconds 必须大于 0。")
-        if self.auto_reply_group_window_seconds <= 0:
-            raise ValueError("auto_reply_group_window_seconds 必须大于 0。")
-        if self.auto_reply_group_penalty_start_count < 0:
-            raise ValueError("auto_reply_group_penalty_start_count 不能小于 0。")
-        if self.auto_reply_assistant_cooldown_seconds <= 0:
-            raise ValueError("auto_reply_assistant_cooldown_seconds 必须大于 0。")
+        if not 0.0 <= self.engagement_sensitivity <= 1.0:
+            raise ValueError("engagement_sensitivity 必须在 [0,1] 范围内。")
+        if self.heat_window_seconds <= 0:
+            raise ValueError("heat_window_seconds 必须大于 0。")
         if self.message_debounce_seconds < 0:
             raise ValueError("message_debounce_seconds 不能小于 0。")
 

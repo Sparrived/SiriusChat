@@ -29,7 +29,7 @@ from sirius_chat.api.models import (
     Transcript,
     User,
 )
-from sirius_chat.core.intent import IntentAnalysis, IntentAnalyzer
+from sirius_chat.core.intent_v2 import IntentAnalysis, IntentAnalyzer
 from sirius_chat.background_tasks import BackgroundTaskConfig, BackgroundTaskManager
 from sirius_chat.api.prompting import (
     GENERATED_AGENTS_FILE_NAME,
