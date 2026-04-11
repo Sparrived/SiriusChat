@@ -4,6 +4,18 @@
 
 ## [Unreleased]
 
+## [0.15.1] - 2026-04-11
+
+### Changed
+- NewAPI provider 的 `base_url` 统一改为框架内固定值，不再接受外部覆盖。
+- 路由与 provider 注册流程对 `newapi` 类型忽略外部 `base_url` 输入。
+
+### Added
+- 新增测试覆盖：验证 `NewAPIProvider` 不接受 `base_url` 参数，以及注册后 `newapi` 的持久化配置不写入 `base_url`。
+
+### Fixed
+- 同步更新 README、架构文档、外部接入文档与 SKILL 文档，修正 NewAPI `base_url` 可配置描述。
+
 ## [0.15.0] - 2026-04-11
 
 ### Removed

@@ -222,7 +222,7 @@ class AutoRoutingProvider(LLMProvider):
                 base_url=config.base_url or "https://ark.cn-beijing.volces.com/api/v3",
             )
         if config.provider_type in _NEWAPI_PROVIDER_TYPES:
-            return NewAPIProvider(api_key=config.api_key, base_url=config.base_url or "https://docs.newapi.pro")
+            return NewAPIProvider(api_key=config.api_key)
         if config.provider_type in _OPENAI_PROVIDER_TYPES:
             return OpenAICompatibleProvider(api_key=config.api_key, base_url=config.base_url or "https://api.openai.com")
         raise RuntimeError(f"不支持的提供商类型：{config.provider_type}")
@@ -284,7 +284,7 @@ def _create_provider_from_config(config: ProviderConfig) -> LLMProvider:
             base_url=config.base_url or "https://ark.cn-beijing.volces.com/api/v3",
         )
     if provider_type in _NEWAPI_PROVIDER_TYPES:
-        return NewAPIProvider(api_key=config.api_key, base_url=config.base_url or "https://docs.newapi.pro")
+        return NewAPIProvider(api_key=config.api_key)
     return OpenAICompatibleProvider(api_key=config.api_key, base_url=config.base_url or "https://api.openai.com")
 
 
@@ -330,10 +330,14 @@ def register_provider_with_validation(
     if not api_key.strip():
         raise RuntimeError("注册 provider 需要提供 API Key")
 
+    effective_base_url = ""
+    if normalized_provider_type not in _NEWAPI_PROVIDER_TYPES:
+        effective_base_url = base_url.strip()
+
     config = ProviderConfig(
         provider_type=normalized_provider_type,
         api_key=api_key.strip(),
-        base_url=base_url.strip(),
+        base_url=effective_base_url,
         healthcheck_model=model_name,
         enabled=True,
     )

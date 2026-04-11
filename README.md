@@ -363,8 +363,7 @@ msg = Message(
   "providers": [
     {
       "type": "newapi",
-      "api_key": "sk-...",
-      "base_url": "https://docs.newapi.pro"
+      "api_key": "sk-..."
     }
   ],
   "agent": {
@@ -374,7 +373,7 @@ msg = Message(
 }
 ```
 
-**说明：** NewAPI 文档声明 AI 模型接口兼容 OpenAI 格式，使用 `/v1/chat/completions`。
+**说明：** NewAPI 文档声明 AI 模型接口兼容 OpenAI 格式，使用 `/v1/chat/completions`，其基地址由框架内部固定维护，不支持外部覆盖。
 
 ### 🔹 火山方舟（Volcengine Ark）配置
 

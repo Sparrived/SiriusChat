@@ -62,8 +62,8 @@ _PROVIDER_SPECS: list[dict] = [
         "model": "gpt-4o-mini",
         "patch_target": "sirius_chat.providers.openai_compatible.urllib_request.urlopen",
         "expected_url": "https://docs.newapi.pro/v1/chat/completions",
-        "custom_url": "https://docs.newapi.pro/v1",
-        "custom_url_result": "https://docs.newapi.pro/v1/chat/completions",
+        "custom_url": None,
+        "custom_url_result": None,
         "has_reasoning": False,
     },
     {
@@ -165,6 +165,11 @@ def test_provider_handles_custom_base_url(spec: dict) -> None:
         provider.generate(_make_request(spec["model"]))
     called_request = mocked.call_args[0][0]
     assert called_request.full_url == spec["custom_url_result"]
+
+
+def test_newapi_provider_rejects_custom_base_url_argument() -> None:
+    with pytest.raises(TypeError):
+        NewAPIProvider(api_key="test-key", base_url="https://example.com")  # type: ignore[call-arg]
 
 
 # ---------------------------------------------------------------------------

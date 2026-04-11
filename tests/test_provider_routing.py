@@ -259,6 +259,7 @@ def test_register_newapi_provider_with_validation_persists_healthcheck_model(tmp
     assert provider_type == "newapi"
     providers = ProviderRegistry(tmp_path).load()
     assert providers["newapi"].healthcheck_model == "gpt-4o-mini"
+    assert providers["newapi"].base_url == ""
 
 
 def test_ensure_provider_platform_supported_normalizes_alias() -> None:

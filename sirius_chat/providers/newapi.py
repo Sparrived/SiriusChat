@@ -16,14 +16,10 @@ class NewAPIProvider(OpenAICompatibleProvider):
         self,
         *,
         api_key: str,
-        base_url: str = DEFAULT_NEWAPI_BASE_URL,
         timeout_seconds: int = 30,
     ) -> None:
-        normalized = base_url.rstrip("/")
-        if normalized.endswith("/v1"):
-            normalized = normalized[: -len("/v1")]
         super().__init__(
-            base_url=normalized,
+            base_url=DEFAULT_NEWAPI_BASE_URL,
             api_key=api_key,
             timeout_seconds=timeout_seconds,
         )

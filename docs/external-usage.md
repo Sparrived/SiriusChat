@@ -272,7 +272,7 @@ provider = NewAPIProvider(
 说明：
 
 - `NewAPIProvider` 默认基地址为 `https://docs.newapi.pro`。
-- 若外部配置传入 `https://docs.newapi.pro/v1` 也可兼容，内部会自动规范化。
+- `NewAPIProvider` 的基地址由框架内部固定维护，不支持外部传入或覆盖。
 - 接口路径遵循 OpenAI 兼容的 `/v1/chat/completions`。
 
 若使用 DeepSeek，可使用：
