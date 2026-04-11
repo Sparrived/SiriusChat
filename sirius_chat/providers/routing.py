@@ -241,15 +241,6 @@ class AutoRoutingProvider(LLMProvider):
             if self._provider_matches_model(provider, model):
                 return provider
 
-        # Heuristic fallback for common model namespaces.
-        if "/" in model and any(key in self._providers for key in _SILICONFLOW_PROVIDER_TYPES):
-            return self._providers["siliconflow"]
-        if model.startswith("deepseek-") and any(key in self._providers for key in _DEEPSEEK_PROVIDER_TYPES):
-            return self._providers["deepseek"]
-        if model.startswith("doubao-") and any(key in self._providers for key in _VOLCENGINE_ARK_PROVIDER_TYPES):
-            # Doubao models are commonly served by Volcengine Ark endpoints.
-            return self._providers["volcengine-ark"] if "volcengine-ark" in self._providers else self._providers["ark"]
-
         return next(iter(self._providers.values()))
 
     def generate(self, request: GenerationRequest) -> str:
