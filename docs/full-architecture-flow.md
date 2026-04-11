@@ -26,7 +26,7 @@ flowchart TD
     G4 --> H{orchestration<br/>enabled?}
     H -- 并行辅助任务 --> I["memory_extract<br/>用户画像提取<br/>（携带上下文）"]
     H -- 并行辅助任务 --> J2["event_extract<br/>事件特征提取"]
-    H -- 并行辅助任务 --> J3["intent_analysis_v2<br/>意图分类 + target 识别<br/>reason / evidence_span / target"]
+    H -- 并行辅助任务 --> J3["intent_analysis<br/>意图分类 + target 识别<br/>支持预算 / 重试 / 专用模型"]
     I --> K
     J2 --> K
     J3 --> K["参与决策<br/>HeatAnalyzer → IntentAnalyzer v2<br/>→ EngagementCoordinator"]

@@ -61,8 +61,8 @@ def setup_multimodel_config(
 
     Args:
         session_config: 现有的 SessionConfig 对象
-        task_models: 任务模型映射，例如 {"memory_extract": "model-1", "event_extract": "model-2"}
-        task_budgets: 各任务的 token 预算，例如 {"memory_extract": 1200, "event_extract": 1000}
+        task_models: 任务模型映射，例如 {"memory_extract": "model-1", "event_extract": "model-2", "intent_analysis": "model-3"}
+        task_budgets: 各任务的 token 预算，例如 {"memory_extract": 1200, "event_extract": 1000, "intent_analysis": 600}
         task_temperatures: 各任务的采样温度，例如 {"memory_extract": 0.1}
         task_max_tokens: 各任务的最大 token 数，例如 {"memory_extract": 128}
         task_retries: 各任务的重试次数，例如 {"memory_extract": 1}
@@ -80,10 +80,12 @@ def setup_multimodel_config(
         ...     task_models={
         ...         "memory_extract": "doubao-seed-2-0-lite-260215",
         ...         "event_extract": "doubao-seed-2-0-lite-260215",
+        ...         "intent_analysis": "gpt-4o-mini",
         ...     },
         ...     task_budgets={
         ...         "memory_extract": 1200,
         ...         "event_extract": 1000,
+        ...         "intent_analysis": 600,
         ...     },
         ...     task_temperatures={
         ...         "memory_extract": 0.1,
@@ -133,8 +135,8 @@ def create_multimodel_config(
     Example:
         >>> from sirius_chat.api import create_multimodel_config
         >>> mm_config = create_multimodel_config(
-        ...     task_models={"memory_extract": "model-1"},
-        ...     task_budgets={"memory_extract": 1200},
+        ...     task_models={"memory_extract": "model-1", "intent_analysis": "model-2"},
+        ...     task_budgets={"memory_extract": 1200, "intent_analysis": 600},
         ... )
         >>> orchestration = mm_config.to_orchestration_policy()
     """

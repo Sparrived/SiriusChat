@@ -38,11 +38,12 @@ from sirius_chat.cli_diagnostics import (
     generate_default_config,
     run_preflight_check,
 )
+from sirius_chat.config.helpers import build_orchestration_policy_from_dict
 from sirius_chat.logging_config import configure_logging, setup_log_archival, get_logger
 
 InputFunc = Callable[[str], str]
 PrintFunc = Callable[[str], None]
-ProviderFactory = Callable[[dict[str, str]], LLMProvider]
+ProviderFactory = Callable[[dict[str, object]], LLMProvider]
 REPO_ROOT = Path(__file__).resolve().parent
 LAST_CONFIG_PATH_FILE = REPO_ROOT / ".last_config_path"
 DEFAULT_WORK_PATH = REPO_ROOT / "data"
@@ -98,46 +99,6 @@ def _load_session_config(config_path: Path, work_path: Path) -> tuple[SessionCon
     if not generated_agent_key:
         raise ValueError("必需提供 generated_agent_key")
 
-    # 构建orchestration配置：仅在配置中有实际内容时才创建，否则使用None让SessionConfig使用默认值（unified_model=agent.model）
-    orch_config = raw.get("orchestration", {})
-    unified_model = str(orch_config.get("unified_model", "")).strip()
-    task_models = {
-        str(k): str(v)
-        for k, v in dict(orch_config.get("task_models", {})).items()
-        if str(k).strip() and str(v).strip()
-    }
-    
-    # 若两种配置方案都未提供，则传递None，让SessionConfig使用默认方案1（unified_model=agent.model）
-    if unified_model or task_models:
-        orchestration = OrchestrationPolicy(
-            unified_model=unified_model,
-            task_models=task_models,
-            task_budgets={
-                str(k): int(v)
-                for k, v in dict(orch_config.get("task_budgets", {})).items()
-                if str(k).strip()
-            },
-            task_temperatures={
-                str(k): float(v)
-                for k, v in dict(orch_config.get("task_temperatures", {})).items()
-                if str(k).strip()
-            },
-            task_max_tokens={
-                str(k): int(v)
-                for k, v in dict(orch_config.get("task_max_tokens", {})).items()
-                if str(k).strip()
-            },
-            task_retries={
-                str(k): int(v)
-                for k, v in dict(orch_config.get("task_retries", {})).items()
-                if str(k).strip()
-            },
-            max_multimodal_inputs_per_turn=int(orch_config.get("max_multimodal_inputs_per_turn", 4)),
-            max_multimodal_value_length=int(orch_config.get("max_multimodal_value_length", 4096)),
-        )
-    else:
-        orchestration = None
-
     session = create_session_config_from_selected_agent(
         work_path=work_path,
         agent_key=generated_agent_key,
@@ -145,8 +106,16 @@ def _load_session_config(config_path: Path, work_path: Path) -> tuple[SessionCon
         history_max_chars=int(raw.get("history_max_chars", 6000)),
         max_recent_participant_messages=int(raw.get("max_recent_participant_messages", 5)),
         enable_auto_compression=bool(raw.get("enable_auto_compression", True)),
-        orchestration=orchestration,
     )
+
+    orchestration = build_orchestration_policy_from_dict(
+        raw.get("orchestration", {}),
+        agent_model=session.agent.model,
+        return_none_if_empty=True,
+    )
+    if orchestration is not None:
+        session.orchestration = orchestration
+        session.orchestration.validate()
 
     # 加载 providers 列表（必需）
     providers_config = list(raw.get("providers", []))
@@ -911,7 +880,7 @@ def main(
             print_func=print_func,
         )
 
-        output_path = Path(args.output) if args.output else work_path / "transcript.json"
+        output_path = Path(args.output) if args.output else Path("transcript.json")
         if not output_path.is_absolute():
             output_path = work_path / output_path
         _write_transcript_output(transcript, output_path)

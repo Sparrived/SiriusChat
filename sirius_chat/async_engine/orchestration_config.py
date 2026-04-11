@@ -27,6 +27,7 @@ def configure_orchestration_models(
             支持的任务名：
             - memory_extract: 用户记忆提取
             - event_extract: 事件提取
+            - intent_analysis: 意图分析
             - memory_manager: 记忆管理器
             
     Returns:

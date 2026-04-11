@@ -12,7 +12,8 @@ import re
 from pathlib import Path
 from typing import Any
 
-from sirius_chat.config.models import Agent, AgentPreset, OrchestrationPolicy, SessionConfig
+from sirius_chat.config.helpers import build_orchestration_policy_from_dict
+from sirius_chat.config.models import Agent, AgentPreset, SessionConfig
 
 
 class ConfigManager:
@@ -196,39 +197,9 @@ class ConfigManager:
             global_system_prompt=config_dict.get("global_system_prompt", ""),
         )
 
-        # Build OrchestrationPolicy
-        orch_dict = config_dict.get("orchestration", {})
-        # 如果既没有 unified_model 也没有 task_models，使用 agent 的模型作为 unified_model
-        unified_model = orch_dict.get("unified_model", "")
-        task_models = orch_dict.get("task_models", {})
-        if not unified_model and not task_models:
-            # 使用 agent 的模型作为默认的统一模型
-            unified_model = agent.model
-        
-        orchestration = OrchestrationPolicy(
-            unified_model=unified_model,
-            task_models=task_models,
-            # task_enabled 控制功能开关，默认所有任务启用
-            # 若启用，则根据 unified_model/task_models 选择调用哪个模型
-            task_enabled=orch_dict.get("task_enabled", {
-                "memory_extract": True,
-                "event_extract": True,
-            }),
-            task_budgets=orch_dict.get("task_budgets", {}),
-            task_temperatures=orch_dict.get("task_temperatures", {}),
-            task_max_tokens=orch_dict.get("task_max_tokens", {}),
-            task_retries=orch_dict.get("task_retries", {}),
-            max_multimodal_inputs_per_turn=int(
-                orch_dict.get("max_multimodal_inputs_per_turn", 4)
-            ),
-            max_multimodal_value_length=int(
-                orch_dict.get("max_multimodal_value_length", 4096)
-            ),
-            enable_prompt_driven_splitting=orch_dict.get("enable_prompt_driven_splitting", True),
-            split_marker=orch_dict.get("split_marker", "<MSG_SPLIT>"),
-            memory_manager_model=orch_dict.get("memory_manager_model", ""),
-            memory_manager_temperature=float(orch_dict.get("memory_manager_temperature", 0.3)),
-            memory_manager_max_tokens=int(orch_dict.get("memory_manager_max_tokens", 512)),
+        orchestration = build_orchestration_policy_from_dict(
+            config_dict.get("orchestration", {}),
+            agent_model=agent.model,
         )
 
         # Build SessionConfig

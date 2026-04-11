@@ -4,6 +4,16 @@
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-04-11
+
+### Added
+- 将意图分析器正式纳入任务编排体系，新增 `intent_analysis` 任务配置入口，可通过 `task_enabled`、`task_models`、`task_budgets`、`task_temperatures`、`task_max_tokens`、`task_retries` 单独控制。
+- 新增迁移文档 `docs/migration-v0.16.md`，说明如何从 `enable_intent_analysis` / `intent_analysis_model` 迁移到统一任务配置。
+
+### Changed
+- `reply_mode=auto` / `smart` 下的 LLM 意图分析现在走统一任务执行路径，支持预算、重试、统计与专用模型配置；任务关闭、预算超限或调用失败时自动退回关键词回退路径。
+- `main.py`、库内 `sirius_chat` CLI 与 `ConfigManager` 现在会完整加载 orchestration JSON 中的任务开关、模型、预算和参与决策相关设置，不再忽略这部分配置。
+
 ## [0.15.8] - 2026-04-11
 
 ### Fixed

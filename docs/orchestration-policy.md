@@ -6,7 +6,7 @@
 
 `OrchestrationPolicy` 负责控制：
 
-- 辅助任务的模型路由与开关（`memory_extract`、`event_extract`）。
+- 辅助任务的模型路由与开关（`memory_extract`、`event_extract`、`intent_analysis`）。
 - 各任务预算、温度、最大输出、重试次数。
 - 多模态输入限流。
 - 提示词驱动消息分割（`split_marker`）。
@@ -35,6 +35,7 @@
 
 - `memory_extract`: `true`
 - `event_extract`: `true`
+- `intent_analysis`: `true`
 
 其他关键默认值：
 
@@ -66,28 +67,34 @@
     "unified_model": "",
     "task_models": {
       "memory_extract": "doubao-seed-2-0-lite-260215",
-      "event_extract": "doubao-seed-2-0-lite-260215"
+      "event_extract": "doubao-seed-2-0-lite-260215",
+      "intent_analysis": "gpt-4o-mini"
     },
     "task_enabled": {
       "memory_extract": true,
-      "event_extract": true
+      "event_extract": true,
+      "intent_analysis": true
     },
     "task_budgets": {
       "memory_extract": 1200,
       "event_extract": 1000,
+      "intent_analysis": 600,
       "memory_manager": 800
     },
     "task_temperatures": {
       "memory_extract": 0.1,
-      "event_extract": 0.1
+      "event_extract": 0.1,
+      "intent_analysis": 0.1
     },
     "task_max_tokens": {
       "memory_extract": 128,
-      "event_extract": 192
+      "event_extract": 192,
+      "intent_analysis": 192
     },
     "task_retries": {
       "memory_extract": 1,
       "event_extract": 1,
+      "intent_analysis": 1,
       "memory_manager": 1
     },
     "max_multimodal_inputs_per_turn": 4,
@@ -118,7 +125,8 @@
 任务调度：
 
 - `task_enabled[task] = false` 时，任务直接跳过。
-- 任务未配置模型时不会调用该任务模型。
+- `intent_analysis` 未单独配置模型时，会依次回退到 `unified_model` 和 `agent.model`。
+- 其他任务未配置模型时不会调用该任务模型。
 - `task_budgets[task] <= 0` 或未设置，视为不限制预算。
 - 预算判断采用近似 token 估算（字符数 / 4，向上取整）。
 
@@ -155,6 +163,18 @@
   - 影响 ambient 消息的基线分和决策阈值
   - 影响 `target=others` 消息的插话概率
 - `heat_window_seconds`：热度分析的滑动窗口长度（默认 60 秒）。
+
+`intent_analysis` 任务设置：
+- `task_enabled["intent_analysis"]`：控制是否启用 LLM 意图分析；关闭后直接使用关键词回退路径。
+- `task_models["intent_analysis"]`：为意图分析指定专用模型。
+- `task_budgets["intent_analysis"]`：限制意图分析任务的 token 预算。
+- `task_temperatures["intent_analysis"]`：意图分析采样温度，默认 `0.1`。
+- `task_max_tokens["intent_analysis"]`：意图分析最大输出 token，默认 `192`。
+- `task_retries["intent_analysis"]`：意图分析失败时的重试次数。
+
+兼容说明：
+- `enable_intent_analysis` 与 `intent_analysis_model` 仍可使用，但已转为兼容字段。
+- 新配置建议统一迁移到 `task_*["intent_analysis"]`，迁移步骤见 `docs/migration-v0.16.md`。
 
 > **注意**：v0.14.1 已彻底移除旧版 `auto_reply_*` 参数。迁移详情见 `docs/migration-v0.14.md`。
 

@@ -39,13 +39,18 @@ config = create_session_config_from_selected_agent(
     agent_key="main_agent",
     orchestration=OrchestrationPolicy(
         unified_model="",  # 使用按任务配置模式
-        task_models={"memory_extract": "doubao-seed-2-0-lite-260215"},
-        task_budgets={"memory_extract": 1200},
-        task_temperatures={"memory_extract": 0.1},
-        task_max_tokens={"memory_extract": 128},
+        task_enabled={"memory_extract": True, "intent_analysis": True},
+        task_models={
+            "memory_extract": "doubao-seed-2-0-lite-260215",
+            "intent_analysis": "gpt-4o-mini",
+        },
+        task_budgets={"memory_extract": 1200, "intent_analysis": 600},
+        task_temperatures={"memory_extract": 0.1, "intent_analysis": 0.1},
+        task_max_tokens={"memory_extract": 128, "intent_analysis": 192},
         # 频率控制：每3条消息执行一次，且内容≥50字符
         memory_extract_batch_size=3,
         memory_extract_min_content_length=50,
+        session_reply_mode="auto",
     ),
 )
 
@@ -201,6 +206,7 @@ orchestration = OrchestrationPolicy(
     task_models={
         "memory_extract": "gpt-4o-mini",     # 用户记忆提取
         "event_extract": "gpt-4o-mini",      # 事件提取
+        "intent_analysis": "gpt-4o-mini",    # 意图分析（reply_mode=auto/smart）
         "memory_manager": "gpt-4o-mini",     # 记忆管理（可选）
     },
     
@@ -208,18 +214,22 @@ orchestration = OrchestrationPolicy(
     task_budgets={
         "memory_extract": 1200,    # token预算
         "event_extract": 800,
+        "intent_analysis": 600,
     },
     task_max_tokens={
         "memory_extract": 128,     # 最大输出token
         "event_extract": 256,
+        "intent_analysis": 192,
     },
     task_temperatures={
         "memory_extract": 0.1,     # 温度（越低越稳定）
         "event_extract": 0.3,
+        "intent_analysis": 0.1,
     },
     task_retries={
         "memory_extract": 2,       # 失败重试次数
         "event_extract": 1,
+        "intent_analysis": 1,
     },
     
     # === 执行频率控制 ===
@@ -239,9 +249,11 @@ orchestration = OrchestrationPolicy(
 
 **配置说明**：
 - 若 `unified_model` 设置，则覆盖所有 `task_models` 配置
+- `reply_mode=auto` / `smart` 下，意图分析会优先使用 `task_models["intent_analysis"]`；未设置时回退 `unified_model` 或主模型
 - 频率控制：当消息数达到批次大小且内容长度满足时，执行任务
 - SKILL 目录：框架会始终先创建 `{work_path}/skills/` 与 `README.md`；关闭 SKILL 仅影响调用，不影响目录引导文件生成
 - 提示词分割：当 `enable_prompt_driven_splitting=True` 时，系统提示会带分割指令，AI 会在适当位置输出 `<MSG_SPLIT>` 标记
+- 兼容字段 `enable_intent_analysis` / `intent_analysis_model` 仍然可用，但建议迁移到任务配置，详见 `docs/migration-v0.16.md`
 
 若使用 SiliconFlow，可直接替换 provider：
 

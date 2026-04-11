@@ -156,7 +156,7 @@ class AsyncRolePlayEngine:
             # 方案2：按任务配置模型，但仅检查启用的任务
             enabled_tasks = [
                 task for task in self._REQUIRED_TASKS
-                if orchestration.task_enabled.get(task, True)  # 检查启用的任务
+                if orchestration.is_task_enabled(task)
             ]
             
             missing_tasks = [
@@ -168,7 +168,7 @@ class AsyncRolePlayEngine:
                     {task: [task] for task in missing_tasks}
                 )
             enabled_flag = {
-                task: bool(orchestration.task_enabled.get(task, True))
+                task: bool(orchestration.is_task_enabled(task))
                 for task in self._REQUIRED_TASKS
             }
             log_key = (
@@ -202,13 +202,10 @@ class AsyncRolePlayEngine:
             ValueError: 如果无法确定任务模型
         """
         orchestration = config.orchestration
-        
-        # 优先返回统一模型（方案1）
-        if orchestration.unified_model:
-            return orchestration.unified_model
-        
-        # 其次返回按任务配置的模型（方案2）
-        model = orchestration.task_models.get(task_name)
+        model = orchestration.resolve_model_for_task(
+            task_name,
+            default_model=config.agent.model if task_name == self._TASK_INTENT_ANALYSIS else "",
+        )
         if model:
             return model
         
@@ -1163,10 +1160,13 @@ class AsyncRolePlayEngine:
         *,
         config: SessionConfig,
         transcript: Transcript,
+        participant: Participant,
         content: str,
+        task_token_usage: dict[str, int],
     ) -> IntentAnalysis:
         """执行新版意图分析（携带参与者上下文）。"""
         agent_alias = str(config.agent.metadata.get("alias", "")).strip()
+        task_name = self._TASK_INTENT_ANALYSIS
 
         # 从最近消息中提取参与者名称（排除 AI 自身）
         participant_names: list[str] = []
@@ -1176,17 +1176,12 @@ class AsyncRolePlayEngine:
                 seen.add(msg.speaker)
                 participant_names.append(msg.speaker)
 
-        if not config.orchestration.enable_intent_analysis:
+        if not config.orchestration.is_task_enabled(task_name):
             return IntentAnalyzer.fallback_analysis(
                 content, config.agent.name, agent_alias, participant_names,
             )
 
-        model = config.orchestration.intent_analysis_model.strip()
-        if not model:
-            try:
-                model = self.get_model_for_task(config, self._TASK_INTENT_ANALYSIS)
-            except ValueError:
-                model = config.agent.model
+        model = self.get_model_for_task(config, task_name)
 
         agent_alias = str(config.agent.metadata.get("alias", "")).strip()
 
@@ -1199,15 +1194,52 @@ class AsyncRolePlayEngine:
                     entry["speaker"] = msg.speaker
                 recent_messages.append(entry)
 
-        return await IntentAnalyzer.analyze(
+        request_payload = IntentAnalyzer.build_request(
             content=content,
             agent_name=config.agent.name,
             agent_alias=agent_alias,
             participant_names=participant_names,
             recent_messages=recent_messages,
-            call_provider=self._call_provider,
             model=model,
+            temperature=float(config.orchestration.task_temperatures.get(task_name, 0.1)),
+            max_tokens=int(config.orchestration.task_max_tokens.get(task_name, 192)),
         )
+
+        prompt_text = request_payload.system_prompt + "\n" + "\n".join(
+            str(item.get("content", "")) for item in request_payload.messages
+        )
+        estimated_cost = self._estimate_tokens(prompt_text)
+        used = task_token_usage.get(task_name, 0)
+        budget = int(config.orchestration.task_budgets.get(task_name, 0))
+
+        self._record_task_stat(transcript, task_name, "attempted")
+        if budget > 0 and used + estimated_cost > budget:
+            self._record_task_stat(transcript, task_name, "skipped_budget")
+            return IntentAnalyzer.fallback_analysis(
+                content, config.agent.name, agent_alias, participant_names,
+            )
+
+        retry_times = int(config.orchestration.task_retries.get(task_name, 0))
+        try:
+            raw = await self._call_provider_with_retry(
+                request_payload=request_payload,
+                retry_times=retry_times,
+                transcript=transcript,
+                task_name=task_name,
+                actor_id=participant.user_id,
+            )
+        except RuntimeError as exc:
+            self._record_task_stat(transcript, task_name, "failed_provider")
+            logger.warning("意图分析任务调用失败，使用回退: %s", exc)
+            return IntentAnalyzer.fallback_analysis(
+                content, config.agent.name, agent_alias, participant_names,
+            )
+
+        if retry_times > 0:
+            self._record_task_stat(transcript, task_name, "retry_enabled")
+        task_token_usage[task_name] = used + estimated_cost
+        self._record_task_stat(transcript, task_name, "succeeded")
+        return IntentAnalyzer._parse_response(raw)
 
     @staticmethod
     def _should_reply_for_turn(turn: Message) -> bool:
@@ -2274,7 +2306,9 @@ class AsyncRolePlayEngine:
             intent = await self._run_engagement_intent_analysis(
                 config=config,
                 transcript=transcript,
+                participant=participant,
                 content=turn.content,
+                task_token_usage=context.task_token_usage,
             )
             engagement = EngagementCoordinator.decide(
                 heat=heat,

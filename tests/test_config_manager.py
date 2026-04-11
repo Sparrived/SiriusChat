@@ -148,6 +148,41 @@ class TestConfigManager:
         assert session_config.orchestration.unified_model == "test-model"
         assert session_config.agent.metadata == {"key": "value"}
 
+    def test_dict_to_session_config_parses_intent_analysis_task_settings(self, config_manager: ConfigManager) -> None:
+        """Test ConfigManager parses intent_analysis task settings from JSON."""
+        config_dict = {
+            "work_path": "/tmp/test",
+            "global_system_prompt": "Test prompt",
+            "agent": {
+                "name": "TestAgent",
+                "persona": "Test persona",
+                "model": "test-model",
+            },
+            "orchestration": {
+                "task_enabled": {
+                    "memory_extract": False,
+                    "event_extract": False,
+                    "intent_analysis": True,
+                },
+                "task_models": {
+                    "intent_analysis": "intent-model",
+                },
+                "task_max_tokens": {
+                    "intent_analysis": 192,
+                },
+                "session_reply_mode": "auto",
+                "message_debounce_seconds": 0.0,
+            },
+        }
+
+        session_config = config_manager._dict_to_session_config(config_dict, Path("/tmp"))
+
+        assert session_config.orchestration.task_enabled["intent_analysis"] is True
+        assert session_config.orchestration.task_models["intent_analysis"] == "intent-model"
+        assert session_config.orchestration.task_max_tokens["intent_analysis"] == 192
+        assert session_config.orchestration.session_reply_mode == "auto"
+        assert session_config.orchestration.message_debounce_seconds == 0.0
+
     def test_resolve_values_nested(self, config_manager: ConfigManager) -> None:
         """Test recursive environment variable resolution."""
         os.environ["TEST_MODEL"] = "test-model-value"

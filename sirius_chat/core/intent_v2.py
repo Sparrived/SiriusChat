@@ -16,6 +16,8 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Callable, Awaitable
 
+from sirius_chat.providers.base import GenerationRequest
+
 logger = logging.getLogger(__name__)
 
 INTENT_TYPES = frozenset({
@@ -95,7 +97,39 @@ class IntentAnalyzer:
             call_provider: 异步 LLM 调用函数。
             model: 分析用模型名。
         """
-        from sirius_chat.providers.base import GenerationRequest
+        request = IntentAnalyzer.build_request(
+            content=content,
+            agent_name=agent_name,
+            agent_alias=agent_alias,
+            participant_names=participant_names,
+            recent_messages=recent_messages,
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+
+        try:
+            raw = await call_provider(request)
+            return IntentAnalyzer._parse_response(raw)
+        except Exception as exc:
+            logger.warning("意图分析 LLM 调用失败，使用回退: %s", exc)
+            return IntentAnalyzer.fallback_analysis(
+                content, agent_name, agent_alias, participant_names,
+            )
+
+    @staticmethod
+    def build_request(
+        *,
+        content: str,
+        agent_name: str,
+        agent_alias: str,
+        participant_names: list[str],
+        recent_messages: list[dict[str, str]],
+        model: str,
+        temperature: float = 0.1,
+        max_tokens: int = 192,
+    ) -> GenerationRequest:
+        """Build a GenerationRequest for the intent analysis task."""
 
         # 构造丰富的上下文
         context_lines: list[str] = []
@@ -117,7 +151,7 @@ class IntentAnalyzer:
             + f"\n\n当前消息: {content[:400]}"
         )
 
-        request = GenerationRequest(
+        return GenerationRequest(
             model=model,
             system_prompt=_INTENT_SYSTEM_PROMPT,
             messages=[{"role": "user", "content": user_prompt}],
@@ -125,15 +159,6 @@ class IntentAnalyzer:
             max_tokens=max_tokens,
             purpose="intent_analysis",
         )
-
-        try:
-            raw = await call_provider(request)
-            return IntentAnalyzer._parse_response(raw)
-        except Exception as exc:
-            logger.warning("意图分析 LLM 调用失败，使用回退: %s", exc)
-            return IntentAnalyzer.fallback_analysis(
-                content, agent_name, agent_alias, participant_names,
-            )
 
     @staticmethod
     def _parse_response(raw: str) -> IntentAnalysis:

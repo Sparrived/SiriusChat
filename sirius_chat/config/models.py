@@ -64,7 +64,7 @@ class OrchestrationPolicy:
         - Supports fine-grained task-level control
     
     Task Enablement:
-        - All tasks (memory_extract, event_extract) enabled by default
+        - All tasks (memory_extract, event_extract, intent_analysis) enabled by default
         - Use task_enabled dict to enable/disable specific tasks
         - Example: task_enabled={"memory_extract": False} disables memory extraction tasks
     """
@@ -104,9 +104,11 @@ class OrchestrationPolicy:
     # Event Extract batch size (v2: 每N条消息批量提取一次用户观察)
     event_extract_batch_size: int = 5  # 每隔N条消息执行一次事件观察提取
 
-    # Intent analysis (意图分析器)
-    enable_intent_analysis: bool = True  # 是否启用 LLM 意图分析
-    intent_analysis_model: str = ""  # 意图分析使用的模型（为空则使用 unified_model）
+    # Intent analysis compatibility fields.
+    # Recommended configuration now uses task_enabled/task_models with task name
+    # "intent_analysis". These fields are retained for backward compatibility.
+    enable_intent_analysis: bool = True
+    intent_analysis_model: str = ""
 
     # Background memory consolidation (后台记忆归纳)
     consolidation_enabled: bool = True  # 是否启用定时记忆归纳
@@ -154,6 +156,24 @@ class OrchestrationPolicy:
     max_skill_rounds: int = 3  # max consecutive skill call rounds per turn
     skill_execution_timeout: float = 30.0  # max seconds per SKILL execution, 0 = no limit
     auto_install_skill_deps: bool = True  # auto-install missing SKILL dependencies via uv/pip
+
+    def __post_init__(self) -> None:
+        if "intent_analysis" not in self.task_enabled:
+            self.task_enabled = dict(self.task_enabled)
+            self.task_enabled["intent_analysis"] = bool(self.enable_intent_analysis)
+
+    def is_task_enabled(self, task_name: str) -> bool:
+        return bool(self.task_enabled.get(task_name, True))
+
+    def resolve_model_for_task(self, task_name: str, *, default_model: str = "") -> str:
+        explicit_model = str(self.task_models.get(task_name, "")).strip()
+        if task_name == "intent_analysis" and not explicit_model:
+            explicit_model = self.intent_analysis_model.strip()
+        if explicit_model:
+            return explicit_model
+        if self.unified_model:
+            return self.unified_model.strip()
+        return default_model.strip()
     
     def validate(self) -> None:
         """Validate configuration legitimacy."""

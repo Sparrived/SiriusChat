@@ -10,12 +10,12 @@ from sirius_chat.api import (
     AsyncRolePlayEngine,
     AutoRoutingProvider,
     Message,
-    OrchestrationPolicy,
     SessionConfig,
     create_session_config_from_selected_agent,
     create_async_engine,
     merge_provider_sources,
 )
+from sirius_chat.config.helpers import build_orchestration_policy_from_dict
 from sirius_chat.logging_config import configure_logging, setup_log_archival, get_logger
 
 InputFunc = Callable[[str], str]
@@ -35,7 +35,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _load_session_config(config_path: Path, work_path: Path) -> tuple[SessionConfig, dict[str, str], list[dict[str, object]]]:
+def _load_session_config(config_path: Path, work_path: Path) -> tuple[SessionConfig, list[dict[str, object]]]:
     raw = json.loads(config_path.read_text(encoding="utf-8-sig"))
 
     if "agent" in raw or "global_system_prompt" in raw:
@@ -44,45 +44,6 @@ def _load_session_config(config_path: Path, work_path: Path) -> tuple[SessionCon
     if not generated_agent_key:
         raise ValueError("\u5fc5\u9700\u63d0\u4f9b generated_agent_key")
 
-    # 构建 orchestration 配置（仅当配置中提供了相关信息时）
-    orchestration_config = raw.get("orchestration", {})
-    unified_model = str(orchestration_config.get("unified_model", "")).strip()
-    task_models = {
-        str(k): str(v)
-        for k, v in dict(orchestration_config.get("task_models", {})).items()
-        if str(k).strip() and str(v).strip()
-    }
-    
-    # 只有当有实际的 orchestration 配置时才创建 OrchestrationPolicy
-    orchestration = None
-    if unified_model or task_models or "task_budgets" in orchestration_config or "task_temperatures" in orchestration_config or "task_max_tokens" in orchestration_config or "task_retries" in orchestration_config:
-        orchestration = OrchestrationPolicy(
-            unified_model=unified_model,
-            task_models=task_models,
-            task_budgets={
-                str(k): int(v)
-                for k, v in dict(orchestration_config.get("task_budgets", {})).items()
-                if str(k).strip()
-            },
-            task_temperatures={
-                str(k): float(v)
-                for k, v in dict(orchestration_config.get("task_temperatures", {})).items()
-                if str(k).strip()
-            },
-            task_max_tokens={
-                str(k): int(v)
-                for k, v in dict(orchestration_config.get("task_max_tokens", {})).items()
-                if str(k).strip()
-            },
-            task_retries={
-                str(k): int(v)
-                for k, v in dict(orchestration_config.get("task_retries", {})).items()
-                if str(k).strip()
-            },
-            max_multimodal_inputs_per_turn=int(orchestration_config.get("max_multimodal_inputs_per_turn", 4)),
-            max_multimodal_value_length=int(orchestration_config.get("max_multimodal_value_length", 4096)),
-        )
-
     session = create_session_config_from_selected_agent(
         work_path=work_path,
         agent_key=generated_agent_key,
@@ -90,8 +51,16 @@ def _load_session_config(config_path: Path, work_path: Path) -> tuple[SessionCon
         history_max_chars=int(raw.get("history_max_chars", 6000)),
         max_recent_participant_messages=int(raw.get("max_recent_participant_messages", 5)),
         enable_auto_compression=bool(raw.get("enable_auto_compression", True)),
-        orchestration=orchestration,
     )
+
+    orchestration = build_orchestration_policy_from_dict(
+        raw.get("orchestration", {}),
+        agent_model=session.agent.model,
+        return_none_if_empty=True,
+    )
+    if orchestration is not None:
+        session.orchestration = orchestration
+        session.orchestration.validate()
 
     # 加载 providers 列表（必需）
     providers_config = list(raw.get("providers", []))
@@ -185,7 +154,7 @@ def main(
     else:
         print_func(latest.content)
 
-    output_path = Path(args.output) if args.output else (work_path / "transcript.json")
+    output_path = Path(args.output) if args.output else Path("transcript.json")
     if not output_path.is_absolute():
         output_path = work_path / output_path
     _write_transcript_output(transcript.messages, output_path)

@@ -31,7 +31,8 @@ Sirius Chat 提供灵活的配置管理系统，支持：
   "orchestration": {
     "task_enabled": {
       "memory_extract": true,
-      "event_extract": true
+      "event_extract": true,
+      "intent_analysis": true
     },
     "task_models": {},
     "task_budgets": {},
@@ -127,7 +128,8 @@ Agent 配置定义 AI 助手的身份和行为。
 ```json
 {
   "memory_extract": true,
-  "event_extract": true
+  "event_extract": true,
+  "intent_analysis": true
 }
 ```
 
@@ -138,7 +140,8 @@ Agent 配置定义 AI 助手的身份和行为。
 ```json
 {
   "memory_extract": "gpt-4-mini",
-  "event_extract": "gpt-4-mini"
+  "event_extract": "gpt-4-mini",
+  "intent_analysis": "gpt-4o-mini"
 }
 ```
 
@@ -149,7 +152,8 @@ Agent 配置定义 AI 助手的身份和行为。
 ```json
 {
   "memory_extract": 2000,
-  "event_extract": 2000
+  "event_extract": 2000,
+  "intent_analysis": 800
 }
 ```
 
@@ -160,9 +164,15 @@ Agent 配置定义 AI 助手的身份和行为。
 ```json
 {
   "memory_extract": 0.1,
-  "event_extract": 0.1
+  "event_extract": 0.1,
+  "intent_analysis": 0.1
 }
 ```
+
+#### orchestration.intent_analysis 兼容字段
+- `enable_intent_analysis`: 兼容开关字段；推荐改为 `task_enabled["intent_analysis"]`
+- `intent_analysis_model`: 兼容模型字段；推荐改为 `task_models["intent_analysis"]`
+- 若未给 `intent_analysis` 单独配置模型，引擎会回退到 `unified_model`，再回退到 `agent.model`
 
 #### orchestration.memory_manager_model
 - **类型**: 字符串

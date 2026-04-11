@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 import pytest
 import json
 
@@ -276,6 +277,49 @@ def test_main_no_resume_disables_auto_resume(monkeypatch, tmp_path) -> None:
     exit_code = main_module.main(["--no-resume"], input_func=lambda _p: "", print_func=lambda _m: None)
     assert exit_code == 0
     assert captured["transcript"] is None
+
+
+def test_main_writes_default_output_under_relative_work_path(monkeypatch, tmp_path) -> None:
+    relative_work_path = Path("runtime")
+    config_path = tmp_path / "config.json"
+    config_path.write_text("{}", encoding="utf-8")
+    captured: dict[str, Path | None] = {"output_path": None}
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(main_module, "_resolve_runtime_paths", lambda *_a, **_k: (config_path, relative_work_path))
+    monkeypatch.setattr(main_module, "_persist_last_config_path", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        main_module,
+        "_load_or_persist_session_bundle",
+        lambda **_k: (
+            main_module.SessionConfig(
+                work_path=relative_work_path,
+                preset=main_module.AgentPreset(
+                    agent=main_module.Agent(name="主助手", persona="测试", model="mock-model"),
+                    global_system_prompt="测试系统提示词",
+                ),
+            ),
+            [{"type": "openai-compatible", "base_url": "https://api.openai.com", "api_key": "k"}],
+        ),
+    )
+    monkeypatch.setattr(
+        main_module,
+        "_bootstrap_primary_user",
+        lambda **_k: main_module.Participant(name="用户", user_id="u1"),
+    )
+    monkeypatch.setattr(main_module, "_build_provider", lambda *_a, **_k: object())
+    monkeypatch.setattr(main_module, "_create_session_store", lambda **_k: _FakeStore(False, None))
+    monkeypatch.setattr(main_module, "run_interactive_session", lambda *_a, **_k: main_module.Transcript())
+    monkeypatch.setattr(
+        main_module,
+        "_write_transcript_output",
+        lambda _transcript, output_path: captured.__setitem__("output_path", output_path),
+    )
+
+    exit_code = main_module.main([], input_func=lambda _p: "", print_func=lambda _m: None)
+
+    assert exit_code == 0
+    assert captured["output_path"] == relative_work_path / "transcript.json"
 
 
 

@@ -205,3 +205,37 @@ def test_cli_exits_when_message_is_empty(tmp_path) -> None:
 
     assert exit_code == 0
     assert any("未输入消息，已退出。" in item for item in outputs)
+
+
+def test_cli_writes_default_output_under_relative_work_path(tmp_path, monkeypatch) -> None:
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "providers": [
+                    {
+                        "type": "openai-compatible",
+                        "base_url": "https://api.openai.com",
+                        "api_key": "test-key",
+                    }
+                ],
+                "generated_agent_key": "main_agent",
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    work_path = tmp_path / "runtime"
+    _write_generated_agents(work_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(cli_module, "_build_engine", lambda *args, **kwargs: _FakeEngine("相对路径OK"))
+
+    exit_code = cli_module.main(
+        ["--config", str(config_path), "--work-path", "runtime", "--message", "你好", "--speaker", "测试用户"],
+        print_func=lambda _msg: None,
+    )
+
+    assert exit_code == 0
+    assert (work_path / "transcript.json").exists()
+    assert not (work_path / "runtime" / "transcript.json").exists()

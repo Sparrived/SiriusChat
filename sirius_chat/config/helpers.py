@@ -8,8 +8,173 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Any
 
-from sirius_chat.config.models import Agent, SessionConfig
+from sirius_chat.config.models import Agent, MemoryPolicy, OrchestrationPolicy, SessionConfig
 from sirius_chat.exceptions import OrchestrationConfigError
+
+
+def build_orchestration_policy_from_dict(
+    orch_dict: dict[str, Any] | None,
+    *,
+    agent_model: str,
+    return_none_if_empty: bool = False,
+) -> OrchestrationPolicy | None:
+    """Build an OrchestrationPolicy from raw JSON-like data."""
+    raw = dict(orch_dict or {})
+    recognized_keys = {
+        "unified_model",
+        "task_models",
+        "task_enabled",
+        "task_budgets",
+        "task_temperatures",
+        "task_max_tokens",
+        "task_retries",
+        "max_multimodal_inputs_per_turn",
+        "max_multimodal_value_length",
+        "enable_prompt_driven_splitting",
+        "split_marker",
+        "memory_manager_model",
+        "memory_manager_temperature",
+        "memory_manager_max_tokens",
+        "memory_extract_batch_size",
+        "memory_extract_min_content_length",
+        "event_extract_batch_size",
+        "enable_intent_analysis",
+        "intent_analysis_model",
+        "consolidation_enabled",
+        "consolidation_interval_seconds",
+        "consolidation_min_entries",
+        "consolidation_min_notes",
+        "consolidation_min_facts",
+        "session_reply_mode",
+        "engagement_sensitivity",
+        "heat_window_seconds",
+        "message_debounce_seconds",
+        "memory",
+        "enable_self_memory",
+        "self_memory_extract_batch_size",
+        "self_memory_min_chars",
+        "self_memory_max_diary_prompt_entries",
+        "self_memory_max_glossary_prompt_terms",
+        "reply_frequency_window_seconds",
+        "reply_frequency_max_replies",
+        "reply_frequency_exempt_on_mention",
+        "max_concurrent_llm_calls",
+        "enable_skills",
+        "skill_call_marker",
+        "max_skill_rounds",
+        "skill_execution_timeout",
+        "auto_install_skill_deps",
+    }
+    has_config = any(key in raw for key in recognized_keys)
+    if return_none_if_empty and not has_config:
+        return None
+
+    unified_model = str(raw.get("unified_model", "")).strip()
+    task_models = {
+        str(key).strip(): str(value).strip()
+        for key, value in dict(raw.get("task_models", {})).items()
+        if str(key).strip() and str(value).strip()
+    }
+    if not unified_model and not task_models:
+        unified_model = agent_model
+
+    kwargs: dict[str, Any] = {
+        "unified_model": unified_model,
+        "task_models": task_models,
+    }
+
+    if "task_enabled" in raw and isinstance(raw.get("task_enabled"), dict):
+        kwargs["task_enabled"] = {
+            str(key).strip(): bool(value)
+            for key, value in dict(raw.get("task_enabled", {})).items()
+            if str(key).strip()
+        }
+    if "task_budgets" in raw and isinstance(raw.get("task_budgets"), dict):
+        kwargs["task_budgets"] = {
+            str(key).strip(): int(value)
+            for key, value in dict(raw.get("task_budgets", {})).items()
+            if str(key).strip()
+        }
+    if "task_temperatures" in raw and isinstance(raw.get("task_temperatures"), dict):
+        kwargs["task_temperatures"] = {
+            str(key).strip(): float(value)
+            for key, value in dict(raw.get("task_temperatures", {})).items()
+            if str(key).strip()
+        }
+    if "task_max_tokens" in raw and isinstance(raw.get("task_max_tokens"), dict):
+        kwargs["task_max_tokens"] = {
+            str(key).strip(): int(value)
+            for key, value in dict(raw.get("task_max_tokens", {})).items()
+            if str(key).strip()
+        }
+    if "task_retries" in raw and isinstance(raw.get("task_retries"), dict):
+        kwargs["task_retries"] = {
+            str(key).strip(): int(value)
+            for key, value in dict(raw.get("task_retries", {})).items()
+            if str(key).strip()
+        }
+
+    scalar_fields: dict[str, tuple[type, Any]] = {
+        "max_multimodal_inputs_per_turn": (int, 4),
+        "max_multimodal_value_length": (int, 4096),
+        "enable_prompt_driven_splitting": (bool, True),
+        "split_marker": (str, "<MSG_SPLIT>"),
+        "memory_manager_model": (str, ""),
+        "memory_manager_temperature": (float, 0.3),
+        "memory_manager_max_tokens": (int, 512),
+        "memory_extract_batch_size": (int, 1),
+        "memory_extract_min_content_length": (int, 0),
+        "event_extract_batch_size": (int, 5),
+        "enable_intent_analysis": (bool, True),
+        "intent_analysis_model": (str, ""),
+        "consolidation_enabled": (bool, True),
+        "consolidation_interval_seconds": (int, 7200),
+        "consolidation_min_entries": (int, 6),
+        "consolidation_min_notes": (int, 4),
+        "consolidation_min_facts": (int, 15),
+        "session_reply_mode": (str, "always"),
+        "engagement_sensitivity": (float, 0.5),
+        "heat_window_seconds": (float, 60.0),
+        "message_debounce_seconds": (float, 5.0),
+        "enable_self_memory": (bool, True),
+        "self_memory_extract_batch_size": (int, 3),
+        "self_memory_min_chars": (int, 0),
+        "self_memory_max_diary_prompt_entries": (int, 6),
+        "self_memory_max_glossary_prompt_terms": (int, 15),
+        "reply_frequency_window_seconds": (float, 60.0),
+        "reply_frequency_max_replies": (int, 8),
+        "reply_frequency_exempt_on_mention": (bool, True),
+        "max_concurrent_llm_calls": (int, 1),
+        "enable_skills": (bool, True),
+        "skill_call_marker": (str, "[SKILL_CALL:"),
+        "max_skill_rounds": (int, 3),
+        "skill_execution_timeout": (float, 30.0),
+        "auto_install_skill_deps": (bool, True),
+    }
+    for field_name, (caster, _) in scalar_fields.items():
+        if field_name not in raw:
+            continue
+        value = raw.get(field_name)
+        kwargs[field_name] = caster(value) if caster is not bool else bool(value)
+
+    memory_raw = raw.get("memory")
+    if isinstance(memory_raw, dict):
+        decay_raw = memory_raw.get("decay_schedule", {})
+        decay_schedule = {
+            int(key): float(value)
+            for key, value in dict(decay_raw).items()
+        } if isinstance(decay_raw, dict) else MemoryPolicy().decay_schedule
+        kwargs["memory"] = MemoryPolicy(
+            max_facts_per_user=int(memory_raw.get("max_facts_per_user", 50)),
+            transient_confidence_threshold=float(memory_raw.get("transient_confidence_threshold", 0.85)),
+            event_dedup_window_minutes=int(memory_raw.get("event_dedup_window_minutes", 5)),
+            max_observed_set_size=int(memory_raw.get("max_observed_set_size", 100)),
+            max_summary_facts_per_type=int(memory_raw.get("max_summary_facts_per_type", 5)),
+            max_summary_total_chars=int(memory_raw.get("max_summary_total_chars", 2000)),
+            decay_schedule=decay_schedule,
+        )
+
+    return OrchestrationPolicy(**kwargs)
 
 
 def auto_configure_multimodal_agent(
@@ -110,6 +275,7 @@ def configure_orchestration_models(
             支持的任务名：
             - memory_extract: 用户记忆提取
             - event_extract: 事件提取
+            - intent_analysis: 意图分析
             - memory_manager: 记忆管理器
             
     Returns:

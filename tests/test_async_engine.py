@@ -723,6 +723,99 @@ def test_run_live_session_reply_mode_auto_infers_when_to_reply() -> None:
     asyncio.run(_run())
 
 
+def test_reply_mode_auto_uses_intent_analysis_task_model() -> None:
+    async def _run() -> None:
+        provider = MockProvider(
+            responses=[
+                json.dumps(
+                    {
+                        "intent_type": "question",
+                        "target": "ai",
+                        "importance": 0.9,
+                        "needs_memory": True,
+                        "needs_summary": True,
+                        "reason": "用户直接点名主助手并提出请求。",
+                        "evidence_span": "主助手，可以帮我总结一下吗",
+                    },
+                    ensure_ascii=False,
+                ),
+                "这是自动判断后的回复",
+            ]
+        )
+        engine = create_async_engine(provider)
+        config = SessionConfig(
+            work_path=Path("data/tests/intent_analysis_task_model"),
+            preset=AgentPreset(
+                agent=Agent(name="主助手", persona="异步测试", model="mock-model"),
+                global_system_prompt="测试系统提示词",
+            ),
+            orchestration=OrchestrationPolicy(
+                unified_model="",
+                task_models={"intent_analysis": "intent-model"},
+                task_enabled={
+                    "memory_extract": False,
+                    "event_extract": False,
+                    "intent_analysis": True,
+                },
+                session_reply_mode="auto",
+                message_debounce_seconds=0.0,
+            ),
+        )
+
+        transcript = await _run_live_turns(
+            engine=engine,
+            config=config,
+            human_turns=[
+                Message(role="user", speaker="小王", content="主助手，可以帮我总结一下吗？", reply_mode="auto"),
+            ],
+        )
+
+        assert [request.purpose for request in provider.requests] == ["intent_analysis", "chat_main"]
+        assert provider.requests[0].model == "intent-model"
+        assert transcript.orchestration_stats["intent_analysis"]["attempted"] == 1
+        assert transcript.orchestration_stats["intent_analysis"]["succeeded"] == 1
+        assert transcript.messages[-1].content == "这是自动判断后的回复"
+
+    asyncio.run(_run())
+
+
+def test_reply_mode_auto_can_disable_intent_analysis_task() -> None:
+    async def _run() -> None:
+        provider = MockProvider(responses=["这是回退路径的回复"])
+        engine = create_async_engine(provider)
+        config = SessionConfig(
+            work_path=Path("data/tests/intent_analysis_task_disabled"),
+            preset=AgentPreset(
+                agent=Agent(name="主助手", persona="异步测试", model="mock-model"),
+                global_system_prompt="测试系统提示词",
+            ),
+            orchestration=OrchestrationPolicy(
+                unified_model="mock-model",
+                task_enabled={
+                    "memory_extract": False,
+                    "event_extract": False,
+                    "intent_analysis": False,
+                },
+                session_reply_mode="auto",
+                message_debounce_seconds=0.0,
+            ),
+        )
+
+        transcript = await _run_live_turns(
+            engine=engine,
+            config=config,
+            human_turns=[
+                Message(role="user", speaker="小王", content="主助手，你怎么看？", reply_mode="auto"),
+            ],
+        )
+
+        assert [request.purpose for request in provider.requests] == ["chat_main"]
+        assert "intent_analysis" not in transcript.orchestration_stats
+        assert transcript.messages[-1].content == "这是回退路径的回复"
+
+    asyncio.run(_run())
+
+
 def test_chat_main_merges_system_messages_into_system_prompt() -> None:
     async def _run() -> None:
         provider = MockProvider(responses=["第一次回复", "第二次回复"])

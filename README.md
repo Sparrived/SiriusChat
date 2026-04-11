@@ -51,7 +51,7 @@
 
 ### 🔌 **多模型协同**
 - **多 Provider 支持**：OpenAI / DeepSeek / SiliconFlow / Volcengine Ark 等
-- **任务级模型选择**：记忆提取、事件分析、多模态处理可配置独立模型
+- **任务级模型选择**：记忆提取、事件分析、意图分析等任务可配置独立模型
 - **自动路由**：按 `healthcheck_model` 智能选择最合适的 Provider
 
 ### 🎬 **高级功能**

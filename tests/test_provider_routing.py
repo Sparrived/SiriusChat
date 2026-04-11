@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 from pathlib import Path
+import pytest
 from unittest.mock import patch
 
 from sirius_chat.providers.base import GenerationRequest
@@ -64,7 +65,7 @@ def test_auto_routing_provider_selects_provider_by_exact_model_name() -> None:
     assert sf_generate.call_count == 1
 
 
-def test_auto_routing_provider_falls_back_to_first_enabled_provider() -> None:
+def test_auto_routing_provider_raises_for_unknown_model_without_explicit_match() -> None:
     routing = AutoRoutingProvider(
         {
             "openai-compatible": ProviderConfig(
@@ -76,11 +77,8 @@ def test_auto_routing_provider_falls_back_to_first_enabled_provider() -> None:
         }
     )
 
-    with patch("sirius_chat.providers.routing.OpenAICompatibleProvider.generate", return_value="openai-ok") as generate:
-        output = routing.generate(_request("custom-model"))
-
-    assert output == "openai-ok"
-    assert generate.call_count == 1
+    with pytest.raises(RuntimeError, match="custom-model"):
+        routing.generate(_request("custom-model"))
 
 
 def test_merge_provider_sources_uses_registry_and_config(tmp_path: Path) -> None:
@@ -120,7 +118,7 @@ def test_get_supported_provider_platforms_contains_core_platforms() -> None:
     assert platforms["volcengine-ark"]["default_base_url"] == "https://ark.cn-beijing.volces.com/api/v3"
 
 
-def test_auto_routing_provider_prefers_ark_for_doubao_model() -> None:
+def test_auto_routing_provider_routes_to_ark_when_models_list_contains_model() -> None:
     routing = AutoRoutingProvider(
         {
             "volcengine-ark": ProviderConfig(
@@ -128,6 +126,7 @@ def test_auto_routing_provider_prefers_ark_for_doubao_model() -> None:
                 api_key="ark-key",
                 base_url="",
                 healthcheck_model="",
+                models=["doubao-seed-2-0-lite-260215"],
             ),
             "openai-compatible": ProviderConfig(
                 provider_type="openai-compatible",
@@ -145,7 +144,7 @@ def test_auto_routing_provider_prefers_ark_for_doubao_model() -> None:
     assert ark_generate.call_count == 1
 
 
-def test_auto_routing_provider_prefers_deepseek_for_deepseek_model() -> None:
+def test_auto_routing_provider_routes_to_deepseek_when_models_list_contains_model() -> None:
     routing = AutoRoutingProvider(
         {
             "deepseek": ProviderConfig(
@@ -153,6 +152,7 @@ def test_auto_routing_provider_prefers_deepseek_for_deepseek_model() -> None:
                 api_key="deepseek-key",
                 base_url="",
                 healthcheck_model="",
+                models=["deepseek-chat"],
             ),
             "openai-compatible": ProviderConfig(
                 provider_type="openai-compatible",

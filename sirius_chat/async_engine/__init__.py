@@ -20,6 +20,7 @@ from sirius_chat.core import AsyncRolePlayEngine
 from sirius_chat.async_engine.orchestration import (
     SUPPORTED_MULTIMODAL_TYPES,
     TASK_EVENT_EXTRACT,
+    TASK_INTENT_ANALYSIS,
     TASK_MEMORY_EXTRACT,
     TASK_MEMORY_MANAGER,
     TaskConfig,
@@ -35,6 +36,7 @@ __all__ = [
     "get_system_prompt_for_task",
     "TASK_MEMORY_EXTRACT",
     "TASK_EVENT_EXTRACT",
+    "TASK_INTENT_ANALYSIS",
     "TASK_MEMORY_MANAGER",
     "SUPPORTED_MULTIMODAL_TYPES",
 ]
