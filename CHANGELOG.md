@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+## [0.15.8] - 2026-04-11
+
+### Fixed
+- 修复 `merge_provider_sources` 的合并策略：当 session JSON 中未显式指定 `models` 字段时，不再用空列表覆盖 `provider_keys.json` 中已有的模型列表，而是保留持久化配置。这解决了即使已在持久化文件中配置了模型，路由仍然找不到 Provider 的问题。
+
 ## [0.15.7] - 2026-04-11
 
 ### Changed

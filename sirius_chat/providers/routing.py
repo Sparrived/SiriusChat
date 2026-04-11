@@ -191,8 +191,12 @@ def merge_provider_sources(
         if not provider_type or not api_key:
             continue
         base_url = str(item.get("base_url", "")).strip()
-        models_raw = item.get("models", [])
-        models = [str(m).strip() for m in models_raw if str(m).strip()] if isinstance(models_raw, list) else []
+        models_raw = item.get("models", None)
+        if models_raw is not None and isinstance(models_raw, list):
+            models = [str(m).strip() for m in models_raw if str(m).strip()]
+        else:
+            # session JSON 未显式指定 models，保留持久化配置中的模型列表
+            models = merged.get(provider_type, ProviderConfig(provider_type=provider_type, api_key="", base_url="")).models
         merged[provider_type] = ProviderConfig(
             provider_type=provider_type,
             api_key=api_key,
