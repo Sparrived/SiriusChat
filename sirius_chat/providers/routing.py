@@ -6,6 +6,7 @@ from pathlib import Path
 
 from sirius_chat.providers.base import GenerationRequest, LLMProvider
 from sirius_chat.providers.deepseek import DeepSeekProvider
+from sirius_chat.providers.newapi import NewAPIProvider
 from sirius_chat.providers.openai_compatible import OpenAICompatibleProvider
 from sirius_chat.providers.siliconflow import SiliconFlowProvider
 from sirius_chat.providers.volcengine_ark import VolcengineArkProvider
@@ -16,11 +17,16 @@ _OPENAI_PROVIDER_TYPES = {"openai", "openai-compatible"}
 _DEEPSEEK_PROVIDER_TYPES = {"deepseek"}
 _SILICONFLOW_PROVIDER_TYPES = {"siliconflow"}
 _VOLCENGINE_ARK_PROVIDER_TYPES = {"volcengine-ark", "ark"}
+_NEWAPI_PROVIDER_TYPES = {"newapi", "new-api"}
 
 _SUPPORTED_PROVIDER_PLATFORMS: dict[str, dict[str, str]] = {
     "openai-compatible": {
         "default_base_url": "https://api.openai.com",
         "notes": "OpenAI-compatible chat completions endpoint",
+    },
+    "newapi": {
+        "default_base_url": "https://docs.newapi.pro",
+        "notes": "NewAPI OpenAI-compatible chat completions endpoint",
     },
     "deepseek": {
         "default_base_url": "https://api.deepseek.com",
@@ -60,6 +66,8 @@ def normalize_provider_type(provider_type: str) -> str:
         return "openai-compatible"
     if normalized == "ark":
         return "volcengine-ark"
+    if normalized == "new-api":
+        return "newapi"
     return normalized
 
 
@@ -213,6 +221,8 @@ class AutoRoutingProvider(LLMProvider):
                 api_key=config.api_key,
                 base_url=config.base_url or "https://ark.cn-beijing.volces.com/api/v3",
             )
+        if config.provider_type in _NEWAPI_PROVIDER_TYPES:
+            return NewAPIProvider(api_key=config.api_key, base_url=config.base_url or "https://docs.newapi.pro")
         if config.provider_type in _OPENAI_PROVIDER_TYPES:
             return OpenAICompatibleProvider(api_key=config.api_key, base_url=config.base_url or "https://api.openai.com")
         raise RuntimeError(f"不支持的提供商类型：{config.provider_type}")
@@ -273,6 +283,8 @@ def _create_provider_from_config(config: ProviderConfig) -> LLMProvider:
             api_key=config.api_key,
             base_url=config.base_url or "https://ark.cn-beijing.volces.com/api/v3",
         )
+    if provider_type in _NEWAPI_PROVIDER_TYPES:
+        return NewAPIProvider(api_key=config.api_key, base_url=config.base_url or "https://docs.newapi.pro")
     return OpenAICompatibleProvider(api_key=config.api_key, base_url=config.base_url or "https://api.openai.com")
 
 

@@ -50,7 +50,7 @@
 - **高并发支持**：自动消息合并（debounce）、LLM 并发限流、后台任务隔离
 
 ### 🔌 **多模型协同**
-- **多 Provider 支持**：OpenAI / DeepSeek / SiliconFlow / Volcengine Ark 等
+- **多 Provider 支持**：OpenAI / NewAPI / DeepSeek / SiliconFlow / Volcengine Ark 等
 - **任务级模型选择**：记忆提取、事件分析、多模态处理可配置独立模型
 - **自动路由**：按 `healthcheck_model` 智能选择最合适的 Provider
 
@@ -176,6 +176,7 @@ sirius_chat/
 │   └── models.py                 # Transcript / Message / UserProfile
 ├── providers/                    # 🔗 LLM Provider 实现
 │   ├── openai_compatible.py      # OpenAI 兼容接口
+│   ├── newapi.py                 # NewAPI 兼容接口
 │   ├── deepseek.py               # DeepSeek 适配
 │   ├── siliconflow.py            # SiliconFlow 适配
 │   └── volcengine_ark.py         # 火山方舟适配
@@ -354,6 +355,26 @@ msg = Message(
 ```
 
 **说明：** 框架会自动规范化路径，支持 `https://api.siliconflow.cn` 或 `https://api.siliconflow.cn/v1`
+
+### 🔹 NewAPI 配置
+
+```json
+{
+  "providers": [
+    {
+      "type": "newapi",
+      "api_key": "sk-...",
+      "base_url": "https://docs.newapi.pro"
+    }
+  ],
+  "agent": {
+    "name": "NewAPI",
+    "model": "gpt-4o-mini"
+  }
+}
+```
+
+**说明：** NewAPI 文档声明 AI 模型接口兼容 OpenAI 格式，使用 `/v1/chat/completions`。
 
 ### 🔹 火山方舟（Volcengine Ark）配置
 

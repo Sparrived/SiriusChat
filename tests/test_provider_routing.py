@@ -114,9 +114,11 @@ def test_get_supported_provider_platforms_contains_core_platforms() -> None:
     assert "siliconflow" in platforms
     assert "deepseek" in platforms
     assert "openai-compatible" in platforms
+    assert "newapi" in platforms
     assert "volcengine-ark" in platforms
     assert platforms["siliconflow"]["default_base_url"] == "https://api.siliconflow.cn"
     assert platforms["deepseek"]["default_base_url"] == "https://api.deepseek.com"
+    assert platforms["newapi"]["default_base_url"] == "https://docs.newapi.pro"
     assert platforms["volcengine-ark"]["default_base_url"] == "https://ark.cn-beijing.volces.com/api/v3"
 
 
@@ -244,8 +246,27 @@ def test_register_provider_with_validation_persists_healthcheck_model(tmp_path: 
     assert providers["openai-compatible"].healthcheck_model == "gpt-4o-mini"
 
 
+def test_register_newapi_provider_with_validation_persists_healthcheck_model(tmp_path: Path) -> None:
+    with patch("sirius_chat.providers.routing.NewAPIProvider.generate", return_value="ok"):
+        provider_type = register_provider_with_validation(
+            work_path=tmp_path,
+            provider_type="newapi",
+            api_key="test-key",
+            healthcheck_model="gpt-4o-mini",
+            base_url="https://docs.newapi.pro",
+        )
+
+    assert provider_type == "newapi"
+    providers = ProviderRegistry(tmp_path).load()
+    assert providers["newapi"].healthcheck_model == "gpt-4o-mini"
+
+
 def test_ensure_provider_platform_supported_normalizes_alias() -> None:
     assert ensure_provider_platform_supported("ark") == "volcengine-ark"
+
+
+def test_ensure_provider_platform_supported_normalizes_newapi_alias() -> None:
+    assert ensure_provider_platform_supported("new-api") == "newapi"
 
 
 def test_auto_routing_provider_matches_model_from_models_list() -> None:

@@ -53,6 +53,7 @@ from sirius_chat.api.providers import (
     AutoRoutingProvider,
     LLMProvider,
     MockProvider,
+    NewAPIProvider,
     OpenAICompatibleProvider,
     ProviderConfig,
     ProviderRegistry,
@@ -205,4 +206,5 @@ __all__ = [
     "IntentAnalyzer",
     "BackgroundTaskConfig",
     "BackgroundTaskManager",
+    "NewAPIProvider",
 ]

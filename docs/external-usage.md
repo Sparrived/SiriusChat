@@ -259,6 +259,22 @@ provider = SiliconFlowProvider(
 - 若外部配置传入 `https://api.siliconflow.cn/v1` 也可兼容，内部会自动规范化。
 - 接口路径遵循 OpenAI 兼容的 `/v1/chat/completions`。
 
+若使用 NewAPI，可使用：
+
+```python
+from sirius_chat.api import NewAPIProvider
+
+provider = NewAPIProvider(
+    api_key="YOUR_NEWAPI_KEY",
+)
+```
+
+说明：
+
+- `NewAPIProvider` 默认基地址为 `https://docs.newapi.pro`。
+- 若外部配置传入 `https://docs.newapi.pro/v1` 也可兼容，内部会自动规范化。
+- 接口路径遵循 OpenAI 兼容的 `/v1/chat/completions`。
+
 若使用 DeepSeek，可使用：
 
 ```python
