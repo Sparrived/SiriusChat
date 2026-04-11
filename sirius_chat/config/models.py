@@ -123,15 +123,19 @@ class OrchestrationPolicy:
 
     
     # Message debounce: buffer same-user messages within this window (seconds).
-    # 0 = disabled (immediate reply). Recommended: 3.0~5.0 for group chat.
-    message_debounce_seconds: float = 5.0
+    # 0 = disabled (immediate reply). Recommended: 5.0~10.0 for group chat.
+    # During the window, consecutive messages from the same user are accumulated;
+    # only the last coroutine flushes them all as a single merged message so that
+    # intent analysis and profile extraction fire exactly once per burst.
+    message_debounce_seconds: float = 8.0
     
     # Memory policy (centralized memory system configuration)
     memory: MemoryPolicy = field(default_factory=MemoryPolicy)
 
     # Self-memory system (AI diary + glossary)
     enable_self_memory: bool = True
-    self_memory_extract_batch_size: int = 3  # Extract diary/glossary every N assistant replies
+    self_memory_extract_batch_size: int = 3  # Kept for compatibility; superseded by interval mode
+    self_memory_extract_interval_seconds: int = 360  # Time-based background extraction interval (default 6 min)
     self_memory_max_diary_prompt_entries: int = 6  # Max diary entries injected into prompt
     self_memory_max_glossary_prompt_terms: int = 15  # Max glossary terms injected into prompt
 
@@ -139,6 +143,11 @@ class OrchestrationPolicy:
     reply_frequency_window_seconds: float = 60.0  # Sliding window
     reply_frequency_max_replies: int = 8  # Max replies within the window
     reply_frequency_exempt_on_mention: bool = True  # Bypass limit when AI is directly mentioned
+
+    # LLM concurrency limiter: cap parallel LLM generation calls per session context.
+    # Algorithm-only steps (heat, keyword intent) are unaffected.
+    # Set to 0 to disable (unlimited). Recommended: 1~3.
+    max_concurrent_llm_calls: int = 1
 
     # Skill system: allow AI to invoke external code via SKILL_CALL
     enable_skills: bool = True

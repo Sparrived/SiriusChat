@@ -41,7 +41,11 @@ class BackgroundTaskConfig:
     consolidation_min_entries: int = 6  # 最少条目数才触发归纳
     consolidation_min_notes: int = 4   # 最少摘要数才触发归纳
     consolidation_min_facts: int = 15  # 最少事实数才触发归纳
-    
+
+    # AI 自身记忆提取配置（日记 + 名词）
+    self_memory_enabled: bool = False
+    self_memory_interval_seconds: int = 360  # 默认 6 分钟
+
     # 是否启用日志
     verbose_logging: bool = False
 
@@ -64,6 +68,7 @@ class BackgroundTaskManager:
         self._memory_compressor_callback: Optional[Callable[[str], None]] = None
         self._transient_cleanup_callback: Optional[Callable[[str], None]] = None
         self._consolidation_callback: Optional[Callable[[], Awaitable[None]]] = None
+        self._self_memory_callback: Optional[Callable[[], Awaitable[None]]] = None
     
     def set_memory_compressor_callback(
         self, 
@@ -96,6 +101,17 @@ class BackgroundTaskManager:
         UserMemoryManager.consolidate_summary_notes / consolidate_memory_facts。
         """
         self._consolidation_callback = callback
+
+    def set_self_memory_callback(
+        self,
+        callback: Callable[[], Awaitable[None]],
+    ) -> None:
+        """设置 AI 自身记忆提取回调函数（异步）。
+
+        回调函数签名: async callback() -> None
+        引擎在每个时间间隔结束后自动调用此回调，提取日记条目和名词解释。
+        """
+        self._self_memory_callback = callback
     
     async def start(self) -> None:
         """启动所有启用的后台任务"""
@@ -126,6 +142,13 @@ class BackgroundTaskManager:
                 name="memory_consolidation",
             )
             self.tasks["memory_consolidation"] = task
+
+        if self.config.self_memory_enabled:
+            task = asyncio.create_task(
+                self._self_memory_loop(),
+                name="self_memory_extract",
+            )
+            self.tasks["self_memory_extract"] = task
     
     async def stop(self) -> None:
         """停止所有后台任务"""
@@ -217,6 +240,30 @@ class BackgroundTaskManager:
         except asyncio.CancelledError:
             logger.debug("Memory consolidation loop cancelled")
             raise
+
+    async def _self_memory_loop(self) -> None:
+        """AI 自身记忆定时提取任务循环（日记 + 名词）"""
+        interval = self.config.self_memory_interval_seconds
+
+        try:
+            while self._running:
+                await asyncio.sleep(interval)
+
+                if not self._running:
+                    break
+
+                if self.config.verbose_logging:
+                    logger.debug("Self-memory extraction task triggered")
+
+                if self._self_memory_callback:
+                    try:
+                        await self._self_memory_callback()
+                    except Exception as e:
+                        logger.error(f"Error in self-memory extraction: {e}", exc_info=True)
+
+        except asyncio.CancelledError:
+            logger.debug("Self-memory extraction loop cancelled")
+            raise
     
     async def trigger_compression_now(self, user_id: str = "all_users") -> None:
         """立即触发一次内存压缩"""
@@ -241,6 +288,14 @@ class BackgroundTaskManager:
                 await self._consolidation_callback()
             except Exception as e:
                 logger.error(f"Error triggering consolidation: {e}", exc_info=True)
+
+    async def trigger_self_memory_now(self) -> None:
+        """立即触发一次 AI 自身记忆提取"""
+        if self._self_memory_callback:
+            try:
+                await self._self_memory_callback()
+            except Exception as e:
+                logger.error(f"Error triggering self-memory extraction: {e}", exc_info=True)
     
     def is_running(self) -> bool:
         """检查后台任务是否在运行"""

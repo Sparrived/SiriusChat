@@ -41,6 +41,16 @@ from sirius_chat.token.store import TokenUsageStore
 logger = logging.getLogger(__name__)
 
 
+from contextlib import asynccontextmanager
+from typing import AsyncIterator
+
+
+@asynccontextmanager
+async def _noop_semaphore() -> AsyncIterator[None]:
+    """No-op async context manager used when concurrency limiting is disabled."""
+    yield
+
+
 @dataclass(slots=True)
 class _PendingTurn:
     """Buffered user turn for debounce/batching."""
@@ -65,7 +75,7 @@ class LiveSessionContext:
     token_store: TokenUsageStore | None = None
     self_memory: SelfMemoryManager = field(default_factory=SelfMemoryManager)
     self_memory_store: SelfMemoryFileStore | None = None
-    assistant_reply_count_since_self_extract: int = 0
+    llm_semaphore: asyncio.Semaphore | None = None  # Concurrency limiter for LLM calls
 
 
 @dataclass(slots=True)
@@ -291,74 +301,101 @@ class AsyncRolePlayEngine:
         else:
             logger.debug("SKILL系统已禁用，但已初始化SKILL目录: %s", skills_dir)
 
-        # ── Background consolidation task ──
-        if config.orchestration.consolidation_enabled:
+        # ── LLM concurrency semaphore ──
+        max_concurrent = int(config.orchestration.max_concurrent_llm_calls)
+        if max_concurrent > 0:
+            created.llm_semaphore = asyncio.Semaphore(max_concurrent)
+
+        # ── Background tasks: consolidation + self-memory ──
+        needs_bg = config.orchestration.consolidation_enabled or config.orchestration.enable_self_memory
+        if needs_bg:
             bg_config = BackgroundTaskConfig(
-                consolidation_enabled=True,
+                consolidation_enabled=config.orchestration.consolidation_enabled,
                 consolidation_interval_seconds=config.orchestration.consolidation_interval_seconds,
                 consolidation_min_entries=config.orchestration.consolidation_min_entries,
                 consolidation_min_notes=config.orchestration.consolidation_min_notes,
                 consolidation_min_facts=config.orchestration.consolidation_min_facts,
+                self_memory_enabled=config.orchestration.enable_self_memory,
+                self_memory_interval_seconds=config.orchestration.self_memory_extract_interval_seconds,
                 compression_enabled=False,
                 cleanup_enabled=False,
             )
             bg_manager = BackgroundTaskManager(config=bg_config)
 
-            async def _consolidation_callback(
-                _engine: AsyncRolePlayEngine = self,
-                _config: SessionConfig = config,
-                _transcript: Transcript = transcript,
-                _ctx: LiveSessionContext = created,
-            ) -> None:
-                """Periodically consolidate events + notes + facts for all users."""
-                class _Adapter:
-                    def __init__(self, engine: AsyncRolePlayEngine) -> None:
-                        self._engine = engine
-                    async def generate_async(self, request: GenerationRequest) -> str:
-                        return await self._engine._call_provider(request)
+            if config.orchestration.consolidation_enabled:
+                async def _consolidation_callback(
+                    _engine: AsyncRolePlayEngine = self,
+                    _config: SessionConfig = config,
+                    _transcript: Transcript = transcript,
+                    _ctx: LiveSessionContext = created,
+                ) -> None:
+                    """Periodically consolidate events + notes + facts for all users."""
+                    class _Adapter:
+                        def __init__(self, engine: AsyncRolePlayEngine) -> None:
+                            self._engine = engine
+                        async def generate_async(self, request: GenerationRequest) -> str:
+                            return await self._engine._call_provider(request)
 
-                adapter = _Adapter(_engine)
-                try:
-                    model = _engine.get_model_for_task(_config, _engine._TASK_EVENT_EXTRACT)
-                except ValueError:
-                    model = _config.agent.model
+                    adapter = _Adapter(_engine)
+                    try:
+                        model = _engine.get_model_for_task(_config, _engine._TASK_EVENT_EXTRACT)
+                    except ValueError:
+                        model = _config.agent.model
 
-                # Consolidate events
-                for uid in _ctx.event_store.get_all_user_ids():
-                    await _ctx.event_store.consolidate_entries(
-                        user_id=uid,
-                        provider_async=adapter,
-                        model_name=model,
-                        min_entries=bg_config.consolidation_min_entries,
+                    # Consolidate events
+                    for uid in _ctx.event_store.get_all_user_ids():
+                        await _ctx.event_store.consolidate_entries(
+                            user_id=uid,
+                            provider_async=adapter,
+                            model_name=model,
+                            min_entries=bg_config.consolidation_min_entries,
+                        )
+
+                    # Consolidate user summaries and facts
+                    for uid in list(_transcript.user_memory.entries.keys()):
+                        await _transcript.user_memory.consolidate_summary_notes(
+                            user_id=uid,
+                            provider_async=adapter,
+                            model_name=model,
+                            min_notes=bg_config.consolidation_min_notes,
+                        )
+                        await _transcript.user_memory.consolidate_memory_facts(
+                            user_id=uid,
+                            provider_async=adapter,
+                            model_name=model,
+                            min_facts=bg_config.consolidation_min_facts,
+                        )
+
+                    # Persist after consolidation
+                    _ctx.file_store.save_all(_transcript.user_memory)
+                    _ctx.event_file_store.save(_ctx.event_store)
+
+                    # Diary decay during consolidation
+                    if _ctx.self_memory_store is not None:
+                        removed = _ctx.self_memory.apply_diary_decay()
+                        if removed > 0:
+                            logger.info("后台归纳：移除 %d 条衰退日记条目", removed)
+                        _ctx.self_memory_store.save(_ctx.self_memory)
+
+                bg_manager.set_consolidation_callback(_consolidation_callback)
+
+            if config.orchestration.enable_self_memory:
+                async def _self_memory_callback(
+                    _engine: AsyncRolePlayEngine = self,
+                    _config: SessionConfig = config,
+                    _transcript: Transcript = transcript,
+                    _ctx: LiveSessionContext = created,
+                ) -> None:
+                    """Periodic time-based AI self-memory extraction (diary + glossary)."""
+                    await _engine._run_self_memory_extract_task(
+                        config=_config,
+                        transcript=_transcript,
+                        context=_ctx,
+                        assistant_content="",
                     )
 
-                # Consolidate user summaries and facts
-                for uid in list(_transcript.user_memory.entries.keys()):
-                    await _transcript.user_memory.consolidate_summary_notes(
-                        user_id=uid,
-                        provider_async=adapter,
-                        model_name=model,
-                        min_notes=bg_config.consolidation_min_notes,
-                    )
-                    await _transcript.user_memory.consolidate_memory_facts(
-                        user_id=uid,
-                        provider_async=adapter,
-                        model_name=model,
-                        min_facts=bg_config.consolidation_min_facts,
-                    )
+                bg_manager.set_self_memory_callback(_self_memory_callback)
 
-                # Persist after consolidation
-                _ctx.file_store.save_all(_transcript.user_memory)
-                _ctx.event_file_store.save(_ctx.event_store)
-
-                # Diary decay during consolidation
-                if _ctx.self_memory_store is not None:
-                    removed = _ctx.self_memory.apply_diary_decay()
-                    if removed > 0:
-                        logger.info("后台归纳：移除 %d 条衰退日记条目", removed)
-                    _ctx.self_memory_store.save(_ctx.self_memory)
-
-            bg_manager.set_consolidation_callback(_consolidation_callback)
             created.bg_task_manager = bg_manager
 
         self._live_session_contexts[key] = created
@@ -2171,9 +2208,6 @@ class AsyncRolePlayEngine:
             else:
                 # Different user or first message — flush pending if any, then buffer new
                 if pending is not None and pending.messages:
-                    # Cancel any pending timer
-                    if pending.timer_task is not None and not pending.timer_task.done():
-                        pending.timer_task.cancel()
                     old_participant = self._resolve_participant_for_turn(
                         transcript=transcript,
                         turn=pending.messages[0],
@@ -2399,16 +2433,21 @@ class AsyncRolePlayEngine:
                 data={"speaker": turn.speaker},
             ))
 
-            assistant_message = await self._generate_assistant_message(
-                config,
-                transcript,
-                skill_registry=context.skill_registry,
-                skill_executor=context.skill_executor,
-                environment_context=environment_context,
-                event_bus=context.event_bus,
-                skip_sections=intent.skip_sections if intent else [],
-                self_memory=context.self_memory if config.orchestration.enable_self_memory else None,
-            )
+            # Acquire LLM concurrency semaphore before main generation (if configured).
+            # Algorithm-based steps (heat, intent keyword path) have already run without
+            # the semaphore so they are unaffected by queuing here.
+            _sem = context.llm_semaphore
+            async with (_sem if _sem is not None else _noop_semaphore()):
+                assistant_message = await self._generate_assistant_message(
+                    config,
+                    transcript,
+                    skill_registry=context.skill_registry,
+                    skill_executor=context.skill_executor,
+                    environment_context=environment_context,
+                    event_bus=context.event_bus,
+                    skip_sections=intent.skip_sections if intent else [],
+                    self_memory=context.self_memory if config.orchestration.enable_self_memory else None,
+                )
             last_assistant_reply_at = datetime.now(timezone.utc)
 
             # Record reply timestamp for frequency limiter
@@ -2424,20 +2463,8 @@ class AsyncRolePlayEngine:
                 and self._parse_runtime_datetime(ts).timestamp() >= cutoff_ts  # type: ignore[union-attr]
             ]
 
-            # Self-memory extraction (fire-and-forget after reply)
-            if config.orchestration.enable_self_memory:
-                context.assistant_reply_count_since_self_extract += 1
-                batch = max(1, config.orchestration.self_memory_extract_batch_size)
-                if context.assistant_reply_count_since_self_extract >= batch:
-                    context.assistant_reply_count_since_self_extract = 0
-                    asyncio.create_task(
-                        self._run_self_memory_extract_task(
-                            config=config,
-                            transcript=transcript,
-                            context=context,
-                            assistant_content=assistant_message.content,
-                        )
-                    )
+            # Self-memory extraction is now handled by the time-based background task.
+            # (see _self_memory_callback registered in _get_or_create_live_context)
 
             await context.event_bus.emit(SessionEvent(
                 type=SessionEventType.PROCESSING_COMPLETED,

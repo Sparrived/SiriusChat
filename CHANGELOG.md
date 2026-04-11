@@ -4,7 +4,37 @@
 
 ## [Unreleased]
 
-## [0.14.4] - 2026-04-10
+## [0.14.5] - 2026-04-11
+
+### Changed
+- **SelfMemory 触发机制：消息计数 → 定时后台任务**
+  - 旧机制（v0.13+）：每 N 条 AI 回复后（`self_memory_extract_batch_size`，默认 3）在主流程中 fire-and-forget；触发频率与对话强度强耦合，对话空闲时不提取，高频对话时每条回复都检查。
+  - 新机制（v0.14.5）：以固定时间间隔（`self_memory_extract_interval_seconds`，默认 360 秒 / 6 分钟）在后台任务循环中提取，与对话速率完全解耦；由 `BackgroundTaskManager` 的 `_self_memory_loop` 统一管理。
+  - `self_memory_extract_batch_size` 保留在 `OrchestrationPolicy` 中（向后兼容），但 engine 不再使用该字段触发提取。
+  - `BackgroundTaskConfig` 新增 `self_memory_enabled` 和 `self_memory_interval_seconds` 字段。
+  - `BackgroundTaskManager` 新增 `set_self_memory_callback()`、`trigger_self_memory_now()` 和 `_self_memory_loop()` 方法。
+  - `LiveSessionContext.assistant_reply_count_since_self_extract` 字段已移除，替换为 `llm_semaphore: asyncio.Semaphore | None`。
+
+- **LLM 并发限流：`max_concurrent_llm_calls`**
+  - 高并发场景下多个用户的消息同时抵达时，原先会触发等量的并行 LLM 生成调用，造成模型侧压力堆积和响应延迟。
+  - 新增 `OrchestrationPolicy.max_concurrent_llm_calls`（默认 `1`）：每个 session context 最多允许指定数量的 LLM 主回复生成同时执行，超出部分排队等待。
+  - 纯算法路径（热度分析 `HeatAnalyzer`、关键词意图回退）**不受限流影响**，直接运行；只有 `_generate_assistant_message` 受信号量保护。
+  - 设为 `0` 则禁用限制（无限并发，与旧版行为一致）。
+  - 实现：`LiveSessionContext.llm_semaphore: asyncio.Semaphore | None`；`_noop_semaphore()` 用于限流关闭时的零开销兼容。
+
+- **`_PendingTurn.timer_task` 死代码清理**：移除遗留的 `timer_task` 引用（该字段已在 v0.14.2 debounce 重构时删除）。
+
+### Migration Guide (v0.14.4 → v0.14.5)
+
+**SelfMemory：**
+- 原 `self_memory_extract_batch_size=N` 配置不会报错，但已无实际效果（默认每 6 分钟后台提取一次）。
+- 如需调整频率，设置 `self_memory_extract_interval_seconds`（单位：秒，推荐 300–600）。
+
+**并发限流：**
+- 默认 `max_concurrent_llm_calls=1` 会将主回复生成串行化。如需并发（旧行为），设 `max_concurrent_llm_calls=0`。
+- 群聊+多用户场景建议保持 `1`，避免模型排队积压。
+
+
 
 ### Changed
 - **SKILL 执行模式：模板链 → 迭代反馈循环（Breaking Change for v0.14.3 chain syntax）**
