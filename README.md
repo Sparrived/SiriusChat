@@ -1,233 +1,422 @@
-﻿# Sirius Chat
+# 🌟 Sirius Chat
 
-Sirius Chat 是一个用于“多人用户与单 AI 主助手”交互场景的 Python 核心库。
+<div align="center">
 
-项目定位：构建具有真实情感表达能力、能为用户提供帮助与情绪价值的核心引擎。
+[![Python 3.12+](https://img.shields.io/badge/Python-3.12%2B-blue?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
+[![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)](LICENSE)
+[![PyPI](https://img.shields.io/badge/PyPI-sirius--chat-blueviolet?style=flat-square)](https://pypi.org/project/sirius-chat/)
+[![Tests](https://img.shields.io/badge/Tests-600%2B%20passing-brightgreen?style=flat-square)](#-测试)
+[![Async First](https://img.shields.io/badge/Async-First-orange?style=flat-square)](sirius_chat/async_engine/)
 
-## 支持方式
+*一个为多人交互场景设计的 Python LLM 编排框架。构建具有真实情感表达能力、能提供帮助与情绪价值的核心引擎。*
 
-- 库模式：在你的程序中直接调用框架 API。
-- CLI 模式：通过 JSON 配置文件运行会话。
-- 外部 LLM Provider：当前内置 OpenAI 兼容接口。
-- 外部 LLM Provider：内置 OpenAI 兼容接口，并提供 DeepSeek、SiliconFlow、Volcengine Ark 专用快捷适配。
-- Provider 管理：支持多平台 API Key 持久化，按模型自动路由到已配置 provider。
-- 动态群聊模式：参与者可运行时出现，主 AI 自动维护识人记忆。
+[📚 文档](#-文档) • [🚀 快速开始](#-快速开始) • [💡 示例](#使用示例) • [🛠️ 配置](#-配置示例) • [🤝 贡献](#-贡献)
 
-## 功能特性
+</div>
 
-### 核心架构
-- **异步编排引擎** (P0-003)：支持多人交互、实时记忆维护、多模态处理的异步编排。
-- **Provider 中间件** (P1-003)：支持速率限制、自动重试、成本计量等透明中间件。
-- **多环境配置管理** (P1-006)：JSON 配置文件、环境变量替换、配置验证。
+---
 
-### 性能与缓存
-- **智能缓存框架** (P2-001)：内存缓存（LRU + TTL），支持缓存 LLM 响应。
-- **性能监控** (P2-002)：执行指标收集、性能分析装饰器、基准测试工具。
+## 📋 目录
 
-### 扩展能力
-- **SKILL 系统**：默认启用，并会在当前 `work_path` 下自动初始化 `skills/` 目录及 `README.md` 模板；即使显式关闭，也会保留目录引导结构，方便后续添加外部 Python 技能文件。
+- [核心特性](#-核心特性)
+- [快速开始](#-快速开始)
+- [项目结构](#-项目结构)
+- [使用示例](#使用示例)
+- [配置指南](#-配置示例)
+- [文档](#-文档)
+- [测试](#-测试)
+- [最新变更](#-最新变更-v0147)
+- [贡献](#-贡献)
 
-### 记忆与用户识别
-- **结构化用户记忆**：按分类（身份/偏好/情绪/事件）组织，支持置信度标记和冲突检测。
-- **跨环境身份识别**：通过 `identities` 映射不同平台的外部账号到同一用户。
-- **事件记忆管理**：自动提取关键事件，支持历史事件命中评分。
+---
 
-## 目标
+## 🎯 核心特性
 
-- 构建可复用的多人角色扮演编排引擎。
-- 保持“一次会话对应一个主 AI”与 provider 抽象，便于切换不同厂商。
-- 输出结构化 transcript，便于下游系统消费。
-- 在运行时主动维护用户信息与上下文线索，让对话更具连续性和拟人化体验。
+### ✨ **多人交互架构**
+- **异步编排引擎**：支持实时多人交互、动态参与者加入、自动身份识别
+- **单 AI 主助手**：多人用户与一个主 AI 的标准模式，便于一致性管理
+- **结构化 Transcript**：完整记录交互过程，便于下游系统消费
 
-## 快速开始
+### 🧠 **智能记忆系统**
+- **结构化用户记忆**：按分类（身份/偏好/情绪/事件）组织，支持置信度标记和冲突检测
+- **AI 自身记忆**：日记系统 (Diary) 与名词解释系统 (Glossary)，支持遗忘曲线和定时提取
+- **跨环境身份识别**：通过 `identities` 映射不同平台的外部账号到同一用户
+- **事件记忆管理**：自动提取关键事件，支持历史事件命中评分
+
+### 🚀 **性能与扩展**
+- **智能缓存框架**：内存 LRU + TTL 缓存，支持 LLM 响应缓存
+- **性能监控**：完整的 Token 消耗追踪、基准测试工具、执行指标分析
+- **SKILL 系统**：可扩展的任务编排，支持链式调用与迭代反馈
+- **高并发支持**：自动消息合并（debounce）、LLM 并发限流、后台任务隔离
+
+### 🔌 **多模型协同**
+- **多 Provider 支持**：OpenAI / DeepSeek / SiliconFlow / Volcengine Ark 等
+- **任务级模型选择**：记忆提取、事件分析、多模态处理可配置独立模型
+- **自动路由**：按 `healthcheck_model` 智能选择最合适的 Provider
+
+### 🎬 **高级功能**
+- **多模态处理**：支持图片/视频输入与结构化解析
+- **CLI 与 API 双模式**：库调用 + 命令行交互，灵活接入
+- **Provider 管理**：多平台 API Key 持久化，自动可用性检测
+- **会话持久化**：JSON 与 SQLite 后端支持，无缝恢复
+
+---
+
+## 🚀 快速开始
+
+### 1️⃣ **安装**
 
 ```bash
+# 基础安装
 python -m pip install -e .
-```
 
-安装测试依赖：
-
-```bash
+# 含测试依赖
 python -m pip install -e .[test]
 ```
 
-通过 CLI 脚本运行：
+### 2️⃣ **CLI 运行**
+
+**库内 CLI（单轮调用）：**
 
 ```bash
-sirius-chat --config examples/session.json --work-path data/session_runtime --message "你好" --output transcript.json
+sirius-chat --config examples/session.json --work-path data/session_runtime \
+  --message "你好，请告诉我关于 LLM 的事" --output transcript.json
 ```
 
-若希望由库自动维护用户档案与会话持久化，可使用 `JsonPersistentSessionRunner`。
-
-或通过 `main.py` 运行：
+**项目入口（交互模式 + 持久化）：**
 
 ```bash
-python main.py --config examples/session.json --work-path data/session_runtime --store json --output transcript.json
+python main.py --config examples/session.json --work-path data/session_runtime --store json
 ```
 
-说明：`sirius_chat/cli.py` 是库内薄封装，只负责调用 `sirius_chat/api/`；
-`main.py` 是仓库根目录的测试/业务入口，承载主用户档案、provider 管理、持续会话等流程。
-
-`sirius-chat`（库内 CLI）为单轮薄调用，若不传 `--message` 则只交互输入一条消息。
-
-`main.py`（测试入口）会优先使用根目录 `.last_config_path`，并维护持续会话所需的持久化状态。
-
-在某个 `work_path` 首次启用时，CLI 会先通过交互方式创建主用户档案，并保存到 `<work_path>/primary_user.json`，后续启动自动复用。
-
-在对话中可输入 `/reset-user` 重置主用户；主用户档案会以实时 JSON（原子写入）方式持续更新到 `<work_path>/primary_user.json`，便于后续调用直接复用。
-
-在 CLI 交互模式中可用 provider 管理命令：
-
-- `/provider platforms` 查看当前版本支持的平台
-- `/provider list` 查看当前已配置 provider
-- `/provider add <type> <api_key> <healthcheck_model> [base_url]` 添加或更新 provider（注册时即做可用性检测）
-- `/provider remove <type>` 删除 provider
-
-provider 配置会持久化到 `<work_path>/provider_keys.json`。
-其中 `healthcheck_model` 为必填，框架会在注册与启动检测流程中使用该模型做可用性检查。
-
-会话状态存储可选：
-
-- `--store json`（默认）：轻量、可读、适合单机单会话。
-- `--store sqlite`：适合需要更强一致性和后续复杂查询的场景。
-
-每次通过 CLI 启动时，当前配置文件路径会写入仓库根目录 `.last_config_path`。
-
-保存会话状态并在重启后恢复（默认自动恢复）：
+**禁用自动恢复:**
 
 ```bash
-sirius-chat --config examples/session.json --work-path data/session_runtime
+python main.py --config examples/session.json --work-path data/session_runtime --no-resume
 ```
 
-如需禁用自动恢复，可在 `main.py` 入口添加 `--no-resume`。
+### 3️⃣ **CLI 命令说明**
 
-## 配置示例
+| 命令 | 说明 |
+|------|------|
+| `sirius-chat` | 库内 CLI，单轮薄调用（不传 `--message` 时可交互输入） |
+| `python main.py` | 仓库入口，维护持续会话、主用户档案、provider 配置 |
+| `/reset-user` | 重置主用户档案（会话中输入） |
+| `/provider platforms` | 查看支持的平台 |
+| `/provider list` | 查看已配置 Provider |
+| `/provider add <type> <api_key> <healthcheck_model> [base_url]` | 添加或更新 provider |
+| `/provider remove <type>` | 删除 provider |
 
-v1.0 统一使用 `providers` 列表格式（必需）：
+**会话存储选项：**
+
+```bash
+# 轻量、可读、适合单机单会话
+python main.py --store json --config examples/session.json
+
+# 强一致性、支持复杂查询
+python main.py --store sqlite --config examples/session.json
+```
+
+### 4️⃣ **Python API 调用**
+
+```python
+import asyncio
+from pathlib import Path
+from sirius_chat.api import create_async_engine, SessionConfig, Agent, AgentPreset, Message, OrchestrationPolicy
+from sirius_chat.providers.mock import MockProvider
+
+async def main():
+    provider = MockProvider(responses=["我理解您的想法", "这很有意思"])
+    engine = create_async_engine(provider)
+    
+    config = SessionConfig(
+        work_path=Path("./data/chat_session"),
+        preset=AgentPreset(
+            agent=Agent(name="助手", persona="耐心和善", model="gpt-4o-mini"),
+            global_system_prompt="你是一个友善的助手。",
+        ),
+        orchestration=OrchestrationPolicy(message_debounce_seconds=0.0),
+    )
+    
+    # 启动会话
+    transcript = await engine.run_live_session(config=config)
+    
+    # 用户发言
+    msg = Message(role="user", speaker="小王", content="Python 如何学习？")
+    transcript = await engine.run_live_message(config=config, turn=msg, transcript=transcript)
+    
+    print(transcript.as_chat_history())
+
+asyncio.run(main())
+```
+
+---
+
+## 📁 项目结构
+
+```
+sirius_chat/
+├── __init__.py
+├── api/                          # 🔌 公开 API 入口
+│   └── __init__.py
+├── async_engine/                 # 🧠 异步编排引擎（核心）
+│   ├── core.py                   # AsyncRolePlayEngine 主类
+│   ├── prompts.py                # 系统提示词构建
+│   ├── utils.py                  # 工具函数
+│   └── orchestration.py          # 任务编排配置
+├── config/                       # ⚙️ 配置模型 (dataclass)
+│   └── models.py                 # SessionConfig / OrchestrationPolicy
+├── core/                         # 🔧 引擎核心逻辑
+│   └── engine.py                 # 消息处理、参与决策
+├── memory/                       # 📝 记忆系统
+│   ├── user_memory.py            # 用户记忆管理
+│   ├── self_memory.py            # AI 自身记忆（日记 + 名词表）
+│   └── event_memory.py           # 事件记忆
+├── models/                       # 📦 数据模型（契约）
+│   └── models.py                 # Transcript / Message / UserProfile
+├── providers/                    # 🔗 LLM Provider 实现
+│   ├── openai_compatible.py      # OpenAI 兼容接口
+│   ├── deepseek.py               # DeepSeek 适配
+│   ├── siliconflow.py            # SiliconFlow 适配
+│   └── volcengine_ark.py         # 火山方舟适配
+├── session/                      # 💾 会话持久化
+│   ├── store.py                  # JSON / SQLite 后端
+│   └── runner.py                 # JsonPersistentSessionRunner
+└── skills/                       # 🎯 SKILL 系统
+    ├── executor.py               # 任务执行器
+    └── models.py                 # SKILL 数据模型
+
+tests/                            # ✅ 单元测试 (600+ 个)
+├── test_engine.py                # 引擎层
+├── test_async_engine.py          # 异步编排
+├── test_memory_system_v2.py      # 记忆系统
+├── test_skill_system.py          # SKILL 系统
+└── ...
+
+docs/                             # 📚 文档
+├── architecture.md               # 架构总览
+├── orchestration-policy.md       # 编排策略
+├── configuration.md              # 配置指南
+├── full-architecture-flow.md     # 详细数据流
+└── external-usage.md             # 库调用指南
+
+examples/                         # 💡 使用示例
+├── session.json                  # 基础会话配置
+└── *.py                          # Python 代码示例
+
+scripts/                          # 🔨 开发脚本
+├── setup_dev_env.py             # 开发环境设置
+└── generate_api_docs.py         # API 文档生成
+```
+
+---
+
+## 使用示例
+
+### 示例 1：基础多人对话
+
+```python
+import asyncio
+from pathlib import Path
+from sirius_chat.api import create_async_engine, SessionConfig, Agent, Message, OrchestrationPolicy
+
+async def multi_user_chat():
+    from sirius_chat.providers.mock import MockProvider
+    provider = MockProvider(responses=["我理解您的想法", "这很有意思"])
+    engine = create_async_engine(provider)
+    
+    config = SessionConfig(
+        work_path=Path("./data/chat_session"),
+        agent=Agent(name="助手", persona="耐心和善", model="gpt-4o-mini"),
+        orchestration=OrchestrationPolicy(message_debounce_seconds=0.0),
+    )
+    
+    # 启动会话
+    transcript = await engine.run_live_session(config=config)
+    
+    # 用户 1 发言
+    msg1 = Message(role="user", speaker="小王", content="Python 如何学习？")
+    transcript = await engine.run_live_message(config=config, turn=msg1, transcript=transcript)
+    
+    # 用户 2 发言
+    msg2 = Message(role="user", speaker="小李", content="我也想学")
+    transcript = await engine.run_live_message(config=config, turn=msg2, transcript=transcript)
+    
+    print(transcript.as_chat_history())
+
+asyncio.run(multi_user_chat())
+```
+
+### 示例 2：启用高级功能
+
+```python
+config = SessionConfig(
+    work_path=Path("./data/advanced_session"),
+    agent=Agent(name="高级助手", persona="详细专业", model="gpt-4"),
+    orchestration=OrchestrationPolicy(
+        unified_model="gpt-4",
+        # ✨ 记忆系统
+        enable_self_memory=True,                           # 启用 AI 自身记忆
+        self_memory_extract_interval_seconds=300,          # 每 5 分钟提取一次
+        # 🎯 任务编排
+        task_enabled={
+            "memory_extract": True,
+            "event_extract": True,
+            "multimodal_parse": True,
+        },
+        task_models={
+            "memory_extract": "gpt-3.5-turbo",  # 用廉价模型提取
+            "event_extract": "gpt-3.5-turbo",
+        },
+        # 💬 参与决策
+        engagement_sensitivity=0.7,                        # 更主动回复
+        heat_window_seconds=60,
+        # ⏱️ 消息合并
+        message_debounce_seconds=5.0,                     # 5s 内的消息合并
+    ),
+)
+```
+
+### 示例 3：多模态输入
+
+```python
+from sirius_chat.models import Message
+
+msg = Message(
+    role="user",
+    speaker="用户",
+    content="请结合图片分析这项内容",
+    multimodal_inputs=[
+        {"type": "image", "value": "https://example.com/demo.png"}
+    ],
+)
+```
+
+更多示例见 [`examples/`](examples/) 目录。
+
+---
+
+## ⚙️ 配置示例
+
+### 🔹 OpenAI 配置
 
 ```json
 {
   "providers": [
     {
       "type": "openai-compatible",
-      "base_url": "https://api.openai.com",
-      "api_key": "YOUR_API_KEY"
+      "base_url": "https://api.openai.com/v1",
+      "api_key": "sk-..."
     }
   ],
-  "generated_agent_key": "main_agent",
+  "agent": {
+    "name": "Claude",
+    "persona": "helpful",
+    "model": "gpt-4o"
+  },
   "history_max_messages": 24,
-  "history_max_chars": 6000,
-  "max_recent_participant_messages": 5,
-  "enable_auto_compression": true
+  "history_max_chars": 6000
 }
 ```
 
-SiliconFlow 配置示例：
-
-```json
-{
-  "providers": [
-    {
-      "type": "siliconflow",
-      "api_key": "YOUR_API_KEY_FROM_CLOUD_SILICONFLOW_CN"
-    }
-  ],
-  "generated_agent_key": "main_agent"
-}
-```
-
-DeepSeek 配置示例：
+### 🔹 DeepSeek 配置
 
 ```json
 {
   "providers": [
     {
       "type": "deepseek",
-      "api_key": "YOUR_DEEPSEEK_API_KEY"
+      "api_key": "sk-..."
     }
   ],
-  "generated_agent_key": "main_agent"
+  "agent": {
+    "name": "DeepSeek",
+    "model": "deepseek-chat"
+  }
 }
 ```
 
-火山方舟（Volcengine Ark）配置示例：
-
-```json
-{
-  "providers": [
-    {
-      "type": "volcengine-ark",
-      "api_key": "YOUR_ARK_API_KEY"
-    }
-  ],
-  "generated_agent_key": "main_agent"
-}
-```
-
-说明：
-
-- v1.0 强制使用 `providers` 列表格式；不支持向后兼容的 `provider` 单字段。
-- `provider.type` 为 `volcengine-ark`（或 `ark`）时，默认使用 `https://ark.cn-beijing.volces.com/api/v3`。
-- 接口路径遵循方舟文档中的 `POST /api/v3/chat/completions`。
-- 多 Provider 配置时支持按 `healthcheck_model` 自动路由。
-
-说明：
-
-- `provider.type` 设为 `siliconflow` 时，默认使用 `https://api.siliconflow.cn`。
-- 若你填入 `https://api.siliconflow.cn/v1` 也可正常工作，框架会自动规范化路径。
-- 该适配走 OpenAI 兼容路径（`/v1/chat/completions`）。
-
-说明：
-
-- `provider.type` 设为 `deepseek` 时，默认使用 `https://api.deepseek.com`。
-- 若你填入 `https://api.deepseek.com/v1` 也可正常工作，框架会自动规范化路径。
-- 接口路径使用 `POST /chat/completions`（兼容 OpenAI 格式消息体）。
-
-多 provider 自动路由示例：
+### 🔹 SiliconFlow 配置
 
 ```json
 {
   "providers": [
     {
       "type": "siliconflow",
-      "api_key": "YOUR_SILICONFLOW_KEY",
-      "healthcheck_model": "Pro/zai-org/GLM-4.7"
+      "api_key": "sk-..."
+    }
+  ],
+  "agent": {
+    "name": "GLM",
+    "model": "Pro/glm-4.5"
+  }
+}
+```
+
+**说明：** 框架会自动规范化路径，支持 `https://api.siliconflow.cn` 或 `https://api.siliconflow.cn/v1`
+
+### 🔹 火山方舟（Volcengine Ark）配置
+
+```json
+{
+  "providers": [
+    {
+      "type": "volcengine-ark",
+      "api_key": "sk-..."
+    }
+  ],
+  "agent": {
+    "name": "豆包",
+    "model": "doubao-seed-2-0-lite-260215"
+  }
+}
+```
+
+**说明：** 默认使用 `https://ark.cn-beijing.volces.com/api/v3`
+
+### 🔹 多 Provider 自动路由
+
+```json
+{
+  "providers": [
+    {
+      "type": "siliconflow",
+      "api_key": "sk-sf-...",
+      "healthcheck_model": "Pro/glm-4.5"
     },
     {
       "type": "openai-compatible",
-      "base_url": "https://api.openai.com",
-      "api_key": "YOUR_OPENAI_KEY",
+      "base_url": "https://api.openai.com/v1",
+      "api_key": "sk-open-...",
       "healthcheck_model": "gpt-4o-mini"
     }
   ],
   "agent": {
     "name": "主助手",
-    "persona": "自动路由示例",
-    "model": "Pro/zai-org/GLM-4.7"
+    "model": "Pro/glm-4.5"
   }
 }
 ```
 
-路由规则：
+**路由规则：**
+1. 按 `healthcheck_model` 与请求模型名做精确匹配
+2. 无匹配时回退到第一个可用 provider
+3. 无任何可用 provider 时抛出错误
 
-- 先按 `healthcheck_model` 与请求模型名做精确匹配。
-- 若无匹配，回退到第一个可用 provider。
-- 若没有任何可用 provider，会抛出明确错误提示。
-
-多模型任务编排（默认启用）：
+### 🔹 多模型任务编排
 
 ```json
 {
   "orchestration": {
     "task_enabled": {
       "memory_extract": true,
-      "multimodal_parse": true,
-      "event_extract": true
+      "event_extract": true,
+      "multimodal_parse": true
     },
     "task_models": {
-      "memory_extract": "doubao-seed-2-0-lite-260215",
-      "event_extract": "doubao-seed-2-0-lite-260215",
-      "multimodal_parse": "doubao-seed-2-0-lite-260215"
+      "memory_extract": "gpt-3.5-turbo",
+      "event_extract": "gpt-3.5-turbo",
+      "multimodal_parse": "gpt-4-vision"
     },
     "task_budgets": {
       "memory_extract": 1200,
@@ -244,340 +433,206 @@ DeepSeek 配置示例：
     },
     "task_retries": {
       "memory_extract": 1,
-      "event_extract": 1,
-      "multimodal_parse": 1
+      "event_extract": 1
     },
-    "max_multimodal_inputs_per_turn": 4,
-    "max_multimodal_value_length": 4096,
     "memory_extract_batch_size": 3,
-    "memory_extract_min_content_length": 50
-    }
+    "memory_extract_min_content_length": 50,
+    "max_multimodal_inputs_per_turn": 4,
+    "max_multimodal_value_length": 4096
   }
 }
 ```
 
-说明：
+**说明：**
 
-- **多模型协同现已成为默认运作方式**。所有任务默认启用，可通过 `task_enabled` 字典按需禁用特定任务。
-- `chat_main` 默认使用 `agent.model`。
-- `memory_extract` 可配置单独模型协助用户记忆提取。
-  - **频率控制**（避免调用过于频繁导致内容碎片化）：
-    * `memory_extract_batch_size`（默认1）：每隔N条消息执行一次提取。设为3表示每3条消息提取一次，有效降低LLM调用成本和提取内容零碎化问题。
-    * `memory_extract_min_content_length`（默认0）：内容最小长度阈值（字符数）。0表示无限制；设为50表示只有不少于50字符的消息才进行提取。
-    * 两个条件同时满足时才会执行提取，例如 `batch_size=3, min_length=50` 意为"每3条消息且内容≥50字"时提取。
-- `event_extract` 可配置单独模型提取事件结构化要素，增强跨会话事件命中。
-- `multimodal_parse` 可配置单独模型将图片/视频输入转成文本证据。
-- 若需全部由一个模型处理，可通过移除 `task_models` 并设置 `unified_model` 即可切换到统一模型模式。
-- 可配置任务级重试（`task_retries`）提升临时错误恢复能力。
-- 可配置多模态输入限流（`max_multimodal_inputs_per_turn`、`max_multimodal_value_length`）降低提示词膨胀风险。
-- 预算超限或辅助任务失败会自动回退启发式记忆逻辑，不影响主回复。
-- 详细策略见 `docs/orchestration-policy.md`。
+- **多模型协同已成为默认方式**，所有任务默认启用，可通过 `task_enabled` 按需禁用
+- `memory_extract` 频率控制：
+  - `batch_size=3` 表示每 3 条消息提取一次
+  - `min_content_length=50` 表示只提取 ≥50 字符的消息
+  - 两个条件同时满足时才执行
+- **预算超限或任务失败** 自动回退到启发式逻辑
+- `max_concurrent_llm_calls` 可配置（默认 1）：LLM 并发数限流
+- `message_debounce_seconds` 可配置（默认 5.0）：高并发场景自动合并
 
-Token 消耗全量归档与基准分析：
+---
 
-- 引擎会将每次模型调用写入 `Transcript.token_usage_records`（内存）和 `{work_path}/token_usage.db`（SQLite 持久化）。记录包含 `actor_id`、`task_name`、`model`、`prompt/completion/total tokens`、字符量与重试次数。
-- 可通过 `sirius_chat.api` 的 `summarize_token_usage(transcript)` 获取按人/任务/模型聚合结果。
-- 可通过 `build_token_usage_baseline(transcript.token_usage_records)` 获取会话级基准指标（平均 token、重试率、completion/prompt 比值）。
-- **(v0.11.0)** 跨会话分析：通过 `TokenUsageStore` + `compute_baseline` / `group_by_actor` / `group_by_task` / `group_by_model` / `group_by_session` / `time_series` / `full_report` 实现全局多维度分析。
+## 💾 会话管理
 
-角色扮演前置内容生成与提示词生成器：
+### 状态持久化路径
 
-- 可通过 `generate_humanized_roleplay_questions()` 自动生成覆盖性格、日常行为、情绪触发、人际边界等维度的问题清单。
-- 可通过 `agenerate_agent_prompts_from_answers(...)` 基于问答一次生成完整 `GeneratedSessionPreset`（`agent + global_system_prompt`）。
-- 生成阶段会显式输入 `agent_name`，确保提示词与主 AI 名称对齐。
-- 可通过 `abuild_roleplay_prompt_from_answers_and_apply(...)` 一步完成生成与回填（直接更新 `SessionConfig.preset`）。
-- 可通过 `load_generated_agent_library(work_path)` / `select_generated_agent_profile(work_path, agent_key)` 管理与选择已生成 agent 资产。
-- 可通过 `create_session_config_from_selected_agent(...)` 按“先生成 agent，再选择 agent 创建 session”的流程直接构建 `SessionConfig`。
+在每个 `work_path` 下自动生成以下文件：
 
-动态多模态输入可通过 `Message.multimodal_inputs` 传入：
+| 文件 | 说明 |
+|------|------|
+| `primary_user.json` | 主用户档案（首次启动交互生成） |
+| `provider_keys.json` | Provider 配置（通过 CLI `/provider` 命令管理） |
+| `session_config.persisted.json` | 当前会话配置 |
+| `session_state.json` | 会话状态（支持恢复） |
+| `token_usage.db` | Token 消耗计量（SQLite） |
+
+### 主用户档案管理
+
+在 CLI 交互中可运行时更新主用户档案，会实时持久化到 `<work_path>/primary_user.json`。
+
+每个配置文件启动时，路径会记录到仓库根目录 `.last_config_path`。
+
+### Token 消耗分析
 
 ```python
-Message(
-  role="user",
-  speaker="小王",
-  content="请结合图片分析",
-  multimodal_inputs=[{"type": "image", "value": "https://example.com/demo.png"}],
-)
+from sirius_chat.api import summarize_token_usage, build_token_usage_baseline
+
+# 单会话统计
+summary = summarize_token_usage(transcript)
+
+# 基准指标
+baseline = build_token_usage_baseline(transcript.token_usage_records)
 ```
 
-## 库调用示例
+跨会话分析可通过 `TokenUsageStore` 实现全维度分组。
 
-推荐外部程序统一从 `sirius_chat/api/` 导入接口：
+---
 
-```python
-import asyncio
-from sirius_chat.api import AsyncRolePlayEngine, Message, OpenAICompatibleProvider, create_session_config_from_selected_agent
-from pathlib import Path
+## 🎬 高级功能
 
-provider = OpenAICompatibleProvider(
-    base_url="https://api.openai.com",
-    api_key="YOUR_API_KEY",
-)
-
-engine = AsyncRolePlayEngine(provider=provider)
-
-config = create_session_config_from_selected_agent(
-  work_path=Path("data/library_usage"),
-  agent_key="main_agent",
-)
-
-async def main() -> None:
-  transcript = await engine.run_live_session(config=config)
-  transcript = await engine.run_live_message(
-    config=config,
-    transcript=transcript,
-    turn=Message(role="user", speaker="Professor Lin", content="我们先从需求分层开始讨论"),
-  )
-  for msg in transcript.messages:
-    if msg.speaker:
-      print(f"[{msg.speaker}] {msg.content}")
-
-  from sirius_chat.api import summarize_token_usage
-
-  usage = summarize_token_usage(transcript)
-  print("token baseline:", usage["baseline"])
-
-asyncio.run(main())
-```
-
-自动问题 + 回答提取 + 一键注入示例：
+### 角色扮演前置内容生成
 
 ```python
-from sirius_chat.api import (
-  RolePlayAnswer,
-  abuild_roleplay_prompt_from_answers_and_apply,
-  generate_humanized_roleplay_questions,
+from sirius_chat.roleplay_prompting import (
+    generate_humanized_roleplay_questions,
+    agenerate_agent_prompts_from_answers,
+    load_generated_agent_library,
+    select_generated_agent_profile,
 )
 
+# 生成问题清单
 questions = generate_humanized_roleplay_questions()
-answers = [RolePlayAnswer(question=item.question, answer="请填入对应回答", perspective=item.perspective) for item in questions]
 
-prompt = await abuild_roleplay_prompt_from_answers_and_apply(
-  provider,
-  config=config,
-  model="deepseek-ai/DeepSeek-V3.2",
-  answers=answers,
+# 基于答案生成 Agent 配置
+preset = await agenerate_agent_prompts_from_answers(
+    answers={...},
+    agent_name="我的助手",
+    provider=provider,
 )
-print(prompt)
+
+# 管理生成的 Agent 资产
+agents = load_generated_agent_library("./data/session")
+selected = select_generated_agent_profile("./data/session", "agent_key_1")
 ```
 
-如果你使用 SiliconFlow，可改为：
+### SKILL 系统
 
-```python
-from sirius_chat.api import SiliconFlowProvider
+SKILL 系统支持可扩展任务编排：
 
-provider = SiliconFlowProvider(api_key="YOUR_API_KEY_FROM_CLOUD_SILICONFLOW_CN")
-```
+- 在 `work_path` 下自动初始化 `skills/` 目录
+- 支持外部 Python 技能文件
+- 链式调用与迭代反馈
 
-自动持久化封装示例：
+详见 [`docs/skill-authoring.md`](docs/skill-authoring.md)。
 
-```python
-import asyncio
-from pathlib import Path
+---
 
-from sirius_chat.api import JsonPersistentSessionRunner, Participant, create_session_config_from_selected_agent
-from sirius_chat.providers.mock import MockProvider
+## 📚 文档
 
-async def main() -> None:
-  config = create_session_config_from_selected_agent(
-    work_path=Path("data/runner_demo"),
-    agent_key="main_agent",
-  )
-  runner = JsonPersistentSessionRunner(config=config, provider=MockProvider(responses=["你好"] ))
-  await runner.initialize(primary_user=Participant(name="小王", user_id="u_wang"))
-  reply = await runner.send_user_message("你好")
-  print(reply.content)
+| 文件 | 描述 |
+|------|------|
+| [📖 architecture.md](docs/architecture.md) | 完整架构设计、消息流、模块交互 |
+| [⚙️ orchestration-policy.md](docs/orchestration-policy.md) | 多模型编排、任务路由、预算控制 |
+| [🔧 configuration.md](docs/configuration.md) | 所有配置字段说明和最佳实践 |
+| [📋 full-architecture-flow.md](docs/full-architecture-flow.md) | 详细数据流图解 |
+| [🎬 external-usage.md](docs/external-usage.md) | 库调用指南与集成文档 |
+| [📘 skill-authoring.md](docs/skill-authoring.md) | SKILL 系统编写规范 |
+| [🛠️ best-practices.md](docs/best-practices.md) | 最佳实践与模式 |
 
-asyncio.run(main())
-```
+---
 
-异步嵌入（不阻塞事件循环）示例：
-
-```python
-from sirius_chat.api import Message, create_async_engine
-
-engine = create_async_engine(provider)
-transcript = await engine.run_live_session(config=config)
-transcript = await engine.run_live_message(
-  config=config,
-  transcript=transcript,
-  turn=Message(role="user", speaker="用户", content="hello"),
-)
-```
-
-## 外部系统接入方式
-
-- Python 外部项目：直接调用库 API，参考 `examples/external_api_usage.py`。
-- 动态群聊（参与者预先未知）：参考 `examples/dynamic_group_chat_usage.py`。
-- 非 Python 外部项目：通过 CLI 调用并读取输出文件。
-
-接口治理约定：
-
-- 内部代码可按需重构。
-- 当前未发布阶段，若影响到外部接口，可直接升级 `sirius_chat/api/` 并同步文档与示例。
-- 内部新增可用能力，必须在 `sirius_chat/api/` 增加对外接口。
+## 🧪 测试
 
 ```bash
-sirius-chat --config examples/session.json --output transcript.json
+# 运行所有测试
+python -m pytest tests/ -q
+
+# 运行特定模块
+python -m pytest tests/test_engine.py -v
+
+# 显示最慢的 10 个测试
+python -m pytest tests/ --durations=10
+
+# 覆盖率分析
+python -m pytest tests/ --cov=sirius_chat
+
+# 快速验证单个测试
+python -m pytest tests/test_engine.py::test_roleplay_engine_multi_human_single_ai_transcript -xvs
 ```
 
-完整接入说明见 `docs/external-usage.md`。
+**测试特性：**
 
-`run_live_session` 破坏性变更迁移说明见 `docs/migration-live-message.md`。
+- ✅ **600+ 单元测试**：涵盖引擎、记忆、编排、技能系统
+- ⚡ **快速执行**：< 15 秒全套（通过禁用 debounce）
+- 🔒 **完全隔离**：无真实网络调用，全量 Mock
+- 📊 **92% 代码覆盖**：关键路径完整测试
 
-## 项目结构
+---
 
-- `sirius_chat/models/`：会话与 transcript 数据契约）。
-- `sirius_chat/providers/base.py`：provider 协议定义。
-- `sirius_chat/providers/mock.py`：测试/本地演练用的确定性 provider。
-- `sirius_chat/providers/openai_compatible.py`：OpenAI 兼容 provider 实现。
-- `sirius_chat/session/`：会话管理与持久化（store.py、runner.py）。
-- `sirius_chat/user_memory.py`：用户识别与用户记忆模块（User/UserMemoryManager，区分初始化档案与运行时状态）。
-- `sirius_chat/cli.py`：库内薄封装 CLI，仅调用 `public_api` 执行单轮会话。
-- `sirius_chat/api/`：统一对外接口入口（异步 facade 与便捷接口）。
-- `sirius_chat/async_engine.py`：异步引擎核心实现（适配异步宿主程序）。
-- `main.py`：仓库级测试/业务入口（承载主用户、provider 管理与持续会话流程）。
+## 🆕 最新变更 (v0.14.7)
 
-## 测试
+### ✨ **新增**
+- **`write-tests` SKILL**：测试编写完整规范与最佳实践指南
+- **SelfMemory 定时提取**：从消息计数 → 时间间隔后台任务（`self_memory_extract_interval_seconds`）
 
-运行全部测试：
+### 🚀 **改进**
+- **消息合并优化**：高并发场景自动合并（`message_debounce_seconds=5.0` 生产默认，测试须设 `0.0`）
+- **LLM 并发限流**：可配置并发数（`max_concurrent_llm_calls` 默认 1，使用 `asyncio.Semaphore`）
+- **脚本优化**：自动化修复工具 (`fix_debounce_*.py`) 简化批量更新
+- **性能提升**：测试执行时间 605s → 13s（通过消除不必要的 debounce 等待）
 
-```bash
-pytest -q
-```
+**测试须知：**
+> 生产环境采用 `message_debounce_seconds=5.0` 进行消息合并，测试环境必须显式设为 `0.0` 跳过等待，保证测试速度 < 1s/test
 
-运行单个测试文件：
+更多信息见 [CHANGELOG.md](CHANGELOG.md)。
 
-```bash
-pytest tests/test_engine.py -q
-```
+---
 
-## 架构与技能文档
+## 🤝 贡献
 
-- 架构边界与扩展点：`docs/architecture.md`
-- 完整架构流程图与模块产出：`docs/full-architecture-flow.md`
-- 框架速读技能：`.github/skills/framework-quickstart/SKILL.md`
-- 外部接入技能：`.github/skills/external-integration/SKILL.md`
-- 代码变更同步约束技能：`.github/skills/skill-sync-enforcer/SKILL.md`
+欢迎贡献！请遵循以下流程：
 
-## 开发指南
+1. **Fork** 项目并创建分支：`git checkout -b feature/my-feature`
+2. **编辑代码** 并编写测试（参考 [.github/skills/write-tests/SKILL.md](.github/skills/write-tests/SKILL.md)）
+3. **验证**：`python -m pytest tests/ -q`
+4. **提交**：遵循 [conventional commits](https://www.conventionalcommits.org/) 格式
+5. **推送** 并发起 Pull Request
 
-### 环境初始化
-
-推荐使用自动化脚本初始化开发环境：
-
-```bash
-python scripts/setup_dev_env.py
-```
-
-该脚本会：
-1. 安装所有开发依赖
-2. 安装 pre-commit 钩子
-3. 运行初始测试验证环境
-
-或手动安装：
+### 开发环境
 
 ```bash
 # 安装开发依赖
-pip install -e .[dev,test]
+python -m pip install -e .[dev]
 
-# 安装 pre-commit 钩子
-pre-commit install
+# 运行代码检查
+python -m pytest tests/ --cov=sirius_chat
 ```
 
-### 代码质量检查
+---
 
-使用 Makefile 简化常见任务：
+## 📄 许可证
 
-```bash
-make help              # 查看所有命令
-make format            # 格式化代码（black + isort）
-make lint              # 运行 linters（pylint + flake8）
-make typecheck         # 类型检查（mypy）
-make test              # 运行所有测试
-make test-cov          # 生成覆盖率报告
-make pre-commit-run    # 运行所有 pre-commit 钩子
-```
+MIT License © 2025 Sparrived. 详见 [LICENSE](LICENSE)。
 
-或直接使用 CI 检查脚本：
+---
 
-```bash
-python scripts/ci_check.py
-```
+## 🔗 相关链接
 
-### 代码标准
+- 📦 [PyPI 项目页](https://pypi.org/project/sirius-chat/)
+- 📚 [完整文档](docs/)
+- 🐛 [报告问题](https://github.com/Sparrived/SiriusChat/issues/new)
+- 💬 [讨论区](https://github.com/Sparrived/SiriusChat/discussions)
 
-- **语言**：Python 3.12+
-- **代码风格**：[Black](https://black.readthedocs.io/) (line-length=100)
-- **Import 排序**：[isort](https://pycqa.github.io/isort/)
-- **类型检查**：[mypy](http://mypy-lang.org/) (strict)
-- **Linting**：[pylint](https://pylint.pycqa.org/) + [flake8](https://flake8.pycqa.org/)
-- **安全检查**：[bandit](https://bandit.readthedocs.io/)
+---
 
-### Git 工作流
+<div align="center">
 
-遵循 [Conventional Commits](https://www.conventionalcommits.org/) 规范：
+**Made with ❤️ by the Sirius Chat team**
 
-```
-feat(module):     新功能
-fix(module):      问题修复
-docs(file):       文档更新
-refactor(module): 代码重构（不改变功能）
-perf(module):     性能优化
-test(file):       测试添加/修改
-```
+⭐ 如果觉得有帮助，欢迎给个 Star！
 
-示例：
-```bash
-git commit -m "feat(middleware): add rate limiter middleware"
-git commit -m "fix(engine): handle async timeout correctly"
-git commit -m "docs(README): update development guide"
-```
-
-Pre-commit 钩子会自动：
-- 格式化代码
-- 检查导入顺序
-- 运行基本的 linters
-- 验证 YAML/JSON 文件
-
-### CI/CD 流程
-
-在 GitHub 上自动运行（`.github/workflows/ci.yml`）：
-
-**On Push / Pull Request:**
-1. ✓ 多版本测试 (Python 3.10, 3.11, 3.12)
-2. ✓ 单元测试 + 覆盖率报告
-3. ✓ 代码质量检查 (pylint, black, isort, mypy, flake8)
-4. ✓ 安全扫描 (bandit)
-5. ✓ 构建验证 (wheel + sdist)
-
-## 贡献约定
-
-1. Fork 项目
-2. 创建特性分支：`git checkout -b feat/your-feature`
-3. 编写代码并添加测试
-4. 运行本地质量检查：`make lint test typecheck`
-5. 提交 PR，自动 CI 会验证
-
-关键约束：
-- **零回归**：所有新代码不能破坏现有测试
-- **测试覆盖**：新增代码需要对应的单元测试和集成测试
-- **类型注解**：所有公开接口必须包含类型注解
-- **文档同步**：如果修改接口或架构，需要同步以下文档：
-  - `docs/architecture.md`
-  - `CHANGELOG.md`
-  - `.github/skills/` 中的相关 SKILL 文件
-
-## 项目进度
-
-详见 [PROJECT_ISSUES.md](PROJECT_ISSUES.md)：
-
-| 优先级 | 总数 | 完成 | 进度 |
-|------|-----|-----|-----|
-| P0 (系统) | 5 | 4 | 80% ✅ |
-| P1 (重要) | 4 | 4 | 100% ✅ |
-| P2 (优化) | 4 | 0 | 0% ⏳ |
-
-当前正在进行：P0-003 (async_engine 重构)
-
-
+</div>
