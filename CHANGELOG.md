@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+## [0.15.4] - 2026-04-11
+
+### Changed
+- `ProviderRegistry` 持久化 `provider_keys.json` 时现在始终包含 `models` 字段（默认为空列表 `[]`），方便用户直接在 JSON 中快速配置支持的模型。
+- 更新 `ProviderRegistry.upsert` 方法，支持显式传入模型列表。
+
 ## [0.15.3] - 2026-04-11
 
 ### Added

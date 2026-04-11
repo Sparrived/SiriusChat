@@ -121,9 +121,8 @@ class ProviderRegistry:
                 "base_url": config.base_url,
                 "healthcheck_model": config.healthcheck_model,
                 "enabled": config.enabled,
+                "models": config.models,
             }
-            if config.models:
-                entry["models"] = config.models
             providers_payload[provider_type] = entry
         payload: dict[str, object] = {"providers": providers_payload}
         tmp = self.path.with_suffix(self.path.suffix + ".tmp")
@@ -137,6 +136,7 @@ class ProviderRegistry:
         api_key: str,
         base_url: str = "",
         healthcheck_model: str = "",
+        models: list[str] | None = None,
     ) -> None:
         provider_key = normalize_provider_type(provider_type)
         providers = self.load()
@@ -146,6 +146,7 @@ class ProviderRegistry:
             base_url=base_url.strip(),
             healthcheck_model=healthcheck_model.strip(),
             enabled=True,
+            models=models or [],
         )
         self.save(providers)
 
