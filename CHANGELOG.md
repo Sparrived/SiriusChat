@@ -4,7 +4,22 @@
 
 ## [Unreleased]
 
-## [0.14.5] - 2026-04-11
+## [0.14.6] - 2026-04-11
+
+### Added
+- **`write-tests` SKILL**（`.github/skills/write-tests/SKILL.md`）：测试编写完整规范
+  - 速度红线：单测 < 1 秒，套件 < 30 秒；禁止 `asyncio.sleep`、debounce、后台任务
+  - 标准 `OrchestrationPolicy` 配置模板（关闭所有辅助 LLM 任务）
+  - `MockProvider` 与 `_run_live_turns` 标准模式
+  - 断言规范、文件组织规范、命名规范
+  - 常见陷阱速查表（debounce / enable_self_memory / work_path 污染等）
+
+### Fixed
+- **`message_debounce_seconds` 默认值 `8.0` → `0.0`**（性能）
+  - 默认 8s 导致每次 `run_live_message` 都睡 8 秒，全套测试从 605s 降至 13s（× 46）
+  - Debounce 是群聊 opt-in 功能，需显式设置方可启用
+
+
 
 ### Changed
 - **SelfMemory 触发机制：消息计数 → 定时后台任务**
