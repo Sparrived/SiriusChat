@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+## [0.16.1] - 2026-04-11
+
+### Fixed
+- 修复技能（SKILL）执行后大体积结果被注入 transcript 时，`compress_for_budget` 因将 `system` 消息计入字符预算，导致当前 user 消息被弹出、后续重新生成请求不含 user 角色消息、Qwen 等严格校验接口返回 400 的问题。现在字符预算计算中排除 `system` 消息（它们最终被合并进 `system_prompt`，不占 chat_history 预算）。
+- 在 `_build_chat_main_request_context` 末尾添加防御性兜底：若构建出的 `chat_history` 不含任何 `user` 消息，自动从 transcript 中回填最近一条 user 消息并输出 WARNING，防止极端压缩场景下 API 拒绝请求。
+
 ## [0.16.0] - 2026-04-11
 
 ### Added

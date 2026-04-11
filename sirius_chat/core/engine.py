@@ -1390,6 +1390,23 @@ class AsyncRolePlayEngine:
                 chat_history.append({"role": message.role, "content": content_parts})
             else:
                 chat_history.append({"role": message.role, "content": text_content})
+
+        # Safety guard: after compression, the current user message may have been
+        # evicted from the transcript (e.g. by a very large skill-result system
+        # message that inflated the char budget before the root-cause fix landed).
+        # Ensure chat_history always contains at least one user message so that
+        # API providers that enforce this constraint (e.g. Qwen-VL) don't reject the
+        # request with "do not contain elements with the role of user".
+        if chat_history and not any(d.get("role") == "user" for d in chat_history):
+            for msg in reversed(transcript.messages):
+                if str(msg.role or "").strip().lower() == "user" and msg.content.strip():
+                    chat_history.insert(0, {"role": "user", "content": msg.content})
+                    logger.warning(
+                        "chat_history 不含 user 消息，已回填最近一条 user 消息以防 API 拒绝。"
+                        " 请检查 history_max_chars 配置或技能返回内容是否过大。"
+                    )
+                    break
+
         return system_prompt, chat_history
 
     @staticmethod

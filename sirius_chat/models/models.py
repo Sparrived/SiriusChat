@@ -155,7 +155,14 @@ class Transcript:
             self.messages = self.messages[-max_messages:]
 
         def _total_chars() -> int:
-            return sum(len(item.content) for item in self.messages) + len(self.session_summary)
+            # Exclude system messages: they are moved to system_prompt at request-build
+            # time and must not inflate the chat-history budget, otherwise large skill
+            # results can evict the current user message and cause API errors.
+            return sum(
+                len(item.content)
+                for item in self.messages
+                if str(item.role or "").strip().lower() != "system"
+            ) + len(self.session_summary)
 
         while len(self.messages) > 2 and _total_chars() > max_chars:
             archived = [self.messages.pop(0)]
