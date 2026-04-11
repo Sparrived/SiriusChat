@@ -42,7 +42,6 @@ def test_split_strips_generic_speaker_prefix() -> None:
                 split_marker="<MSG_SPLIT>",
                 task_enabled={
                     "memory_extract": False,
-                    "multimodal_parse": False,
                     "event_extract": False,
                 },
             ),
@@ -87,7 +86,6 @@ def test_split_no_false_positive_on_short_brackets() -> None:
                 split_marker="<MSG_SPLIT>",
                 task_enabled={
                     "memory_extract": False,
-                    "multimodal_parse": False,
                     "event_extract": False,
                 },
             ),

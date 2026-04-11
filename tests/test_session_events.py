@@ -52,7 +52,6 @@ def _make_config(work_path: Path, reply_mode: str = "always") -> SessionConfig:
             enable_skills=False,
             task_enabled={
                 "memory_extract": False,
-                "multimodal_parse": False,
                 "event_extract": False,
             },
         message_debounce_seconds=0.0,

@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import asyncio
 import json
@@ -23,7 +23,6 @@ def test_json_persistent_session_runner_auto_persistence_and_reset(tmp_path: Pat
                 unified_model="mock-model",
                 task_enabled={
                     "memory_extract": False,
-                    "multimodal_parse": False,
                     "event_extract": False,
                 },
             message_debounce_seconds=0.0,
@@ -85,7 +84,6 @@ def test_json_persistent_session_runner_reuses_saved_profile(tmp_path: Path) -> 
                 unified_model="mock-model",
                 task_enabled={
                     "memory_extract": False,
-                    "multimodal_parse": False,
                     "event_extract": False,
                 },
             message_debounce_seconds=0.0,
@@ -112,7 +110,6 @@ def test_json_persistent_session_runner_supports_sqlite_store(tmp_path: Path) ->
                 unified_model="mock-model",
                 task_enabled={
                     "memory_extract": False,
-                    "multimodal_parse": False,
                     "event_extract": False,
                 },
             message_debounce_seconds=0.0,
@@ -148,7 +145,7 @@ def test_sqlite_session_store_save_and_load(tmp_path: Path) -> None:
         ]
     )
     transcript.orchestration_stats = {
-        "multimodal_parse": {"attempted": 1, "succeeded": 1},
+        "memory_extract": {"attempted": 1, "succeeded": 1},
     }
     transcript.add_token_usage_record(
         TokenUsageRecord(
@@ -163,7 +160,7 @@ def test_sqlite_session_store_save_and_load(tmp_path: Path) -> None:
     assert loaded.messages[-1].content == "hello"
     assert loaded.messages[-1].speaker == "A"
     assert loaded.messages[-1].multimodal_inputs == [{"type": "image", "value": "https://example.com/a.png"}]
-    assert loaded.orchestration_stats["multimodal_parse"]["succeeded"] == 1
+    assert loaded.orchestration_stats["memory_extract"]["succeeded"] == 1
     assert len(loaded.token_usage_records) == 1
     assert loaded.token_usage_records[0].total_tokens == 60
     assert loaded.token_usage_records[0].retries_used == 1

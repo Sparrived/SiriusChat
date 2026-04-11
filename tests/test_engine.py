@@ -1,4 +1,4 @@
-﻿import asyncio
+import asyncio
 
 from sirius_chat.async_engine import AsyncRolePlayEngine
 from sirius_chat.config import Agent, AgentPreset, SessionConfig, OrchestrationPolicy
@@ -51,7 +51,6 @@ def test_roleplay_engine_multi_human_single_ai_transcript() -> None:
                 enable_self_memory=False,
                 task_enabled={
                     "memory_extract": False,
-                    "multimodal_parse": False,
                     "event_extract": False,
                 },
             message_debounce_seconds=0.0,
@@ -112,7 +111,6 @@ def test_run_live_session_supports_dynamic_participants_and_memory() -> None:
                 enable_self_memory=False,
                 task_enabled={
                     "memory_extract": False,
-                    "multimodal_parse": False,
                     "event_extract": False,
                 },
             message_debounce_seconds=0.0,
@@ -154,7 +152,6 @@ def test_transcript_can_resume_after_persist_and_reboot(tmp_path) -> None:
                 unified_model="mock-model",
                 task_enabled={
                     "memory_extract": False,
-                    "multimodal_parse": False,
                     "event_extract": False,
                 },
             message_debounce_seconds=0.0,
@@ -231,7 +228,6 @@ def test_cross_environment_identity_mapping_resolves_same_user() -> None:
                 unified_model="mock-model",
                 task_enabled={
                     "memory_extract": False,
-                    "multimodal_parse": False,
                     "event_extract": False,
                 },
             message_debounce_seconds=0.0,
@@ -338,7 +334,6 @@ def test_on_reply_callback_receives_assistant_messages() -> None:
                 unified_model="mock-model",
                 task_enabled={
                     "memory_extract": False,
-                    "multimodal_parse": False,
                     "event_extract": False,
                 },
             message_debounce_seconds=0.0,
@@ -387,7 +382,6 @@ def test_user_profile_auto_registration() -> None:
                 unified_model="mock-model",
                 task_enabled={
                     "memory_extract": False,
-                    "multimodal_parse": False,
                     "event_extract": False,
                 },
             message_debounce_seconds=0.0,
@@ -444,7 +438,6 @@ def test_timeout_raises_on_expiry() -> None:
                 session_reply_mode="always",
                 task_enabled={
                     "memory_extract": False,
-                    "multimodal_parse": False,
                     "event_extract": False,
                 },
             message_debounce_seconds=0.0,
@@ -497,7 +490,6 @@ def test_on_reply_with_timeout_cleans_up_on_expiry() -> None:
                 session_reply_mode="always",
                 task_enabled={
                     "memory_extract": False,
-                    "multimodal_parse": False,
                     "event_extract": False,
                 },
             message_debounce_seconds=0.0,
@@ -564,7 +556,6 @@ def run(text: str, **kwargs):
                 enable_skills=True,
                 task_enabled={
                     "memory_extract": False,
-                    "multimodal_parse": False,
                     "event_extract": False,
                 },
             message_debounce_seconds=0.0,
@@ -639,7 +630,6 @@ def run(**kwargs):
                 enable_skills=False,
                 task_enabled={
                     "memory_extract": False,
-                    "multimodal_parse": False,
                     "event_extract": False,
                 },
             message_debounce_seconds=0.0,
@@ -658,7 +648,6 @@ def run(**kwargs):
                 enable_skills=True,
                 task_enabled={
                     "memory_extract": False,
-                    "multimodal_parse": False,
                     "event_extract": False,
                 },
             message_debounce_seconds=0.0,
@@ -734,7 +723,6 @@ def run(text: str, **kwargs):
                 enable_skills=True,
                 task_enabled={
                     "memory_extract": False,
-                    "multimodal_parse": False,
                     "event_extract": False,
                 },
             message_debounce_seconds=0.0,
@@ -784,7 +772,6 @@ def test_unknown_skill_triggers_regeneration_instead_of_partial_output(tmp_path)
                 enable_skills=True,
                 task_enabled={
                     "memory_extract": False,
-                    "multimodal_parse": False,
                     "event_extract": False,
                 },
             message_debounce_seconds=0.0,
@@ -848,7 +835,6 @@ def run(**kwargs):
                 enable_skills=True,
                 task_enabled={
                     "memory_extract": False,
-                    "multimodal_parse": False,
                     "event_extract": False,
                 },
             message_debounce_seconds=0.0,
@@ -935,7 +921,6 @@ def run(**kwargs):
                 max_skill_rounds=3,
                 task_enabled={
                     "memory_extract": False,
-                    "multimodal_parse": False,
                     "event_extract": False,
                 },
             message_debounce_seconds=0.0,
@@ -1007,7 +992,6 @@ def run(**kwargs):
                 max_skill_rounds=3,
                 task_enabled={
                     "memory_extract": False,
-                    "multimodal_parse": False,
                     "event_extract": False,
                 },
             message_debounce_seconds=0.0,

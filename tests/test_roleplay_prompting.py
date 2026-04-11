@@ -1,4 +1,4 @@
-﻿import asyncio
+import asyncio
 from pathlib import Path
 
 from sirius_chat.api import (
@@ -44,7 +44,6 @@ def test_generated_prompt_is_used_by_engine() -> None:
                 unified_model="mock-model",
                 task_enabled={
                     "memory_extract": False,
-                    "multimodal_parse": False,
                     "event_extract": False,
                 },
             message_debounce_seconds=0.0,

@@ -1,4 +1,4 @@
-﻿import asyncio
+import asyncio
 import json
 import shutil
 import time
@@ -48,7 +48,6 @@ def test_async_engine_runs_live_session() -> None:
                 unified_model="mock-model",
                 task_enabled={
                     "memory_extract": False,
-                    "multimodal_parse": False,
                     "event_extract": False,
                 },
             message_debounce_seconds=0.0,
@@ -168,12 +167,10 @@ def test_async_engine_memory_extract_task_uses_aux_model() -> None:
                 unified_model="",  # 使用按任务配置模式
                 task_models={
                     "memory_extract": "memory-model",
-                    "multimodal_parse": "mock-model",
                     "event_extract": "mock-model",
                 },
                 task_budgets={
                     "memory_extract": 1000,
-                    "multimodal_parse": 1000,
                     "event_extract": 1000,
                 },
                 task_temperatures={"memory_extract": 0.1},
@@ -231,7 +228,6 @@ def test_memory_extract_task_includes_recent_conversation_context() -> None:
                 unified_model="main-model",
                 task_enabled={
                     "memory_extract": True,
-                    "multimodal_parse": False,
                     "event_extract": False,
                 },
             message_debounce_seconds=0.0,
@@ -281,7 +277,6 @@ def test_async_engine_memory_extract_task_skips_when_budget_exceeded() -> None:
                 unified_model="",
                 task_models={
                     "memory_extract": "memory-model",
-                    "multimodal_parse": "mock-model",
                     "event_extract": "mock-model",
                 },
                 task_budgets={"memory_extract": 1},
@@ -327,7 +322,7 @@ def test_async_engine_multimodal_image_passed_to_main_model_vision_format() -> N
             ),
             orchestration=OrchestrationPolicy(
                 unified_model="main-model",
-                task_enabled={"memory_extract": False, "event_extract": False, "multimodal_parse": False},
+                task_enabled={"memory_extract": False, "event_extract": False},
                 message_debounce_seconds=0.0,
             ),
         )
@@ -383,7 +378,7 @@ def test_async_engine_multimodal_non_image_messages_use_text_format() -> None:
             ),
             orchestration=OrchestrationPolicy(
                 unified_model="main-model",
-                task_enabled={"memory_extract": False, "event_extract": False, "multimodal_parse": False},
+                task_enabled={"memory_extract": False, "event_extract": False},
                 message_debounce_seconds=0.0,
             ),
         )
@@ -429,7 +424,6 @@ def test_async_engine_task_retry_can_recover_from_transient_failure() -> None:
                 unified_model="",
                 task_models={
                     "memory_extract": "memory-model",
-                    "multimodal_parse": "mock-model",
                     "event_extract": "mock-model",
                 },
                 task_budgets={"memory_extract": 1000},
@@ -471,7 +465,7 @@ def test_async_engine_multimodal_validation_filters_and_truncates_inputs() -> No
             ),
             orchestration=OrchestrationPolicy(
                 unified_model="main-model",
-                task_enabled={"memory_extract": False, "event_extract": False, "multimodal_parse": False},
+                task_enabled={"memory_extract": False, "event_extract": False},
                 max_multimodal_inputs_per_turn=1,
                 max_multimodal_value_length=16,
             message_debounce_seconds=0.0,
@@ -530,7 +524,6 @@ def test_async_engine_records_token_usage_for_task_and_main_calls() -> None:
                 unified_model="",
                 task_models={
                     "memory_extract": "memory-model",
-                    "multimodal_parse": "mock-model",
                     "event_extract": "mock-model",
                 },
                 task_budgets={"memory_extract": 1000},
@@ -632,7 +625,6 @@ def test_async_engine_event_extract_task_enriches_event_features() -> None:
                 task_models={
                     "event_extract": "event-model",
                     "memory_extract": "mock-model",
-                    "multimodal_parse": "mock-model",
                 },
                 task_budgets={"event_extract": 1000},
             message_debounce_seconds=0.0,
@@ -670,7 +662,6 @@ def test_run_live_session_reply_mode_never_updates_memory_without_reply() -> Non
                 unified_model="mock-model",
                 task_enabled={
                     "memory_extract": False,
-                    "multimodal_parse": False,
                     "event_extract": False,
                 },
             message_debounce_seconds=0.0,
@@ -711,7 +702,6 @@ def test_run_live_session_reply_mode_auto_infers_when_to_reply() -> None:
                 enable_intent_analysis=False,
                 task_enabled={
                     "memory_extract": False,
-                    "multimodal_parse": False,
                     "event_extract": False,
                 },
             message_debounce_seconds=0.0,
@@ -747,7 +737,6 @@ def test_chat_main_merges_system_messages_into_system_prompt() -> None:
                 unified_model="mock-model",
                 task_enabled={
                     "memory_extract": False,
-                    "multimodal_parse": False,
                     "event_extract": False,
                 },
             message_debounce_seconds=0.0,
@@ -788,7 +777,6 @@ def test_run_live_session_reply_mode_auto_probability_fallback_can_trigger_reply
                 unified_model="mock-model",
                 task_enabled={
                     "memory_extract": False,
-                    "multimodal_parse": False,
                     "event_extract": False,
                 },
                 enable_intent_analysis=False,
@@ -851,7 +839,6 @@ def test_run_live_session_reply_mode_auto_suppresses_rapid_chatter() -> None:
                 unified_model="mock-model",
                 task_enabled={
                     "memory_extract": False,
-                    "multimodal_parse": False,
                     "event_extract": False,
                 },
             message_debounce_seconds=0.0,
@@ -956,8 +943,6 @@ def test_event_extract_runs_for_consecutive_messages_without_dedup() -> None:
                     '{"inferred_persona":"","inferred_traits":[],"inferred_aliases":[],'
                     '"preference_tags":[],"summary_note":""}'
                 )
-            if purpose == "multimodal_parse":
-                return '{"evidence":""}'
             return "ok"
 
     async def _run() -> None:
@@ -974,7 +959,6 @@ def test_event_extract_runs_for_consecutive_messages_without_dedup() -> None:
                 event_extract_batch_size=1,
                 task_enabled={
                     "memory_extract": False,
-                    "multimodal_parse": False,
                     "event_extract": True,
                 },
             message_debounce_seconds=0.0,
@@ -1023,7 +1007,6 @@ def test_memory_extract_provider_timeout_does_not_block_live_message() -> None:
                     session_reply_mode="never",
                     task_enabled={
                         "memory_extract": True,
-                        "multimodal_parse": False,
                         "event_extract": False,
                     },
                 message_debounce_seconds=0.0,
@@ -1061,7 +1044,6 @@ def test_run_live_session_reply_mode_auto_threshold_is_configurable() -> None:
                 unified_model="mock-model",
                 task_enabled={
                     "memory_extract": False,
-                    "multimodal_parse": False,
                     "event_extract": False,
                 },
                 enable_intent_analysis=False,
@@ -1098,7 +1080,6 @@ def test_run_live_session_reply_runtime_persists_across_calls() -> None:
                 unified_model="mock-model",
                 task_enabled={
                     "memory_extract": False,
-                    "multimodal_parse": False,
                     "event_extract": False,
                 },
                 engagement_sensitivity=0.8,
@@ -1145,7 +1126,6 @@ def test_run_live_session_auto_engagement_sensitivity_is_configurable() -> None:
                 unified_model="mock-model",
                 task_enabled={
                     "memory_extract": False,
-                    "multimodal_parse": False,
                     "event_extract": False,
                 },
                 engagement_sensitivity=0.8,
@@ -1187,7 +1167,6 @@ def test_run_live_message_uses_session_level_auto_reply_mode() -> None:
                 enable_intent_analysis=False,
                 task_enabled={
                     "memory_extract": False,
-                    "multimodal_parse": False,
                     "event_extract": False,
                 },
             message_debounce_seconds=0.0,
@@ -1233,7 +1212,6 @@ def test_async_engine_event_extract_task_skips_when_budget_exceeded() -> None:
                 task_models={
                     "event_extract": "event-model",
                     "memory_extract": "mock-model",
-                    "multimodal_parse": "mock-model",
                 },
                 task_budgets={"event_extract": 1},
             message_debounce_seconds=0.0,
