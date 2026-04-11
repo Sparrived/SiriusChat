@@ -598,14 +598,14 @@ class TestManagerSerialization:
 class TestConfigFields:
 
     def test_self_memory_config_defaults(self):
-        policy = OrchestrationPolicy()
+        policy = OrchestrationPolicy(message_debounce_seconds=0.0)
         assert policy.enable_self_memory is True
         assert policy.self_memory_extract_batch_size == 3
         assert policy.self_memory_max_diary_prompt_entries == 6
         assert policy.self_memory_max_glossary_prompt_terms == 15
 
     def test_reply_frequency_config_defaults(self):
-        policy = OrchestrationPolicy()
+        policy = OrchestrationPolicy(message_debounce_seconds=0.0)
         assert policy.reply_frequency_window_seconds == 60.0
         assert policy.reply_frequency_max_replies == 8
         assert policy.reply_frequency_exempt_on_mention is True
