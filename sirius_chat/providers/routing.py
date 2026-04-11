@@ -89,6 +89,7 @@ class ProviderRegistry:
         raw = json.loads(self.path.read_text(encoding="utf-8"))
         providers = raw.get("providers", {})
         results: dict[str, ProviderConfig] = {}
+        needs_migration = False
         for provider_name, payload in providers.items():
             if not isinstance(payload, dict):
                 continue
@@ -96,6 +97,11 @@ class ProviderRegistry:
             api_key = str(payload.get("api_key", "")).strip()
             if not api_key:
                 continue
+            
+            # 开启自动迁移标记：如果任一 entry 缺失 models 字段
+            if "models" not in payload:
+                needs_migration = True
+
             base_url = str(payload.get("base_url", "")).strip()
             healthcheck_model = str(payload.get("healthcheck_model", "")).strip()
             enabled = bool(payload.get("enabled", True))
@@ -109,6 +115,10 @@ class ProviderRegistry:
                 enabled=enabled,
                 models=models,
             )
+        
+        if needs_migration:
+            self.save(results)
+
         return results
 
     def save(self, providers: dict[str, ProviderConfig]) -> None:

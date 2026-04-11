@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+## [0.15.5] - 2026-04-11
+
+### Fixed
+- 修复 `ProviderRegistry.load` 逻辑，增加自动迁移功能：当加载旧版本的 `provider_keys.json` 时，如果发现缺失 `models` 字段，会自动补齐并写回文件。
+
 ## [0.15.4] - 2026-04-11
 
 ### Changed
