@@ -127,7 +127,8 @@ class OrchestrationPolicy:
     # During the window, consecutive messages from the same user are accumulated;
     # only the last coroutine flushes them all as a single merged message so that
     # intent analysis and profile extraction fire exactly once per burst.
-    message_debounce_seconds: float = 8.0
+    # Default is 0 (opt-in). Set to 5.0~10.0 explicitly to enable debounce.
+    message_debounce_seconds: float = 0.0
     
     # Memory policy (centralized memory system configuration)
     memory: MemoryPolicy = field(default_factory=MemoryPolicy)

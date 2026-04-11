@@ -1082,7 +1082,6 @@ def test_run_live_session_reply_runtime_persists_across_calls() -> None:
                 },
                 engagement_sensitivity=0.8,
                 enable_intent_analysis=False,
-                message_debounce_seconds=0.0,
             ),
         )
 

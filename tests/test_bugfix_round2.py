@@ -162,9 +162,9 @@ def test_merge_pending_turns_skips_blank_content() -> None:
 
 
 def test_debounce_config_default_zero() -> None:
-    """Default debounce is 5 seconds."""
+    """Default debounce is 0 (disabled, opt-in)."""
     policy = OrchestrationPolicy()
-    assert policy.message_debounce_seconds == 5.0
+    assert policy.message_debounce_seconds == 0.0
 
 
 def test_debounce_config_negative_raises() -> None:
