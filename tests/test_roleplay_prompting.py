@@ -46,7 +46,8 @@ def test_generated_prompt_is_used_by_engine() -> None:
                     "memory_extract": False,
                     "multimodal_parse": False,
                     "event_extract": False,
-                }
+                },
+            message_debounce_seconds=0.0,
             ),
         )
 

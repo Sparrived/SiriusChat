@@ -71,7 +71,8 @@ def test_public_api_async_facade() -> None:
                     "memory_extract": False,
                     "multimodal_parse": False,
                     "event_extract": False,
-                }
+                },
+            message_debounce_seconds=0.0,
             ),
         )
 

@@ -50,7 +50,8 @@ def test_async_engine_runs_live_session() -> None:
                     "memory_extract": False,
                     "multimodal_parse": False,
                     "event_extract": False,
-                }
+                },
+            message_debounce_seconds=0.0,
             ),
         )
 
@@ -177,6 +178,7 @@ def test_async_engine_memory_extract_task_uses_aux_model() -> None:
                 },
                 task_temperatures={"memory_extract": 0.1},
                 task_max_tokens={"memory_extract": 64},
+            message_debounce_seconds=0.0,
             ),
         )
 
@@ -232,6 +234,7 @@ def test_memory_extract_task_includes_recent_conversation_context() -> None:
                     "multimodal_parse": False,
                     "event_extract": False,
                 },
+            message_debounce_seconds=0.0,
             ),
         )
 
@@ -282,6 +285,7 @@ def test_async_engine_memory_extract_task_skips_when_budget_exceeded() -> None:
                     "event_extract": "mock-model",
                 },
                 task_budgets={"memory_extract": 1},
+            message_debounce_seconds=0.0,
             ),
         )
 
@@ -328,6 +332,7 @@ def test_async_engine_multimodal_parse_task_injects_evidence_message() -> None:
                     "event_extract": "mock-model",
                 },
                 task_budgets={"multimodal_parse": 1000},
+            message_debounce_seconds=0.0,
             ),
         )
 
@@ -378,6 +383,7 @@ def test_async_engine_multimodal_parse_task_skips_when_budget_exceeded() -> None
                     "event_extract": "mock-model",
                 },
                 task_budgets={"multimodal_parse": 1},
+            message_debounce_seconds=0.0,
             ),
         )
 
@@ -431,6 +437,7 @@ def test_async_engine_task_retry_can_recover_from_transient_failure() -> None:
                 },
                 task_budgets={"memory_extract": 1000},
                 task_retries={"memory_extract": 1},
+            message_debounce_seconds=0.0,
             ),
         )
 
@@ -476,6 +483,7 @@ def test_async_engine_multimodal_validation_filters_and_truncates_inputs() -> No
                 task_budgets={"multimodal_parse": 1000},
                 max_multimodal_inputs_per_turn=1,
                 max_multimodal_value_length=16,
+            message_debounce_seconds=0.0,
             ),
         )
 
@@ -523,6 +531,7 @@ def test_async_engine_records_token_usage_for_task_and_main_calls() -> None:
                     "event_extract": "mock-model",
                 },
                 task_budgets={"memory_extract": 1000},
+            message_debounce_seconds=0.0,
             ),
         )
 
@@ -559,6 +568,7 @@ def test_async_engine_event_memory_add_and_hit_across_sessions() -> None:
             orchestration=OrchestrationPolicy(
                 unified_model="mock-model",
                 event_extract_batch_size=1,
+            message_debounce_seconds=0.0,
             ),
         )
 
@@ -622,6 +632,7 @@ def test_async_engine_event_extract_task_enriches_event_features() -> None:
                     "multimodal_parse": "mock-model",
                 },
                 task_budgets={"event_extract": 1000},
+            message_debounce_seconds=0.0,
             ),
         )
 
@@ -659,6 +670,7 @@ def test_run_live_session_reply_mode_never_updates_memory_without_reply() -> Non
                     "multimodal_parse": False,
                     "event_extract": False,
                 },
+            message_debounce_seconds=0.0,
             ),
         )
 
@@ -699,6 +711,7 @@ def test_run_live_session_reply_mode_auto_infers_when_to_reply() -> None:
                     "multimodal_parse": False,
                     "event_extract": False,
                 },
+            message_debounce_seconds=0.0,
             ),
         )
 
@@ -734,6 +747,7 @@ def test_chat_main_merges_system_messages_into_system_prompt() -> None:
                     "multimodal_parse": False,
                     "event_extract": False,
                 },
+            message_debounce_seconds=0.0,
             ),
         )
 
@@ -776,6 +790,7 @@ def test_run_live_session_reply_mode_auto_probability_fallback_can_trigger_reply
                 },
                 enable_intent_analysis=False,
                 engagement_sensitivity=1.0,
+            message_debounce_seconds=0.0,
             ),
         )
 
@@ -836,6 +851,7 @@ def test_run_live_session_reply_mode_auto_suppresses_rapid_chatter() -> None:
                     "multimodal_parse": False,
                     "event_extract": False,
                 },
+            message_debounce_seconds=0.0,
             ),
         )
 
@@ -898,6 +914,7 @@ def test_auxiliary_tasks_run_in_parallel_for_single_turn() -> None:
                     "multimodal_parse": True,
                     "event_extract": True,
                 },
+            message_debounce_seconds=0.0,
             ),
         )
 
@@ -959,6 +976,7 @@ def test_event_extract_runs_for_consecutive_messages_without_dedup() -> None:
                     "multimodal_parse": False,
                     "event_extract": True,
                 },
+            message_debounce_seconds=0.0,
             ),
         )
 
@@ -1007,6 +1025,7 @@ def test_memory_extract_provider_timeout_does_not_block_live_message() -> None:
                         "multimodal_parse": False,
                         "event_extract": False,
                     },
+                message_debounce_seconds=0.0,
                 ),
             )
 
@@ -1046,6 +1065,7 @@ def test_run_live_session_reply_mode_auto_threshold_is_configurable() -> None:
                 },
                 enable_intent_analysis=False,
                 engagement_sensitivity=0.9,
+            message_debounce_seconds=0.0,
             ),
         )
 
@@ -1082,6 +1102,7 @@ def test_run_live_session_reply_runtime_persists_across_calls() -> None:
                 },
                 engagement_sensitivity=0.8,
                 enable_intent_analysis=False,
+            message_debounce_seconds=0.0,
             ),
         )
 
@@ -1127,6 +1148,7 @@ def test_run_live_session_auto_engagement_sensitivity_is_configurable() -> None:
                     "event_extract": False,
                 },
                 engagement_sensitivity=0.8,
+            message_debounce_seconds=0.0,
             ),
         )
 
@@ -1167,6 +1189,7 @@ def test_run_live_message_uses_session_level_auto_reply_mode() -> None:
                     "multimodal_parse": False,
                     "event_extract": False,
                 },
+            message_debounce_seconds=0.0,
             ),
         )
 
@@ -1212,6 +1235,7 @@ def test_async_engine_event_extract_task_skips_when_budget_exceeded() -> None:
                     "multimodal_parse": "mock-model",
                 },
                 task_budgets={"event_extract": 1},
+            message_debounce_seconds=0.0,
             ),
         )
 
