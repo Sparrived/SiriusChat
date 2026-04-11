@@ -67,7 +67,6 @@ TASK_EVENT_EXTRACT_MODEL=gpt-4-mini
   "orchestration": {
     "task_enabled": {
       "memory_extract": true,
-      "multimodal_parse": true,
       "event_extract": true
     },
     "task_models": {
@@ -299,13 +298,14 @@ engine = AsyncRolePlayEngine(provider=cached_provider)
 config.orchestration.task_enabled = {
     "memory_extract": True,
     "event_extract": True,
-    "multimodal_parse": True,
 }
 config.orchestration.task_models = {
     "memory_extract": "gpt-4-mini",
     "event_extract": "gpt-4-mini",
-    "multimodal_parse": "gpt-4-vision",
 }
+
+# 图片输入会直接交给主模型；如需自动升级图片能力，请配置
+# config.agent.metadata["multimodal_model"] = "gpt-4o"
 ```
 
 ### 3. 自定义 Agent 提示词

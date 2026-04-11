@@ -17,30 +17,25 @@
   "orchestration": {
     "task_enabled": {
       "memory_extract": true,
-      "multimodal_parse": true,
       "event_extract": true
     },
     "task_models": {
       "memory_extract": "${TASK_MEMORY_EXTRACT_MODEL:gpt-4-mini}",
-      "event_extract": "${TASK_EVENT_EXTRACT_MODEL:gpt-4-mini}",
-      "multimodal_parse": "${TASK_MULTIMODAL_PARSE_MODEL:gpt-4-vision}"
+      "event_extract": "${TASK_EVENT_EXTRACT_MODEL:gpt-4-mini}"
     },
     "task_budgets": {
       "memory_extract": 2000,
       "event_extract": 2000,
-      "multimodal_parse": 3000,
       "memory_manager": 2000
     },
     "task_temperatures": {
       "memory_extract": 0.2,
       "event_extract": 0.1,
-      "multimodal_parse": 0.1,
       "memory_manager": 0.3
     },
     "task_max_tokens": {
       "memory_extract": 512,
       "event_extract": 256,
-      "multimodal_parse": 512,
       "memory_manager": 512
     },
     "memory_manager_model": "${MEMORY_MANAGER_MODEL:gpt-4-mini}",

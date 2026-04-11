@@ -25,11 +25,9 @@ flowchart TD
 
     G4 --> H{orchestration<br/>enabled?}
     H -- 并行辅助任务 --> I["memory_extract<br/>用户画像提取<br/>（携带上下文）"]
-    H -- 并行辅助任务 --> J["multimodal_parse<br/>多模态证据提取"]
     H -- 并行辅助任务 --> J2["event_extract<br/>事件特征提取"]
     H -- 并行辅助任务 --> J3["intent_analysis_v2<br/>意图分类 + target 识别<br/>reason / evidence_span / target"]
     I --> K
-    J --> K
     J2 --> K
     J3 --> K["参与决策<br/>HeatAnalyzer → IntentAnalyzer v2<br/>→ EngagementCoordinator"]
 
@@ -39,7 +37,7 @@ flowchart TD
     K2 -- 否 --> L
     K4 --> L
 
-    L["构建系统提示词<br/>主 AI + 参与者记忆<br/>+ 会话摘要 + 环境上下文<br/>分割指令（可选）<br/>安全提醒注入"] --> M["调用 Provider<br/>自动路由或指定<br/>生成 assistant 回复"]
+    L["构建系统提示词<br/>主 AI + 参与者记忆<br/>+ 会话摘要 + 环境上下文<br/>分割指令（可选）<br/>安全提醒注入"] --> M["调用 Provider<br/>自动路由或指定<br/>图片直接随主请求发送<br/>生成 assistant 回复"]
     M --> N["Token 记录双写<br/>① Transcript.token_usage_records 内存<br/>② TokenUsageStore → token_usage.db SQLite"]
     N --> O["自动压缩历史<br/>session_summary<br/>超过长度阈值时"]
     O --> P["输出更新后<br/>Transcript"]

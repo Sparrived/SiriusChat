@@ -31,7 +31,6 @@ Sirius Chat 提供灵活的配置管理系统，支持：
   "orchestration": {
     "task_enabled": {
       "memory_extract": true,
-      "multimodal_parse": true,
       "event_extract": true
     },
     "task_models": {},
@@ -128,8 +127,7 @@ Agent 配置定义 AI 助手的身份和行为。
 ```json
 {
   "memory_extract": true,
-  "event_extract": true,
-  "multimodal_parse": true
+  "event_extract": true
 }
 ```
 
@@ -140,8 +138,7 @@ Agent 配置定义 AI 助手的身份和行为。
 ```json
 {
   "memory_extract": "gpt-4-mini",
-  "event_extract": "gpt-4-mini",
-  "multimodal_parse": "gpt-4-vision"
+  "event_extract": "gpt-4-mini"
 }
 ```
 
@@ -152,8 +149,7 @@ Agent 配置定义 AI 助手的身份和行为。
 ```json
 {
   "memory_extract": 2000,
-  "event_extract": 2000,
-  "multimodal_parse": 3000
+  "event_extract": 2000
 }
 ```
 
@@ -164,8 +160,7 @@ Agent 配置定义 AI 助手的身份和行为。
 ```json
 {
   "memory_extract": 0.1,
-  "event_extract": 0.1,
-  "multimodal_parse": 0.5
+  "event_extract": 0.1
 }
 ```
 
@@ -239,7 +234,6 @@ Agent 配置定义 AI 助手的身份和行为。
   "orchestration": {
     "task_enabled": {
       "memory_extract": true,
-      "multimodal_parse": true,
       "event_extract": true
     },
     "task_models": {
@@ -264,7 +258,6 @@ Agent 配置定义 AI 助手的身份和行为。
   "orchestration": {
     "task_enabled": {
       "memory_extract": false,
-      "multimodal_parse": false,
       "event_extract": false
     }
   }
@@ -287,7 +280,6 @@ Agent 配置定义 AI 助手的身份和行为。
   "orchestration": {
     "task_enabled": {
       "memory_extract": true,
-      "multimodal_parse": true,
       "event_extract": true
     },
     "memory_manager_model": "${MEMORY_MANAGER_MODEL:gpt-4-mini}"

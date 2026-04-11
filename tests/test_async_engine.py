@@ -304,104 +304,101 @@ def test_async_engine_memory_extract_task_skips_when_budget_exceeded() -> None:
     asyncio.run(_run())
 
 
-def test_async_engine_multimodal_parse_task_injects_evidence_message() -> None:
-    class MultiTaskProvider:
-        def __init__(self) -> None:
-            self.models: list[str] = []
+def test_async_engine_multimodal_image_passed_to_main_model_vision_format() -> None:
+    """Images in multimodal_inputs are embedded in the main model request as vision format.
+    
+    No separate mm-model call is made; images go directly to the main model.
+    """
+    captured_requests: list[GenerationRequest] = []
 
+    class VisionProvider:
         def generate(self, request: GenerationRequest) -> str:
-            self.models.append(request.model)
-            if request.model == "mm-model":
-                return json.dumps({"evidence": "图片中出现产品原型图与价格标签。"}, ensure_ascii=False)
+            captured_requests.append(request)
             return "主回复"
 
     async def _run() -> None:
-        provider = MultiTaskProvider()
+        provider = VisionProvider()
         engine = create_async_engine(provider)
         config = SessionConfig(
-            work_path=Path("data/tests/multimodal_orchestration"),
+            work_path=Path("data/tests/multimodal_vision"),
             preset=AgentPreset(
                 agent=Agent(name="主助手", persona="异步测试", model="main-model"),
                 global_system_prompt="测试系统提示词",
             ),
             orchestration=OrchestrationPolicy(
-                unified_model="",
-                task_models={
-                    "multimodal_parse": "mm-model",
-                    "memory_extract": "mock-model",
-                    "event_extract": "mock-model",
-                },
-                task_budgets={"multimodal_parse": 1000},
-            message_debounce_seconds=0.0,
+                unified_model="main-model",
+                task_enabled={"memory_extract": False, "event_extract": False, "multimodal_parse": False},
+                message_debounce_seconds=0.0,
             ),
         )
 
-        transcript = await _run_live_turns(engine=engine, 
+        image_url = "https://example.com/demo.png"
+        transcript = await _run_live_turns(engine=engine,
             config=config,
             human_turns=[
                 Message(
                     role="user",
                     speaker="小王",
-                    content="请结合我发的图片给建议",
-                    multimodal_inputs=[{"type": "image", "value": "https://example.com/demo.png"}],
+                    content="请结合图片给建议",
+                    multimodal_inputs=[{"type": "image", "value": image_url}],
                 )
             ],
         )
 
-        assert any("多模态解析证据" in item.content for item in transcript.messages if item.role == "system")
-        assert "mm-model" in provider.models
-        assert "main-model" in provider.models
+        # No 多模态解析证据 system message in transcript (old behavior)
+        assert not any("多模态解析证据" in m.content for m in transcript.messages if m.role == "system")
+        # Main model received a request with vision-format content
+        vision_req = next((r for r in captured_requests if r.purpose == "chat_main"), None)
+        assert vision_req is not None
+        user_msg = next(
+            (m for m in reversed(vision_req.messages) if m["role"] == "user"), None
+        )
+        assert user_msg is not None, "主模型未收到 user 消息"
+        content = user_msg["content"]
+        assert isinstance(content, list), "应为 vision 格式 list"
+        image_parts = [p for p in content if isinstance(p, dict) and p.get("type") == "image_url"]
+        assert any(p.get("image_url", {}).get("url") == image_url for p in image_parts), \
+            f"图片 URL 未出现在 vision 内容中: {image_parts}"
 
     asyncio.run(_run())
 
 
-def test_async_engine_multimodal_parse_task_skips_when_budget_exceeded() -> None:
-    class BudgetProvider:
-        def __init__(self) -> None:
-            self.models: list[str] = []
+def test_async_engine_multimodal_non_image_messages_use_text_format() -> None:
+    """Messages without image inputs are still sent as plain text (no vision format)."""
+    captured_requests: list[GenerationRequest] = []
 
+    class PlainProvider:
         def generate(self, request: GenerationRequest) -> str:
-            self.models.append(request.model)
-            if request.model == "mm-model":
-                return json.dumps({"evidence": "不应触发"}, ensure_ascii=False)
+            captured_requests.append(request)
             return "主回复"
 
     async def _run() -> None:
-        provider = BudgetProvider()
+        provider = PlainProvider()
         engine = create_async_engine(provider)
         config = SessionConfig(
-            work_path=Path("data/tests/multimodal_budget"),
+            work_path=Path("data/tests/multimodal_no_image"),
             preset=AgentPreset(
                 agent=Agent(name="主助手", persona="异步测试", model="main-model"),
                 global_system_prompt="测试系统提示词",
             ),
             orchestration=OrchestrationPolicy(
-                unified_model="",
-                task_models={
-                    "multimodal_parse": "mm-model",
-                    "memory_extract": "mock-model",
-                    "event_extract": "mock-model",
-                },
-                task_budgets={"multimodal_parse": 1},
-            message_debounce_seconds=0.0,
+                unified_model="main-model",
+                task_enabled={"memory_extract": False, "event_extract": False, "multimodal_parse": False},
+                message_debounce_seconds=0.0,
             ),
         )
 
-        transcript = await _run_live_turns(engine=engine, 
+        transcript = await _run_live_turns(engine=engine,
             config=config,
-            human_turns=[
-                Message(
-                    role="user",
-                    speaker="小王",
-                    content="请结合图片",
-                    multimodal_inputs=[{"type": "image", "value": "https://example.com/demo.png"}],
-                )
-            ],
+            human_turns=[Message(role="user", speaker="小王", content="普通文本消息")],
         )
 
-        assert not any("多模态解析证据" in item.content for item in transcript.messages if item.role == "system")
-        assert "mm-model" not in provider.models
-        assert "main-model" in provider.models
+        chat_req = next((r for r in captured_requests if r.purpose == "chat_main"), None)
+        assert chat_req is not None
+        user_msg = next((m for m in reversed(chat_req.messages) if m["role"] == "user"), None)
+        assert user_msg is not None
+        # No vision format: content should be a plain string
+        assert isinstance(user_msg["content"], str), "无图片时内容应为普通字符串"
 
     asyncio.run(_run())
 
@@ -455,13 +452,12 @@ def test_async_engine_task_retry_can_recover_from_transient_failure() -> None:
 
 
 def test_async_engine_multimodal_validation_filters_and_truncates_inputs() -> None:
-    captured_payloads: list[str] = []
+    """Images normalized by max_multimodal_inputs_per_turn/value_length are reflected in vision format."""
+    captured_requests: list[GenerationRequest] = []
 
     class InspectProvider:
         def generate(self, request: GenerationRequest) -> str:
-            if request.model == "mm-model":
-                captured_payloads.append(request.messages[0]["content"])
-                return json.dumps({"evidence": "ok"}, ensure_ascii=False)
+            captured_requests.append(request)
             return "主回复"
 
     async def _run() -> None:
@@ -474,13 +470,8 @@ def test_async_engine_multimodal_validation_filters_and_truncates_inputs() -> No
                 global_system_prompt="测试系统提示词",
             ),
             orchestration=OrchestrationPolicy(
-                unified_model="",
-                task_models={
-                    "multimodal_parse": "mm-model",
-                    "memory_extract": "mock-model",
-                    "event_extract": "mock-model",
-                },
-                task_budgets={"multimodal_parse": 1000},
+                unified_model="main-model",
+                task_enabled={"memory_extract": False, "event_extract": False, "multimodal_parse": False},
                 max_multimodal_inputs_per_turn=1,
                 max_multimodal_value_length=16,
             message_debounce_seconds=0.0,
@@ -503,9 +494,21 @@ def test_async_engine_multimodal_validation_filters_and_truncates_inputs() -> No
         )
 
     asyncio.run(_run())
-    assert captured_payloads
-    assert "unknown" not in captured_payloads[0]
-    assert "very-long-image-url" not in captured_payloads[0]
+    # After normalization: only supported types kept, value truncated to 16 chars
+    # Check via vision format in main model request
+    chat_req = next((r for r in captured_requests if r.purpose == "chat_main"), None)
+    assert chat_req is not None
+    user_msg = next((m for m in reversed(chat_req.messages) if m["role"] == "user"), None)
+    assert user_msg is not None
+    content = user_msg["content"]
+    # Vision format: list with text + image_url
+    assert isinstance(content, list)
+    image_parts = [p for p in content if isinstance(p, dict) and p.get("type") == "image_url"]
+    # Only 1 image (limited by max_multimodal_inputs_per_turn=1)
+    assert len(image_parts) == 1
+    # URL truncated to 16 chars
+    url = image_parts[0]["image_url"]["url"]  # type: ignore[index]
+    assert len(url) <= 16, f"URL 未截断: {url!r}"
 
 
 def test_async_engine_records_token_usage_for_task_and_main_calls() -> None:
@@ -891,8 +894,6 @@ def test_auxiliary_tasks_run_in_parallel_for_single_turn() -> None:
                     '{"inferred_persona":"","inferred_traits":[],"inferred_aliases":[],'
                     '"preference_tags":[],"summary_note":""}'
                 )
-            if purpose == "multimodal_parse":
-                return '{"evidence":"看到一张图片"}'
             if purpose == "event_extract":
                 return '[]'
             return "ok"
@@ -911,7 +912,6 @@ def test_auxiliary_tasks_run_in_parallel_for_single_turn() -> None:
                 event_extract_batch_size=1,
                 task_enabled={
                     "memory_extract": True,
-                    "multimodal_parse": True,
                     "event_extract": True,
                 },
             message_debounce_seconds=0.0,
@@ -933,8 +933,9 @@ def test_auxiliary_tasks_run_in_parallel_for_single_turn() -> None:
         )
 
         assert "memory_extract" in provider.purposes
-        assert "multimodal_parse" in provider.purposes
         assert "event_extract" in provider.purposes
+        # multimodal_parse 已不再是辅助任务（图片由主模型直接处理）
+        assert "multimodal_parse" not in provider.purposes
         assert provider.max_active_calls >= 2
 
     asyncio.run(_run())

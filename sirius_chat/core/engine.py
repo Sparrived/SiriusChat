@@ -75,6 +75,7 @@ class LiveSessionContext:
     token_store: TokenUsageStore | None = None
     self_memory: SelfMemoryManager = field(default_factory=SelfMemoryManager)
     self_memory_store: SelfMemoryFileStore | None = None
+    self_memory_turn_counter: int = 0  # AI reply count since last self-memory extract
     llm_semaphore: asyncio.Semaphore | None = None  # Concurrency limiter for LLM calls
 
 
@@ -85,7 +86,6 @@ class AsyncRolePlayEngine:
     _orchestration_log_cache: set[str] = field(default_factory=set, init=False, repr=False)
 
     _TASK_MEMORY_EXTRACT = "memory_extract"
-    _TASK_MULTIMODAL_PARSE = "multimodal_parse"
     _TASK_EVENT_EXTRACT = "event_extract"
     _TASK_MEMORY_MANAGER = "memory_manager"
     _TASK_INTENT_ANALYSIS = "intent_analysis"
@@ -119,7 +119,6 @@ class AsyncRolePlayEngine:
     # 所有需要模型支持的必需任务
     _REQUIRED_TASKS = [
         "memory_extract",
-        "multimodal_parse",
         "event_extract",
     ]
 
@@ -307,7 +306,7 @@ class AsyncRolePlayEngine:
             created.llm_semaphore = asyncio.Semaphore(max_concurrent)
 
         # ── Background tasks: consolidation + self-memory ──
-        needs_bg = config.orchestration.consolidation_enabled or config.orchestration.enable_self_memory
+        needs_bg = config.orchestration.consolidation_enabled
         if needs_bg:
             bg_config = BackgroundTaskConfig(
                 consolidation_enabled=config.orchestration.consolidation_enabled,
@@ -315,8 +314,8 @@ class AsyncRolePlayEngine:
                 consolidation_min_entries=config.orchestration.consolidation_min_entries,
                 consolidation_min_notes=config.orchestration.consolidation_min_notes,
                 consolidation_min_facts=config.orchestration.consolidation_min_facts,
-                self_memory_enabled=config.orchestration.enable_self_memory,
-                self_memory_interval_seconds=config.orchestration.self_memory_extract_interval_seconds,
+                self_memory_enabled=False,
+                self_memory_interval_seconds=0,
                 compression_enabled=False,
                 cleanup_enabled=False,
             )
@@ -378,23 +377,6 @@ class AsyncRolePlayEngine:
                         _ctx.self_memory_store.save(_ctx.self_memory)
 
                 bg_manager.set_consolidation_callback(_consolidation_callback)
-
-            if config.orchestration.enable_self_memory:
-                async def _self_memory_callback(
-                    _engine: AsyncRolePlayEngine = self,
-                    _config: SessionConfig = config,
-                    _transcript: Transcript = transcript,
-                    _ctx: LiveSessionContext = created,
-                ) -> None:
-                    """Periodic time-based AI self-memory extraction (diary + glossary)."""
-                    await _engine._run_self_memory_extract_task(
-                        config=_config,
-                        transcript=_transcript,
-                        context=_ctx,
-                        assistant_content="",
-                    )
-
-                bg_manager.set_self_memory_callback(_self_memory_callback)
 
             created.bg_task_manager = bg_manager
 
@@ -468,7 +450,8 @@ class AsyncRolePlayEngine:
         turn: Message,
         context: LiveSessionContext,
     ) -> Participant:
-        normalized = turn.speaker.strip().lower()
+        speaker = str(turn.speaker or "")
+        normalized = speaker.strip().lower()
         participant: Participant | None = None
 
         if turn.channel and turn.channel_user_id:
@@ -514,7 +497,7 @@ class AsyncRolePlayEngine:
             identities = {}
             if turn.channel and turn.channel_user_id:
                 identities[turn.channel] = turn.channel_user_id
-            participant = Participant(name=turn.speaker, user_id=turn.speaker, identities=identities)
+            participant = Participant(name=speaker, user_id=speaker, identities=identities)
             context.known_by_id[participant.user_id] = participant
 
         labels = [participant.name, participant.user_id, *participant.aliases]
@@ -632,9 +615,20 @@ class AsyncRolePlayEngine:
                     self._call_provider(request_payload),
                     timeout=timeout_seconds,
                 )
-                prompt_text = request_payload.system_prompt + "\n" + "\n".join(
-                    item.get("content", "") for item in request_payload.messages
-                )
+                prompt_parts = [request_payload.system_prompt]
+                for item in request_payload.messages:
+                    message_content = item.get("content", "")
+                    if isinstance(message_content, list):
+                        prompt_parts.append(
+                            " ".join(
+                                str(part.get("text", ""))
+                                for part in message_content
+                                if isinstance(part, dict) and part.get("type") == "text"
+                            )
+                        )
+                    else:
+                        prompt_parts.append(str(message_content))
+                prompt_text = "\n".join(part for part in prompt_parts if part)
                 prompt_tokens = self._estimate_tokens(prompt_text)
                 completion_tokens = self._estimate_tokens(content)
                 record = TokenUsageRecord(
@@ -894,92 +888,6 @@ class AsyncRolePlayEngine:
             len(diary_items) if isinstance(diary_items, list) else 0,
             len(glossary_items) if isinstance(glossary_items, list) else 0,
         )
-
-    async def _run_multimodal_parse_task(
-        self,
-        *,
-        config: SessionConfig,
-        transcript: Transcript,
-        participant: Participant,
-        content: str,
-        multimodal_inputs: list[dict[str, str]],
-        task_token_usage: dict[str, int],
-    ) -> str | None:
-        task_name = self._TASK_MULTIMODAL_PARSE
-        # 检查任务是否启用
-        if not config.orchestration.task_enabled.get(task_name, True):
-            return None  # 任务被禁用
-        
-        model = self.get_model_for_task(config, task_name)
-
-        normalized = self._normalize_multimodal_inputs(
-            multimodal_inputs,
-            max_items=max(1, int(config.orchestration.max_multimodal_inputs_per_turn)),
-            max_value_length=max(1, int(config.orchestration.max_multimodal_value_length)),
-        )
-        if not normalized:
-            self._record_task_stat(transcript, task_name, "skipped_invalid_input")
-            return None
-
-        self._record_task_stat(transcript, task_name, "attempted")
-
-        system_prompt = (
-            "你是多模态证据提取器。请阅读多模态输入说明并输出 JSON 对象，"
-            "仅包含 evidence(string) 字段。"
-        )
-        task_input = (
-            f"user_id={participant.user_id}\n"
-            f"speaker={participant.name}\n"
-            f"content={content}\n"
-            f"multimodal_inputs={json.dumps(normalized, ensure_ascii=False)}"
-        )
-        estimated_cost = self._estimate_tokens(system_prompt + task_input)
-
-        used = task_token_usage.get(task_name, 0)
-        budget = int(config.orchestration.task_budgets.get(task_name, 0))
-        if budget > 0 and used + estimated_cost > budget:
-            self._record_task_stat(transcript, task_name, "skipped_budget")
-            return None
-
-        request_payload = GenerationRequest(
-            model=model,
-            system_prompt=system_prompt,
-            messages=[{"role": "user", "content": task_input}],
-            temperature=float(config.orchestration.task_temperatures.get(task_name, 0.1)),
-            max_tokens=int(config.orchestration.task_max_tokens.get(task_name, 256)),
-            purpose=task_name,
-        )
-        retry_times = int(config.orchestration.task_retries.get(task_name, 0))
-        try:
-            raw = await self._call_provider_with_retry(
-                request_payload=request_payload,
-                retry_times=retry_times,
-                transcript=transcript,
-                task_name=task_name,
-                actor_id=participant.user_id,
-            )
-        except RuntimeError:
-            self._record_task_stat(transcript, task_name, "failed_provider")
-            return None
-
-        if retry_times > 0:
-            self._record_task_stat(transcript, task_name, "retry_enabled")
-
-        task_token_usage[task_name] = used + estimated_cost
-        parsed = self._extract_json_payload(raw)
-        if parsed is None:
-            self._record_task_stat(transcript, task_name, "failed_parse")
-            return None
-        evidence = parsed.get("evidence")
-        if not isinstance(evidence, str):
-            self._record_task_stat(transcript, task_name, "failed_parse")
-            return None
-        evidence = evidence.strip()
-        if not evidence:
-            self._record_task_stat(transcript, task_name, "failed_parse")
-            return None
-        self._record_task_stat(transcript, task_name, "succeeded")
-        return evidence
 
     async def _run_event_extract_task(
         self,
@@ -1389,7 +1297,7 @@ class AsyncRolePlayEngine:
         environment_context: str = "",
         skip_sections: list[str] | None = None,
         self_memory: SelfMemoryManager | None = None,
-    ) -> tuple[str, list[dict[str, str]]]:
+    ) -> tuple[str, list[dict[str, object]]]:
         # Build self-memory prompt sections
         diary_section = ""
         glossary_section = ""
@@ -1430,10 +1338,26 @@ class AsyncRolePlayEngine:
                 f"{internal_notes}"
             )
 
-        chat_history = [
-            item for item in transcript.as_chat_history()
-            if str(item.get("role", "")).strip().lower() != "system"
-        ]
+        chat_history: list[dict[str, object]] = []
+        for message in transcript.messages:
+            role = str(message.role or "").strip().lower()
+            if role == "system":
+                continue
+            speaker_prefix = f"[{message.speaker}] " if message.speaker else ""
+            text_content = f"{speaker_prefix}{message.content}"
+            image_inputs = [
+                item for item in message.multimodal_inputs
+                if item.get("type") == "image" and item.get("value")
+            ]
+            if image_inputs and role == "user":
+                content_parts: list[dict[str, object]] = [{"type": "text", "text": text_content}]
+                for image in image_inputs:
+                    content_parts.append(
+                        {"type": "image_url", "image_url": {"url": image["value"]}}
+                    )
+                chat_history.append({"role": message.role, "content": content_parts})
+            else:
+                chat_history.append({"role": message.role, "content": text_content})
         return system_prompt, chat_history
 
     @staticmethod
@@ -1894,17 +1818,6 @@ class AsyncRolePlayEngine:
                 )
             )
 
-        multimodal_task: asyncio.Task[str | None] = asyncio.create_task(
-            self._run_multimodal_parse_task(
-                config=config,
-                transcript=transcript,
-                participant=participant,
-                content=content,
-                multimodal_inputs=normalized_multimodal_inputs,
-                task_token_usage=task_token_usage,
-            )
-        )
-
         event_extract_task: asyncio.Task[list[object]] | None = None
         if should_run_event_extract:
             event_extract_task = asyncio.create_task(
@@ -1917,27 +1830,13 @@ class AsyncRolePlayEngine:
                 )
             )
 
-        pending_tasks: list[asyncio.Task[object]] = [multimodal_task]
+        pending_tasks: list[asyncio.Task[object]] = []
         if memory_extract_task is not None:
             pending_tasks.append(cast(asyncio.Task[object], memory_extract_task))
         if event_extract_task is not None:
             pending_tasks.append(cast(asyncio.Task[object], event_extract_task))
-        await asyncio.gather(*pending_tasks)
-
-        evidence = multimodal_task.result()
-        if evidence:
-            transcript.add(
-                Message(
-                    role="system",
-                    content=f"多模态解析证据[{participant.name}]：{evidence}",
-                )
-            )
-            transcript.user_memory.apply_ai_runtime_update(
-                user_id=participant.user_id,
-                summary_note=f"多模态证据：{evidence[:48]}",
-                source="multimodal_parse",
-                confidence=0.75,
-            )
+        if pending_tasks:
+            await asyncio.gather(*pending_tasks)
 
         # 获取事件相关度（用于回复意愿评估），不需要 LLM 调用
         hit_payload = event_store.check_relevance(
@@ -2463,8 +2362,29 @@ class AsyncRolePlayEngine:
                 and self._parse_runtime_datetime(ts).timestamp() >= cutoff_ts  # type: ignore[union-attr]
             ]
 
-            # Self-memory extraction is now handled by the time-based background task.
-            # (see _self_memory_callback registered in _get_or_create_live_context)
+            if config.orchestration.enable_self_memory:
+                context.self_memory_turn_counter += 1
+                batch_size = max(1, int(config.orchestration.self_memory_extract_batch_size))
+                min_chars = int(getattr(config.orchestration, "self_memory_min_chars", 0))
+                reply_content = assistant_message.content
+                trigger_by_count = context.self_memory_turn_counter % batch_size == 0
+                trigger_by_chars = min_chars > 0 and len(reply_content) >= min_chars
+                if trigger_by_count or trigger_by_chars:
+                    logger.debug(
+                        "自我记忆提取触发 | 轮次=%d batch=%d chars=%d",
+                        context.self_memory_turn_counter,
+                        batch_size,
+                        len(reply_content),
+                    )
+                    await self._run_self_memory_extract_task(
+                        config=config,
+                        transcript=transcript,
+                        context=context,
+                        assistant_content=reply_content,
+                    )
+                    context.self_memory_turn_counter = 0
+                    if context.self_memory_store is not None:
+                        context.self_memory_store.save(context.self_memory)
 
             await context.event_bus.emit(SessionEvent(
                 type=SessionEventType.PROCESSING_COMPLETED,

@@ -16,7 +16,6 @@
   "orchestration": {
     "task_enabled": {
       "memory_extract": true,
-      "multimodal_parse": true,
       "event_extract": true
     },
     "task_models": {},

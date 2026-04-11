@@ -49,7 +49,6 @@ orchestration=OrchestrationPolicy(
     enable_self_memory=False,       # ← 关闭后台提取
     task_enabled={
         "memory_extract": False,    # ← 关闭所有辅助 LLM 任务
-        "multimodal_parse": False,
         "event_extract": False,
     },
     # message_debounce_seconds 默认为 0.0，无需显式设置
@@ -97,7 +96,6 @@ config = SessionConfig(
         enable_self_memory=False,
         task_enabled={
             "memory_extract": False,
-            "multimodal_parse": False,
             "event_extract": False,
         },
     ),
@@ -268,7 +266,6 @@ def test_<feature>_<condition>_<expected>() -> None:
                 enable_self_memory=False,
                 task_enabled={
                     "memory_extract": False,
-                    "multimodal_parse": False,
                     "event_extract": False,
                 },
             ),

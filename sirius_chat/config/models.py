@@ -64,7 +64,7 @@ class OrchestrationPolicy:
         - Supports fine-grained task-level control
     
     Task Enablement:
-        - All tasks (memory_extract, event_extract, multimodal_parse) enabled by default
+        - All tasks (memory_extract, event_extract) enabled by default
         - Use task_enabled dict to enable/disable specific tasks
         - Example: task_enabled={"memory_extract": False} disables memory extraction tasks
     """
@@ -75,7 +75,6 @@ class OrchestrationPolicy:
     # Task enablement control (bool fields, all enabled by default)
     task_enabled: dict[str, bool] = field(default_factory=lambda: {
         "memory_extract": True,
-        "multimodal_parse": True,
         "event_extract": True,
     })
     
@@ -134,8 +133,8 @@ class OrchestrationPolicy:
 
     # Self-memory system (AI diary + glossary)
     enable_self_memory: bool = True
-    self_memory_extract_batch_size: int = 3  # Kept for compatibility; superseded by interval mode
-    self_memory_extract_interval_seconds: int = 360  # Time-based background extraction interval (default 6 min)
+    self_memory_extract_batch_size: int = 3  # AI replies between self-memory extractions (count-based trigger)
+    self_memory_min_chars: int = 0  # Also trigger when AI reply ≥ N chars (0 = disabled; OR logic with batch_size)
     self_memory_max_diary_prompt_entries: int = 6  # Max diary entries injected into prompt
     self_memory_max_glossary_prompt_terms: int = 15  # Max glossary terms injected into prompt
 
@@ -178,6 +177,10 @@ class OrchestrationPolicy:
 
         if self.event_extract_batch_size <= 0:
             raise ValueError("event_extract_batch_size 必须大于 0。")
+        if self.self_memory_extract_batch_size <= 0:
+            raise ValueError("self_memory_extract_batch_size 必须大于 0。")
+        if self.self_memory_min_chars < 0:
+            raise ValueError("self_memory_min_chars 不能小于 0。")
 
         normalized_reply_mode = self.session_reply_mode.strip().lower()
         if normalized_reply_mode not in {

@@ -4,6 +4,20 @@
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-04-11
+
+### Removed
+- 删除 `OrchestrationPolicy.self_memory_extract_interval_seconds` 兼容字段，AI 自身记忆不再支持后台定时触发。
+- 删除独立 `multimodal_parse` 辅助任务、对应常量与默认配置入口。
+
+### Changed
+- 主模型现在直接接收图片的 vision-format 输入；如果需要图片能力，应配置支持视觉的主模型，或通过 `Agent.metadata["multimodal_model"]` 升级模型。
+- AI 自身记忆改回在主流程内按 `self_memory_extract_batch_size` 和 `self_memory_min_chars` 触发，保证对高频/长回复场景都能稳定生效。
+- 默认示例配置、测试模板、外部接入文档全部同步移除 `multimodal_parse` 键。
+
+### Added
+- 新增迁移文档：`docs/migration-v0.15.md`
+
 ## [0.14.7] - 2026-04-11
 
 ### Changed

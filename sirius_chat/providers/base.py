@@ -8,7 +8,7 @@ from typing import Protocol
 class GenerationRequest:
     model: str
     system_prompt: str
-    messages: list[dict[str, str]]
+    messages: list[dict[str, object]]
     temperature: float = 0.7
     max_tokens: int = 512
     purpose: str = "chat_main"
@@ -21,7 +21,15 @@ def estimate_generation_request_input_tokens(request: GenerationRequest) -> int:
     """
     text_parts = [request.system_prompt]
     for msg in request.messages:
-        text_parts.append(str(msg.get("content", "")))
+        content = msg.get("content", "")
+        if isinstance(content, list):
+            text_parts.extend(
+                str(part.get("text", ""))
+                for part in content
+                if isinstance(part, dict) and part.get("type") == "text"
+            )
+            continue
+        text_parts.append(str(content))
     merged = "\n".join(part for part in text_parts if part)
     if not merged:
         return 0

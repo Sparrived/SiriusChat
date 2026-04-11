@@ -201,7 +201,6 @@ orchestration = OrchestrationPolicy(
     task_models={
         "memory_extract": "gpt-4o-mini",     # 用户记忆提取
         "event_extract": "gpt-4o-mini",      # 事件提取
-        "multimodal_parse": "gpt-4o",        # 多模态处理
         "memory_manager": "gpt-4o-mini",     # 记忆管理（可选）
     },
     
@@ -209,17 +208,14 @@ orchestration = OrchestrationPolicy(
     task_budgets={
         "memory_extract": 1200,    # token预算
         "event_extract": 800,
-        "multimodal_parse": 2000,
     },
     task_max_tokens={
         "memory_extract": 128,     # 最大输出token
         "event_extract": 256,
-        "multimodal_parse": 512,
     },
     task_temperatures={
         "memory_extract": 0.1,     # 温度（越低越稳定）
         "event_extract": 0.3,
-        "multimodal_parse": 0.7,
     },
     task_retries={
         "memory_extract": 2,       # 失败重试次数
@@ -424,7 +420,7 @@ turn = Message(
 )
 ```
 
-若配置了 `orchestration.task_models.multimodal_parse`，引擎会先提取多模态证据，再交给主模型生成回复。
+若消息包含图片，引擎会直接把图片以 vision 格式发送给主模型；如需升级模型，请配置 `Agent.metadata["multimodal_model"]`。
 
 token 消耗分析示例：
 

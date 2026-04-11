@@ -82,7 +82,7 @@ class TestOrchestrationConfigValidation:
         provider = MockProvider()
         engine = AsyncRolePlayEngine(provider=provider)
         
-        # 应该抛出异常，因为 multimodal_parse 和 event_extract 已启用但没有模型
+        # 应该抛出异常，因为 event_extract 已启用但没有模型
         with pytest.raises(OrchestrationConfigError):
             engine.validate_orchestration_config(config)
 
@@ -98,7 +98,6 @@ class TestOrchestrationConfigValidation:
         # 禁用没有模型的任务
         config.orchestration.task_enabled = {
             "memory_extract": True,
-            "multimodal_parse": False,
             "event_extract": False,
         }
         # 仅在已启用的任务中启用预算
@@ -125,7 +124,6 @@ class TestOrchestrationConfigValidation:
         # 启用所有任务
         config.orchestration.task_budgets = {
             "memory_extract": 1000,
-            "multimodal_parse": 1000,
             "event_extract": 1000,
         }
         
@@ -136,8 +134,7 @@ class TestOrchestrationConfigValidation:
             engine.validate_orchestration_config(config)
         
         error = exc_info.value
-        assert len(error.missing_models) == 2  # 另外两个必需任务
-        assert "multimodal_parse" in error.missing_models
+        assert len(error.missing_models) == 1
         assert "event_extract" in error.missing_models
 
     def test_orchestration_enabled_with_all_models_no_error(self):
@@ -147,13 +144,11 @@ class TestOrchestrationConfigValidation:
         config.orchestration.unified_model = ""
         config.orchestration.task_models = {
             "memory_extract": "gpt-4-mini",
-            "multimodal_parse": "gpt-4-mini",
             "event_extract": "gpt-4-mini",
         }
         # 启用所有任务
         config.orchestration.task_budgets = {
             "memory_extract": 1000,
-            "multimodal_parse": 1000,
             "event_extract": 1000,
         }
         
@@ -170,12 +165,10 @@ class TestOrchestrationConfigValidation:
         updated_config = configure_orchestration_models(
             config,
             memory_extract="gpt-4-mini",
-            multimodal_parse="gpt-4-mini",
             event_extract="gpt-4-mini",
         )
         
         assert updated_config.orchestration.task_models["memory_extract"] == "gpt-4-mini"
-        assert updated_config.orchestration.task_models["multimodal_parse"] == "gpt-4-mini"
         assert updated_config.orchestration.task_models["event_extract"] == "gpt-4-mini"
         # 原配置应该不变
         assert config.orchestration.task_models == {}
@@ -214,7 +207,6 @@ class TestOrchestrationConfigValidation:
             config,
             task_models={
                 "memory_extract": "gpt-4-mini",
-                "multimodal_parse": "gpt-4-mini",
                 "event_extract": "gpt-4-mini",
             },
             task_budgets={
@@ -244,7 +236,6 @@ class TestOrchestrationConfigValidation:
         # 启用所有任务（这会导致错误，因为并非所有任务都有模型）
         config.orchestration.task_budgets = {
             "memory_extract": 1000,
-            "multimodal_parse": 1000,
             "event_extract": 1000,
         }
         
@@ -273,7 +264,6 @@ class TestOrchestrationConfigValidation:
         # 配置所有必需模型
         config.orchestration.task_models = {
             "memory_extract": "mock",
-            "multimodal_parse": "mock",
             "event_extract": "mock",
         }
         
@@ -309,7 +299,6 @@ class TestOrchestrationConfigValidation:
         config.orchestration.task_budgets = {
             "event_extract": 1000,
             "memory_extract": 1000,
-            "multimodal_parse": 1000,
         }
 
         provider = MockProvider()

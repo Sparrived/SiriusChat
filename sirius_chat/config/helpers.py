@@ -109,7 +109,6 @@ def configure_orchestration_models(
         **task_models: 任务名称到模型名称的映射。
             支持的任务名：
             - memory_extract: 用户记忆提取
-            - multimodal_parse: 多模态内容解析
             - event_extract: 事件提取
             - memory_manager: 记忆管理器
             

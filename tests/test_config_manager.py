@@ -37,7 +37,6 @@ class TestConfigManager:
             "orchestration": {
                 "task_enabled": {
                     "memory_extract": True,
-                    "multimodal_parse": True,
                     "event_extract": True,
                 },
                 "task_models": {},
@@ -179,7 +178,6 @@ class TestConfigManager:
             "orchestration": {
                 "task_enabled": {
                     "memory_extract": True,
-                    "multimodal_parse": True,
                     "event_extract": True,
                 }
             },

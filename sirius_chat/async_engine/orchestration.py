@@ -15,7 +15,6 @@ if TYPE_CHECKING:
 
 # Task identifiers
 TASK_MEMORY_EXTRACT = "memory_extract"
-TASK_MULTIMODAL_PARSE = "multimodal_parse"
 TASK_EVENT_EXTRACT = "event_extract"
 TASK_MEMORY_MANAGER = "memory_manager"
 
@@ -24,11 +23,6 @@ TASK_MEMORY_EXTRACT_SYSTEM_PROMPT = (
     "你是用户画像提取器。请从输入中提取 JSON，并严格输出 JSON 对象，"
     "字段仅包含 inferred_persona(string)、inferred_traits(array[string])、"
     "inferred_aliases(array[string])、preference_tags(array[string])、summary_note(string)。"
-)
-
-TASK_MULTIMODAL_PARSE_SYSTEM_PROMPT = (
-    "你是多模态证据提取器。请阅读多模态输入说明并输出 JSON 对象，"
-    "仅包含 evidence(string) 字段。"
 )
 
 TASK_EVENT_EXTRACT_SYSTEM_PROMPT = (
@@ -86,7 +80,6 @@ def get_system_prompt_for_task(task_name: str) -> str:
     """Get the default system prompt for a task."""
     prompts = {
         TASK_MEMORY_EXTRACT: TASK_MEMORY_EXTRACT_SYSTEM_PROMPT,
-        TASK_MULTIMODAL_PARSE: TASK_MULTIMODAL_PARSE_SYSTEM_PROMPT,
         TASK_EVENT_EXTRACT: TASK_EVENT_EXTRACT_SYSTEM_PROMPT,
         TASK_MEMORY_MANAGER: TASK_MEMORY_MANAGER_SYSTEM_PROMPT,
     }

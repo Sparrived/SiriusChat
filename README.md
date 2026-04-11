@@ -1,4 +1,4 @@
-# 🌟 Sirius Chat
+﻿# 🌟 Sirius Chat
 
 <div align="center">
 
@@ -257,12 +257,12 @@ config = SessionConfig(
         unified_model="gpt-4",
         # ✨ 记忆系统
         enable_self_memory=True,                           # 启用 AI 自身记忆
-        self_memory_extract_interval_seconds=300,          # 每 5 分钟提取一次
+        self_memory_extract_batch_size=3,                 # 每 3 条 AI 回复提取一次
+        self_memory_min_chars=400,                        # 或单条回复超过 400 字时提取
         # 🎯 任务编排
         task_enabled={
             "memory_extract": True,
             "event_extract": True,
-            "multimodal_parse": True,
         },
         task_models={
             "memory_extract": "gpt-3.5-turbo",  # 用廉价模型提取
@@ -410,18 +410,15 @@ msg = Message(
   "orchestration": {
     "task_enabled": {
       "memory_extract": true,
-      "event_extract": true,
-      "multimodal_parse": true
+      "event_extract": true
     },
     "task_models": {
       "memory_extract": "gpt-3.5-turbo",
-      "event_extract": "gpt-3.5-turbo",
-      "multimodal_parse": "gpt-4-vision"
+      "event_extract": "gpt-3.5-turbo"
     },
     "task_budgets": {
       "memory_extract": 1200,
-      "event_extract": 1000,
-      "multimodal_parse": 1000
+      "event_extract": 1000
     },
     "task_temperatures": {
       "memory_extract": 0.1,
@@ -446,6 +443,7 @@ msg = Message(
 **说明：**
 
 - **多模型协同已成为默认方式**，所有任务默认启用，可通过 `task_enabled` 按需禁用
+- 图片不再经过 `multimodal_parse` 辅助任务；会直接随用户消息以 vision 格式发送给主模型
 - `memory_extract` 频率控制：
   - `batch_size=3` 表示每 3 条消息提取一次
   - `min_content_length=50` 表示只提取 ≥50 字符的消息
@@ -577,7 +575,7 @@ python -m pytest tests/test_engine.py::test_roleplay_engine_multi_human_single_a
 
 ### ✨ **新增**
 - **`write-tests` SKILL**：测试编写完整规范与最佳实践指南
-- **SelfMemory 定时提取**：从消息计数 → 时间间隔后台任务（`self_memory_extract_interval_seconds`）
+- **SelfMemory 计数触发**：按 `self_memory_extract_batch_size` / `self_memory_min_chars` 在主流程中触发
 
 ### 🚀 **改进**
 - **消息合并优化**：高并发场景自动合并（`message_debounce_seconds=5.0` 生产默认，测试须设 `0.0`）

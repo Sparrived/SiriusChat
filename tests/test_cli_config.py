@@ -134,7 +134,7 @@ def test_load_session_config_parses_orchestration_policy(tmp_path) -> None:
                 ],
                 "generated_agent_key": "main_agent",
                 "orchestration": {
-                    "task_enabled": {"memory_extract": True, "multimodal_parse": True, "event_extract": True},
+                    "task_enabled": {"memory_extract": True, "event_extract": True},
                     "task_models": {"memory_extract": "doubao-seed-2-0-lite-260215"},
                     "task_budgets": {"memory_extract": 1200},
                     "task_temperatures": {"memory_extract": 0.1},

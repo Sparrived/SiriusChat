@@ -51,9 +51,9 @@ description: "当你需要在不通读全部代码的情况下快速理解 Siriu
 ## 心智模型
 
 - `models/models.py` ✨ **（包重构）** 定义数据契约（多人用户 + 单 AI 主助手）。
-- `OrchestrationPolicy` 用于任务路由与预算控制，**现已默认启用**（`enabled=True`），支持 `memory_extract`、`event_extract`、`multimodal_parse`、`memory_manager` 等任务的模型配置与预算限制。若需回退单模型模式，设置 `enabled=False`。同时支持提示词驱动的内容分割（`enable_prompt_driven_splitting=True`）。✨ `memory_manager` 是新增的可选 LLM 任务，用于汇聚、去重、标注、冲突检测记忆。
+- `OrchestrationPolicy` 用于任务路由与预算控制，**现已默认启用**（`enabled=True`），支持 `memory_extract`、`event_extract`、`memory_manager` 等任务的模型配置与预算限制。若需回退单模型模式，设置 `enabled=False`。同时支持提示词驱动的内容分割（`enable_prompt_driven_splitting=True`）。✨ `memory_manager` 是新增的可选 LLM 任务，用于汇聚、去重、标注、冲突检测记忆。
 - ✨ **(v0.13.0)** `OrchestrationPolicy` 新增 AI 自身记忆配置（`enable_self_memory`、`self_memory_extract_batch_size`、`self_memory_max_diary_prompt_entries`、`self_memory_max_glossary_prompt_terms`）。
-- ✨ **(v0.14.5)** AI 自身记忆触发机制改为**定时后台任务**：`OrchestrationPolicy.self_memory_extract_interval_seconds`（默认 360 秒），由 `BackgroundTaskManager._self_memory_loop` 周期运行；`self_memory_extract_batch_size` 保留但不再触发提取。新增 `max_concurrent_llm_calls`（默认 1）限制单 session LLM 并发数，算法路径不受影响，`0` 表示不限制。
+- ✨ **(v0.15.0)** AI 自身记忆触发机制回归为**主流程计数/字数触发**：`self_memory_extract_batch_size` 控制每 N 条 AI 回复触发一次，`self_memory_min_chars` 允许超长回复即时触发。旧的 `self_memory_extract_interval_seconds` 已移除。图片不再走 `multimodal_parse` 辅助任务，而是直接以 vision 格式发送给主模型。
 - ✨ **(v0.14.0)** 回复决策重写：旧意愿分系统替换为三级参与决策架构，仅保留 `engagement_sensitivity` 和 `heat_window_seconds` 两个参数。回复频率限制集成到 `EngagementCoordinator` 中。
 - ✨ **(v0.14.1)** 彻底移除旧版兼容代码：删除全部 `auto_reply_*` 参数、`ReplyWillingnessDecision`、`core/intent.py`。迁移详见 `docs/migration-v0.14.md`。
 - ✨ **async_engine 包重构** (P0-003)：将 924 行单文件分解为多个职责明确的模块
@@ -78,7 +78,7 @@ description: "当你需要在不通读全部代码的情况下快速理解 Siriu
 - `user_memory.py` 负责用户身份识别（user_id/aliases/identities）与结构化用户记忆。
 - 用户记忆分为 `profile`（初始化字段）与 `runtime`（运行时可变字段）。
 - `runtime.memory_facts` 是结构化分类记忆，每个记忆包含：
-  - `fact_type`、`value`、`source`（来源：memory_extract/event_extract/multimodal_parse/memory_manager）、`confidence`
+  - `fact_type`、`value`、`source`（来源：memory_extract/event_extract/memory_manager 等）、`confidence`
   - `memory_category`（分类：identity/preference/emotion/event/custom）、`validated`（验证标记）、`conflict_with`（冲突列表）
   - V2 新增：`mention_count`（去重提频）、`source_event_id`（事件来源）、`context_channel`/`context_topic`（渠道/主题）
   - V2 变更：`is_transient` 从字段改为方法 (`fact.is_transient(threshold)`)，`created_at` 已移除（使用 `observed_at`）

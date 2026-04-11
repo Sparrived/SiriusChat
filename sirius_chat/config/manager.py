@@ -212,7 +212,6 @@ class ConfigManager:
             # 若启用，则根据 unified_model/task_models 选择调用哪个模型
             task_enabled=orch_dict.get("task_enabled", {
                 "memory_extract": True,
-                "multimodal_parse": True,
                 "event_extract": True,
             }),
             task_budgets=orch_dict.get("task_budgets", {}),

@@ -6,7 +6,7 @@
 
 `OrchestrationPolicy` 负责控制：
 
-- 辅助任务的模型路由与开关（`memory_extract`、`event_extract`、`multimodal_parse`）。
+- 辅助任务的模型路由与开关（`memory_extract`、`event_extract`）。
 - 各任务预算、温度、最大输出、重试次数。
 - 多模态输入限流。
 - 提示词驱动消息分割（`split_marker`）。
@@ -35,7 +35,6 @@
 
 - `memory_extract`: `true`
 - `event_extract`: `true`
-- `multimodal_parse`: `true`
 
 其他关键默认值：
 
@@ -67,34 +66,28 @@
     "unified_model": "",
     "task_models": {
       "memory_extract": "doubao-seed-2-0-lite-260215",
-      "event_extract": "doubao-seed-2-0-lite-260215",
-      "multimodal_parse": "doubao-seed-2-0-lite-260215"
+      "event_extract": "doubao-seed-2-0-lite-260215"
     },
     "task_enabled": {
       "memory_extract": true,
-      "event_extract": true,
-      "multimodal_parse": true
+      "event_extract": true
     },
     "task_budgets": {
       "memory_extract": 1200,
       "event_extract": 1000,
-      "multimodal_parse": 1000,
       "memory_manager": 800
     },
     "task_temperatures": {
       "memory_extract": 0.1,
-      "event_extract": 0.1,
-      "multimodal_parse": 0.3
+      "event_extract": 0.1
     },
     "task_max_tokens": {
       "memory_extract": 128,
-      "event_extract": 192,
-      "multimodal_parse": 256
+      "event_extract": 192
     },
     "task_retries": {
       "memory_extract": 1,
       "event_extract": 1,
-      "multimodal_parse": 1,
       "memory_manager": 1
     },
     "max_multimodal_inputs_per_turn": 4,
@@ -144,6 +137,7 @@
 
 - `memory_manager_model` 非空时启用记忆管理任务。
 - 该任务可使用 `task_budgets["memory_manager"]` 与 `task_retries["memory_manager"]`。
+- 多模态输入不会触发独立辅助任务；会直接作为主模型请求的一部分传递。
 
 ## 参与决策参数（reply_mode=auto）
 
@@ -168,6 +162,7 @@
 
 - `enable_self_memory`: 是否启用 AI 自身记忆系统（日记 + 名词解释），默认 `true`。
 - `self_memory_extract_batch_size`: 每 N 条 AI 回复后触发一次 LLM 提取（日记条目和名词），默认 `3`。
+- `self_memory_min_chars`: 单条 AI 回复达到指定字符数时也可触发提取，默认 `0`（关闭）。
 - `self_memory_max_diary_prompt_entries`: 系统提示词中包含的日记条目上限，默认 `6`。
 - `self_memory_max_glossary_prompt_terms`: 系统提示词中包含的名词解释上限，默认 `15`。
 
