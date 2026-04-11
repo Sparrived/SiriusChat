@@ -123,12 +123,11 @@ class OrchestrationPolicy:
 
     
     # Message debounce: buffer same-user messages within this window (seconds).
-    # 0 = disabled (immediate reply). Recommended: 5.0~10.0 for group chat.
     # During the window, consecutive messages from the same user are accumulated;
     # only the last coroutine flushes them all as a single merged message so that
     # intent analysis and profile extraction fire exactly once per burst.
-    # Default is 0 (opt-in). Set to 5.0~10.0 explicitly to enable debounce.
-    message_debounce_seconds: float = 0.0
+    # Default is 5.0 (enabled). Set to 0 to disable debounce (immediate reply).
+    message_debounce_seconds: float = 5.0
     
     # Memory policy (centralized memory system configuration)
     memory: MemoryPolicy = field(default_factory=MemoryPolicy)
