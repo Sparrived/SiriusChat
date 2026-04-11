@@ -19,11 +19,8 @@ DEFAULT_SILICONFLOW_BASE_URL = "https://api.siliconflow.cn"
 class SiliconFlowProvider(LLMProvider):
     """SiliconFlow provider backed by OpenAI-compatible /v1/chat/completions."""
 
-    def __init__(self, *, api_key: str, base_url: str = DEFAULT_SILICONFLOW_BASE_URL, timeout_seconds: int = 30) -> None:
-        normalized = base_url.rstrip("/")
-        if normalized.endswith("/v1"):
-            normalized = normalized[: -len("/v1")]
-        self._base_url = normalized
+    def __init__(self, *, api_key: str, timeout_seconds: int = 30) -> None:
+        self._base_url = DEFAULT_SILICONFLOW_BASE_URL
         self._api_key = api_key
         self._timeout_seconds = timeout_seconds
 

@@ -50,8 +50,6 @@ _PROVIDER_SPECS: list[dict] = [
         "model": "gpt-4o-mini",
         "patch_target": "sirius_chat.providers.openai_compatible.urllib_request.urlopen",
         "expected_url": "https://api.openai.com/v1/chat/completions",
-        "custom_url": None,
-        "custom_url_result": None,
         "has_reasoning": False,
     },
     {
@@ -61,8 +59,6 @@ _PROVIDER_SPECS: list[dict] = [
         "model": "deepseek-chat",
         "patch_target": "sirius_chat.providers.deepseek.urllib_request.urlopen",
         "expected_url": "https://api.deepseek.com/chat/completions",
-        "custom_url": "https://api.deepseek.com/v1",
-        "custom_url_result": "https://api.deepseek.com/chat/completions",
         "has_reasoning": True,
     },
     {
@@ -72,8 +68,6 @@ _PROVIDER_SPECS: list[dict] = [
         "model": "Pro/zai-org/GLM-4.7",
         "patch_target": "sirius_chat.providers.siliconflow.urllib_request.urlopen",
         "expected_url": "https://api.siliconflow.cn/v1/chat/completions",
-        "custom_url": "https://api.siliconflow.cn/v1",
-        "custom_url_result": "https://api.siliconflow.cn/v1/chat/completions",
         "has_reasoning": True,
     },
     {
@@ -83,8 +77,6 @@ _PROVIDER_SPECS: list[dict] = [
         "model": "doubao-seed-2-0-lite-260215",
         "patch_target": "sirius_chat.providers.volcengine_ark.urllib_request.urlopen",
         "expected_url": "https://ark.cn-beijing.volces.com/api/v3/chat/completions",
-        "custom_url": "https://ark.cn-beijing.volces.com/api/v3",
-        "custom_url_result": "https://ark.cn-beijing.volces.com/api/v3/chat/completions",
         "has_reasoning": True,
     },
 ]
@@ -136,27 +128,7 @@ def test_provider_uses_correct_default_endpoint(spec: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 基准 3：自定义 base_url 处理
-# ---------------------------------------------------------------------------
-
-_CUSTOM_URL_SPECS = [s for s in _PROVIDER_SPECS if s["custom_url"]]
-
-
-@pytest.mark.parametrize("spec", _CUSTOM_URL_SPECS, ids=_ids(_CUSTOM_URL_SPECS))
-def test_provider_handles_custom_base_url(spec: dict) -> None:
-    init = {**spec["init"], "base_url": spec["custom_url"]}
-    provider = spec["cls"](**init)
-    with patch(spec["patch_target"]) as mocked:
-        mocked.return_value = _FakeResponse(
-            {"choices": [{"message": {"content": "ok"}}]}
-        )
-        provider.generate(_make_request(spec["model"]))
-    called_request = mocked.call_args[0][0]
-    assert called_request.full_url == spec["custom_url_result"]
-
-
-# ---------------------------------------------------------------------------
-# 基准 4：结构化内容列表
+# 基准 3：结构化内容列表
 # ---------------------------------------------------------------------------
 
 

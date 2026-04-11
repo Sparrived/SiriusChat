@@ -19,11 +19,9 @@ DEFAULT_VOLCENGINE_ARK_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3"
 class VolcengineArkProvider(LLMProvider):
     """Volcengine Ark provider backed by /api/v3/chat/completions."""
 
-    def __init__(self, *, api_key: str, base_url: str = DEFAULT_VOLCENGINE_ARK_BASE_URL, timeout_seconds: int = 30) -> None:
-        normalized = base_url.rstrip("/")
-        if normalized.endswith("/api/v3"):
-            normalized = normalized[: -len("/api/v3")]
-        self._base_url = normalized
+    def __init__(self, *, api_key: str, timeout_seconds: int = 30) -> None:
+        # Strip the /api/v3 suffix so generate() can append it consistently
+        self._base_url = DEFAULT_VOLCENGINE_ARK_BASE_URL.removesuffix("/api/v3")
         self._api_key = api_key
         self._timeout_seconds = timeout_seconds
 

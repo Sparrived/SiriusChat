@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+## [0.15.3] - 2026-04-11
+
+### Added
+- 新增 `YTeaProvider`，适配 `https://api.ytea.top` OpenAI 兼容接口（需提供 API Key）。
+
+### Changed
+- `DeepSeekProvider`、`SiliconFlowProvider`、`VolcengineArkProvider` 的端点 URL 改为硬编码，移除可配置 `base_url` 参数；仅 `OpenAICompatibleProvider` 保留 `base_url`。
+
 ## [0.15.0] - 2026-04-11
 
 ### Removed

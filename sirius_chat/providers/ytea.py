@@ -13,20 +13,14 @@ from sirius_chat.providers.response_utils import extract_assistant_text
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_DEEPSEEK_BASE_URL = "https://api.deepseek.com"
+DEFAULT_YTEA_BASE_URL = "https://api.ytea.top"
 
 
-class DeepSeekProvider(LLMProvider):
-    """DeepSeek provider backed by /chat/completions.
-
-    DeepSeek is OpenAI-compatible. The constructor accepts either:
-    - https://api.deepseek.com
-    - https://api.deepseek.com/v1
-    and normalizes both to the same request endpoint.
-    """
+class YTeaProvider(LLMProvider):
+    """YTea provider backed by OpenAI-compatible /v1/chat/completions."""
 
     def __init__(self, *, api_key: str, timeout_seconds: int = 30) -> None:
-        self._base_url = DEFAULT_DEEPSEEK_BASE_URL
+        self._base_url = DEFAULT_YTEA_BASE_URL
         self._api_key = api_key
         self._timeout_seconds = timeout_seconds
 
@@ -49,7 +43,7 @@ class DeepSeekProvider(LLMProvider):
             f"{json.dumps(debug_input, ensure_ascii=False, indent=2)}"
         )
 
-        url = f"{self._base_url}/chat/completions"
+        url = f"{self._base_url}/v1/chat/completions"
         payload = {
             "model": request.model,
             "temperature": request.temperature,

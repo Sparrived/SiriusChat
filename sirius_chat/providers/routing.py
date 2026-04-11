@@ -9,6 +9,7 @@ from sirius_chat.providers.deepseek import DeepSeekProvider
 from sirius_chat.providers.openai_compatible import OpenAICompatibleProvider
 from sirius_chat.providers.siliconflow import SiliconFlowProvider
 from sirius_chat.providers.volcengine_ark import VolcengineArkProvider
+from sirius_chat.providers.ytea import YTeaProvider
 
 PROVIDER_KEYS_FILE = "provider_keys.json"
 
@@ -16,6 +17,7 @@ _OPENAI_PROVIDER_TYPES = {"openai", "openai-compatible"}
 _DEEPSEEK_PROVIDER_TYPES = {"deepseek"}
 _SILICONFLOW_PROVIDER_TYPES = {"siliconflow"}
 _VOLCENGINE_ARK_PROVIDER_TYPES = {"volcengine-ark", "ark"}
+_YTEA_PROVIDER_TYPES = {"ytea"}
 
 _SUPPORTED_PROVIDER_PLATFORMS: dict[str, dict[str, str]] = {
     "openai-compatible": {
@@ -33,6 +35,10 @@ _SUPPORTED_PROVIDER_PLATFORMS: dict[str, dict[str, str]] = {
     "volcengine-ark": {
         "default_base_url": "https://ark.cn-beijing.volces.com/api/v3",
         "notes": "Volcengine Ark chat completions endpoint",
+    },
+    "ytea": {
+        "default_base_url": "https://api.ytea.top",
+        "notes": "YTea OpenAI-compatible endpoint",
     },
 }
 
@@ -205,14 +211,13 @@ class AutoRoutingProvider(LLMProvider):
 
     def _create_provider(self, config: ProviderConfig) -> LLMProvider:
         if config.provider_type in _SILICONFLOW_PROVIDER_TYPES:
-            return SiliconFlowProvider(api_key=config.api_key, base_url=config.base_url or "https://api.siliconflow.cn")
+            return SiliconFlowProvider(api_key=config.api_key)
         if config.provider_type in _DEEPSEEK_PROVIDER_TYPES:
-            return DeepSeekProvider(api_key=config.api_key, base_url=config.base_url or "https://api.deepseek.com")
+            return DeepSeekProvider(api_key=config.api_key)
         if config.provider_type in _VOLCENGINE_ARK_PROVIDER_TYPES:
-            return VolcengineArkProvider(
-                api_key=config.api_key,
-                base_url=config.base_url or "https://ark.cn-beijing.volces.com/api/v3",
-            )
+            return VolcengineArkProvider(api_key=config.api_key)
+        if config.provider_type in _YTEA_PROVIDER_TYPES:
+            return YTeaProvider(api_key=config.api_key)
         if config.provider_type in _OPENAI_PROVIDER_TYPES:
             return OpenAICompatibleProvider(api_key=config.api_key, base_url=config.base_url or "https://api.openai.com")
         raise RuntimeError(f"不支持的提供商类型：{config.provider_type}")
@@ -265,14 +270,13 @@ def probe_provider_availability(
 def _create_provider_from_config(config: ProviderConfig) -> LLMProvider:
     provider_type = ensure_provider_platform_supported(config.provider_type)
     if provider_type in _SILICONFLOW_PROVIDER_TYPES:
-        return SiliconFlowProvider(api_key=config.api_key, base_url=config.base_url or "https://api.siliconflow.cn")
+        return SiliconFlowProvider(api_key=config.api_key)
     if provider_type in _DEEPSEEK_PROVIDER_TYPES:
-        return DeepSeekProvider(api_key=config.api_key, base_url=config.base_url or "https://api.deepseek.com")
+        return DeepSeekProvider(api_key=config.api_key)
     if provider_type in _VOLCENGINE_ARK_PROVIDER_TYPES:
-        return VolcengineArkProvider(
-            api_key=config.api_key,
-            base_url=config.base_url or "https://ark.cn-beijing.volces.com/api/v3",
-        )
+        return VolcengineArkProvider(api_key=config.api_key)
+    if provider_type in _YTEA_PROVIDER_TYPES:
+        return YTeaProvider(api_key=config.api_key)
     return OpenAICompatibleProvider(api_key=config.api_key, base_url=config.base_url or "https://api.openai.com")
 
 
