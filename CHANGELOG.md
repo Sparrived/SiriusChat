@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+## [0.15.7] - 2026-04-11
+
+### Changed
+- 强化路由约束：当目标模型不匹配任何已注册 Provider 的 `models` 列表或 `healthcheck_model` 时，不再随机回退到第一个 Provider，而是直接抛出 `RuntimeError`。这确保了调用的确定性并能及时发现配置错误。
+
 ## [0.15.6] - 2026-04-11
 
 ### Fixed

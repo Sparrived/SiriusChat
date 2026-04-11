@@ -241,7 +241,9 @@ class AutoRoutingProvider(LLMProvider):
             if self._provider_matches_model(provider, model):
                 return provider
 
-        return next(iter(self._providers.values()))
+        raise RuntimeError(
+            f"无法为模型 '{model}' 找到合适的提供商。请确保在 provider_keys.json 或配置中的 'models' 列表中包含了该模型。"
+        )
 
     def generate(self, request: GenerationRequest) -> str:
         selected = self._pick_provider(request.model)
