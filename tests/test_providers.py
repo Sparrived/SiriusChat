@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import io
 import json
 from unittest.mock import patch
 from urllib import error
@@ -170,6 +171,30 @@ def test_provider_handles_custom_base_url(spec: dict) -> None:
 def test_newapi_provider_rejects_custom_base_url_argument() -> None:
     with pytest.raises(TypeError):
         NewAPIProvider(api_key="test-key", base_url="https://example.com")  # type: ignore[call-arg]
+
+
+def test_newapi_provider_follows_http_307_redirect_once() -> None:
+    provider = NewAPIProvider(api_key="test-key")
+    redirect_error = error.HTTPError(
+        url="https://docs.newapi.pro/v1/chat/completions",
+        code=307,
+        msg="Redirect",
+        hdrs={"Location": "https://api.newapi.pro/v1/chat/completions"},
+        fp=io.BytesIO(b"Redirecting..."),
+    )
+    with patch("sirius_chat.providers.openai_compatible.urllib_request.urlopen") as mocked:
+        mocked.side_effect = [
+            redirect_error,
+            _FakeResponse({"choices": [{"message": {"content": "ok"}}]}),
+        ]
+        output = provider.generate(_make_request("gpt-5-nano"))
+
+    assert output == "ok"
+    assert mocked.call_count == 2
+    first_req = mocked.call_args_list[0].args[0]
+    second_req = mocked.call_args_list[1].args[0]
+    assert first_req.full_url == "https://docs.newapi.pro/v1/chat/completions"
+    assert second_req.full_url == "https://api.newapi.pro/v1/chat/completions"
 
 
 # ---------------------------------------------------------------------------

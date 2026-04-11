@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+## [0.15.2] - 2026-04-11
+
+### Fixed
+- 修复 OpenAI 兼容 provider 在 NewAPI 返回 HTTP 307/308 时直接失败的问题：现会在检测到 `Location` 后自动跟随一次重定向并保持 POST 调用。
+- 降低 NewAPI 文档域名重定向场景下的注册探测失败率，避免 `register_provider_with_validation` 因 `Redirecting...` 误判不可用。
+
+### Added
+- 新增回归测试，覆盖 `NewAPIProvider` 在 HTTP 307 场景下自动跟随重定向并成功返回响应的行为。
+
 ## [0.15.1] - 2026-04-11
 
 ### Changed

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+from urllib.parse import urljoin
 from urllib import error, request as urllib_request
 
 from sirius_chat.providers.base import (
@@ -54,26 +55,38 @@ class OpenAICompatibleProvider(LLMProvider):
         }
 
         body = json.dumps(payload).encode("utf-8")
-        req = urllib_request.Request(
-            url=url,
-            data=body,
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {self._api_key}",
-            },
-            method="POST",
-        )
-
-        try:
-            with urllib_request.urlopen(req, timeout=self._timeout_seconds) as response:
-                raw = response.read().decode("utf-8")
-        except error.HTTPError as exc:
-            details = exc.read().decode("utf-8", errors="replace")
-            logger.error(f"[模型调用失败] {request.model} | HTTP {exc.code}: {details[:100]}")
-            raise RuntimeError(f"提供商 HTTP 错误 {exc.code}：{details}") from exc
-        except error.URLError as exc:
-            logger.error(f"[模型调用失败] {request.model} | 网络错误: {exc.reason}")
-            raise RuntimeError(f"提供商网络错误：{exc.reason}") from exc
+        raw = ""
+        for attempt in range(2):
+            req = urllib_request.Request(
+                url=url,
+                data=body,
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {self._api_key}",
+                },
+                method="POST",
+            )
+            try:
+                with urllib_request.urlopen(req, timeout=self._timeout_seconds) as response:
+                    raw = response.read().decode("utf-8")
+                    break
+            except error.HTTPError as exc:
+                redirect_location = exc.headers.get("Location") if exc.headers else ""
+                if exc.code in (307, 308) and redirect_location and attempt == 0:
+                    url = urljoin(url, redirect_location)
+                    logger.warning(
+                        "[模型调用重定向] %s | HTTP %s -> %s",
+                        request.model,
+                        exc.code,
+                        url,
+                    )
+                    continue
+                details = exc.read().decode("utf-8", errors="replace")
+                logger.error(f"[模型调用失败] {request.model} | HTTP {exc.code}: {details[:100]}")
+                raise RuntimeError(f"提供商 HTTP 错误 {exc.code}：{details}") from exc
+            except error.URLError as exc:
+                logger.error(f"[模型调用失败] {request.model} | 网络错误: {exc.reason}")
+                raise RuntimeError(f"提供商网络错误：{exc.reason}") from exc
 
         logger.debug(f"[模型原始响应] {request.model} | raw:\n{raw}")
 
