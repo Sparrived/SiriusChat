@@ -11,6 +11,7 @@ class GenerationRequest:
     messages: list[dict[str, object]]
     temperature: float = 0.7
     max_tokens: int = 512
+    timeout_seconds: float | None = None
     purpose: str = "chat_main"
 
 
@@ -36,13 +37,32 @@ def estimate_generation_request_input_tokens(request: GenerationRequest) -> int:
     return max(1, (len(merged) + 3) // 4)
 
 
+def resolve_generation_timeout_seconds(
+    request: GenerationRequest,
+    default_timeout_seconds: float,
+) -> float:
+    """Return the effective timeout for a provider call.
+
+    Request-scoped timeout overrides provider defaults when supplied.
+    """
+    timeout_seconds = request.timeout_seconds
+    if timeout_seconds is None:
+        timeout_seconds = default_timeout_seconds
+    resolved_timeout = float(timeout_seconds)
+    if resolved_timeout <= 0:
+        raise ValueError("GenerationRequest.timeout_seconds must be greater than 0.")
+    return resolved_timeout
+
+
 @runtime_checkable
 class LLMProvider(Protocol):
     def generate(self, request: GenerationRequest) -> str:
         """Generate one assistant message from the upstream provider."""
+        ...
 
 
 @runtime_checkable
 class AsyncLLMProvider(Protocol):
     async def generate_async(self, request: GenerationRequest) -> str:
         """Generate one assistant message asynchronously from the upstream provider."""
+        ...

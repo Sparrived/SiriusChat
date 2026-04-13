@@ -18,6 +18,7 @@ from sirius_chat.providers.mock import MockProvider
 from sirius_chat.providers.openai_compatible import OpenAICompatibleProvider
 from sirius_chat.providers.siliconflow import SiliconFlowProvider
 from sirius_chat.providers.volcengine_ark import VolcengineArkProvider
+from sirius_chat.providers.ytea import YTeaProvider
 
 
 # ---------------------------------------------------------------------------
@@ -79,14 +80,24 @@ _PROVIDER_SPECS: list[dict] = [
         "expected_url": "https://ark.cn-beijing.volces.com/api/v3/chat/completions",
         "has_reasoning": True,
     },
+    {
+        "id": "ytea",
+        "cls": YTeaProvider,
+        "init": {"api_key": "test-key"},
+        "model": "gpt-4o-mini",
+        "patch_target": "sirius_chat.providers.ytea.urllib_request.urlopen",
+        "expected_url": "https://api.ytea.top/v1/chat/completions",
+        "has_reasoning": False,
+    },
 ]
 
 
-def _make_request(model: str) -> GenerationRequest:
+def _make_request(model: str, *, timeout_seconds: float | None = None) -> GenerationRequest:
     return GenerationRequest(
         model=model,
         system_prompt="你是一个有用的助手",
         messages=[{"role": "user", "content": "你好"}],
+        timeout_seconds=timeout_seconds,
     )
 
 
@@ -125,6 +136,30 @@ def test_provider_uses_correct_default_endpoint(spec: dict) -> None:
         provider.generate(_make_request(spec["model"]))
     called_request = mocked.call_args[0][0]
     assert called_request.full_url == spec["expected_url"]
+
+
+@pytest.mark.parametrize("spec", _PROVIDER_SPECS, ids=_ids(_PROVIDER_SPECS))
+def test_provider_uses_request_timeout_override(spec: dict) -> None:
+    provider = spec["cls"](**spec["init"])
+    with patch(spec["patch_target"]) as mocked:
+        mocked.return_value = _FakeResponse(
+            {"choices": [{"message": {"content": "ok"}}]}
+        )
+        provider.generate(_make_request(spec["model"], timeout_seconds=95.0))
+    assert mocked.call_args.kwargs["timeout"] == 95.0
+
+
+@pytest.mark.parametrize("spec", _PROVIDER_SPECS, ids=_ids(_PROVIDER_SPECS))
+def test_provider_falls_back_to_provider_timeout(spec: dict) -> None:
+    init = dict(spec["init"])
+    init["timeout_seconds"] = 41
+    provider = spec["cls"](**init)
+    with patch(spec["patch_target"]) as mocked:
+        mocked.return_value = _FakeResponse(
+            {"choices": [{"message": {"content": "ok"}}]}
+        )
+        provider.generate(_make_request(spec["model"]))
+    assert mocked.call_args.kwargs["timeout"] == 41.0
 
 
 # ---------------------------------------------------------------------------
@@ -235,7 +270,7 @@ class TestMiddleware:
     async def test_rate_limiter_tracks_requests(self) -> None:
         from sirius_chat.providers.middleware import RateLimiterMiddleware, MiddlewareContext
         limiter = RateLimiterMiddleware(max_requests=2, window_seconds=1)
-        ctx = MiddlewareContext(request=object(), metadata={})
+        ctx = MiddlewareContext(request=_make_request("mock-model"), metadata={})
         await limiter.process_request(ctx)
         assert len(limiter.request_times) == 1
         await limiter.process_request(ctx)
@@ -246,7 +281,7 @@ class TestMiddleware:
         from sirius_chat.providers.middleware import TokenBucketRateLimiter, MiddlewareContext
         bucket = TokenBucketRateLimiter(capacity=5, refill_rate=1.0)
         bucket.tokens = 5.0
-        ctx = MiddlewareContext(request=object(), metadata={})
+        ctx = MiddlewareContext(request=_make_request("mock-model"), metadata={})
         await bucket.process_request(ctx)
         assert bucket.tokens == 4.0
 
@@ -254,7 +289,7 @@ class TestMiddleware:
     async def test_retry_initializes_counter(self) -> None:
         from sirius_chat.providers.middleware import RetryMiddleware, MiddlewareContext
         retry = RetryMiddleware(max_retries=3)
-        ctx = MiddlewareContext(request=object(), metadata={})
+        ctx = MiddlewareContext(request=_make_request("mock-model"), metadata={})
         await retry.process_request(ctx)
         assert ctx.metadata["retry_count"] == 0
 
@@ -262,7 +297,7 @@ class TestMiddleware:
     async def test_circuit_breaker_opens_on_failures(self) -> None:
         from sirius_chat.providers.middleware import CircuitBreakerMiddleware, MiddlewareContext
         breaker = CircuitBreakerMiddleware(failure_threshold=2)
-        ctx = MiddlewareContext(request=object(), metadata={})
+        ctx = MiddlewareContext(request=_make_request("mock-model"), metadata={})
         await breaker.process_response(ctx, "", RuntimeError("fail"))
         await breaker.process_response(ctx, "", RuntimeError("fail"))
         with pytest.raises(CircuitBreakerMiddleware.CircuitOpen):
@@ -272,7 +307,7 @@ class TestMiddleware:
     async def test_circuit_breaker_recovers(self) -> None:
         from sirius_chat.providers.middleware import CircuitBreakerMiddleware, MiddlewareContext
         breaker = CircuitBreakerMiddleware(failure_threshold=1, success_threshold=2)
-        ctx = MiddlewareContext(request=object(), metadata={})
+        ctx = MiddlewareContext(request=_make_request("mock-model"), metadata={})
         await breaker.process_response(ctx, "", RuntimeError("fail"))
         await breaker.process_response(ctx, "ok", None)
         await breaker.process_response(ctx, "ok", None)
@@ -281,12 +316,9 @@ class TestMiddleware:
     @pytest.mark.asyncio
     async def test_cost_metrics_tracks_calls(self) -> None:
         from sirius_chat.providers.middleware import CostMetricsMiddleware, MiddlewareContext
-
-        class _Req:
-            model = "gpt-3.5-turbo"
-            prompt = "hello" * 100
         metrics = CostMetricsMiddleware()
-        ctx = MiddlewareContext(request=_Req(), metadata={"request": _Req()})
+        request = _make_request("gpt-3.5-turbo")
+        ctx = MiddlewareContext(request=request, metadata={"request": request})
         await metrics.process_request(ctx)
         await metrics.process_response(ctx, "response" * 50, None)
         assert metrics.total_calls == 1
@@ -301,6 +333,6 @@ class TestMiddleware:
         chain = MiddlewareChain()
         chain.add(RateLimiterMiddleware(max_requests=10))
         chain.add(RetryMiddleware(max_retries=3))
-        ctx = MiddlewareContext(request=object(), metadata={})
+        ctx = MiddlewareContext(request=_make_request("mock-model"), metadata={})
         await chain.execute_request(ctx)
         assert ctx.metadata["retry_count"] == 0

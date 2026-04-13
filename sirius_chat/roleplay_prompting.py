@@ -16,6 +16,8 @@ GENERATED_AGENTS_FILE_NAME = "generated_agents.json"
 GENERATED_AGENT_TRACE_DIR_NAME = "generated_agent_traces"
 PENDING_PERSONA_SPECS_FIELD_NAME = "pending_persona_specs"
 PENDING_GENERATION_TRACE_FIELD_NAME = "pending_trace"
+ROLEPLAY_GENERATION_MAX_TOKENS_DEFAULT = 5120
+ROLEPLAY_GENERATION_TIMEOUT_SECONDS_DEFAULT = 120.0
 
 
 @dataclass(slots=True)
@@ -98,6 +100,19 @@ class PreparedPersonaGenerationInput:
     dependency_snapshots: list[DependencyFileSnapshot] = field(default_factory=list)
     system_prompt: str = ""
     user_prompt: str = ""
+
+
+class PersonaGenerationResponseError(ValueError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        raw_response: str,
+        parsed_payload: dict[str, object] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.raw_response = raw_response
+        self.parsed_payload = dict(parsed_payload or {})
 
 
 GeneratedSessionPreset = AgentPreset
@@ -336,6 +351,7 @@ async def _agenerate_prompt(
     user_prompt: str,
     temperature: float,
     max_tokens: int,
+    timeout_seconds: float | None,
 ) -> str:
     request_payload = GenerationRequest(
         model=model,
@@ -343,6 +359,7 @@ async def _agenerate_prompt(
         messages=[{"role": "user", "content": user_prompt}],
         temperature=float(temperature),
         max_tokens=max_tokens,
+        timeout_seconds=timeout_seconds,
         purpose="roleplay_prompt_generation",
     )
     return await _acall_provider(provider, request_payload)
@@ -833,6 +850,7 @@ def generate_humanized_roleplay_questions(template: str = "default") -> list[Rol
 
 
 def _extract_json_payload(raw: str) -> dict[str, object] | None:
+    raw = _strip_wrapped_json_code_fence(raw)
     try:
         data = json.loads(raw)
         if isinstance(data, dict):
@@ -852,6 +870,115 @@ def _extract_json_payload(raw: str) -> dict[str, object] | None:
     if not isinstance(data, dict):
         return None
     return data
+
+
+def _strip_wrapped_json_code_fence(raw: str) -> str:
+    stripped = raw.strip()
+    match = re.fullmatch(r"```(?:json)?\s*(.*?)\s*```", stripped, flags=re.IGNORECASE | re.DOTALL)
+    if match:
+        return match.group(1).strip()
+    return stripped
+
+
+def _looks_like_roleplay_json_response(raw: str) -> bool:
+    normalized = raw.strip().lower()
+    return (
+        normalized.startswith("{")
+        or normalized.startswith("```json")
+        or '"agent_persona"' in normalized
+        or '"global_system_prompt"' in normalized
+    )
+
+
+def _decode_json_string_fragment(fragment: str) -> str:
+    candidate = fragment
+    while True:
+        try:
+            return cast(str, json.loads(f'"{candidate}"'))
+        except json.JSONDecodeError:
+            if candidate.endswith("\\"):
+                candidate = candidate[:-1]
+                continue
+            break
+    return (
+        fragment.replace("\\n", "\n")
+        .replace("\\r", "\r")
+        .replace("\\t", "\t")
+        .replace('\\"', '"')
+        .replace("\\/", "/")
+        .replace("\\\\", "\\")
+    )
+
+
+def _extract_json_string_field(raw: str, field_names: tuple[str, ...]) -> tuple[str, bool] | None:
+    for field_name in field_names:
+        match = re.search(rf'"{re.escape(field_name)}"\s*:\s*"', raw)
+        if match is None:
+            continue
+        start = match.end()
+        buffer: list[str] = []
+        backslash_run = 0
+        for ch in raw[start:]:
+            if ch == '"' and backslash_run % 2 == 0:
+                return _decode_json_string_fragment("".join(buffer)).strip(), True
+            buffer.append(ch)
+            if ch == "\\":
+                backslash_run += 1
+            else:
+                backslash_run = 0
+        return _decode_json_string_fragment("".join(buffer)).strip(), False
+    return None
+
+
+def _extract_json_number_field(raw: str, field_names: tuple[str, ...]) -> float | int | None:
+    for field_name in field_names:
+        match = re.search(rf'"{re.escape(field_name)}"\s*:\s*(-?\d+(?:\.\d+)?)', raw)
+        if match is None:
+            continue
+        text = match.group(1)
+        try:
+            if "." in text:
+                return float(text)
+            return int(text)
+        except ValueError:
+            continue
+    return None
+
+
+def _extract_partial_roleplay_payload(raw: str) -> tuple[dict[str, object], list[str], list[str]] | None:
+    candidate = _strip_wrapped_json_code_fence(raw)
+    payload: dict[str, object] = {}
+    truncated_fields: list[str] = []
+    for canonical, aliases in {
+        "agent_persona": ("agent_persona", "persona"),
+        "global_system_prompt": ("global_system_prompt", "prompt"),
+        "agent_alias": ("agent_alias",),
+    }.items():
+        extracted = _extract_json_string_field(candidate, aliases)
+        if extracted is None:
+            continue
+        value, is_complete = extracted
+        payload[canonical] = value
+        if not is_complete:
+            truncated_fields.append(canonical)
+
+    for numeric_name, aliases in {
+        "temperature": ("temperature", "recommended_temperature"),
+        "max_tokens": ("max_tokens", "recommended_max_tokens"),
+    }.items():
+        numeric_value = _extract_json_number_field(candidate, aliases)
+        if numeric_value is not None:
+            payload[numeric_name] = numeric_value
+
+    if not payload:
+        return None
+
+    missing_required_fields = [
+        field_name
+        for field_name in ("agent_persona", "global_system_prompt")
+        if field_name not in payload
+    ]
+    return payload, truncated_fields, missing_required_fields
 
 
 def _parse_temperature(value: object, default: float) -> float:
@@ -1118,6 +1245,7 @@ async def _agenerate_from_prepared_persona_input(
     model: str,
     temperature: float,
     max_tokens: int,
+    timeout_seconds: float,
     base_model: str,
     base_temperature: float,
     base_max_tokens: int,
@@ -1131,6 +1259,7 @@ async def _agenerate_from_prepared_persona_input(
         user_prompt=prepared.user_prompt,
         temperature=temperature,
         max_tokens=max_tokens,
+        timeout_seconds=timeout_seconds,
     )
     preset = _build_preset_from_response(
         raw,
@@ -1164,6 +1293,7 @@ async def _arun_persisted_persona_generation(
     dependency_root: Path | None,
     temperature: float,
     max_tokens: int,
+    timeout_seconds: float,
     base_model: str,
     base_temperature: float,
     base_max_tokens: int,
@@ -1196,6 +1326,7 @@ async def _arun_persisted_persona_generation(
             model=model,
             temperature=temperature,
             max_tokens=max_tokens,
+            timeout_seconds=timeout_seconds,
             base_model=base_model,
             base_temperature=base_temperature,
             base_max_tokens=base_max_tokens,
@@ -1203,6 +1334,13 @@ async def _arun_persisted_persona_generation(
             operation=operation,
         )
     except Exception as exc:
+        raw_response = exc.raw_response if isinstance(exc, PersonaGenerationResponseError) else ""
+        failed_payload: dict[str, object] = {
+            "stage": "generation_failed",
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+        if isinstance(exc, PersonaGenerationResponseError):
+            failed_payload.update(exc.parsed_payload)
         failed_trace = _build_persona_generation_trace(
             prepared=prepared,
             agent_key=agent_key,
@@ -1210,11 +1348,8 @@ async def _arun_persisted_persona_generation(
             model=model,
             temperature=temperature,
             max_tokens=max_tokens,
-            raw_response="",
-            parsed_payload={
-                "stage": "generation_failed",
-                "error": f"{type(exc).__name__}: {exc}",
-            },
+            raw_response=raw_response,
+            parsed_payload=failed_payload,
             output_preset={},
         )
         _save_pending_persona_generation_trace(work_path, agent_key, failed_trace)
@@ -1232,6 +1367,28 @@ def _build_preset_from_response(
     base_max_tokens: int,
 ) -> GeneratedSessionPreset:
     parsed = _extract_json_payload(raw)
+    if parsed is None:
+        partial_result = _extract_partial_roleplay_payload(raw)
+        if partial_result is not None:
+            parsed, truncated_fields, missing_required_fields = partial_result
+            invalid_fields = truncated_fields + missing_required_fields
+            if invalid_fields:
+                raise PersonaGenerationResponseError(
+                    "人格生成响应疑似被截断或格式错误，未完整返回字段："
+                    f"{', '.join(dict.fromkeys(invalid_fields))}。"
+                    "请提高 max_tokens 或检查模型输出。",
+                    raw_response=raw,
+                    parsed_payload={
+                        "extracted_payload": parsed,
+                        "truncated_fields": truncated_fields,
+                        "missing_required_fields": missing_required_fields,
+                    },
+                )
+        elif _looks_like_roleplay_json_response(raw):
+            raise PersonaGenerationResponseError(
+                "人格生成响应疑似 JSON 格式错误或被截断，请提高 max_tokens 或检查模型输出。",
+                raw_response=raw,
+            )
     if parsed is None:
         text = raw.strip()
         return GeneratedSessionPreset(
@@ -1256,6 +1413,13 @@ def _build_preset_from_response(
         global_system_prompt = str(parsed.get("prompt", "")).strip()
 
     if not agent_persona and not global_system_prompt:
+        if _looks_like_roleplay_json_response(raw):
+            raise PersonaGenerationResponseError(
+                "人格生成响应缺少 agent_persona 和 global_system_prompt 字段。"
+                "请检查模型输出格式。",
+                raw_response=raw,
+                parsed_payload={"parsed_payload": parsed},
+            )
         text = raw.strip()
         return GeneratedSessionPreset(
             agent=Agent(
@@ -1300,7 +1464,8 @@ async def agenerate_from_persona_spec(
     model: str,
     dependency_root: Path | None = None,
     temperature: float = 0.2,
-    max_tokens: int = 1400,
+    max_tokens: int = ROLEPLAY_GENERATION_MAX_TOKENS_DEFAULT,
+    timeout_seconds: float = ROLEPLAY_GENERATION_TIMEOUT_SECONDS_DEFAULT,
     base_model: str = "",
     base_temperature: float = 0.7,
     base_max_tokens: int = 512,
@@ -1315,7 +1480,8 @@ async def agenerate_from_persona_spec(
 
     ``Agent.persona`` in the returned preset contains compact keyword tags
     (e.g. ``"热情/直接/逻辑清晰"``); the detailed role guide lives in
-    ``global_system_prompt``.
+    ``global_system_prompt``. Structured persona generation now defaults to
+    ``max_tokens=5120`` and ``timeout_seconds=120.0`` to reduce JSON truncation.
     """
     preset, _ = await _agenerate_from_persona_spec_with_trace(
         provider,
@@ -1324,6 +1490,7 @@ async def agenerate_from_persona_spec(
         dependency_root=dependency_root,
         temperature=temperature,
         max_tokens=max_tokens,
+        timeout_seconds=timeout_seconds,
         base_model=base_model,
         base_temperature=base_temperature,
         base_max_tokens=base_max_tokens,
@@ -1341,6 +1508,7 @@ async def _agenerate_from_persona_spec_with_trace(
     dependency_root: Path | None,
     temperature: float,
     max_tokens: int,
+    timeout_seconds: float,
     base_model: str,
     base_temperature: float,
     base_max_tokens: int,
@@ -1359,6 +1527,7 @@ async def _agenerate_from_persona_spec_with_trace(
         model=model,
         temperature=temperature,
         max_tokens=max_tokens,
+        timeout_seconds=timeout_seconds,
         base_model=base_model,
         base_temperature=base_temperature,
         base_max_tokens=base_max_tokens,
@@ -1379,7 +1548,8 @@ async def agenerate_agent_prompts_from_answers(
     dependency_root: Path | None = None,
     output_language: str = "zh-CN",
     temperature: float = 0.2,
-    max_tokens: int = 1400,
+    max_tokens: int = ROLEPLAY_GENERATION_MAX_TOKENS_DEFAULT,
+    timeout_seconds: float = ROLEPLAY_GENERATION_TIMEOUT_SECONDS_DEFAULT,
     base_model: str = "",
     base_temperature: float = 0.7,
     base_max_tokens: int = 512,
@@ -1410,6 +1580,7 @@ async def agenerate_agent_prompts_from_answers(
         dependency_root=dependency_root,
         temperature=temperature,
         max_tokens=max_tokens,
+        timeout_seconds=timeout_seconds,
         base_model=base_model,
         base_temperature=base_temperature,
         base_max_tokens=base_max_tokens,
@@ -1433,7 +1604,8 @@ async def abuild_roleplay_prompt_from_answers_and_apply(
     persist_generated_agent: bool = True,
     select_after_save: bool = True,
     temperature: float = 0.2,
-    max_tokens: int = 1400,
+    max_tokens: int = ROLEPLAY_GENERATION_MAX_TOKENS_DEFAULT,
+    timeout_seconds: float = ROLEPLAY_GENERATION_TIMEOUT_SECONDS_DEFAULT,
 ) -> str:
     """Generate a roleplay preset and apply it in-place to *config*.
 
@@ -1476,6 +1648,7 @@ async def abuild_roleplay_prompt_from_answers_and_apply(
         dependency_root=config.work_path,
         temperature=temperature,
         max_tokens=max_tokens,
+        timeout_seconds=timeout_seconds,
         base_model=config.agent.model,
         base_temperature=config.agent.temperature,
         base_max_tokens=config.agent.max_tokens,
@@ -1513,7 +1686,8 @@ async def aupdate_agent_prompt(
     agent_alias: str | None = None,
     output_language: str | None = None,
     temperature: float = 0.2,
-    max_tokens: int = 1400,
+    max_tokens: int = ROLEPLAY_GENERATION_MAX_TOKENS_DEFAULT,
+    timeout_seconds: float = ROLEPLAY_GENERATION_TIMEOUT_SECONDS_DEFAULT,
     select_after_update: bool = True,
 ) -> GeneratedSessionPreset:
     """Partially update the prompt for an existing agent without full rewrite.
@@ -1558,6 +1732,7 @@ async def aupdate_agent_prompt(
         dependency_root=work_path,
         temperature=temperature,
         max_tokens=max_tokens,
+        timeout_seconds=timeout_seconds,
         base_model=existing_preset.agent.model,
         base_temperature=existing_preset.agent.temperature,
         base_max_tokens=existing_preset.agent.max_tokens,
@@ -1583,7 +1758,8 @@ async def aregenerate_agent_prompt_from_dependencies(
     model: str,
     dependency_files: list[str] | None = None,
     temperature: float = 0.2,
-    max_tokens: int = 1400,
+    max_tokens: int = ROLEPLAY_GENERATION_MAX_TOKENS_DEFAULT,
+    timeout_seconds: float = ROLEPLAY_GENERATION_TIMEOUT_SECONDS_DEFAULT,
     select_after_update: bool = True,
 ) -> GeneratedSessionPreset:
     """Regenerate an existing agent by re-reading its dependency files from disk."""
@@ -1618,6 +1794,7 @@ async def aregenerate_agent_prompt_from_dependencies(
         dependency_root=work_path,
         temperature=temperature,
         max_tokens=max_tokens,
+        timeout_seconds=timeout_seconds,
         base_model=existing_preset.agent.model,
         base_temperature=existing_preset.agent.temperature,
         base_max_tokens=existing_preset.agent.max_tokens,

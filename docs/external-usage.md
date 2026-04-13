@@ -589,6 +589,7 @@ prompt = await abuild_roleplay_prompt_from_answers_and_apply(
     agent_name=config.agent.name,
     persona_spec=spec,
     persona_key="beichen_v2",
+    timeout_seconds=120.0,
 )
 print(prompt)
 
@@ -614,9 +615,11 @@ print(updated.agent.persona)
 - `agenerate_agent_prompts_from_answers(...)` 会从回答中生成完整 `GeneratedSessionPreset`（`agent + global_system_prompt`）。
 - 生成时会显式输入 `agent_name`，确保主 AI 命名与提示词一致。
 - `abuild_roleplay_prompt_from_answers_and_apply(...)` 会把生成结果写入 `config.preset`，并把完整生成过程本地化到 `<work_path>/generated_agent_traces/<agent_key>.json`。
+- 结构化人格生成默认使用 `max_tokens=5120` 和 `timeout_seconds=120.0`；如果上游模型更慢或 JSON 更长，可继续显式传入更大的 `timeout_seconds`。
 - 生成器会把这些抽象输入主动展开为具体的人物小传、语言习惯、回复节奏和互动边界；除非你提供的是风格样本，否则不必自己先写完整台词或整段系统提示词。
 - `dependency_files=[...]` 适合挂接角色卡、设定稿、语气样本、对白模板等本地素材；框架会读取文件内容参与生成，并记录快照与 sha256。
 - 当输入中出现“拟人”“情感”“陪伴”“关系”“共情”等信号时，生成器会自动强化 prompt，使角色更有真实人感和情绪温度。
+- 如果模型返回被 ```json 包裹但未完整闭合的 JSON-like 响应，框架会显式报错、保留失败原始响应到 trace，并保持当前配置不被脏数据覆盖。
 - `load_persona_generation_traces(...)` 可用于审计生成过程、追踪提示词来源、比对不同版本人格。
 - `aregenerate_agent_prompt_from_dependencies(...)` 会重新读取最新依赖文件并重生同一个 agent key，适合外部系统在素材更新后做无问卷刷新。
 
@@ -665,6 +668,7 @@ persona_input = {
 补充说明：
 
 - 对 `abuild_roleplay_prompt_from_answers_and_apply(...)`、`aupdate_agent_prompt(...)`、`aregenerate_agent_prompt_from_dependencies(...)` 这三条会写入 `work_path` 的链路，框架会先把最新 `PersonaSpec` 和待生成快照落盘，再调用模型。
+- 这三条链路底层会把 `timeout_seconds` 透传到 `GenerationRequest`，各同步 provider 会优先使用该请求级 timeout，而不是固定停留在 provider 构造时的默认 30 秒。
 - 如果模型生成阶段报错，可直接通过 `load_persona_spec(work_path, agent_key)` 取回最近一次高层输入，避免问卷回答、背景设定或 `dependency_files` 丢失。
 
 如果你需要一个可直接输出问卷骨架的示例脚本，可运行：

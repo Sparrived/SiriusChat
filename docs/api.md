@@ -568,19 +568,19 @@ RolePlayQuestion(question: 'str', perspective: 'str' = 'subjective', details: 's
 
 ### Functions
 
-#### `async aregenerate_agent_prompt_from_dependencies(provider: LLMProvider | AsyncLLMProvider, work_path: Path, agent_key: str, model: str, dependency_files: list[str] | None, temperature: float, max_tokens: int, select_after_update: bool) -> GeneratedSessionPreset`
+#### `async aregenerate_agent_prompt_from_dependencies(provider: LLMProvider | AsyncLLMProvider, work_path: Path, agent_key: str, model: str, dependency_files: list[str] | None, temperature: float, max_tokens: int, timeout_seconds: float, select_after_update: bool) -> GeneratedSessionPreset`
 
 Regenerate an existing agent by re-reading its dependency files from disk.
 
-#### `async abuild_roleplay_prompt_from_answers_and_apply(provider: LLMProvider | AsyncLLMProvider, config: SessionConfig, model: str, answers: list[RolePlayAnswer] | None, trait_keywords: list[str] | None, dependency_files: list[str] | None, persona_spec: PersonaSpec | None, persona_key: str, agent_name: str, agent_alias: str, background: str, output_language: str, persist_generated_agent: bool, select_after_save: bool, temperature: float, max_tokens: int) -> str`
+#### `async abuild_roleplay_prompt_from_answers_and_apply(provider: LLMProvider | AsyncLLMProvider, config: SessionConfig, model: str, answers: list[RolePlayAnswer] | None, trait_keywords: list[str] | None, dependency_files: list[str] | None, persona_spec: PersonaSpec | None, persona_key: str, agent_name: str, agent_alias: str, background: str, output_language: str, persist_generated_agent: bool, select_after_save: bool, temperature: float, max_tokens: int, timeout_seconds: float) -> str`
 
 Build roleplay prompt from user answers and apply it.
 
-#### `async agenerate_agent_prompts_from_answers(provider: LLMProvider | AsyncLLMProvider, model: str, agent_name: str, agent_alias: str, answers: list[RolePlayAnswer], background: str, dependency_files: list[str] | None, dependency_root: Path | None, output_language: str, temperature: float, max_tokens: int, base_model: str, base_temperature: float, base_max_tokens: int) -> GeneratedSessionPreset`
+#### `async agenerate_agent_prompts_from_answers(provider: LLMProvider | AsyncLLMProvider, model: str, agent_name: str, agent_alias: str, answers: list[RolePlayAnswer], background: str, dependency_files: list[str] | None, dependency_root: Path | None, output_language: str, temperature: float, max_tokens: int, timeout_seconds: float, base_model: str, base_temperature: float, base_max_tokens: int) -> GeneratedSessionPreset`
 
 Generate agent prompts from user answers.
 
-#### `async agenerate_from_persona_spec(provider: LLMProvider | AsyncLLMProvider, spec: PersonaSpec, model: str, dependency_root: Path | None, temperature: float, max_tokens: int, base_model: str, base_temperature: float, base_max_tokens: int) -> GeneratedSessionPreset`
+#### `async agenerate_from_persona_spec(provider: LLMProvider | AsyncLLMProvider, spec: PersonaSpec, model: str, dependency_root: Path | None, temperature: float, max_tokens: int, timeout_seconds: float, base_model: str, base_temperature: float, base_max_tokens: int) -> GeneratedSessionPreset`
 
 Generate a :class:`GeneratedSessionPreset` from a :class:`PersonaSpec`.
 
@@ -592,9 +592,10 @@ Supports three construction paths driven by the spec:
 
 ``Agent.persona`` in the returned preset contains compact keyword tags
 (e.g. ``"热情/直接/逻辑清晰"``); the detailed role guide lives in
-``global_system_prompt``.
+``global_system_prompt``. Structured persona generation now defaults to
+``max_tokens=5120`` and ``timeout_seconds=120.0`` to reduce JSON truncation.
 
-#### `async aupdate_agent_prompt(provider: LLMProvider | AsyncLLMProvider, work_path: Path, agent_key: str, model: str, trait_keywords: list[str] | None, answers: list[RolePlayAnswer] | None, background: str | None, dependency_files: list[str] | None, agent_alias: str | None, output_language: str | None, temperature: float, max_tokens: int, select_after_update: bool) -> GeneratedSessionPreset`
+#### `async aupdate_agent_prompt(provider: LLMProvider | AsyncLLMProvider, work_path: Path, agent_key: str, model: str, trait_keywords: list[str] | None, answers: list[RolePlayAnswer] | None, background: str | None, dependency_files: list[str] | None, agent_alias: str | None, output_language: str | None, temperature: float, max_tokens: int, timeout_seconds: float, select_after_update: bool) -> GeneratedSessionPreset`
 
 Partially update the prompt for an existing agent without full rewrite.
 

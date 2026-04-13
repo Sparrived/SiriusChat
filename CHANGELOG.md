@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+## [0.22.2] - 2026-04-14
+
+### Fixed
+- **人格生成截断响应处理**：当模型返回被 ```json 包裹但未完整闭合的 JSON-like 响应时，框架不再把原始文本直接写入 `agent.persona` 和 `global_system_prompt`；现在会显式报错、保留失败原始响应到 trace，并保留最近一次暂存的 `PersonaSpec` 供恢复。
+
+### Changed
+- **人格生成默认预算再提高**：`agenerate_from_persona_spec(...)`、`agenerate_agent_prompts_from_answers(...)`、`abuild_roleplay_prompt_from_answers_and_apply(...)`、`aupdate_agent_prompt(...)`、`aregenerate_agent_prompt_from_dependencies(...)` 的默认 `max_tokens` 从 `1400` 提高到 `5120`，进一步降低长人格 JSON 被截断的概率。
+- **人格生成支持请求级超时**：`GenerationRequest` 新增 `timeout_seconds`，各同步 provider 现在会优先使用请求级 timeout；上述人格生成入口也新增 `timeout_seconds` 参数，并默认使用 `120.0` 秒，避免长结构化输出在 provider 默认 30 秒超时前被中断。
+
 ## [0.22.1] - 2026-04-14
 
 ### Changed

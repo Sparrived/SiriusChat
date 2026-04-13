@@ -8,6 +8,7 @@ from sirius_chat.providers.base import (
     GenerationRequest,
     LLMProvider,
     estimate_generation_request_input_tokens,
+    resolve_generation_timeout_seconds,
 )
 from sirius_chat.providers.response_utils import extract_assistant_text
 
@@ -31,13 +32,14 @@ class DeepSeekProvider(LLMProvider):
         self._timeout_seconds = timeout_seconds
 
     def generate(self, request: GenerationRequest) -> str:
+        timeout_seconds = resolve_generation_timeout_seconds(request, self._timeout_seconds)
         msg_count = len(request.messages)
         estimated_input_tokens = estimate_generation_request_input_tokens(request)
         estimated_total_upper = estimated_input_tokens + max(0, int(request.max_tokens))
 
         logger.info(
             f"[模型调用] {request.model} | 温度: {request.temperature}, Token上限: {request.max_tokens} "
-            f"| 消息数: {msg_count} | 调用目的: {request.purpose} "
+            f"| 消息数: {msg_count} | 调用目的: {request.purpose} | 超时: {timeout_seconds:.1f}s "
             f"| 预计输入Token: {estimated_input_tokens} | 预计总Token上限: {estimated_total_upper}"
         )
         debug_input = {
@@ -72,7 +74,7 @@ class DeepSeekProvider(LLMProvider):
         )
 
         try:
-            with urllib_request.urlopen(req, timeout=self._timeout_seconds) as response:
+            with urllib_request.urlopen(req, timeout=timeout_seconds) as response:
                 raw = response.read().decode("utf-8")
         except error.HTTPError as exc:
             details = exc.read().decode("utf-8", errors="replace")

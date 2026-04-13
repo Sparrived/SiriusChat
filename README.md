@@ -547,6 +547,7 @@ prompt = await abuild_roleplay_prompt_from_answers_and_apply(
     answers=answers,
     dependency_files=["persona/notes.md", "persona/style_examples.txt"],
     persona_key="assistant_v2",
+  timeout_seconds=120.0,
 )
 
 # 查看完整生成轨迹
@@ -571,6 +572,8 @@ selected = select_generated_agent_profile(config.work_path, "assistant_v2")
 - `generate_humanized_roleplay_questions(template=...)` 支持 `default`、`companion`、`romance`、`group_chat` 四类问卷模板，可配合 `list_roleplay_question_templates()` 做前端下拉或外部配置。
 - 若外部系统只想先拿模板问题，不想立刻接入 Python API，可直接用 `sirius-chat --list-roleplay-question-templates` 和 `sirius-chat --print-roleplay-questions-template <template>`。
 - 生成器会自动识别“拟人”“情感”“陪伴”“共情”等关键词并加强 prompt，让角色更自然、更有人味。
+- 结构化人格生成默认使用 `max_tokens=5120` 和 `timeout_seconds=120.0`；如果上游模型更慢，仍可在这几个 API 上继续显式调高 `timeout_seconds`。
+- 如果模型返回的是被 ```json 包裹但实际被截断的 JSON-like 响应，框架会显式报错并保留失败 trace，不再把原始文本污染到 `agent.persona` 或 `global_system_prompt`。
 - 完整生成过程会本地化到 `<work_path>/generated_agent_traces/<agent_key>.json`，便于审计和回滚。
 - 外部调用方可直接按 `template + answers + dependency_files` 组织输入，示例输入规范见 [docs/external-usage.md](docs/external-usage.md)。
 - 可直接参考 `examples/roleplay_template_selection.py` 导出 `PersonaSpec` 骨架，再交给外部表单或配置后台填充。

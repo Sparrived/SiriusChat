@@ -1,4 +1,4 @@
-# 外部人格生成迁移指南：v0.19.x → v0.22.1
+# 外部人格生成迁移指南：v0.19.x → v0.22.2
 
 ## 适用范围
 
@@ -11,6 +11,8 @@
 本次升级不改变会话主流程 API，但**升级了人格生成器的输入模型、持久化产物和再生能力**。
 
 在后续版本中，这条升级路径又继续增强：问卷现在支持模板化场景选择（`default` / `companion` / `romance` / `group_chat`），推荐外部系统优先收集高层人格 brief，再交给 LLM 具体化。
+
+`v0.22.2` 继续补强了结构化输出稳定性：人格生成默认 `max_tokens` 提升到 `5120`、公开入口新增 `timeout_seconds`（默认 `120.0` 秒），并且当模型返回被 ```json 包裹但实际被截断的 JSON-like 响应时，会显式报错并保留失败 trace，而不是污染已有人格配置。
 
 如果你是外部接入方，本文的目标不是让你“勉强兼容旧调用”，而是帮助你**真正切换到新的人格生成器工作流**：
 
@@ -57,6 +59,25 @@
 - 陪伴型角色的长期关系说明
 
 这些文件会在生成时被读取并注入 prompt，帮助模型稳定继承外部素材中的人格线索。
+
+### 1.1 结构化输出默认预算与超时都提高了
+
+从 `v0.22.2` 开始，这几条人格生成入口：
+
+- `agenerate_from_persona_spec(...)`
+- `agenerate_agent_prompts_from_answers(...)`
+- `abuild_roleplay_prompt_from_answers_and_apply(...)`
+- `aupdate_agent_prompt(...)`
+- `aregenerate_agent_prompt_from_dependencies(...)`
+
+默认都会使用：
+
+- `max_tokens=5120`
+- `timeout_seconds=120.0`
+
+原因很直接：人格生成现在更强调返回完整 JSON 结构，预算和超时都需要比普通聊天调用更激进。
+
+如果你的上游模型更慢，或者返回的人格 JSON 更长，建议继续显式传入更高的 `timeout_seconds`，而不是只调 provider 构造器上的默认 timeout。
 
 ### 2. 生成器会自动加强“拟人/情感”相关 prompt
 
@@ -240,6 +261,7 @@ await abuild_roleplay_prompt_from_answers_and_apply(
     model="deepseek-ai/DeepSeek-V3.2",
     persona_spec=spec,
     persona_key="beichen_v2",
+    timeout_seconds=120.0,
 )
 
 # 5. 读取轨迹，纳入可观测范围
@@ -251,6 +273,7 @@ await aregenerate_agent_prompt_from_dependencies(
     work_path=config.work_path,
     agent_key="beichen_v2",
     model="deepseek-ai/DeepSeek-V3.2",
+    timeout_seconds=120.0,
 )
 ```
 
@@ -334,6 +357,8 @@ print(latest.generated_at, latest.operation)
 ```
 
 这样能在出问题时快速定位是 prompt、原始返回还是输入素材导致的人格变化。
+
+如果你最近遇到过“`agent.persona` / `global_system_prompt` 被整段 ```json 文本污染”的情况，也建议确认已经升级到这一版：现在当返回看起来像 JSON 但字段缺失或被截断时，框架会直接报错并把原始返回保留在 trace 中，而不会把错误文本落进正式配置。
 
 ### 场景 B：你希望把角色卡/设定稿接入生成器
 

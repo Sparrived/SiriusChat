@@ -1926,6 +1926,11 @@
               "kind": "keyword-only"
             },
             {
+              "name": "timeout_seconds",
+              "annotation": "float",
+              "kind": "keyword-only"
+            },
+            {
               "name": "select_after_update",
               "annotation": "bool",
               "kind": "keyword-only"
@@ -2017,6 +2022,11 @@
               "name": "max_tokens",
               "annotation": "int",
               "kind": "keyword-only"
+            },
+            {
+              "name": "timeout_seconds",
+              "annotation": "float",
+              "kind": "keyword-only"
             }
           ],
           "return_type": "str",
@@ -2082,6 +2092,11 @@
               "kind": "keyword-only"
             },
             {
+              "name": "timeout_seconds",
+              "annotation": "float",
+              "kind": "keyword-only"
+            },
+            {
               "name": "base_model",
               "annotation": "str",
               "kind": "keyword-only"
@@ -2135,6 +2150,11 @@
               "kind": "keyword-only"
             },
             {
+              "name": "timeout_seconds",
+              "annotation": "float",
+              "kind": "keyword-only"
+            },
+            {
               "name": "base_model",
               "annotation": "str",
               "kind": "keyword-only"
@@ -2151,7 +2171,7 @@
             }
           ],
           "return_type": "GeneratedSessionPreset",
-          "docstring": "Generate a :class:`GeneratedSessionPreset` from a :class:`PersonaSpec`.\n\nSupports three construction paths driven by the spec:\n\n* **Tag-based**: set ``spec.trait_keywords`` only — fast path, no Q&A.\n* **Q&A-based**: set ``spec.answers`` — traditional question-answer flow.\n* **Hybrid**: set both for richer, anchored generation.\n\n``Agent.persona`` in the returned preset contains compact keyword tags\n(e.g. ``\"热情/直接/逻辑清晰\"``); the detailed role guide lives in\n``global_system_prompt``."
+          "docstring": "Generate a :class:`GeneratedSessionPreset` from a :class:`PersonaSpec`.\n\nSupports three construction paths driven by the spec:\n\n* **Tag-based**: set ``spec.trait_keywords`` only — fast path, no Q&A.\n* **Q&A-based**: set ``spec.answers`` — traditional question-answer flow.\n* **Hybrid**: set both for richer, anchored generation.\n\n``Agent.persona`` in the returned preset contains compact keyword tags\n(e.g. ``\"热情/直接/逻辑清晰\"``); the detailed role guide lives in\n``global_system_prompt``. Structured persona generation now defaults to\n``max_tokens=5120`` and ``timeout_seconds=120.0`` to reduce JSON truncation."
         },
         {
           "name": "aupdate_agent_prompt",
@@ -2215,6 +2235,11 @@
             {
               "name": "max_tokens",
               "annotation": "int",
+              "kind": "keyword-only"
+            },
+            {
+              "name": "timeout_seconds",
+              "annotation": "float",
               "kind": "keyword-only"
             },
             {

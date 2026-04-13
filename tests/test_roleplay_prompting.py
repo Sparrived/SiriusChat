@@ -317,8 +317,60 @@ def test_agenerate_from_persona_spec_tag_based() -> None:
         payload = str(provider.requests[0].messages[0]["content"])
         assert "keywords=热情/直接/逻辑清晰" in payload
         assert "name=北辰" in payload
+        assert provider.requests[0].max_tokens == 5120
+        assert provider.requests[0].timeout_seconds == 120.0
         assert preset.agent.persona == "热情/直接/逻辑清晰"
         assert "北辰" in preset.global_system_prompt
+
+    asyncio.run(_run())
+
+
+def test_agenerate_from_persona_spec_allows_timeout_override() -> None:
+    async def _run() -> None:
+        provider = MockProvider(
+            responses=[
+                '{"agent_persona":"沉稳/克制","global_system_prompt":"你是临川，回复保持稳定和边界感。","temperature":0.4,"max_tokens":512}'
+            ]
+        )
+        spec = PersonaSpec(
+            agent_name="临川",
+            trait_keywords=["沉稳", "克制"],
+        )
+
+        await agenerate_from_persona_spec(
+            provider,
+            spec,
+            model="test-model",
+            timeout_seconds=180.0,
+        )
+
+        assert provider.requests[0].timeout_seconds == 180.0
+
+    asyncio.run(_run())
+
+
+def test_agenerate_from_persona_spec_accepts_markdown_wrapped_json_response() -> None:
+    async def _run() -> None:
+        provider = MockProvider(
+            responses=[
+                '```json\n{"agent_persona":"AI猫娘/聪慧机灵","global_system_prompt":"你是月白，会像真人一样自然交流。","temperature":0.55,"max_tokens":640}\n```'
+            ]
+        )
+        spec = PersonaSpec(
+            agent_name="月白",
+            trait_keywords=["猫娘", "自然交流"],
+        )
+
+        preset = await agenerate_from_persona_spec(
+            provider,
+            spec,
+            model="test-model",
+        )
+
+        assert preset.agent.persona == "AI猫娘/聪慧机灵"
+        assert preset.global_system_prompt == "你是月白，会像真人一样自然交流。"
+        assert preset.agent.temperature == 0.55
+        assert preset.agent.max_tokens == 640
 
     asyncio.run(_run())
 
@@ -471,6 +523,50 @@ def test_abuild_persists_pending_persona_spec_before_generation_failure() -> Non
         assert trace_payload["pending_trace"]["parsed_payload"]["stage"] == "generation_failed"
         assert "mock generation failed" in trace_payload["pending_trace"]["parsed_payload"]["error"]
         assert trace_payload["pending_trace"]["dependency_snapshots"][0]["content"].startswith("初始设定")
+
+    asyncio.run(_run())
+
+
+def test_abuild_rejects_truncated_json_like_response_instead_of_persisting_raw_text() -> None:
+    async def _run() -> None:
+        work_path = Path("data/tests/roleplay_truncated_json_response")
+        if work_path.exists():
+            shutil.rmtree(work_path)
+
+        provider = MockProvider(
+            responses=[
+                '```json\n{"agent_persona":"AI猫娘/情感觉醒/聪慧机灵","global_system_prompt":"你是月白（Sirius），会像真人一样自然交流，擅长在陪伴中保留细腻情绪与边界感'
+            ]
+        )
+        config = SessionConfig(
+            work_path=work_path,
+            preset=AgentPreset(
+                agent=Agent(name="月白", persona="默认人格", model="mock-model"),
+                global_system_prompt="初始系统提示词",
+            ),
+        )
+
+        with pytest.raises(ValueError, match="人格生成响应疑似被截断或格式错误"):
+            await abuild_roleplay_prompt_from_answers_and_apply(
+                provider,
+                config=config,
+                model="test-model",
+                answers=[RolePlayAnswer(question="关系", answer="像一个会慢慢建立信任的陪伴者")],
+                persona_key="truncated_case",
+            )
+
+        assert config.agent.persona == "默认人格"
+        assert config.global_system_prompt == "初始系统提示词"
+
+        saved_spec = load_persona_spec(work_path, "truncated_case")
+        assert saved_spec is not None
+        assert saved_spec.answers[0].answer == "像一个会慢慢建立信任的陪伴者"
+
+        trace_payload = json.loads(
+            (work_path / "generated_agent_traces" / "truncated_case.json").read_text(encoding="utf-8")
+        )
+        assert trace_payload["pending_trace"]["raw_response"].startswith("```json")
+        assert trace_payload["pending_trace"]["parsed_payload"]["truncated_fields"] == ["global_system_prompt"]
 
     asyncio.run(_run())
 

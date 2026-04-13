@@ -153,7 +153,7 @@ description: "当你需要在不通读全部代码的情况下快速理解 Siriu
   - 中间件通过 MiddlewareChain 串联，可透明地为任意 provider 添加流控、重试、监控等功能
 - `providers/mock.py` 提供可复现的本地测试能力。
 - `providers/*` 实现具体的 LLM 后端。
-- `roleplay_prompting.py` 提供自动问题清单、回答提取式提示词生成、关键词/依赖文件驱动的人格生成、人格持久化、完整本地生成轨迹与依赖文件重生能力；问卷支持 `default` / `companion` / `romance` / `group_chat` 四类模板，可通过 `list_roleplay_question_templates()` 获取模板名，再用 `generate_humanized_roleplay_questions(template=...)` 生成对应的高层人格问卷。对会写入 `work_path` 的人格生成链路，会先暂存 `PersonaSpec` 与待生成快照，再调用模型。
+- `roleplay_prompting.py` 提供自动问题清单、回答提取式提示词生成、关键词/依赖文件驱动的人格生成、人格持久化、完整本地生成轨迹与依赖文件重生能力；问卷支持 `default` / `companion` / `romance` / `group_chat` 四类模板，可通过 `list_roleplay_question_templates()` 获取模板名，再用 `generate_humanized_roleplay_questions(template=...)` 生成对应的高层人格问卷。对会写入 `work_path` 的人格生成链路，会先暂存 `PersonaSpec` 与待生成快照，再调用模型；结构化人格生成默认使用 `max_tokens=5120`、`timeout_seconds=120.0`，并通过 `GenerationRequest.timeout_seconds` 透传请求级超时。
 - 内置 provider 包含 `OpenAICompatibleProvider`、`DeepSeekProvider`、`SiliconFlowProvider` 与 `VolcengineArkProvider`。
 - 若配置了多 provider，`AutoRoutingProvider` 会按模型前缀自动选择可用 provider。
 - `cli.py` 是库内薄封装，默认执行单轮会话；同时提供人格模板辅助命令 `--list-roleplay-question-templates` 与 `--print-roleplay-questions-template <template>`，方便外部快速导出问卷模板。
