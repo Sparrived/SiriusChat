@@ -8,7 +8,7 @@
 
 ## 架构约束
 
-- 编排逻辑集中在 `sirius_chat/async_engine.py`，避免混入 provider 细节。
+- 编排逻辑集中在 `sirius_chat/core/engine.py`，避免混入 provider 细节。
 - `sirius_chat/models/models.py` 是会话与 transcript 契约的唯一事实来源。
 - 架构细节统一参考 `docs/architecture.md`。
 
