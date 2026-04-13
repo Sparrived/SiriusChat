@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field, fields, MISSING
 from datetime import datetime, timezone
 
 
@@ -57,31 +57,21 @@ class DiaryEntry:
             return 0.0
 
     def to_dict(self) -> dict:
-        return {
-            "entry_id": self.entry_id,
-            "content": self.content,
-            "recorded_at": self.recorded_at,
-            "importance": self.importance,
-            "keywords": list(self.keywords),
-            "category": self.category,
-            "confidence": self.confidence,
-            "mention_count": self.mention_count,
-            "related_user_ids": list(self.related_user_ids),
-        }
+        """Serialize to dict; automatically includes any future fields."""
+        return asdict(self)
 
     @classmethod
     def from_dict(cls, data: dict) -> DiaryEntry:
-        return cls(
-            entry_id=str(data.get("entry_id", "")),
-            content=str(data.get("content", "")),
-            recorded_at=str(data.get("recorded_at", "")),
-            importance=float(data.get("importance", 0.5)),
-            keywords=list(data.get("keywords", [])),
-            category=str(data.get("category", "observation")),
-            confidence=float(data.get("confidence", 1.0)),
-            mention_count=int(data.get("mention_count", 0)),
-            related_user_ids=list(data.get("related_user_ids", [])),
-        )
+        """Deserialize from dict; new fields with defaults are handled automatically."""
+        kwargs: dict = {}
+        for f in fields(cls):
+            if f.name in data:
+                kwargs[f.name] = data[f.name]
+            elif f.default is not MISSING:
+                kwargs[f.name] = f.default
+            elif f.default_factory is not MISSING:  # type: ignore[misc]
+                kwargs[f.name] = f.default_factory()  # type: ignore[misc]
+        return cls(**kwargs)
 
 
 @dataclass(slots=True)
@@ -124,33 +114,21 @@ class GlossaryTerm:
             self.last_updated_at = now
 
     def to_dict(self) -> dict:
-        return {
-            "term": self.term,
-            "definition": self.definition,
-            "source": self.source,
-            "first_seen_at": self.first_seen_at,
-            "last_updated_at": self.last_updated_at,
-            "confidence": self.confidence,
-            "usage_count": self.usage_count,
-            "context_examples": list(self.context_examples[:5]),
-            "related_terms": list(self.related_terms),
-            "domain": self.domain,
-        }
+        """Serialize to dict; automatically includes any future fields."""
+        return asdict(self)
 
     @classmethod
     def from_dict(cls, data: dict) -> GlossaryTerm:
-        return cls(
-            term=str(data.get("term", "")),
-            definition=str(data.get("definition", "")),
-            source=str(data.get("source", "inferred")),
-            first_seen_at=str(data.get("first_seen_at", "")),
-            last_updated_at=str(data.get("last_updated_at", "")),
-            confidence=float(data.get("confidence", 0.5)),
-            usage_count=int(data.get("usage_count", 1)),
-            context_examples=list(data.get("context_examples", [])),
-            related_terms=list(data.get("related_terms", [])),
-            domain=str(data.get("domain", "custom")),
-        )
+        """Deserialize from dict; new fields with defaults are handled automatically."""
+        kwargs: dict = {}
+        for f in fields(cls):
+            if f.name in data:
+                kwargs[f.name] = data[f.name]
+            elif f.default is not MISSING:
+                kwargs[f.name] = f.default
+            elif f.default_factory is not MISSING:  # type: ignore[misc]
+                kwargs[f.name] = f.default_factory()  # type: ignore[misc]
+        return cls(**kwargs)
 
 
 @dataclass(slots=True)

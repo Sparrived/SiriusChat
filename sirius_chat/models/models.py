@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field, fields, MISSING
 from typing import Any
 
 from sirius_chat.memory import UserMemoryEntry, UserMemoryManager, UserProfile
@@ -31,6 +31,23 @@ class Message:
     def __post_init__(self) -> None:
         self.content = self._trim_content_tail(self.content)
 
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize to dict; automatically includes any future fields."""
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "Message":
+        """Deserialize from dict; new fields with defaults are handled automatically."""
+        kwargs: dict[str, Any] = {}
+        for f in fields(cls):
+            if f.name in data:
+                kwargs[f.name] = data[f.name]
+            elif f.default is not MISSING:
+                kwargs[f.name] = f.default
+            elif f.default_factory is not MISSING:  # type: ignore[misc]
+                kwargs[f.name] = f.default_factory()  # type: ignore[misc]
+        return cls(**kwargs)
+
 
 @dataclass(slots=True)
 class ReplyRuntimeState:
@@ -42,6 +59,23 @@ class ReplyRuntimeState:
     last_assistant_reply_at: str = ""
     # 滑动窗口内 AI 回复时间序列（用于频率限制）
     assistant_reply_timestamps: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize to dict; automatically includes any future fields."""
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "ReplyRuntimeState":
+        """Deserialize from dict; new fields with defaults are handled automatically."""
+        kwargs: dict[str, Any] = {}
+        for f in fields(cls):
+            if f.name in data:
+                kwargs[f.name] = data[f.name]
+            elif f.default is not MISSING:
+                kwargs[f.name] = f.default
+            elif f.default_factory is not MISSING:  # type: ignore[misc]
+                kwargs[f.name] = f.default_factory()  # type: ignore[misc]
+        return cls(**kwargs)
 
 
 @dataclass(slots=True)
@@ -177,62 +211,50 @@ class Transcript:
             self.session_summary = self.session_summary[-max_chars:]
 
     def to_dict(self) -> dict[str, Any]:
-        return {
-            "messages": [
-                {
-                    "role": item.role,
-                    "content": item.content,
-                    "speaker": item.speaker,
-                    "channel": item.channel,
-                    "channel_user_id": item.channel_user_id,
-                    "multimodal_inputs": item.multimodal_inputs,
-                    "reply_mode": item.reply_mode,
-                }
-                for item in self.messages
-            ],
+        """Serialize to dict. Complex fields use custom logic; all other simple
+        fields on Transcript are auto-included via reflection so any future
+        addition is persisted without touching this method."""
+        _CUSTOM = frozenset({"messages", "user_memory", "reply_runtime", "token_usage_records"})
+        result: dict[str, Any] = {
+            "messages": [msg.to_dict() for msg in self.messages],
             "user_memory": self.user_memory.to_dict(),
-            "reply_runtime": {
-                "user_last_turn_at": dict(self.reply_runtime.user_last_turn_at),
-                "group_recent_turn_timestamps": list(self.reply_runtime.group_recent_turn_timestamps),
-                "last_assistant_reply_at": self.reply_runtime.last_assistant_reply_at,
-                "assistant_reply_timestamps": list(self.reply_runtime.assistant_reply_timestamps),
-            },
-            "session_summary": self.session_summary,
-            "orchestration_stats": self.orchestration_stats,
-            "token_usage_records": [
-                {
-                    "actor_id": item.actor_id,
-                    "task_name": item.task_name,
-                    "model": item.model,
-                    "prompt_tokens": item.prompt_tokens,
-                    "completion_tokens": item.completion_tokens,
-                    "total_tokens": item.total_tokens,
-                    "input_chars": item.input_chars,
-                    "output_chars": item.output_chars,
-                    "estimation_method": item.estimation_method,
-                    "retries_used": item.retries_used,
-                }
-                for item in self.token_usage_records
-            ],
+            "reply_runtime": self.reply_runtime.to_dict(),
+            "token_usage_records": [asdict(r) for r in self.token_usage_records],
         }
+        # Auto-include any simple fields not handled above (forward-compatible)
+        for f in fields(self):
+            if f.name not in _CUSTOM:
+                result[f.name] = getattr(self, f.name)
+        return result
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "Transcript":
+        """Deserialize from dict. Simple fields are loaded reflectively so any
+        future field with a default value is picked up automatically."""
+        _CUSTOM = frozenset({"messages", "user_memory", "reply_runtime", "token_usage_records"})
+
+        # Auto-load simple fields using reflection
+        simple_kwargs: dict[str, Any] = {}
+        for f in fields(cls):
+            if f.name in _CUSTOM:
+                continue
+            if f.name in payload:
+                simple_kwargs[f.name] = payload[f.name]
+            elif f.default is not MISSING:
+                simple_kwargs[f.name] = f.default
+            elif f.default_factory is not MISSING:  # type: ignore[misc]
+                simple_kwargs[f.name] = f.default_factory()  # type: ignore[misc]
+
+        rrt_data = payload.get("reply_runtime", {})
+        reply_runtime = (
+            ReplyRuntimeState.from_dict(rrt_data)
+            if isinstance(rrt_data, dict)
+            else ReplyRuntimeState()
+        )
+
         transcript = cls(
-            messages=[
-                Message(
-                    role=item["role"],
-                    content=item["content"],
-                    speaker=item.get("speaker"),
-                    channel=item.get("channel"),
-                    channel_user_id=item.get("channel_user_id"),
-                    multimodal_inputs=list(item.get("multimodal_inputs", [])),
-                    reply_mode=str(item.get("reply_mode", "always")),
-                )
-                for item in payload.get("messages", [])
-            ],
-            session_summary=str(payload.get("session_summary", "")),
-            orchestration_stats=dict(payload.get("orchestration_stats", {})),
+            messages=[Message.from_dict(item) for item in payload.get("messages", [])],
+            reply_runtime=reply_runtime,
             token_usage_records=[
                 TokenUsageRecord(
                     actor_id=str(item.get("actor_id", "unknown")),
@@ -248,7 +270,9 @@ class Transcript:
                 )
                 for item in payload.get("token_usage_records", [])
             ],
+            **simple_kwargs,
         )
+
         if "user_memory" in payload:
             transcript.user_memory = UserMemoryManager.from_dict(payload.get("user_memory", {}))
         else:
@@ -267,20 +291,6 @@ class Transcript:
                         max_recent_messages=64,
                     )
 
-        reply_runtime_data = payload.get("reply_runtime", {})
-        if isinstance(reply_runtime_data, dict):
-            user_last_turn_at = reply_runtime_data.get("user_last_turn_at", {})
-            group_recent_turn_timestamps = reply_runtime_data.get("group_recent_turn_timestamps", [])
-            transcript.reply_runtime = ReplyRuntimeState(
-                user_last_turn_at=dict(user_last_turn_at)
-                if isinstance(user_last_turn_at, dict)
-                else {},
-                group_recent_turn_timestamps=list(group_recent_turn_timestamps)
-                if isinstance(group_recent_turn_timestamps, list)
-                else [],
-                last_assistant_reply_at=str(reply_runtime_data.get("last_assistant_reply_at", "")).strip(),
-                assistant_reply_timestamps=list(reply_runtime_data.get("assistant_reply_timestamps", [])),
-            )
         return transcript
 
     def as_chat_history(self) -> list[dict[str, str]]:

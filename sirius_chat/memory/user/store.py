@@ -51,21 +51,7 @@ class UserMemoryFileStore:
                 "recent_messages": entry.runtime.recent_messages,
                 "summary_notes": entry.runtime.summary_notes,
                 "memory_facts": [
-                    {
-                        "fact_type": item.fact_type,
-                        "value": item.value,
-                        "source": item.source,
-                        "confidence": item.confidence,
-                        "observed_at": item.observed_at,
-                        "observed_time_desc": item.observed_time_desc,
-                        "memory_category": item.memory_category,
-                        "validated": item.validated,
-                        "conflict_with": item.conflict_with,
-                        "context_channel": item.context_channel,
-                        "context_topic": item.context_topic,
-                        "mention_count": item.mention_count,
-                        "source_event_id": item.source_event_id,
-                    }
+                    item.to_dict()
                     for item in entry.runtime.memory_facts
                 ],
                 "last_seen_channel": entry.runtime.last_seen_channel,
@@ -127,21 +113,7 @@ class UserMemoryFileStore:
             entry.runtime.recent_messages = list(runtime_data.get("recent_messages", []))
             entry.runtime.summary_notes = list(runtime_data.get("summary_notes", []))
             entry.runtime.memory_facts = [
-                MemoryFact(
-                    fact_type=str(item.get("fact_type", "")).strip() or "summary",
-                    value=str(item.get("value", "")).strip(),
-                    source=str(item.get("source", "unknown")).strip() or "unknown",
-                    confidence=float(item.get("confidence", 0.5)),
-                    observed_at=str(item.get("observed_at", "")).strip(),
-                    observed_time_desc=str(item.get("observed_time_desc", "")).strip(),
-                    memory_category=str(item.get("memory_category", "custom")).strip() or "custom",
-                    validated=bool(item.get("validated", False)),
-                    conflict_with=list(item.get("conflict_with", [])),
-                    context_channel=str(item.get("context_channel", "")).strip(),
-                    context_topic=str(item.get("context_topic", "")).strip(),
-                    mention_count=int(item.get("mention_count", 0)),
-                    source_event_id=str(item.get("source_event_id", "")).strip(),
-                )
+                MemoryFact.from_dict(item)
                 for item in list(runtime_data.get("memory_facts", []))
                 if isinstance(item, dict) and str(item.get("value", "")).strip()
             ]
@@ -162,4 +134,6 @@ class UserMemoryFileStore:
             entry.runtime.last_seen_channel = str(runtime_data.get("last_seen_channel", "")).strip()
             entry.runtime.last_seen_uid = str(runtime_data.get("last_seen_uid", "")).strip()
 
+        # Schema write-back: persist any new default fields to each user file.
+        self.save_all(manager)
         return manager

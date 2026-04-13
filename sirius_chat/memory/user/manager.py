@@ -1047,24 +1047,8 @@ class UserMemoryManager:
                         "preference_tags": entry.runtime.preference_tags,
                         "recent_messages": entry.runtime.recent_messages,
                         "summary_notes": entry.runtime.summary_notes,
-                        "memory_facts": [
-                            {
-                                "fact_type": item.fact_type,
-                                "value": item.value,
-                                "source": item.source,
-                                "confidence": item.confidence,
-                                "observed_at": item.observed_at,
-                                "observed_time_desc": item.observed_time_desc,
-                                "memory_category": item.memory_category,
-                                "validated": item.validated,
-                                "conflict_with": item.conflict_with,
-                                "context_channel": item.context_channel,
-                                "context_topic": item.context_topic,
-                                "mention_count": item.mention_count,
-                                "source_event_id": item.source_event_id,
-                            }
-                            for item in entry.runtime.memory_facts
-                        ],
+                        # Use MemoryFact.to_dict() so any future fields are included automatically
+                        "memory_facts": [item.to_dict() for item in entry.runtime.memory_facts],
                         "last_seen_channel": entry.runtime.last_seen_channel,
                         "last_seen_uid": entry.runtime.last_seen_uid,
                         "observed_keywords": list(entry.runtime.observed_keywords),
@@ -1116,22 +1100,9 @@ class UserMemoryManager:
                     preference_tags=list(runtime_data.get("preference_tags", [])),
                     recent_messages=list(runtime_data.get("recent_messages", [])),
                     summary_notes=list(runtime_data.get("summary_notes", [])),
+                    # Use MemoryFact.from_dict() so any future fields are handled automatically
                     memory_facts=[
-                        MemoryFact(
-                            fact_type=str(item.get("fact_type", "")).strip() or "summary",
-                            value=str(item.get("value", "")).strip(),
-                            source=str(item.get("source", "unknown")).strip() or "unknown",
-                            confidence=float(item.get("confidence", 0.5)),
-                            observed_at=str(item.get("observed_at", "")).strip(),
-                            observed_time_desc=str(item.get("observed_time_desc", "")).strip(),
-                            memory_category=str(item.get("memory_category", "custom")).strip() or "custom",
-                            validated=bool(item.get("validated", False)),
-                            conflict_with=list(item.get("conflict_with", [])),
-                            context_channel=str(item.get("context_channel", "")).strip(),
-                            context_topic=str(item.get("context_topic", "")).strip(),
-                            mention_count=int(item.get("mention_count", 0)),
-                            source_event_id=str(item.get("source_event_id", "")).strip(),
-                        )
+                        MemoryFact.from_dict(item)
                         for item in list(runtime_data.get("memory_facts", []))
                         if isinstance(item, dict) and str(item.get("value", "")).strip()
                     ],

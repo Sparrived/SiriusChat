@@ -6,7 +6,8 @@ replacing per-message heuristic event clustering.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field, fields, MISSING
+from typing import Any
 
 # Supported observation categories
 OBSERVATION_CATEGORIES = frozenset({
@@ -38,6 +39,23 @@ class EventMemoryEntry:
     updated_at: str = ""
     mention_count: int = 0
     verified: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize to dict; automatically includes any future fields."""
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "EventMemoryEntry":
+        """Deserialize from dict; new fields with defaults are handled automatically."""
+        kwargs: dict[str, Any] = {}
+        for f in fields(cls):
+            if f.name in data:
+                kwargs[f.name] = data[f.name]
+            elif f.default is not MISSING:
+                kwargs[f.name] = f.default
+            elif f.default_factory is not MISSING:  # type: ignore[misc]
+                kwargs[f.name] = f.default_factory()  # type: ignore[misc]
+        return cls(**kwargs)
 
 
 # Kept for public API backward compatibility — unused in v2 production code.

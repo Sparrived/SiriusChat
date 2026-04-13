@@ -28,7 +28,10 @@ class SelfMemoryFileStore:
             return SelfMemoryManager()
         try:
             payload = json.loads(self._path.read_text(encoding="utf-8"))
-            return SelfMemoryManager.from_dict(payload)
+            manager = SelfMemoryManager.from_dict(payload)
+            # Schema write-back: persist any new default fields immediately.
+            self.save(manager)
+            return manager
         except Exception:
             logger.warning("Failed to load self-memory from %s, starting fresh", self._path)
             return SelfMemoryManager()

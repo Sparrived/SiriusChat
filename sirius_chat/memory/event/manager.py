@@ -290,21 +290,7 @@ class EventMemoryManager:
     def to_dict(self) -> dict[str, Any]:
         return {
             "version": 2,
-            "entries": [
-                {
-                    "event_id": e.event_id,
-                    "user_id": e.user_id,
-                    "category": e.category,
-                    "summary": e.summary,
-                    "confidence": e.confidence,
-                    "evidence_samples": e.evidence_samples,
-                    "created_at": e.created_at,
-                    "updated_at": e.updated_at,
-                    "mention_count": e.mention_count,
-                    "verified": e.verified,
-                }
-                for e in self.entries
-            ],
+            "entries": [e.to_dict() for e in self.entries],
             "buffer": {
                 uid: list(msgs)
                 for uid, msgs in self._buffer.items()
@@ -324,18 +310,8 @@ class EventMemoryManager:
             event_id = str(item.get("event_id", "")).strip()
             if not event_id:
                 continue
-            manager.entries.append(EventMemoryEntry(
-                event_id=event_id,
-                user_id=str(item.get("user_id", "")),
-                category=str(item.get("category", "custom")),
-                summary=str(item.get("summary", "")),
-                confidence=float(item.get("confidence", 0.5)),
-                evidence_samples=list(item.get("evidence_samples", [])),
-                created_at=str(item.get("created_at", "")),
-                updated_at=str(item.get("updated_at", "")),
-                mention_count=int(item.get("mention_count", 0)),
-                verified=bool(item.get("verified", False)),
-            ))
+            from sirius_chat.memory.event.models import EventMemoryEntry as _EME
+            manager.entries.append(_EME.from_dict(item))
         for uid, msgs in payload.get("buffer", {}).items():
             if isinstance(msgs, list):
                 manager._buffer[uid] = [str(m) for m in msgs]

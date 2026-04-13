@@ -33,7 +33,10 @@ class EventMemoryFileStore:
             return EventMemoryManager()
         if not isinstance(payload, dict):
             return EventMemoryManager()
-        return EventMemoryManager.from_dict(payload)
+        manager = EventMemoryManager.from_dict(payload)
+        # Schema write-back: persist any new default fields immediately.
+        self.save(manager)
+        return manager
 
     def save(self, manager: EventMemoryManager) -> None:
         """Save event memory to file."""

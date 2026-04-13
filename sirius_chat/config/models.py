@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field, fields, MISSING
 from pathlib import Path
 from typing import Any
 
@@ -238,6 +238,23 @@ class TokenUsageRecord:
     output_chars: int = 0
     estimation_method: str = "char_div4"
     retries_used: int = 0
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize to dict; automatically includes any future fields."""
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "TokenUsageRecord":
+        """Deserialize from dict; new fields with defaults are handled automatically."""
+        kwargs: dict[str, Any] = {}
+        for f in fields(cls):
+            if f.name in data:
+                kwargs[f.name] = data[f.name]
+            elif f.default is not MISSING:
+                kwargs[f.name] = f.default
+            elif f.default_factory is not MISSING:  # type: ignore[misc]
+                kwargs[f.name] = f.default_factory()  # type: ignore[misc]
+        return cls(**kwargs)
 
 
 @dataclass(slots=True, init=False)

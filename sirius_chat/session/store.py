@@ -37,7 +37,11 @@ class JsonSessionStore:
 
     def load(self) -> Transcript:
         payload = json.loads(self._path.read_text(encoding="utf-8"))
-        return Transcript.from_dict(payload)
+        transcript = Transcript.from_dict(payload)
+        # Schema write-back: immediately persist any new default fields so the
+        # file stays in sync with the current model definition.
+        self.save(transcript)
+        return transcript
 
     def save(self, transcript: Transcript) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
@@ -85,7 +89,10 @@ class SqliteSessionStore:
         if row is None:
             raise FileNotFoundError(f"session state not found in sqlite store: {self._path}")
         payload = json.loads(str(row[0]))
-        return Transcript.from_dict(payload)
+        transcript = Transcript.from_dict(payload)
+        # Schema write-back: immediately persist any new default fields.
+        self.save(transcript)
+        return transcript
 
     def save(self, transcript: Transcript) -> None:
         payload = json.dumps(transcript.to_dict(), ensure_ascii=False)

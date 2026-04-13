@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field, fields, MISSING
 from datetime import datetime
 from typing import Any
 
@@ -57,6 +57,23 @@ class MemoryFact:
 
     def __post_init__(self) -> None:
         self.confidence = max(0.0, min(1.0, float(self.confidence)))
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize to dict; automatically includes any future fields (e.g. context_metadata)."""
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "MemoryFact":
+        """Deserialize from dict; new fields with defaults are handled automatically."""
+        kwargs: dict[str, Any] = {}
+        for f in fields(cls):
+            if f.name in data:
+                kwargs[f.name] = data[f.name]
+            elif f.default is not MISSING:
+                kwargs[f.name] = f.default
+            elif f.default_factory is not MISSING:  # type: ignore[misc]
+                kwargs[f.name] = f.default_factory()  # type: ignore[misc]
+        return cls(**kwargs)
 
     def is_transient(self, threshold: float = 0.85) -> bool:
         """Dynamically derive transient status from confidence."""

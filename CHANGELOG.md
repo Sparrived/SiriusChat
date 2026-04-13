@@ -4,7 +4,14 @@
 
 ## [Unreleased]
 
-## [0.17.0] - 2026-04-12
+## [0.18.0] - 2026-04-13
+
+### Changed
+- **持久化模型自戒序列化**：`Message`、`ReplyRuntimeState`、`TokenUsageRecord`、`EventMemoryEntry`、`DiaryEntry`、`GlossaryTerm`、`MemoryFact` 的 `to_dict()` 匹中改用 `dataclasses.asdict()`，`from_dict()` 改用 `dataclasses.fields()` 反射加载。以后再向这些类新增字段（带默认值）时，无需手动更新序列化方法即可自动持久化。
+- **`Transcript` 反射字段自动覆盖**：`Transcript.to_dict()` 通过 `dataclasses.fields()` 遍历自动包含未涉及复杂子对象的所有简单标量字段，`from_dict()` 同步采用反射加载并应用框架默认値。
+- **Schema 写回机制（write-back on load）**：所有持久化 Store（`JsonSessionStore`、`SqliteSessionStore`、`EventMemoryFileStore`、`SelfMemoryFileStore`、`UserMemoryFileStore`）在 `load()` 完成后立即回写一次数据，确保任何新字段的默认值即时写入现有文件。
+- 修复 `MemoryFact.to_dict()`：`context_metadata` 字段此前被遗漏未序列化，现已通过 `asdict()` 自动包含。
+- 信息级日志拟人化：将引擎内 `logger.info()` 调用改为更自然的角色化表达，在有上下文的地方嵌入 agent/participant 名称。
 
 ### Added
 - 引擎级记忆共享：`AsyncRolePlayEngine` 维护 `_shared_user_memory`、`_shared_self_memory`、`_shared_event_stores`，按 `work_path` 键索引，跨 Session 复用内存中的记忆数据，避免重复磁盘 I/O。

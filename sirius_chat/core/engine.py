@@ -154,7 +154,8 @@ class AsyncRolePlayEngine:
             log_key = f"unified:{orchestration.unified_model.strip()}"
             if log_key not in self._orchestration_log_cache:
                 logger.info(
-                    f"多模型协同（方案1）：所有任务共用模型 '{orchestration.unified_model}'"
+                    "思维线路就绪，所有辅助任务将由 '%s' 统一承担",
+                    orchestration.unified_model,
                 )
                 self._orchestration_log_cache.add(log_key)
             return
@@ -185,7 +186,8 @@ class AsyncRolePlayEngine:
             )
             if log_key not in self._orchestration_log_cache:
                 logger.info(
-                    f"多模型协同（方案2）：按任务配置模型 - {orchestration.task_models}"
+                    "思维线路就绪，各辅助任务已分配专属模型 - %s",
+                    orchestration.task_models,
                 )
                 self._orchestration_log_cache.add(log_key)
             return
@@ -302,7 +304,7 @@ class AsyncRolePlayEngine:
                 # Apply diary decay on first load
                 removed = created.self_memory.apply_diary_decay()
                 if removed > 0:
-                    logger.info("自我记忆日记衰退：移除 %d 条过期条目", removed)
+                    logger.info("%s 翻了翻旧日记，淡忘了 %d 条已久远的记忆碎片", config.agent.name, removed)
             created.self_memory_store = SelfMemoryFileStore(config.work_path)
 
         skills_dir = config.work_path / "skills"
@@ -318,7 +320,7 @@ class AsyncRolePlayEngine:
             if loaded_count > 0:
                 created.skill_registry = registry
                 created.skill_executor = SkillExecutor(config.work_path)
-                logger.info("SKILL系统已初始化，已加载 %d 个SKILL", loaded_count)
+                logger.info("%s 学会了 %d 项新技能，随时可以施展", config.agent.name, loaded_count)
             else:
                 logger.debug("SKILL系统已启用但未找到任何SKILL文件: %s", skills_dir)
         else:
@@ -397,7 +399,7 @@ class AsyncRolePlayEngine:
                     if _ctx.self_memory_store is not None:
                         removed = _ctx.self_memory.apply_diary_decay()
                         if removed > 0:
-                            logger.info("后台归纳：移除 %d 条衰退日记条目", removed)
+                            logger.info("在整理记忆的间隙，悄悄遗忘了 %d 条已褪色的往事", removed)
                         _ctx.self_memory_store.save(_ctx.self_memory)
 
                 bg_manager.set_consolidation_callback(_consolidation_callback)
@@ -441,7 +443,7 @@ class AsyncRolePlayEngine:
                 auto_install_deps=config.orchestration.auto_install_skill_deps,
             )
             if loaded_count > 0:
-                logger.info("SKILL系统懒加载完成，已加载 %d 个SKILL", loaded_count)
+                logger.info("技能补充完毕，%d 项新能力已就位", loaded_count)
             else:
                 logger.debug("SKILL系统已启用，但当前未加载到任何SKILL: %s", skills_dir)
 
@@ -556,7 +558,8 @@ class AsyncRolePlayEngine:
                 min_mentions=3,
             )
             logger.info(
-                "事件记忆最终化完成 - 已验证: %s, 已拒绝: %s, 待验证: %s",
+                "%s 整理了一下记忆：确认了 %s 条，忘掉了 %s 条，还有 %s 条尚未想清楚",
+                config.agent.name,
                 finalize_result["verified_count"],
                 finalize_result["rejected_count"],
                 finalize_result["pending_count"],
@@ -1014,8 +1017,8 @@ class AsyncRolePlayEngine:
 
         self._record_task_stat(transcript, task_name, "succeeded")
         logger.info(
-            "事件观察提取完成 | user=%s | observations=%d",
-            participant.user_id, len(new_observations),
+            "留意到 %s 的 %d 处细节，已悄悄记下",
+            participant.name or participant.user_id, len(new_observations),
         )
         return list(new_observations)
 
@@ -1611,9 +1614,9 @@ class AsyncRolePlayEngine:
                         )
                         if reloaded > 0:
                             logger.info(
-                                "检测到SKILL_CALL未命中，已重载技能目录后重试: loaded=%d | skill=%s",
-                                reloaded,
+                                "没找到 '%s'，重新检索了一下技能库，发现了 %d 项技能",
                                 skill_name,
+                                reloaded,
                             )
                     except Exception:
                         logger.warning(
@@ -1641,8 +1644,8 @@ class AsyncRolePlayEngine:
                     had_unknown_skill = True
                 else:
                     logger.info(
-                        "执行SKILL: %s | 参数: %s | 迭代轮次: %d/%d",
-                        skill_name, skill_params, _round + 1, max_rounds,
+                        "正在施展『%s』（第 %d/%d 轮）",
+                        skill_name, _round + 1, max_rounds,
                     )
                     if event_bus is not None:
                         await event_bus.emit(SessionEvent(
@@ -2436,13 +2439,12 @@ class AsyncRolePlayEngine:
             )
             should_reply = engagement.should_reply
             logger.info(
-                "[Engagement] speaker=%s | score=%.3f | heat=%s(%.2f) | "
-                "target=%s | reason=%s",
+                "%s 说话了（热度:%s %.2f | 指向:%s | 参与度:%.3f）→ %s",
                 turn.speaker,
-                engagement.engagement_score,
-                engagement.heat.heat_level if engagement.heat else "N/A",
+                engagement.heat.heat_level if engagement.heat else "?",
                 engagement.heat.heat_score if engagement.heat else 0.0,
-                engagement.intent.target if engagement.intent else "N/A",
+                engagement.intent.target if engagement.intent else "?",
+                engagement.engagement_score,
                 engagement.reason,
             )
 
@@ -2545,9 +2547,8 @@ class AsyncRolePlayEngine:
             ))
         else:
             logger.info(
-                "[会话] 跳过回复 | speaker=%s | session_reply_mode=%s | engagement=%s",
+                "听到 %s 说话了，但这次选择静静旁观（%s）",
                 turn.speaker,
-                resolved_session_mode,
                 engagement.reason if engagement else "mode_never",
             )
             await context.event_bus.emit(SessionEvent(

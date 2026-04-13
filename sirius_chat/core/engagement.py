@@ -144,7 +144,7 @@ class EngagementCoordinator:
             return False
 
         logger.info(
-            "[频率限制] 滑动窗口内回复次数 %d 已达上限 %d，跳过本次回复",
+            "回复频率已达上限（%d/%d），稍作等待再开口",
             recent_count, max_replies,
         )
         return True

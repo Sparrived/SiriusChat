@@ -189,6 +189,10 @@ def build_system_prompt(
             f"<splitting_instruction>\n"
             f"当前处于群聊场景聊天，每条消息至多1-2句话。存在多个独立内容、话题切换、内容过长或停顿时插入 '{marker}' 分割。"
             f"禁止用连续换行代替分割，一律使用 '{marker}' 分割，外部程序会检测 '{marker}' 并将其分离为多个独立内容。\n"
+            f"示例：\n"
+            f"消息1\n"
+            f"{marker}\n"
+            f"消息2\n"
             f"</splitting_instruction>"
         )
 
