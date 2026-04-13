@@ -46,6 +46,18 @@ from sirius_chat.core.intent_v2 import IntentAnalysis, IntentAnalyzer
 from sirius_chat.core.heat import HeatAnalysis, HeatAnalyzer
 from sirius_chat.core.engagement import EngagementCoordinator, EngagementDecision
 from sirius_chat.background_tasks import BackgroundTaskConfig, BackgroundTaskManager
+from sirius_chat.core.memory_runner import (
+    run_memory_extract_task,
+    run_self_memory_extract_task,
+    run_batch_event_extract,
+    run_memory_manager_task,
+    build_memory_extract_task_input,
+)
+from sirius_chat.core.engagement_pipeline import (
+    build_heat_analysis,
+    run_engagement_intent_analysis,
+    should_reply_for_turn,
+)
 from sirius_chat.token.store import TokenUsageStore
 logger = logging.getLogger(__name__)
 
@@ -717,83 +729,15 @@ class AsyncRolePlayEngine:
         content: str,
         task_token_usage: dict[str, int],
     ) -> None:
-        task_name = TASK_MEMORY_EXTRACT
-        # 检查任务是否启用
-        if not config.orchestration.task_enabled.get(task_name, True):
-            return  # 任务被禁用
-        
-        model = self.get_model_for_task(config, task_name)
-
-        self._record_task_stat(transcript, task_name, "attempted")
-
-        system_prompt = get_system_prompt_for_task(task_name)
-        task_input = self._build_memory_extract_task_input(
+        await run_memory_extract_task(
+            config=config,
             transcript=transcript,
             participant=participant,
             content=content,
+            task_token_usage=task_token_usage,
+            call_with_retry=self._call_provider_with_retry,
+            get_model=self.get_model_for_task,
         )
-        estimated_cost = self._estimate_tokens(system_prompt + task_input)
-
-        used = task_token_usage.get(task_name, 0)
-        budget = int(config.orchestration.task_budgets.get(task_name, 0))
-        if budget > 0 and used + estimated_cost > budget:
-            self._record_task_stat(transcript, task_name, "skipped_budget")
-            return
-
-        request_payload = GenerationRequest(
-            model=model,
-            system_prompt=system_prompt,
-            messages=[{"role": "user", "content": task_input}],
-            temperature=float(config.orchestration.task_temperatures.get(task_name, 0.1)),
-            max_tokens=int(config.orchestration.task_max_tokens.get(task_name, 128)),
-            purpose=task_name,
-        )
-
-        retry_times = int(config.orchestration.task_retries.get(task_name, 0))
-        try:
-            raw = await self._call_provider_with_retry(
-                request_payload=request_payload,
-                retry_times=retry_times,
-                transcript=transcript,
-                task_name=task_name,
-                actor_id=participant.user_id,
-            )
-        except RuntimeError:
-            self._record_task_stat(transcript, task_name, "failed_provider")
-            return
-
-        if retry_times > 0:
-            self._record_task_stat(transcript, task_name, "retry_enabled")
-
-        task_token_usage[task_name] = used + estimated_cost
-        parsed = self._extract_json_payload(raw)
-        if parsed is None:
-            self._record_task_stat(transcript, task_name, "failed_parse")
-            return
-
-        inferred_persona = parsed.get("inferred_persona")
-        inferred_aliases = parsed.get("inferred_aliases")
-        inferred_traits = parsed.get("inferred_traits")
-        preference_tags = parsed.get("preference_tags")
-        summary_note = parsed.get("summary_note")
-
-        transcript.user_memory.apply_ai_runtime_update(
-            user_id=participant.user_id,
-            inferred_persona=str(inferred_persona).strip() if isinstance(inferred_persona, str) else None,
-            inferred_aliases=[str(item).strip() for item in inferred_aliases if str(item).strip()]
-            if isinstance(inferred_aliases, list)
-            else None,
-            inferred_traits=[str(item).strip() for item in inferred_traits if str(item).strip()]
-            if isinstance(inferred_traits, list)
-            else None,
-            preference_tags=[str(item).strip() for item in preference_tags if str(item).strip()]
-            if isinstance(preference_tags, list)
-            else None,
-            summary_note=str(summary_note).strip() if isinstance(summary_note, str) else None,
-            source="memory_extract",
-            confidence=0.8,
-        )
-        self._record_task_stat(transcript, task_name, "succeeded")
 
     @staticmethod
     def _normalize_multimodal_inputs(
@@ -818,106 +762,14 @@ class AsyncRolePlayEngine:
         context: LiveSessionContext,
         assistant_content: str,
     ) -> None:
-        """Extract diary entries and glossary terms from the conversation.
-
-        Called after the AI generates a reply. Uses LLM to decide what to
-        remember (diary) and which terms to define (glossary).
-        """
-        if not config.orchestration.enable_self_memory:
-            return
-
-        task_name = "self_memory_extract"
-        model = self.get_model_for_task(config, task_name) if config.orchestration.task_models.get(task_name) else (
-            config.orchestration.unified_model or config.agent.model
-        )
-
-        # Build recent conversation excerpt for context
-        recent_msgs: list[str] = []
-        for msg in transcript.messages[-8:]:
-            role = msg.role
-            speaker = msg.speaker or role
-            text = msg.content[:200].replace("\n", " ")
-            if text.strip():
-                recent_msgs.append(f"[{speaker}] {text}")
-        context_text = "\n".join(recent_msgs)
-
-        system_prompt = (
-            "你是AI的自省记忆提取器。基于以下对话片段，提取两类记忆：\n"
-            "1. diary: AI值得记住的事情（有趣的事、重要决定、情感印象、里程碑）。"
-            "每条包含 content(string), importance(0-1), keywords(array), category(reflection|observation|decision|emotion|milestone)。\n"
-            "2. glossary: 对话中出现的AI可能不熟悉或值得记录的专有名词/术语。"
-            "每条包含 term(string), definition(string), domain(tech|daily|culture|game|custom), confidence(0-1)。\n"
-            "严格输出JSON: {\"diary\": [...], \"glossary\": [...]}\n"
-            "若无值得记录的内容，返回空数组。保持简洁，每次最多3条diary和5条glossary。"
-        )
-
-        request_payload = GenerationRequest(
-            model=model,
-            system_prompt=system_prompt,
-            messages=[{"role": "user", "content": context_text}],
-            temperature=0.2,
-            max_tokens=int(config.orchestration.task_max_tokens.get(task_name, 256)),
-            purpose=task_name,
-        )
-
-        try:
-            raw = await self._call_provider_with_retry(
-                request_payload=request_payload,
-                retry_times=0,
-                transcript=transcript,
-                task_name=task_name,
-                actor_id=config.agent.name,
-            )
-        except RuntimeError:
-            logger.debug("自我记忆提取失败，跳过")
-            return
-
-        parsed = self._extract_json_payload(raw)
-        if parsed is None:
-            return
-
-        # Process diary entries
-        diary_items = parsed.get("diary")
-        if isinstance(diary_items, list):
-            for item in diary_items[:3]:
-                if not isinstance(item, dict):
-                    continue
-                content_text = str(item.get("content", "")).strip()
-                if not content_text:
-                    continue
-                entry = DiaryEntry(
-                    content=content_text,
-                    importance=float(item.get("importance", 0.5)),
-                    keywords=[str(k) for k in item.get("keywords", []) if str(k).strip()],
-                    category=str(item.get("category", "observation")),
-                    related_user_ids=[],
-                )
-                context.self_memory.add_diary_entry(entry)
-
-        # Process glossary terms
-        glossary_items = parsed.get("glossary")
-        if isinstance(glossary_items, list):
-            for item in glossary_items[:5]:
-                if not isinstance(item, dict):
-                    continue
-                term_text = str(item.get("term", "")).strip()
-                defn = str(item.get("definition", "")).strip()
-                if not term_text or not defn:
-                    continue
-                term = GlossaryTerm(
-                    term=term_text,
-                    definition=defn,
-                    source="conversation",
-                    confidence=float(item.get("confidence", 0.6)),
-                    domain=str(item.get("domain", "custom")),
-                    context_examples=[assistant_content[:80]] if assistant_content.strip() else [],
-                )
-                context.self_memory.add_or_update_term(term)
-
-        logger.debug(
-            "自我记忆提取完成 | diary=%d glossary=%d",
-            len(diary_items) if isinstance(diary_items, list) else 0,
-            len(glossary_items) if isinstance(glossary_items, list) else 0,
+        """Extract diary entries and glossary terms from the conversation."""
+        await run_self_memory_extract_task(
+            config=config,
+            transcript=transcript,
+            context=context,
+            assistant_content=assistant_content,
+            call_with_retry=self._call_provider_with_retry,
+            get_model=self.get_model_for_task,
         )
 
     async def _run_batch_event_extract(
@@ -929,73 +781,16 @@ class AsyncRolePlayEngine:
         task_token_usage: dict[str, int],
         event_store: EventMemoryManager,
     ) -> list[object]:
-        """Batch-extract user observations from buffered messages.
-
-        Observations are directly written into user memory facts.
-        """
-        task_name = TASK_EVENT_EXTRACT
-        if not config.orchestration.task_enabled.get(task_name, True):
-            return []
-
-        model = self.get_model_for_task(config, task_name)
-        self._record_task_stat(transcript, task_name, "attempted")
-
-        # Budget check
-        estimated_cost = 512  # conservative estimate for batch extraction
-        used = task_token_usage.get(task_name, 0)
-        budget = int(config.orchestration.task_budgets.get(task_name, 0))
-        if budget > 0 and used + estimated_cost > budget:
-            self._record_task_stat(transcript, task_name, "skipped_budget")
-            return []
-
-        try:
-            new_observations = await event_store.extract_observations(
-                user_id=participant.user_id,
-                user_name=participant.name,
-                provider_async=self._make_provider_adapter(),
-                model_name=model,
-                temperature=float(config.orchestration.task_temperatures.get(task_name, 0.3)),
-                max_tokens=int(config.orchestration.task_max_tokens.get(task_name, 512)),
-            )
-        except Exception as exc:
-            logger.warning("批量事件提取失败 (user=%s): %s", participant.user_id, exc)
-            self._record_task_stat(transcript, task_name, "failed_provider")
-            return []
-
-        task_token_usage[task_name] = used + estimated_cost
-
-        if not new_observations:
-            self._record_task_stat(transcript, task_name, "no_observations")
-            return []
-
-        # ── 将观察直接写入用户记忆 ──
-        category_to_memory = {
-            "preference": ("preference_tag", "preference"),
-            "trait": ("inferred_trait", "identity"),
-            "relationship": ("social_context", "event"),
-            "experience": ("summary", "event"),
-            "emotion": ("emotional_pattern", "emotion"),
-            "goal": ("summary", "event"),
-            "custom": ("summary", "custom"),
-        }
-        for obs in new_observations:
-            fact_type, mem_cat = category_to_memory.get(obs.category, ("summary", "custom"))
-            transcript.user_memory.add_memory_fact(
-                user_id=participant.user_id,
-                fact_type=fact_type,
-                value=obs.summary,
-                source="event_observation",
-                confidence=obs.confidence,
-                memory_category=mem_cat,
-                source_event_id=obs.event_id,
-            )
-
-        self._record_task_stat(transcript, task_name, "succeeded")
-        logger.info(
-            "留意到 %s 的 %d 处细节，已悄悄记下",
-            participant.name or participant.user_id, len(new_observations),
+        """Batch-extract user observations from buffered messages."""
+        return await run_batch_event_extract(
+            config=config,
+            transcript=transcript,
+            participant=participant,
+            task_token_usage=task_token_usage,
+            event_store=event_store,
+            make_adapter=self._make_provider_adapter,
+            get_model=self.get_model_for_task,
         )
-        return list(new_observations)
 
     async def _run_memory_manager_task(
         self,
@@ -1006,122 +801,13 @@ class AsyncRolePlayEngine:
         task_token_usage: dict[str, int],
     ) -> None:
         """汇聚、去重、标注、验证用户的记忆事实。"""
-        task_name = TASK_MEMORY_MANAGER
-        model = config.orchestration.memory_manager_model.strip()
-        if not model:
-            return  # memory_manager 可选
-
-        self._record_task_stat(transcript, task_name, "attempted")
-
-        # 收集当前用户的所有记忆事实
-        entry = transcript.user_memory.entries.get(participant.user_id)
-        if entry is None or not entry.runtime.memory_facts:
-            return
-
-        # 构建记忆列表用于汇聚
-        facts_json = [
-            {
-                "id": i,
-                "fact_type": fact.fact_type,
-                "value": fact.value,
-                "source": fact.source,
-                "confidence": fact.confidence,
-                "category": fact.memory_category,
-            }
-            for i, fact in enumerate(entry.runtime.memory_facts)
-        ]
-
-        system_prompt = (
-            "你是记忆管理器。基于输入的记忆事实列表，执行以下操作：\n"
-            "1. 检测重复/相似的事实并合并\n"
-            "2. 为每个事实分配类别：identity（身份）、preference（偏好）、emotion（情绪）、event（事件）或 custom（自定义）\n"
-            "3. 检测相互冲突的记忆（如：喜欢稳定 vs 喜欢创新）\n"
-            "4. 输出结构化的汇聚结果为 JSON 数组，每个元素包含："
-            "value、memory_category、is_duplicate、conflict_ids(冲突的id列表)、reason(说明)\n"
-            "严格输出 JSON 数组，不要额外文本。"
+        await run_memory_manager_task(
+            config=config,
+            transcript=transcript,
+            participant=participant,
+            task_token_usage=task_token_usage,
+            call_with_retry=self._call_provider_with_retry,
         )
-
-        task_input = f"记忆事实列表：{json.dumps(facts_json, ensure_ascii=False, indent=2)}"
-        estimated_cost = self._estimate_tokens(system_prompt + task_input)
-
-        budget = int(config.orchestration.task_budgets.get(task_name, 0))
-        used = task_token_usage.get(task_name, 0)
-        if budget > 0 and used + estimated_cost > budget:
-            self._record_task_stat(transcript, task_name, "skipped_budget")
-            return
-
-        request_payload = GenerationRequest(
-            model=model,
-            system_prompt=system_prompt,
-            messages=[{"role": "user", "content": task_input}],
-            temperature=float(config.orchestration.memory_manager_temperature),
-            max_tokens=int(config.orchestration.memory_manager_max_tokens),
-            purpose=task_name,
-        )
-
-        retry_times = int(config.orchestration.task_retries.get(task_name, 0))
-        try:
-            raw = await self._call_provider_with_retry(
-                request_payload=request_payload,
-                retry_times=retry_times,
-                transcript=transcript,
-                task_name=task_name,
-                actor_id=participant.user_id,
-            )
-        except RuntimeError:
-            self._record_task_stat(transcript, task_name, "failed_provider")
-            return
-
-        if retry_times > 0:
-            self._record_task_stat(transcript, task_name, "retry_enabled")
-
-        task_token_usage[task_name] = used + estimated_cost
-
-        # 解析 LLM 输出
-        try:
-            parsed_list = json.loads(raw)
-            if not isinstance(parsed_list, list):
-                self._record_task_stat(transcript, task_name, "failed_parse")
-                return
-        except (json.JSONDecodeError, ValueError):
-            self._record_task_stat(transcript, task_name, "failed_parse")
-            return
-
-        # 应用汇聚结果：更新 memory_facts
-        # 标记重复的记忆，并为所有记忆添加类别和验证标记
-        duplicate_indices: set[int] = set()
-        for result in parsed_list:
-            if not isinstance(result, dict):
-                continue
-            if result.get("is_duplicate", False):
-                # 找到对应的原始记忆并标记为重复
-                value = str(result.get("value", "")).strip()
-                for idx, fact in enumerate(entry.runtime.memory_facts):
-                    if fact.value == value and idx not in duplicate_indices:
-                        duplicate_indices.add(idx)
-                        break
-
-        # 更新记忆的类别和验证标记
-        for i, fact in enumerate(entry.runtime.memory_facts):
-            if i in duplicate_indices:
-                continue  # 跳过重复的
-            # 在结果中找到对应的条目
-            for result in parsed_list:
-                if str(result.get("value", "")).strip() == fact.value:
-                    fact.memory_category = str(result.get("memory_category", "custom")).strip() or "custom"
-                    fact.validated = True
-                    conflict_ids = result.get("conflict_ids", [])
-                    if isinstance(conflict_ids, list):
-                        fact.conflict_with = [str(cid) for cid in conflict_ids]
-                    break
-
-        # 删除重复的记忆
-        entry.runtime.memory_facts = [
-            fact for i, fact in enumerate(entry.runtime.memory_facts)
-            if i not in duplicate_indices
-        ]
-
-        self._record_task_stat(transcript, task_name, "succeeded")
 
     def _has_multimodal_inputs(self, transcript: Transcript) -> bool:
         """检测 transcript 中最后的用户消息是否包含多模态输入。
@@ -1146,25 +832,10 @@ class AsyncRolePlayEngine:
         group_recent_count: int,
     ) -> HeatAnalysis:
         """构建热度分析所需的数据并执行分析。"""
-        window = float(config.orchestration.heat_window_seconds)
-
-        # 收集窗口内活跃参与者
-        active_ids: set[str] = set()
-        assistant_count = 0
-        for msg in transcript.messages[-(group_recent_count + 10):]:
-            if msg.role == "assistant":
-                assistant_count += 1
-            if msg.role == "user" and msg.speaker:
-                active_ids.add(msg.speaker)
-
-        return HeatAnalyzer.analyze(
+        return build_heat_analysis(
+            transcript=transcript,
+            config=config,
             group_recent_count=group_recent_count,
-            window_seconds=window,
-            active_participant_ids=active_ids,
-            assistant_reply_count_in_window=min(
-                assistant_count,
-                len(transcript.reply_runtime.assistant_reply_timestamps),
-            ),
         )
 
     async def _run_engagement_intent_analysis(
@@ -1177,91 +848,20 @@ class AsyncRolePlayEngine:
         task_token_usage: dict[str, int],
     ) -> IntentAnalysis:
         """执行新版意图分析（携带参与者上下文）。"""
-        agent_alias = str(config.agent.metadata.get("alias", "")).strip()
-        task_name = TASK_INTENT_ANALYSIS
-
-        # 从最近消息中提取参与者名称（排除 AI 自身）
-        participant_names: list[str] = []
-        seen: set[str] = set()
-        for msg in reversed(transcript.messages[-20:]):
-            if msg.role == "user" and msg.speaker and msg.speaker not in seen:
-                seen.add(msg.speaker)
-                participant_names.append(msg.speaker)
-
-        if not config.orchestration.is_task_enabled(task_name):
-            return IntentAnalyzer.fallback_analysis(
-                content, config.agent.name, agent_alias, participant_names,
-            )
-
-        model = self.get_model_for_task(config, task_name)
-
-        agent_alias = str(config.agent.metadata.get("alias", "")).strip()
-
-        # 近期上下文（含 speaker）
-        recent_messages: list[dict[str, str]] = []
-        for msg in transcript.messages[-8:]:
-            if msg.role in ("user", "assistant"):
-                entry: dict[str, str] = {"role": msg.role, "content": msg.content}
-                if msg.speaker:
-                    entry["speaker"] = msg.speaker
-                recent_messages.append(entry)
-
-        request_payload = IntentAnalyzer.build_request(
+        return await run_engagement_intent_analysis(
+            config=config,
+            transcript=transcript,
+            participant=participant,
             content=content,
-            agent_name=config.agent.name,
-            agent_alias=agent_alias,
-            participant_names=participant_names,
-            recent_messages=recent_messages,
-            model=model,
-            temperature=float(config.orchestration.task_temperatures.get(task_name, 0.1)),
-            max_tokens=int(config.orchestration.task_max_tokens.get(task_name, 192)),
+            task_token_usage=task_token_usage,
+            call_with_retry=self._call_provider_with_retry,
+            get_model=self.get_model_for_task,
         )
-
-        prompt_text = request_payload.system_prompt + "\n" + "\n".join(
-            str(item.get("content", "")) for item in request_payload.messages
-        )
-        estimated_cost = self._estimate_tokens(prompt_text)
-        used = task_token_usage.get(task_name, 0)
-        budget = int(config.orchestration.task_budgets.get(task_name, 0))
-
-        self._record_task_stat(transcript, task_name, "attempted")
-        if budget > 0 and used + estimated_cost > budget:
-            self._record_task_stat(transcript, task_name, "skipped_budget")
-            return IntentAnalyzer.fallback_analysis(
-                content, config.agent.name, agent_alias, participant_names,
-            )
-
-        retry_times = int(config.orchestration.task_retries.get(task_name, 0))
-        try:
-            raw = await self._call_provider_with_retry(
-                request_payload=request_payload,
-                retry_times=retry_times,
-                transcript=transcript,
-                task_name=task_name,
-                actor_id=participant.user_id,
-            )
-        except RuntimeError as exc:
-            self._record_task_stat(transcript, task_name, "failed_provider")
-            logger.warning("意图分析任务调用失败，使用回退: %s", exc)
-            return IntentAnalyzer.fallback_analysis(
-                content, config.agent.name, agent_alias, participant_names,
-            )
-
-        if retry_times > 0:
-            self._record_task_stat(transcript, task_name, "retry_enabled")
-        task_token_usage[task_name] = used + estimated_cost
-        self._record_task_stat(transcript, task_name, "succeeded")
-        return IntentAnalyzer._parse_response(raw)
 
     @staticmethod
     def _should_reply_for_turn(turn: Message) -> bool:
-        """Check reply_mode: never → False, otherwise → True.
-
-        For auto/smart modes the actual decision is made later by
-        the engagement system inside ``_process_live_turn``.
-        """
-        mode = str(getattr(turn, "reply_mode", "always") or "always").strip().lower()
-        return mode not in {"never", "silent", "none", "no_reply"}
+        """Check reply_mode: never → False, otherwise → True."""
+        return should_reply_for_turn(turn)
 
     def _get_model_for_chat(self, config: SessionConfig, transcript: Transcript) -> str:
         """根据是否有多模态输入，动态选择主模型。
@@ -1455,30 +1055,12 @@ class AsyncRolePlayEngine:
         max_context_messages: int = 8,
         max_context_chars: int = 1200,
     ) -> str:
-        context_lines: list[str] = []
-        for message in transcript.messages:
-            role = str(message.role or "").strip().lower()
-            if role not in {"user", "assistant"}:
-                continue
-            text = str(message.content or "").strip()
-            if not text:
-                continue
-            speaker = str(message.speaker or role).strip()
-            context_lines.append(f"[{role}][{speaker}] {text}")
-
-        if max_context_messages > 0:
-            context_lines = context_lines[-max_context_messages:]
-
-        context_text = "\n".join(context_lines)
-        if max_context_chars > 0 and len(context_text) > max_context_chars:
-            context_text = context_text[-max_context_chars:]
-
-        return (
-            f"user_id={participant.user_id}\n"
-            f"speaker={participant.name}\n"
-            f"latest_user_content={content}\n"
-            "conversation_context=\n"
-            f"{context_text}"
+        return build_memory_extract_task_input(
+            transcript=transcript,
+            participant=participant,
+            content=content,
+            max_context_messages=max_context_messages,
+            max_context_chars=max_context_chars,
         )
 
     async def _generate_assistant_message(
