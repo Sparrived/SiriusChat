@@ -4,6 +4,22 @@
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-04-13
+
+### Changed (Internal)
+- **`AsyncRolePlayEngine` 神类拆分（TD-09）**：将 2576 行的 `core/engine.py` 中内聚的方法组提取为独立模块，engine 方法保留为 thin wrapper：
+  - `sirius_chat/core/memory_runner.py`：5 个记忆/事件任务函数（`run_memory_extract_task`、`run_self_memory_extract_task`、`run_batch_event_extract`、`run_memory_manager_task`、`build_memory_extract_task_input`）
+  - `sirius_chat/core/engagement_pipeline.py`：3 个参与度/回复决策函数（`build_heat_analysis`、`run_engagement_intent_analysis`、`should_reply_for_turn`）
+  - `sirius_chat/core/chat_builder.py`：6 个聊天上下文构建函数（`has_multimodal_inputs`、`get_model_for_chat`、`is_internal_memory_metadata_line`、`sanitize_assistant_content`、`collect_internal_system_notes`、`build_chat_main_request_context`）+ 3 个正则常量
+  - `engine.py` 行数：2576 → 1932（减少 644 行，-25%）
+
+- **`LiveSessionContext` 重构（TD-11）**：将 16 字段的平坦 dataclass 按抽象层次拆分为 3 个子对象：
+  - `SessionStores`：存储层（`file_store`、`event_file_store`、`token_store`、`self_memory_store`）
+  - `SessionSubsystems`：子系统层（`event_store`、`event_bus`、`bg_task_manager`、`skill_registry`、`skill_executor`、`self_memory`）
+  - `SessionCounters`：计数器层（`task_token_usage`、`user_message_count_since_extract`、`self_memory_turn_counter`）
+  - `LiveSessionContext` 现仅含 `stores`、`subsystems`、`counters` 三个子对象 + 4 个状态字段（`known_by_id`、`known_by_label`、`pending_turn`、`llm_semaphore`）
+  - `LiveSessionContext` 为内部实现细节，未在公开 API 中导出，无外部破坏
+
 ## [0.19.0] - 2026-04-13
 
 ### Added
