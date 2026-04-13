@@ -2336,7 +2336,7 @@
             }
           ],
           "return_type": "PersonaSpec | None",
-          "docstring": "Load the persisted :class:`PersonaSpec` for a specific agent key.\n\nReturns ``None`` if the key does not exist or no spec was saved."
+          "docstring": "Load the persisted :class:`PersonaSpec` for a specific agent key.\n\nReturns the latest staged spec when a generation attempt is pending;\notherwise returns the last successful spec. Returns ``None`` if the key\ndoes not exist or no spec was saved."
         },
         {
           "name": "persist_generated_agent_profile",

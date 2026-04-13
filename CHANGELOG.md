@@ -4,6 +4,16 @@
 
 ## [Unreleased]
 
+## [0.22.1] - 2026-04-14
+
+### Changed
+- **人格生成输入预持久化**：`abuild_roleplay_prompt_from_answers_and_apply(...)`、`aupdate_agent_prompt(...)`、`aregenerate_agent_prompt_from_dependencies(...)` 现在会先把最新 `PersonaSpec` 与待生成快照落盘，再调用模型，避免在生成失败时丢失已经收集的高层人格输入。
+- **轨迹文件增强**：`generated_agent_traces/<agent_key>.json` 在正式生成前会先记录待生成快照；生成成功后自动清理 pending 状态，失败时保留最近一次失败信息与依赖文件快照，便于恢复与排查。
+
+### Fixed
+- **失败恢复能力**：`load_persona_spec(...)` 现在能优先返回最近一次暂存的人格输入，保证 build / update / regenerate 失败后仍可恢复问卷回答、背景设定和 `dependency_files`。
+- **迁移说明补强**：更新 `docs/migration-roleplay-v0.20.md`、`docs/architecture.md`、`docs/external-usage.md`、`docs/full-architecture-flow.md` 与相关 SKILL，明确外部接入方应理解新的“先落盘、后生成”工作流。
+
 ## [0.22.0] - 2026-04-13
 
 ### Added

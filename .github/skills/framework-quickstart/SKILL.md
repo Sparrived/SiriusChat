@@ -153,14 +153,14 @@ description: "当你需要在不通读全部代码的情况下快速理解 Siriu
   - 中间件通过 MiddlewareChain 串联，可透明地为任意 provider 添加流控、重试、监控等功能
 - `providers/mock.py` 提供可复现的本地测试能力。
 - `providers/*` 实现具体的 LLM 后端。
-- `roleplay_prompting.py` 提供自动问题清单、回答提取式提示词生成、关键词/依赖文件驱动的人格生成、人格持久化、完整本地生成轨迹与依赖文件重生能力；问卷支持 `default` / `companion` / `romance` / `group_chat` 四类模板，可通过 `list_roleplay_question_templates()` 获取模板名，再用 `generate_humanized_roleplay_questions(template=...)` 生成对应的高层人格问卷。
+- `roleplay_prompting.py` 提供自动问题清单、回答提取式提示词生成、关键词/依赖文件驱动的人格生成、人格持久化、完整本地生成轨迹与依赖文件重生能力；问卷支持 `default` / `companion` / `romance` / `group_chat` 四类模板，可通过 `list_roleplay_question_templates()` 获取模板名，再用 `generate_humanized_roleplay_questions(template=...)` 生成对应的高层人格问卷。对会写入 `work_path` 的人格生成链路，会先暂存 `PersonaSpec` 与待生成快照，再调用模型。
 - 内置 provider 包含 `OpenAICompatibleProvider`、`DeepSeekProvider`、`SiliconFlowProvider` 与 `VolcengineArkProvider`。
 - 若配置了多 provider，`AutoRoutingProvider` 会按模型前缀自动选择可用 provider。
 - `cli.py` 是库内薄封装，默认执行单轮会话；同时提供人格模板辅助命令 `--list-roleplay-question-templates` 与 `--print-roleplay-questions-template <template>`，方便外部快速导出问卷模板。
 - `api/` 是统一对外接口文件；外部调用优先使用该文件暴露的 API。
 - Provider 检测流程已下沉到 `providers/routing.py`：配置检查 -> 平台适配检查 -> 可用性检查（依赖 `healthcheck_model`）。
 - Provider 注册命令要求显式提供检测模型：`/provider add <type> <api_key> <healthcheck_model> [base_url]`。
-- 提示词流程：`list_roleplay_question_templates()` 暴露问卷模板枚举，`generate_humanized_roleplay_questions(template=...)` 产出高层人格问题；`agenerate_agent_prompts_from_answers` / `agenerate_from_persona_spec`（支持 `trait_keywords`、`answers`、`dependency_files`）生成完整 `GeneratedSessionPreset`。推荐先收集人物原型、核心矛盾、关系策略、情绪原则、表达节奏、边界和小缺点等上位约束，再让生成器展开为具体人物小传与语言习惯；推荐将生成结果作为 agent 资产持久化（`generated_agents.json`），并利用 `generated_agent_traces/<agent_key>.json` 保存完整生成轨迹，再通过 `select_generated_agent_profile` + `create_session_config_from_selected_agent` 按 key 创建会话配置。依赖文件更新后可调用 `aregenerate_agent_prompt_from_dependencies(...)` 直接重生人格。
+- 提示词流程：`list_roleplay_question_templates()` 暴露问卷模板枚举，`generate_humanized_roleplay_questions(template=...)` 产出高层人格问题；`agenerate_agent_prompts_from_answers` / `agenerate_from_persona_spec`（支持 `trait_keywords`、`answers`、`dependency_files`）生成完整 `GeneratedSessionPreset`。推荐先收集人物原型、核心矛盾、关系策略、情绪原则、表达节奏、边界和小缺点等上位约束，再让生成器展开为具体人物小传与语言习惯；推荐将生成结果作为 agent 资产持久化（`generated_agents.json`），并利用 `generated_agent_traces/<agent_key>.json` 保存完整生成轨迹。对于 `abuild_roleplay_prompt_from_answers_and_apply(...)`、`aupdate_agent_prompt(...)`、`aregenerate_agent_prompt_from_dependencies(...)` 三条持久化链路，框架会先落盘输入快照，再调用模型，失败时可通过 `load_persona_spec(...)` 恢复最近一次输入。依赖文件更新后可调用 `aregenerate_agent_prompt_from_dependencies(...)` 直接重生人格。
 - 内部实现允许重构；当前未发布阶段若影响外部接口，可直接升级 `api/`，并同步文档与示例。
 - 内部新增能力需同步在 `api/` 提供对外入口。
 - ✨ **(v0.12.0)** `arun_live_message` 新增 `on_reply`（引擎管理事件订阅回调）、`user_profile`（消息处理前自动注册用户）、`timeout`（引擎管理超时与清理）参数，大幅减少外部集成样板代码。详见 `docs/migration-v0.12.md`。

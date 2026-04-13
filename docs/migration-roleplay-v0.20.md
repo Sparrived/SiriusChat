@@ -1,4 +1,4 @@
-# 外部人格生成迁移指南：v0.19.x → v0.22.0
+# 外部人格生成迁移指南：v0.19.x → v0.22.1
 
 ## 适用范围
 
@@ -11,6 +11,26 @@
 本次升级不改变会话主流程 API，但**升级了人格生成器的输入模型、持久化产物和再生能力**。
 
 在后续版本中，这条升级路径又继续增强：问卷现在支持模板化场景选择（`default` / `companion` / `romance` / `group_chat`），推荐外部系统优先收集高层人格 brief，再交给 LLM 具体化。
+
+如果你是外部接入方，本文的目标不是让你“勉强兼容旧调用”，而是帮助你**真正切换到新的人格生成器工作流**：
+
+1. 不再手写整段 `global_system_prompt`
+2. 不再让前端或运营直接维护最终人格长文
+3. 改为维护 `template + answers + dependency_files + traces`
+4. 把人格生成纳入可观测、可重生、可审计的资产流
+
+---
+
+## 先看结论：外部现在应该怎么接
+
+推荐把人格生成拆成四层：
+
+1. **模板层**：用 `list_roleplay_question_templates()` 选择场景模板。
+2. **输入层**：用 `generate_humanized_roleplay_questions(template=...)` 产出高层问题，只收集人物原型、关系策略、情绪原则、边界和小缺点。
+3. **资产层**：把输入组织成 `PersonaSpec`，必要时挂接 `dependency_files`。
+4. **运行层**：调用 `abuild_roleplay_prompt_from_answers_and_apply(...)` 或 `agenerate_from_persona_spec(...)`，并把 `generated_agents.json` + `generated_agent_traces/` 当成正式资产。
+
+如果你现在的外部系统还在“人工手写 prompt 再直接塞给模型”，建议优先迁到这四层结构。
 
 ---
 
@@ -72,6 +92,13 @@
 
 这意味着外部系统不需要自己维护多套问题表，只要存一份模板名，就能在不同场景下切换问题清单。
 
+推荐映射关系：
+
+- `default`：通用人格、普通角色设定
+- `companion`：陪伴型、情绪支持型、长期在场型角色
+- `romance`：恋爱向、亲密关系型角色
+- `group_chat`：群聊型、多人互动型角色
+
 如果只想通过命令行拿问题清单，也可以直接使用：
 
 ```bash
@@ -85,9 +112,11 @@ sirius-chat --print-roleplay-questions-template romance
 
 - `<work_path>/generated_agents.json`
 
-新版本还会额外持久化完整生成轨迹：
+新版本会先暂存输入，再额外持久化完整生成轨迹：
 
 - `<work_path>/generated_agent_traces/<agent_key>.json`
+
+并且在发起模型调用前，会先把最近一次 `PersonaSpec` 暂存到 `<work_path>/generated_agents.json`。如果生成失败，外部仍然可以通过 `load_persona_spec(work_path, agent_key)` 取回这次输入。
 
 每条轨迹包含：
 
@@ -99,6 +128,8 @@ sirius-chat --print-roleplay-questions-template romance
 - 最终输出的 preset
 - 依赖文件快照（完整内容、sha256、缺失状态）
 - 触发的 prompt 强化项
+
+也就是说，新的推荐链路不只是“有 trace 可审计”，而是“即便这次生成失败，前面收集的高层人格输入和依赖文件快照也已经先落盘”。
 
 这意味着外部系统现在可以审计人格生成来源，而不必只看最终结果。
 
@@ -118,7 +149,112 @@ sirius-chat --print-roleplay-questions-template romance
 
 ---
 
+## 不要继续这样接
+
+如果你的外部系统还存在下面任一种做法，建议迁移时一起清掉：
+
+### 1. 不要让前端直接产出最终系统提示词
+
+不推荐：
+
+- 前端表单直接让用户填写一大段人格 prompt
+- 运营在后台手工维护最终 `global_system_prompt`
+- 外部服务把最终 prompt 当成唯一事实来源
+
+推荐：
+
+- 前端只维护 `template`
+- 用户或运营只回答高层问题
+- 由生成人格 API 负责把抽象输入展开为具体角色指南
+
+### 2. 不要手工改写 `generated_agents.json`
+
+不推荐把 `generated_agents.json` 当成手工编辑文件。这个文件应该被视为生成结果资产，而不是运营配置源。
+
+推荐把以下内容作为外部系统的真实输入源：
+
+- 模板名
+- 高层回答
+- 关键词标签
+- 背景母题
+- 依赖文件路径
+
+### 3. 不要跳过轨迹文件
+
+如果你的系统只保存最终人格文本，不保存 `generated_agent_traces/<agent_key>.json`，后面很难追踪：
+
+- 这次人格为什么变了
+- 是模型返回变了还是输入变了
+- 是哪份依赖文件影响了结果
+
+外部系统至少应接入 `load_persona_generation_traces(...)`，把最近一次 build / update / regenerate 结果纳入观测。
+
+---
+
 ## 迁移步骤
+
+### 推荐的最小可用迁移范式
+
+如果你只想知道“外部现在最推荐的接法是什么”，直接照下面这条链路实现：
+
+```python
+from sirius_chat.api import (
+    PersonaSpec,
+    RolePlayAnswer,
+    abuild_roleplay_prompt_from_answers_and_apply,
+    aregenerate_agent_prompt_from_dependencies,
+    generate_humanized_roleplay_questions,
+    list_roleplay_question_templates,
+    load_persona_generation_traces,
+)
+
+# 1. 选择模板
+templates = list_roleplay_question_templates()
+questions = generate_humanized_roleplay_questions(template="companion")
+
+# 2. 只回答高层人格问题
+answers = [
+    RolePlayAnswer(
+        question=questions[0].question,
+        answer="像一个安静但可靠的长期陪伴者，熟了以后很护短。",
+        perspective=questions[0].perspective,
+    ),
+    RolePlayAnswer(
+        question=questions[1].question,
+        answer="对方低落时先接住情绪，再慢慢帮对方理清思路。",
+        perspective=questions[1].perspective,
+    ),
+]
+
+# 3. 组装 PersonaSpec
+spec = PersonaSpec(
+    agent_name="北辰",
+    answers=answers,
+    dependency_files=["persona/notes.md", "persona/style_examples.txt"],
+)
+
+# 4. 生成并写入当前 SessionConfig
+await abuild_roleplay_prompt_from_answers_and_apply(
+    provider,
+    config=config,
+    model="deepseek-ai/DeepSeek-V3.2",
+    persona_spec=spec,
+    persona_key="beichen_v2",
+)
+
+# 5. 读取轨迹，纳入可观测范围
+traces = load_persona_generation_traces(config.work_path, "beichen_v2")
+
+# 6. 后续依赖文件更新时直接重生
+await aregenerate_agent_prompt_from_dependencies(
+    provider,
+    work_path=config.work_path,
+    agent_key="beichen_v2",
+    model="deepseek-ai/DeepSeek-V3.2",
+)
+```
+
+只要你的外部系统能跑通上面这条链路，就已经真正切到新的人格生成器了。
 
 ### 场景 A：你原来只用问答生成，不关心文件依赖
 
@@ -138,6 +274,12 @@ await abuild_roleplay_prompt_from_answers_and_apply(
 ```
 
 这段代码**仍然有效，无需修改**。
+
+但对外部系统来说，这里更推荐你把“旧问答流”继续往前推进一小步：
+
+- 不只是继续传 `answers`
+- 而是把 `answers` 改成从模板问卷收集而来
+- 并逐步收敛到 `persona_spec=PersonaSpec(...)` 的统一入口
 
 如果你希望把旧的“手写问卷”升级成模板问卷，推荐改成：
 
@@ -161,6 +303,25 @@ questions = generate_humanized_roleplay_questions(template="companion")
 - 边界与小缺点
 
 而不是直接手写整段系统提示词。
+
+如果外部调用方还能改接口，推荐进一步统一到：
+
+```python
+spec = PersonaSpec(
+    agent_name=config.agent.name,
+    answers=answers,
+)
+
+await abuild_roleplay_prompt_from_answers_and_apply(
+    provider,
+    config=config,
+    model="deepseek-ai/DeepSeek-V3.2",
+    persona_spec=spec,
+    persona_key="assistant_v2",
+)
+```
+
+这样后续再接 `dependency_files` 或 `background` 时，不需要改调用形状。
 
 推荐你额外接入：
 
@@ -333,3 +494,18 @@ updated = await aregenerate_agent_prompt_from_dependencies(
 5. 最后把素材更新流程切换到 `aregenerate_agent_prompt_from_dependencies(...)`。
 
 这条路径风险最低，也最适合已有外部系统平滑迁移。
+
+---
+
+## 迁移完成后的自检清单
+
+如果你想确认外部系统是否已经“真的在用新生成器”，至少检查这几项：
+
+- 你是否已经不再手写最终 `global_system_prompt`
+- 你是否已经在外部输入里显式保存 `template`
+- 你是否已经使用 `generate_humanized_roleplay_questions(template=...)` 来收集高层回答
+- 你是否已经把输入组织为 `PersonaSpec` 或与之等价的结构
+- 你是否已经保存并读取 `generated_agent_traces/<agent_key>.json`
+- 你是否已经把素材更新流切到 `aregenerate_agent_prompt_from_dependencies(...)`
+
+如果以上仍有 2 项以上未满足，你大概率还停留在“旧人格生成器兼容模式”，而不是“新人格生成器工作流”。

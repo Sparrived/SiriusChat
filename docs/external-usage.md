@@ -662,6 +662,11 @@ persona_input = {
 3. 组装 `PersonaSpec` 或直接把 `answers + dependency_files` 传给生成 API。
 4. 用 `abuild_roleplay_prompt_from_answers_and_apply(...)` 写入当前 `SessionConfig`，或用 `agenerate_from_persona_spec(...)` 先生成资产再持久化。
 
+补充说明：
+
+- 对 `abuild_roleplay_prompt_from_answers_and_apply(...)`、`aupdate_agent_prompt(...)`、`aregenerate_agent_prompt_from_dependencies(...)` 这三条会写入 `work_path` 的链路，框架会先把最新 `PersonaSpec` 和待生成快照落盘，再调用模型。
+- 如果模型生成阶段报错，可直接通过 `load_persona_spec(work_path, agent_key)` 取回最近一次高层输入，避免问卷回答、背景设定或 `dependency_files` 丢失。
+
 如果你需要一个可直接输出问卷骨架的示例脚本，可运行：
 
 ```bash
@@ -689,8 +694,8 @@ session_config = create_session_config_from_selected_agent(
 说明：
 
 - 推荐流程为“先生成 agent 资产，再按 `agent_key` 选择后创建会话”，避免会话先创建后再反向覆盖主 AI 设定。
-- 生成资产保存在 `<work_path>/generated_agents.json`，可跨次会话复用。
-- 完整生成轨迹保存在 `<work_path>/generated_agent_traces/<agent_key>.json`。
+- 生成资产保存在 `<work_path>/generated_agents.json`，可跨次会话复用；若生成中途失败，该文件也会保留最近一次暂存的 `PersonaSpec`。
+- 完整生成轨迹保存在 `<work_path>/generated_agent_traces/<agent_key>.json`；模型调用前的待生成快照也会先写入同一路径。
 - 外部迁移建议见 `docs/migration-roleplay-v0.20.md`。
 
 说明：

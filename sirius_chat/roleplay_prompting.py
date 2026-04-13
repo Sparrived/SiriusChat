@@ -14,6 +14,8 @@ from sirius_chat.providers.base import AsyncLLMProvider, GenerationRequest, LLMP
 
 GENERATED_AGENTS_FILE_NAME = "generated_agents.json"
 GENERATED_AGENT_TRACE_DIR_NAME = "generated_agent_traces"
+PENDING_PERSONA_SPECS_FIELD_NAME = "pending_persona_specs"
+PENDING_GENERATION_TRACE_FIELD_NAME = "pending_trace"
 
 
 @dataclass(slots=True)
@@ -87,6 +89,15 @@ class PersonaGenerationTrace:
     dependency_snapshots: list[DependencyFileSnapshot] = field(default_factory=list)
     persona_spec: PersonaSpec = field(default_factory=PersonaSpec)
     output_preset: dict[str, object] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class PreparedPersonaGenerationInput:
+    normalized_spec: PersonaSpec
+    prompt_enhancements: list[str] = field(default_factory=list)
+    dependency_snapshots: list[DependencyFileSnapshot] = field(default_factory=list)
+    system_prompt: str = ""
+    user_prompt: str = ""
 
 
 GeneratedSessionPreset = AgentPreset
@@ -502,11 +513,44 @@ def _generation_trace_file_path(work_path: Path, agent_key: str) -> Path:
     return _generated_agent_trace_dir_path(work_path) / f"{_normalize_agent_key(agent_key)}.json"
 
 
-def _load_persona_generation_traces_raw(work_path: Path, agent_key: str) -> list[PersonaGenerationTrace]:
+def _load_generation_trace_payload(work_path: Path, agent_key: str) -> dict[str, object]:
     file_path = _generation_trace_file_path(work_path, agent_key)
     if not file_path.exists():
-        return []
+        return {
+            "agent_key": _normalize_agent_key(agent_key),
+            "history": [],
+        }
     payload = json.loads(file_path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        return {
+            "agent_key": _normalize_agent_key(agent_key),
+            "history": [],
+        }
+    history = payload.get("history", [])
+    payload["history"] = history if isinstance(history, list) else []
+    payload["agent_key"] = _normalize_agent_key(agent_key)
+    return payload
+
+
+def _write_generation_trace_payload(
+    work_path: Path,
+    agent_key: str,
+    payload: dict[str, object],
+) -> Path:
+    file_path = _generation_trace_file_path(work_path, agent_key)
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    serialized_payload = dict(payload)
+    history = serialized_payload.get("history", [])
+    serialized_payload["history"] = history if isinstance(history, list) else []
+    serialized_payload["agent_key"] = _normalize_agent_key(agent_key)
+    tmp = file_path.with_suffix(file_path.suffix + ".tmp")
+    tmp.write_text(json.dumps(serialized_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(file_path)
+    return file_path
+
+
+def _load_persona_generation_traces_raw(work_path: Path, agent_key: str) -> list[PersonaGenerationTrace]:
+    payload = _load_generation_trace_payload(work_path, agent_key)
     raw_history = payload.get("history", [])
     traces: list[PersonaGenerationTrace] = []
     if isinstance(raw_history, list):
@@ -526,18 +570,22 @@ def _save_persona_generation_trace(
     agent_key: str,
     trace: PersonaGenerationTrace,
 ) -> Path:
-    file_path = _generation_trace_file_path(work_path, agent_key)
-    file_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = _load_generation_trace_payload(work_path, agent_key)
     history = _load_persona_generation_traces_raw(work_path, agent_key)
     history.append(trace)
-    payload = {
-        "agent_key": _normalize_agent_key(agent_key),
-        "history": [_trace_to_dict(item) for item in history],
-    }
-    tmp = file_path.with_suffix(file_path.suffix + ".tmp")
-    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp.replace(file_path)
-    return file_path
+    payload["history"] = [_trace_to_dict(item) for item in history]
+    payload.pop(PENDING_GENERATION_TRACE_FIELD_NAME, None)
+    return _write_generation_trace_payload(work_path, agent_key, payload)
+
+
+def _save_pending_persona_generation_trace(
+    work_path: Path,
+    agent_key: str,
+    trace: PersonaGenerationTrace,
+) -> Path:
+    payload = _load_generation_trace_payload(work_path, agent_key)
+    payload[PENDING_GENERATION_TRACE_FIELD_NAME] = _trace_to_dict(trace)
+    return _write_generation_trace_payload(work_path, agent_key, payload)
 
 
 def _preset_to_dict(
@@ -584,13 +632,34 @@ def _dict_to_preset(payload: dict[str, object]) -> GeneratedSessionPreset:
     )
 
 
+def _load_pending_persona_specs(raw_pending_specs: object) -> dict[str, PersonaSpec]:
+    pending_specs: dict[str, PersonaSpec] = {}
+    if not isinstance(raw_pending_specs, dict):
+        return pending_specs
+    for key, value in raw_pending_specs.items():
+        spec_payload: object = value
+        if isinstance(value, dict) and isinstance(value.get("persona_spec"), dict):
+            spec_payload = value.get("persona_spec", {})
+        if isinstance(spec_payload, dict):
+            pending_specs[_normalize_agent_key(str(key))] = _dict_to_persona_spec(spec_payload)
+    return pending_specs
+
+
+def _resolve_persisted_persona_spec(
+    agent_key: str,
+    specs: dict[str, PersonaSpec],
+    pending_specs: dict[str, PersonaSpec],
+) -> PersonaSpec | None:
+    return pending_specs.get(agent_key) or specs.get(agent_key)
+
+
 def _load_library_full(
     work_path: Path,
-) -> tuple[dict[str, GeneratedSessionPreset], str, dict[str, PersonaSpec]]:
-    """Load library returning presets, selected key, and persisted specs."""
+) -> tuple[dict[str, GeneratedSessionPreset], str, dict[str, PersonaSpec], dict[str, PersonaSpec]]:
+    """Load library returning presets, selected key, saved specs, and pending specs."""
     file_path = _generated_agents_file_path(work_path)
     if not file_path.exists():
-        return {}, "", {}
+        return {}, "", {}, {}
     payload = json.loads(file_path.read_text(encoding="utf-8"))
     selected = str(payload.get("selected_generated_agent", "")).strip()
     raw_agents = dict(payload.get("generated_agents", {}))
@@ -604,24 +673,27 @@ def _load_library_full(
         spec_data = value.get("persona_spec")
         if isinstance(spec_data, dict):
             specs[normalized_key] = _dict_to_persona_spec(spec_data)
+    pending_specs = _load_pending_persona_specs(payload.get(PENDING_PERSONA_SPECS_FIELD_NAME, {}))
     if selected and selected not in agents:
         selected = ""
-    return agents, selected, specs
+    return agents, selected, specs, pending_specs
 
 
 def load_generated_agent_library(work_path: Path) -> tuple[dict[str, GeneratedSessionPreset], str]:
-    agents, selected, _ = _load_library_full(work_path)
+    agents, selected, _, _ = _load_library_full(work_path)
     return agents, selected
 
 
 def load_persona_spec(work_path: Path, agent_key: str) -> PersonaSpec | None:
     """Load the persisted :class:`PersonaSpec` for a specific agent key.
 
-    Returns ``None`` if the key does not exist or no spec was saved.
+    Returns the latest staged spec when a generation attempt is pending;
+    otherwise returns the last successful spec. Returns ``None`` if the key
+    does not exist or no spec was saved.
     """
     key = _normalize_agent_key(agent_key)
-    _, _, specs = _load_library_full(work_path)
-    return specs.get(key)
+    _, _, specs, pending_specs = _load_library_full(work_path)
+    return _resolve_persisted_persona_spec(key, specs, pending_specs)
 
 
 def _save_generated_agent_library(
@@ -629,6 +701,7 @@ def _save_generated_agent_library(
     agents: dict[str, GeneratedSessionPreset],
     selected_generated_agent: str,
     specs: dict[str, PersonaSpec] | None = None,
+    pending_specs: dict[str, PersonaSpec] | None = None,
 ) -> Path:
     file_path = _generated_agents_file_path(work_path)
     file_path.parent.mkdir(parents=True, exist_ok=True)
@@ -639,10 +712,25 @@ def _save_generated_agent_library(
             for key, value in agents.items()
         },
     }
+    if pending_specs:
+        payload[PENDING_PERSONA_SPECS_FIELD_NAME] = {
+            key: _persona_spec_to_dict(value) for key, value in pending_specs.items()
+        }
     tmp = file_path.with_suffix(file_path.suffix + ".tmp")
     tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     tmp.replace(file_path)
     return file_path
+
+
+def _persist_pending_persona_spec(
+    work_path: Path,
+    agent_key: str,
+    persona_spec: PersonaSpec,
+) -> Path:
+    key = _normalize_agent_key(agent_key)
+    agents, selected, specs, pending_specs = _load_library_full(work_path)
+    pending_specs[key] = persona_spec
+    return _save_generated_agent_library(work_path, agents, selected, specs, pending_specs)
 
 
 def persist_generated_agent_profile(
@@ -658,7 +746,7 @@ def persist_generated_agent_profile(
     if not config.global_system_prompt.strip():
         raise ValueError("全局系統提示不能为空")
 
-    agents, selected, existing_specs = _load_library_full(config.work_path)
+    agents, selected, existing_specs, existing_pending_specs = _load_library_full(config.work_path)
     agents[key] = GeneratedSessionPreset(
         agent=Agent(
             name=config.agent.name,
@@ -672,18 +760,19 @@ def persist_generated_agent_profile(
     )
     if persona_spec is not None:
         existing_specs[key] = persona_spec
+    existing_pending_specs.pop(key, None)
     if select_after_save:
         selected = key
-    _save_generated_agent_library(config.work_path, agents, selected, existing_specs)
+    _save_generated_agent_library(config.work_path, agents, selected, existing_specs, existing_pending_specs)
     return key
 
 
 def select_generated_agent_profile(work_path: Path, agent_key: str) -> GeneratedSessionPreset:
     key = _normalize_agent_key(agent_key)
-    agents, _, specs = _load_library_full(work_path)
+    agents, _, specs, pending_specs = _load_library_full(work_path)
     if key not in agents:
         raise ValueError(f"找不到生成的主教：{agent_key}")
-    _save_generated_agent_library(work_path, agents, key, specs)
+    _save_generated_agent_library(work_path, agents, key, specs, pending_specs)
     return agents[key]
 
 
@@ -948,6 +1037,191 @@ def _build_generation_user_prompt(
     return "\n".join(lines)
 
 
+def _prepare_persona_generation_input(
+    spec: PersonaSpec,
+    *,
+    dependency_root: Path | None,
+    base_temperature: float,
+    base_max_tokens: int,
+) -> PreparedPersonaGenerationInput:
+    if not spec.trait_keywords and not spec.answers and not spec.dependency_files:
+        raise ValueError("PersonaSpec 必须提供 trait_keywords、answers 或 dependency_files 之一")
+
+    if spec.dependency_files and dependency_root is None:
+        raise ValueError("使用 dependency_files 时必须提供 dependency_root")
+
+    normalized_spec = spec.merge(
+        dependency_files=[_normalize_dependency_file_path(item) for item in spec.dependency_files],
+    )
+    prompt_enhancements = _collect_prompt_enhancements(normalized_spec)
+    dependency_snapshots = _load_dependency_file_snapshots(
+        dependency_root=dependency_root if dependency_root is not None else Path("."),
+        dependency_files=normalized_spec.dependency_files,
+    )
+    dependency_prompt = _format_dependency_snapshots_for_prompt(dependency_snapshots)
+    system_prompt = _build_generation_system_prompt(prompt_enhancements)
+    user_prompt = _build_generation_user_prompt(
+        agent_name=normalized_spec.agent_name,
+        agent_alias=normalized_spec.agent_alias,
+        trait_keywords=normalized_spec.trait_keywords,
+        answers=normalized_spec.answers,
+        background=normalized_spec.background,
+        dependency_prompt=dependency_prompt,
+        prompt_enhancements=prompt_enhancements,
+        base_temperature=base_temperature,
+        base_max_tokens=base_max_tokens,
+        output_language=normalized_spec.output_language,
+    )
+    return PreparedPersonaGenerationInput(
+        normalized_spec=normalized_spec,
+        prompt_enhancements=prompt_enhancements,
+        dependency_snapshots=dependency_snapshots,
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+    )
+
+
+def _build_persona_generation_trace(
+    *,
+    prepared: PreparedPersonaGenerationInput,
+    agent_key: str,
+    operation: str,
+    model: str,
+    temperature: float,
+    max_tokens: int,
+    raw_response: str,
+    parsed_payload: dict[str, object],
+    output_preset: dict[str, object],
+) -> PersonaGenerationTrace:
+    return PersonaGenerationTrace(
+        agent_key=_normalize_agent_key(agent_key),
+        generated_at=datetime.now(timezone.utc).isoformat(),
+        operation=operation,
+        model=model,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        system_prompt=prepared.system_prompt,
+        user_prompt=prepared.user_prompt,
+        raw_response=raw_response,
+        parsed_payload=parsed_payload,
+        prompt_enhancements=prepared.prompt_enhancements,
+        dependency_snapshots=prepared.dependency_snapshots,
+        persona_spec=prepared.normalized_spec,
+        output_preset=output_preset,
+    )
+
+
+async def _agenerate_from_prepared_persona_input(
+    provider: LLMProvider | AsyncLLMProvider,
+    prepared: PreparedPersonaGenerationInput,
+    *,
+    model: str,
+    temperature: float,
+    max_tokens: int,
+    base_model: str,
+    base_temperature: float,
+    base_max_tokens: int,
+    agent_key: str,
+    operation: str,
+) -> tuple[GeneratedSessionPreset, PersonaGenerationTrace]:
+    raw = await _agenerate_prompt(
+        provider,
+        model=model,
+        system_prompt=prepared.system_prompt,
+        user_prompt=prepared.user_prompt,
+        temperature=temperature,
+        max_tokens=max_tokens,
+    )
+    preset = _build_preset_from_response(
+        raw,
+        agent_name=prepared.normalized_spec.agent_name,
+        agent_alias=prepared.normalized_spec.agent_alias,
+        base_model=base_model,
+        base_temperature=base_temperature,
+        base_max_tokens=base_max_tokens,
+    )
+    parsed_payload = _extract_json_payload(raw) or {}
+    trace = _build_persona_generation_trace(
+        prepared=prepared,
+        agent_key=agent_key,
+        operation=operation,
+        model=model,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        raw_response=raw,
+        parsed_payload=parsed_payload,
+        output_preset=_preset_to_dict(preset, prepared.normalized_spec),
+    )
+    return preset, trace
+
+
+async def _arun_persisted_persona_generation(
+    provider: LLMProvider | AsyncLLMProvider,
+    spec: PersonaSpec,
+    *,
+    work_path: Path,
+    model: str,
+    dependency_root: Path | None,
+    temperature: float,
+    max_tokens: int,
+    base_model: str,
+    base_temperature: float,
+    base_max_tokens: int,
+    agent_key: str,
+    operation: str,
+) -> tuple[GeneratedSessionPreset, PersonaGenerationTrace, PersonaSpec]:
+    prepared = _prepare_persona_generation_input(
+        spec,
+        dependency_root=dependency_root,
+        base_temperature=base_temperature,
+        base_max_tokens=base_max_tokens,
+    )
+    _persist_pending_persona_spec(work_path, agent_key, prepared.normalized_spec)
+    pending_trace = _build_persona_generation_trace(
+        prepared=prepared,
+        agent_key=agent_key,
+        operation=operation,
+        model=model,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        raw_response="",
+        parsed_payload={"stage": "inputs_persisted"},
+        output_preset={},
+    )
+    _save_pending_persona_generation_trace(work_path, agent_key, pending_trace)
+    try:
+        preset, trace = await _agenerate_from_prepared_persona_input(
+            provider,
+            prepared,
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            base_model=base_model,
+            base_temperature=base_temperature,
+            base_max_tokens=base_max_tokens,
+            agent_key=agent_key,
+            operation=operation,
+        )
+    except Exception as exc:
+        failed_trace = _build_persona_generation_trace(
+            prepared=prepared,
+            agent_key=agent_key,
+            operation=operation,
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            raw_response="",
+            parsed_payload={
+                "stage": "generation_failed",
+                "error": f"{type(exc).__name__}: {exc}",
+            },
+            output_preset={},
+        )
+        _save_pending_persona_generation_trace(work_path, agent_key, failed_trace)
+        raise
+    return preset, trace, prepared.normalized_spec
+
+
 def _build_preset_from_response(
     raw: str,
     *,
@@ -1073,69 +1347,24 @@ async def _agenerate_from_persona_spec_with_trace(
     agent_key: str,
     operation: str,
 ) -> tuple[GeneratedSessionPreset, PersonaGenerationTrace]:
-    if not spec.trait_keywords and not spec.answers and not spec.dependency_files:
-        raise ValueError("PersonaSpec 必须提供 trait_keywords、answers 或 dependency_files 之一")
-
-    if spec.dependency_files and dependency_root is None:
-        raise ValueError("使用 dependency_files 时必须提供 dependency_root")
-
-    normalized_spec = spec.merge(
-        dependency_files=[_normalize_dependency_file_path(item) for item in spec.dependency_files],
-    )
-    prompt_enhancements = _collect_prompt_enhancements(normalized_spec)
-    dependency_snapshots = _load_dependency_file_snapshots(
-        dependency_root=dependency_root if dependency_root is not None else Path("."),
-        dependency_files=normalized_spec.dependency_files,
-    )
-    dependency_prompt = _format_dependency_snapshots_for_prompt(dependency_snapshots)
-    system_prompt = _build_generation_system_prompt(prompt_enhancements)
-
-    user_prompt = _build_generation_user_prompt(
-        agent_name=normalized_spec.agent_name,
-        agent_alias=normalized_spec.agent_alias,
-        trait_keywords=normalized_spec.trait_keywords,
-        answers=normalized_spec.answers,
-        background=normalized_spec.background,
-        dependency_prompt=dependency_prompt,
-        prompt_enhancements=prompt_enhancements,
+    prepared = _prepare_persona_generation_input(
+        spec,
+        dependency_root=dependency_root,
         base_temperature=base_temperature,
         base_max_tokens=base_max_tokens,
-        output_language=normalized_spec.output_language,
     )
-    raw = await _agenerate_prompt(
+    return await _agenerate_from_prepared_persona_input(
         provider,
+        prepared,
         model=model,
-        system_prompt=system_prompt,
-        user_prompt=user_prompt,
         temperature=temperature,
         max_tokens=max_tokens,
-    )
-    preset = _build_preset_from_response(
-        raw,
-        agent_name=normalized_spec.agent_name,
-        agent_alias=normalized_spec.agent_alias,
         base_model=base_model,
         base_temperature=base_temperature,
         base_max_tokens=base_max_tokens,
-    )
-    parsed_payload = _extract_json_payload(raw) or {}
-    trace = PersonaGenerationTrace(
-        agent_key=_normalize_agent_key(agent_key),
-        generated_at=datetime.now(timezone.utc).isoformat(),
+        agent_key=agent_key,
         operation=operation,
-        model=model,
-        temperature=temperature,
-        max_tokens=max_tokens,
-        system_prompt=system_prompt,
-        user_prompt=user_prompt,
-        raw_response=raw,
-        parsed_payload=parsed_payload,
-        prompt_enhancements=prompt_enhancements,
-        dependency_snapshots=dependency_snapshots,
-        persona_spec=normalized_spec,
-        output_preset=_preset_to_dict(preset, normalized_spec),
     )
-    return preset, trace
 
 
 async def agenerate_agent_prompts_from_answers(
@@ -1239,9 +1468,10 @@ async def abuild_roleplay_prompt_from_answers_and_apply(
         if not persona_spec.agent_name:
             persona_spec = persona_spec.merge(agent_name=resolved_agent_name)
 
-    preset, trace = await _agenerate_from_persona_spec_with_trace(
+    preset, trace, persisted_spec = await _arun_persisted_persona_generation(
         provider,
         persona_spec,
+        work_path=config.work_path,
         model=model,
         dependency_root=config.work_path,
         temperature=temperature,
@@ -1265,7 +1495,7 @@ async def abuild_roleplay_prompt_from_answers_and_apply(
             config,
             agent_key=persona_key,
             select_after_save=select_after_save,
-            persona_spec=persona_spec,
+            persona_spec=persisted_spec,
         )
     return preset.global_system_prompt
 
@@ -1297,18 +1527,19 @@ async def aupdate_agent_prompt(
     the agent has no persisted spec (run the initial generation first).
     """
     key = _normalize_agent_key(agent_key)
-    agents, selected, specs = _load_library_full(work_path)
+    agents, selected, specs, pending_specs = _load_library_full(work_path)
 
     if key not in agents:
         raise ValueError(f"找不到 agent：{agent_key}")
-    if key not in specs:
+    current_spec = _resolve_persisted_persona_spec(key, specs, pending_specs)
+    if current_spec is None:
         raise ValueError(
             f"agent '{agent_key}' 没有持久化的 PersonaSpec，"
             "请先通过 abuild_roleplay_prompt_from_answers_and_apply 生成初始版本。"
         )
 
     existing_preset = agents[key]
-    merged_spec = specs[key].merge(
+    merged_spec = current_spec.merge(
         trait_keywords=trait_keywords,
         answers=answers,
         background=background,
@@ -1319,9 +1550,10 @@ async def aupdate_agent_prompt(
         output_language=output_language,
     )
 
-    preset, trace = await _agenerate_from_persona_spec_with_trace(
+    preset, trace, merged_spec = await _arun_persisted_persona_generation(
         provider,
         merged_spec,
+        work_path=work_path,
         model=model,
         dependency_root=work_path,
         temperature=temperature,
@@ -1335,9 +1567,10 @@ async def aupdate_agent_prompt(
 
     agents[key] = preset
     specs[key] = merged_spec
+    pending_specs.pop(key, None)
     if select_after_update:
         selected = key
-    _save_generated_agent_library(work_path, agents, selected, specs)
+    _save_generated_agent_library(work_path, agents, selected, specs, pending_specs)
     _save_persona_generation_trace(work_path, key, trace)
     return preset
 
@@ -1355,11 +1588,12 @@ async def aregenerate_agent_prompt_from_dependencies(
 ) -> GeneratedSessionPreset:
     """Regenerate an existing agent by re-reading its dependency files from disk."""
     key = _normalize_agent_key(agent_key)
-    agents, selected, specs = _load_library_full(work_path)
+    agents, selected, specs, pending_specs = _load_library_full(work_path)
 
     if key not in agents:
         raise ValueError(f"找不到 agent：{agent_key}")
-    if key not in specs:
+    current_spec = _resolve_persisted_persona_spec(key, specs, pending_specs)
+    if current_spec is None:
         raise ValueError(
             f"agent '{agent_key}' 没有持久化的 PersonaSpec，"
             "请先通过 abuild_roleplay_prompt_from_answers_and_apply 生成初始版本。"
@@ -1372,13 +1606,14 @@ async def aregenerate_agent_prompt_from_dependencies(
     if not dependency_values:
         raise ValueError("当前 agent 未配置 dependency_files，无法基于依赖文件重新生成")
 
-    merged_spec = specs[key].merge(
+    merged_spec = current_spec.merge(
         dependency_files=[_normalize_dependency_file_path(item) for item in dependency_values],
     )
 
-    preset, trace = await _agenerate_from_persona_spec_with_trace(
+    preset, trace, merged_spec = await _arun_persisted_persona_generation(
         provider,
         merged_spec,
+        work_path=work_path,
         model=model,
         dependency_root=work_path,
         temperature=temperature,
@@ -1392,8 +1627,9 @@ async def aregenerate_agent_prompt_from_dependencies(
 
     agents[key] = preset
     specs[key] = merged_spec
+    pending_specs.pop(key, None)
     if select_after_update:
         selected = key
-    _save_generated_agent_library(work_path, agents, selected, specs)
+    _save_generated_agent_library(work_path, agents, selected, specs, pending_specs)
     _save_persona_generation_trace(work_path, key, trace)
     return preset

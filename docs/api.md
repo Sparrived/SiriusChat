@@ -630,7 +630,9 @@ Load all locally persisted generation traces for *agent_key*.
 
 Load the persisted :class:`PersonaSpec` for a specific agent key.
 
-Returns ``None`` if the key does not exist or no spec was saved.
+Returns the latest staged spec when a generation attempt is pending;
+otherwise returns the last successful spec. Returns ``None`` if the key
+does not exist or no spec was saved.
 
 #### `persist_generated_agent_profile(config: SessionConfig, agent_key: str, select_after_save: bool, persona_spec: PersonaSpec | None) -> str`
 

@@ -1,4 +1,5 @@
 import asyncio
+import json
 from pathlib import Path
 import shutil
 
@@ -29,6 +30,12 @@ from sirius_chat.api import (
 )
 from sirius_chat.config import OrchestrationPolicy
 from sirius_chat.providers.mock import MockProvider
+
+
+class RaisingMockProvider(MockProvider):
+    def generate(self, request):  # type: ignore[override]
+        self.requests.append(request)
+        raise RuntimeError("mock generation failed")
 
 
 def test_generated_prompt_is_used_by_engine() -> None:
@@ -412,6 +419,59 @@ def test_persona_spec_persisted_along_with_output() -> None:
         assert saved_spec.answers[0].question == "风格"
         assert saved_spec.agent_name == "体贴助手"
 
+        payload = json.loads((config.work_path / GENERATED_AGENTS_FILE_NAME).read_text(encoding="utf-8"))
+        assert "pending_persona_specs" not in payload
+
+    asyncio.run(_run())
+
+
+def test_abuild_persists_pending_persona_spec_before_generation_failure() -> None:
+    async def _run() -> None:
+        work_path = Path("data/tests/roleplay_pending_build_failure")
+        if work_path.exists():
+            shutil.rmtree(work_path)
+        dependency_file = work_path / "persona.txt"
+        dependency_file.parent.mkdir(parents=True, exist_ok=True)
+        dependency_file.write_text("初始设定：更像一个慢热但可靠的朋友。", encoding="utf-8")
+
+        provider = RaisingMockProvider()
+        config = SessionConfig(
+            work_path=work_path,
+            preset=AgentPreset(
+                agent=Agent(name="北辰", persona="默认", model="mock-model"),
+                global_system_prompt="初始提示词",
+            ),
+        )
+
+        with pytest.raises(RuntimeError, match="mock generation failed"):
+            await abuild_roleplay_prompt_from_answers_and_apply(
+                provider,
+                config=config,
+                model="test-model",
+                answers=[RolePlayAnswer(question="关系", answer="像一个会慢慢建立信任的老朋友")],
+                dependency_files=["persona.txt"],
+                background="先把这些高层设定保存下来",
+                persona_key="failed_build_case",
+            )
+
+        saved_spec = load_persona_spec(work_path, "failed_build_case")
+        assert saved_spec is not None
+        assert saved_spec.background == "先把这些高层设定保存下来"
+        assert saved_spec.dependency_files == ["persona.txt"]
+        assert saved_spec.answers[0].question == "关系"
+
+        agents, selected = load_generated_agent_library(work_path)
+        assert agents == {}
+        assert selected == ""
+
+        trace_payload = json.loads(
+            (work_path / "generated_agent_traces" / "failed_build_case.json").read_text(encoding="utf-8")
+        )
+        assert trace_payload["history"] == []
+        assert trace_payload["pending_trace"]["parsed_payload"]["stage"] == "generation_failed"
+        assert "mock generation failed" in trace_payload["pending_trace"]["parsed_payload"]["error"]
+        assert trace_payload["pending_trace"]["dependency_snapshots"][0]["content"].startswith("初始设定")
+
     asyncio.run(_run())
 
 
@@ -569,6 +629,67 @@ def test_abuild_persists_persona_generation_trace_locally() -> None:
         assert traces[0].operation == "build"
         assert "name=北辰" in traces[0].user_prompt
         assert "agent_persona" in traces[0].raw_response
+
+        trace_payload = json.loads(
+            (config.work_path / "generated_agent_traces" / "trace_case.json").read_text(encoding="utf-8")
+        )
+        assert "pending_trace" not in trace_payload
+
+    asyncio.run(_run())
+
+
+def test_aupdate_keeps_pending_spec_when_regeneration_fails() -> None:
+    async def _run() -> None:
+        work_path = Path("data/tests/roleplay_pending_update_failure")
+        if work_path.exists():
+            shutil.rmtree(work_path)
+        provider = MockProvider(
+            responses=[
+                '{"agent_persona":"温和/耐心","global_system_prompt":"原始描述","temperature":0.6,"max_tokens":512}'
+            ]
+        )
+        config = SessionConfig(
+            work_path=work_path,
+            preset=AgentPreset(
+                agent=Agent(name="北辰", persona="默认", model="mock-model"),
+                global_system_prompt="初始",
+            ),
+        )
+
+        await abuild_roleplay_prompt_from_answers_and_apply(
+            provider,
+            config=config,
+            model="test-model",
+            answers=[RolePlayAnswer(question="性格", answer="温和耐心")],
+            persona_key="update_failed_case",
+        )
+
+        with pytest.raises(RuntimeError, match="mock generation failed"):
+            await aupdate_agent_prompt(
+                RaisingMockProvider(),
+                work_path=work_path,
+                agent_key="update_failed_case",
+                model="test-model",
+                background="这次想补充一段新的成长经历",
+            )
+
+        saved_spec = load_persona_spec(work_path, "update_failed_case")
+        assert saved_spec is not None
+        assert saved_spec.background == "这次想补充一段新的成长经历"
+
+        library, selected = load_generated_agent_library(work_path)
+        assert selected == "update_failed_case"
+        assert library["update_failed_case"].global_system_prompt == "原始描述"
+
+        traces = load_persona_generation_traces(work_path, "update_failed_case")
+        assert len(traces) == 1
+        assert traces[0].operation == "build"
+
+        trace_payload = json.loads(
+            (work_path / "generated_agent_traces" / "update_failed_case.json").read_text(encoding="utf-8")
+        )
+        assert trace_payload["pending_trace"]["operation"] == "update"
+        assert trace_payload["pending_trace"]["parsed_payload"]["stage"] == "generation_failed"
 
     asyncio.run(_run())
 
