@@ -1,4 +1,4 @@
-# 外部人格生成迁移指南：v0.19.x → v0.20.0
+# 外部人格生成迁移指南：v0.19.x → v0.22.0
 
 ## 适用范围
 
@@ -9,6 +9,8 @@
 - 维护角色卡、设定稿、对白样本等本地素材文件，并希望在素材更新后自动重生人格的接入方
 
 本次升级不改变会话主流程 API，但**升级了人格生成器的输入模型、持久化产物和再生能力**。
+
+在后续版本中，这条升级路径又继续增强：问卷现在支持模板化场景选择（`default` / `companion` / `romance` / `group_chat`），推荐外部系统优先收集高层人格 brief，再交给 LLM 具体化。
 
 ---
 
@@ -54,6 +56,28 @@
 - 避免机械助手腔、说明书腔和客服腔
 
 这项能力默认开启，无需额外配置。
+
+### 2.1 问卷现在支持按场景切模板
+
+新增模板枚举 API：
+
+- `list_roleplay_question_templates()`
+
+并且：
+
+- `generate_humanized_roleplay_questions(template="default")`
+- `generate_humanized_roleplay_questions(template="companion")`
+- `generate_humanized_roleplay_questions(template="romance")`
+- `generate_humanized_roleplay_questions(template="group_chat")`
+
+这意味着外部系统不需要自己维护多套问题表，只要存一份模板名，就能在不同场景下切换问题清单。
+
+如果只想通过命令行拿问题清单，也可以直接使用：
+
+```bash
+sirius-chat --list-roleplay-question-templates
+sirius-chat --print-roleplay-questions-template romance
+```
 
 ### 3. 生成过程会完整本地化
 
@@ -114,6 +138,29 @@ await abuild_roleplay_prompt_from_answers_and_apply(
 ```
 
 这段代码**仍然有效，无需修改**。
+
+如果你希望把旧的“手写问卷”升级成模板问卷，推荐改成：
+
+```python
+from sirius_chat.api import (
+    generate_humanized_roleplay_questions,
+    list_roleplay_question_templates,
+)
+
+templates = list_roleplay_question_templates()
+questions = generate_humanized_roleplay_questions(template="companion")
+```
+
+然后把回答重点放在：
+
+- 人物原型
+- 核心矛盾
+- 关系策略
+- 情绪原则
+- 表达节奏
+- 边界与小缺点
+
+而不是直接手写整段系统提示词。
 
 推荐你额外接入：
 
@@ -200,6 +247,26 @@ for trace in traces:
     print(trace.generated_at, trace.operation)
 ```
 
+### `list_roleplay_question_templates()`
+
+查看模板名枚举：
+
+```python
+from sirius_chat.api import list_roleplay_question_templates
+
+print(list_roleplay_question_templates())
+```
+
+### `generate_humanized_roleplay_questions(template=...)`
+
+按场景导出高层人格问卷：
+
+```python
+from sirius_chat.api import generate_humanized_roleplay_questions
+
+questions = generate_humanized_roleplay_questions(template="group_chat")
+```
+
 ### `aregenerate_agent_prompt_from_dependencies(...)`
 
 基于最新依赖文件直接重生：
@@ -261,7 +328,8 @@ updated = await aregenerate_agent_prompt_from_dependencies(
 
 1. 先升级代码并保持旧调用不变，确认原问答流仍正常。
 2. 接入 `load_persona_generation_traces(...)`，把生成过程纳入可观测范围。
-3. 再逐步把角色卡、设定稿、语气样本迁入 `dependency_files`。
-4. 最后把素材更新流程切换到 `aregenerate_agent_prompt_from_dependencies(...)`。
+3. 再把手写问题表迁移为 `list_roleplay_question_templates()` + `generate_humanized_roleplay_questions(template=...)` 的模板流。
+4. 逐步把角色卡、设定稿、语气样本迁入 `dependency_files`。
+5. 最后把素材更新流程切换到 `aregenerate_agent_prompt_from_dependencies(...)`。
 
 这条路径风险最低，也最适合已有外部系统平滑迁移。

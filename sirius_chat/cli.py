@@ -13,6 +13,8 @@ from sirius_chat.api import (
     SessionConfig,
     create_session_config_from_selected_agent,
     create_async_engine,
+    generate_humanized_roleplay_questions,
+    list_roleplay_question_templates,
     merge_provider_sources,
 )
 from sirius_chat.config.helpers import build_orchestration_policy_from_dict
@@ -32,7 +34,32 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--speaker", default="用户", help="用户说话人名称")
     parser.add_argument("--channel", default=DEFAULT_CLI_CHANNEL, help="消息渠道标识（默认 cli）")
     parser.add_argument("--channel-user-id", default="", help="渠道内用户ID（默认使用 speaker）")
+    parser.add_argument(
+        "--list-roleplay-question-templates",
+        action="store_true",
+        help="列出可用的人格问卷模板并退出",
+    )
+    parser.add_argument(
+        "--print-roleplay-questions-template",
+        default="",
+        help="打印指定模板的问题清单 JSON 并退出，例如 companion",
+    )
     return parser
+
+
+def _serialize_roleplay_questions(template: str) -> dict[str, object]:
+    questions = generate_humanized_roleplay_questions(template=template)
+    return {
+        "template": template,
+        "questions": [
+            {
+                "question": item.question,
+                "perspective": item.perspective,
+                "details": item.details,
+            }
+            for item in questions
+        ],
+    }
 
 
 def _load_session_config(config_path: Path, work_path: Path) -> tuple[SessionConfig, list[dict[str, object]]]:
@@ -99,6 +126,19 @@ def main(
     print_func: PrintFunc = print,
 ) -> int:
     args = _build_arg_parser().parse_args(argv)
+
+    if args.list_roleplay_question_templates:
+        print_func(json.dumps(list_roleplay_question_templates(), ensure_ascii=False, indent=2))
+        return 0
+
+    if args.print_roleplay_questions_template:
+        try:
+            payload = _serialize_roleplay_questions(args.print_roleplay_questions_template)
+        except ValueError as exc:
+            print_func(str(exc))
+            return 1
+        print_func(json.dumps(payload, ensure_ascii=False, indent=2))
+        return 0
 
     # 配置日志系统 - 同时输出到控制台和日志文件
     config_path = Path(args.config)

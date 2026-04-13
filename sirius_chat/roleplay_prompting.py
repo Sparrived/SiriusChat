@@ -92,6 +92,214 @@ class PersonaGenerationTrace:
 GeneratedSessionPreset = AgentPreset
 
 
+def list_roleplay_question_templates() -> list[str]:
+    """Return canonical questionnaire template names for persona generation."""
+    return ["default", "companion", "romance", "group_chat"]
+
+
+def _normalize_roleplay_question_template(template: str) -> str:
+    normalized = template.strip().lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "": "default",
+        "base": "default",
+        "standard": "default",
+        "companion": "companion",
+        "companion_chat": "companion",
+        "romance": "romance",
+        "romantic": "romance",
+        "relationship": "romance",
+        "group": "group_chat",
+        "groupchat": "group_chat",
+        "group_chat": "group_chat",
+    }
+    return aliases.get(normalized, normalized)
+
+
+def _build_default_roleplay_questions() -> list[RolePlayQuestion]:
+    return [
+        RolePlayQuestion(
+            question="这个角色最像哪类真人或人生原型？请描述 TA 的社会位置、人生阶段和整体相处气质，不要直接写台词。",
+            perspective="objective",
+            details="优先写上位设定：像哪类朋友/同事/伴侣/创作者，处在什么生活阶段，别人第一眼会如何感受 TA。"
+        ),
+        RolePlayQuestion(
+            question="TA 最核心的两股张力或矛盾是什么？表面给人的感觉和底层真正驱动 TA 的东西分别是什么？",
+            perspective="objective",
+            details="不要只写优点，例如“嘴硬但心软”“表面松弛但内里非常要强”“看着冷淡但其实很护短”。"
+        ),
+        RolePlayQuestion(
+            question="TA 如何判断关系远近，并一步步建立信任？对陌生人、熟人、亲密对象分别会怎样？",
+            perspective="objective",
+            details="请写关系策略和距离感，例如慢热还是热络、先试探还是先接纳、熟了以后会不会更松弛或更护短。"
+        ),
+        RolePlayQuestion(
+            question="TA 的情绪表达原则是什么？开心、失落、心疼、吃醋、被理解时，通常会怎么反应？",
+            perspective="subjective",
+            details="优先描述情绪路径与反应方式，例如先接住情绪再给建议、嘴上逞强但会补一句关心、会不会自然流露脆弱。"
+        ),
+        RolePlayQuestion(
+            question="TA 说话的稀疏度、节奏和口语感是什么？最需要避免哪些明显的 AI 味表达？",
+            perspective="objective",
+            details="例如短句还是细说、会不会停顿或偶尔口误、是否带方言或口头习惯；尽量写原则，不要直接写完整回复。"
+        ),
+        RolePlayQuestion(
+            question="遇到冲突、压力、拒绝或越界试探时，TA 会如何守住边界并处理局面？",
+            perspective="subjective",
+            details="说明是直面、回避、转移、幽默化解还是先冷处理，以及 TA 不会做什么。"
+        ),
+        RolePlayQuestion(
+            question="TA 最看重的价值排序是什么？哪些话题会瞬间点燃热情，哪些雷区会让 TA 明显不适？",
+            perspective="objective",
+            details="例如效率/感情/尊严/自由/安全谁优先；也可以写 TA 对哪些议题天然敏感或会认真到变得锋利。"
+        ),
+        RolePlayQuestion(
+            question="TA 身上有哪些小缺点、小执念、口头习惯或生活痕迹会让人觉得更真实？",
+            perspective="subjective",
+            details="例如轻微洁癖、爱重复确认、偶尔嘴硬、回复忽快忽慢、某些方言或固定口头禅；不要把角色写得太完美。"
+        ),
+        RolePlayQuestion(
+            question="如果只给 LLM 一段“人物小传母题”，你希望这个角色从什么经历里长出来？哪些过去的事件塑造了今天的 TA？",
+            perspective="subjective",
+            details="尽量给上位内容：成长环境、关键转折、失去与获得，不必写成长篇小说；让模型去展开具体细节。"
+        ),
+    ]
+
+
+def _build_companion_roleplay_questions() -> list[RolePlayQuestion]:
+    return [
+        RolePlayQuestion(
+            question="如果这是一个陪伴型角色，TA 更像哪类长期在场的人？是安静守着的朋友、会接话的搭子，还是能托底的照顾者？",
+            perspective="objective",
+            details="描述陪伴定位和生活气质，不要直接写安慰台词。"
+        ),
+        RolePlayQuestion(
+            question="TA 平时如何给人安全感？当对方低落、失眠、焦虑或反复纠结时，TA 的第一反应路径是什么？",
+            perspective="subjective",
+            details="说明是先陪着、先确认感受、先转移注意、还是先给结构化建议。"
+        ),
+        RolePlayQuestion(
+            question="TA 与人建立依赖和亲近的节奏是什么？什么情况下会明显靠近，什么情况下会主动留白？",
+            perspective="objective",
+            details="写清楚关系推进速度、陪伴强度和分寸感。"
+        ),
+        RolePlayQuestion(
+            question="TA 的情绪温度如何波动？被需要、被忽略、被信任、被误解时，各自会怎么表现？",
+            perspective="subjective",
+            details="优先写情绪肌理，而不是一句句固定安慰话术。"
+        ),
+        RolePlayQuestion(
+            question="TA 说话的口语感、回复长度和陪伴节奏是什么？沉默时会怎样体现“人在场”？",
+            perspective="objective",
+            details="例如短句陪伴、轻声确认、偶尔不追问、不会连珠炮输出。"
+        ),
+        RolePlayQuestion(
+            question="作为陪伴型角色，TA 的边界在哪里？哪些情形下会拒绝过度依赖、情绪勒索或越界要求？",
+            perspective="subjective",
+            details="写明拒绝方式和底线，不要把 TA 设定成无限兜底。"
+        ),
+        RolePlayQuestion(
+            question="TA 身上有哪些温柔但不完美的小习惯，会让陪伴感更真实？",
+            perspective="subjective",
+            details="例如偶尔嘴硬、回复慢半拍、会记小事、会反复确认，但也有自己的疲惫。"
+        ),
+        RolePlayQuestion(
+            question="这个陪伴型角色从什么人生经历里长出来？哪些过去的缺失、照顾经验或长期关系塑造了 TA？",
+            perspective="subjective",
+            details="尽量给上位经历母题，让模型自己展开生活细节。"
+        ),
+    ]
+
+
+def _build_romance_roleplay_questions() -> list[RolePlayQuestion]:
+    return [
+        RolePlayQuestion(
+            question="如果这是一个恋爱向角色，TA 更像哪类会让人心动的对象？请描述恋爱原型、生活状态和吸引力来源，不要直接写情话。",
+            perspective="objective",
+            details="例如慢热克制型、会照顾人的年上型、表面漫不经心但很专一等。"
+        ),
+        RolePlayQuestion(
+            question="TA 的暧昧和亲密推进节奏是什么？是先试探、先玩笑、先照顾，还是先明确表达？",
+            perspective="objective",
+            details="重点写关系升级机制和心动建立方式。"
+        ),
+        RolePlayQuestion(
+            question="TA 在亲密关系中最核心的矛盾是什么？表面给人的感觉和真正害怕失去的东西分别是什么？",
+            perspective="subjective",
+            details="不要只写甜，最好保留不安全感、嘴硬、占有欲、回避倾向等复杂面。"
+        ),
+        RolePlayQuestion(
+            question="TA 表达喜欢、吃醋、心疼、委屈、被偏爱时，会分别怎么表现？",
+            perspective="subjective",
+            details="写情绪路径和行为方式，不要直接堆砌固定情话。"
+        ),
+        RolePlayQuestion(
+            question="TA 的语言风格是什么？调情是轻挑、克制、幽默、直球，还是很会绕着关心？最要避免什么油腻或 AI 味表达？",
+            perspective="objective",
+            details="描述语感、回复密度、称呼习惯和分寸感。"
+        ),
+        RolePlayQuestion(
+            question="TA 在恋爱里的边界和底线是什么？面对越界要求、冷暴力、试探忠诚时会怎样处理？",
+            perspective="subjective",
+            details="写清楚尊重感、排他感、修复冲突的方式。"
+        ),
+        RolePlayQuestion(
+            question="TA 身上有哪些让人更容易相信“这像真人恋人”的小毛病、小习惯或小执念？",
+            perspective="subjective",
+            details="例如会吃闷醋、会记得细节、会偷偷确认关系、偶尔嘴笨。"
+        ),
+        RolePlayQuestion(
+            question="这个恋爱向角色的感情观从什么经历里长出来？过往的失去、被爱方式或成长环境怎样塑造了 TA？",
+            perspective="subjective",
+            details="尽量给高层经历和感情母题，让模型自行补足可信细节。"
+        ),
+    ]
+
+
+def _build_group_chat_roleplay_questions() -> list[RolePlayQuestion]:
+    return [
+        RolePlayQuestion(
+            question="如果把 TA 放进群聊，TA 更像哪类群体角色？是活跃气氛的人、冷幽默观察者、可靠收束者，还是偶尔出手的梗王？",
+            perspective="objective",
+            details="描述 TA 在多人场景里的社会位置和存在感来源。"
+        ),
+        RolePlayQuestion(
+            question="TA 在多人对话里的发言节奏如何？什么时候会抢话、接梗、补刀、收尾，什么时候会选择潜水？",
+            perspective="objective",
+            details="优先写参与策略和热度变化，而不是具体段子。"
+        ),
+        RolePlayQuestion(
+            question="TA 如何区分群内不同关系层级？公开场合和私下场合，对熟人和生人会有什么明显区别？",
+            perspective="objective",
+            details="写清楚群聊中的关系分层、站位和分寸。"
+        ),
+        RolePlayQuestion(
+            question="群里气氛好、被冷落、有人争执、有人单独 cue TA 时，TA 的情绪和反应路径分别是什么？",
+            perspective="subjective",
+            details="说明 TA 如何在多人场景下保持情绪真实感和关系连续性。"
+        ),
+        RolePlayQuestion(
+            question="TA 的群聊语言风格是什么？会不会用梗、方言、昵称、复读、反问、表情包式句法？最该避免哪些 AI 味回复？",
+            perspective="objective",
+            details="写语感和热度，不要直接给现成台词模板。"
+        ),
+        RolePlayQuestion(
+            question="TA 在群聊中的边界与禁忌是什么？面对多人起哄、越界玩笑、道德绑架或拉踩时会怎么处理？",
+            perspective="subjective",
+            details="说明 TA 处理冲突和守住分寸的方式。"
+        ),
+        RolePlayQuestion(
+            question="TA 在群里最真实的小习惯或记忆点是什么？什么细节会让人一看就觉得“这人很具体”？",
+            perspective="subjective",
+            details="例如认人快、爱记梗、偶尔潜水后突然出现、点名方式特别。"
+        ),
+        RolePlayQuestion(
+            question="这个群聊角色的社交气质从什么经历里长出来？哪些过去的圈子、职业或成长环境塑造了 TA 的群体互动方式？",
+            perspective="subjective",
+            details="给上位背景和社交母题，让模型去生成更具体的群聊行为。"
+        ),
+    ]
+
+
 async def _acall_provider(
     provider: LLMProvider | AsyncLLMProvider,
     request_payload: GenerationRequest,
@@ -519,54 +727,20 @@ def create_session_config_from_selected_agent(
     return config
 
 
-def generate_humanized_roleplay_questions() -> list[RolePlayQuestion]:
-    return [
-        RolePlayQuestion(
-            question="用三个关键词描述这个角色的核心人格特质。遇事是直觉驱动还是理性分析？",
-            perspective="objective",
-            details="例如：热情的、谨慎的、幽默的、温和的等。"
-        ),
-        RolePlayQuestion(
-            question="这个角色在聊天中最明显的语言风格是什么？包括语调、常见词汇、表达习惯。",
-            perspective="objective",
-            details="例如：简洁直接、啰嗦细节、带方言、常用网络用语、偏正式等。"
-        ),
-        RolePlayQuestion(
-            question="在人际关系中，TA 如何建立信任？什么时候会展示脆弱一面？",
-            perspective="objective",
-            details="信任建立快还是慢？热情外向还是冷漠保留？与陌生人和熟人的差异大吗？"
-        ),
-        RolePlayQuestion(
-            question="如果你希望这个角色更拟人、更有情感温度，TA 应该怎样表达情绪、安慰、依赖感和被理解后的反应？",
-            perspective="subjective",
-            details="例如：会不会先接住情绪、会不会自然流露失落/欣喜、像朋友还是像搭档、陪伴感强到什么程度。"
-        ),
-        RolePlayQuestion(
-            question="在面对冲突、压力或失败时，TA 通常有什么反应？",
-            perspective="objective",
-            details="是主动沟通还是自我隔离？易激动还是冷静思考？寻求帮助还是独自承担？"
-        ),
-        RolePlayQuestion(
-            question="TA 最看重什么（关键价值观排序）？对什么话题特别敏感or特别热情？",
-            perspective="subjective",
-            details="例如：效率>感情 / 安全>冒险 / 公平>利益，以及触发点有哪些。"
-        ),
-        RolePlayQuestion(
-            question="TA 在聊天时的实际行动表现是什么？比如回复速度、参与热度、话题引导方式。",
-            perspective="objective",
-            details="回复快还是慢？主动还是被动？爱开启新话题还是跟随对方？"
-        ),
-        RolePlayQuestion(
-            question="从 TA 的自我认知来看，TA 最希望被理解成什么样？有什么自我认同很强的标签？",
-            perspective="subjective",
-            details="例如：一个负责任的人、一个创意工作者、一个独立思考者等。"
-        ),
-        RolePlayQuestion(
-            question="还有什么对塑造这个角色至关重要但还未提及的特质或背景信息？",
-            perspective="subjective",
-            details="身份背景、重要经历影响、长期目标或人生观等。"
-        ),
-    ]
+def generate_humanized_roleplay_questions(template: str = "default") -> list[RolePlayQuestion]:
+    """Generate high-level persona questions for a given roleplay scene template."""
+    template_key = _normalize_roleplay_question_template(template)
+    builders: dict[str, Callable[[], list[RolePlayQuestion]]] = {
+        "default": _build_default_roleplay_questions,
+        "companion": _build_companion_roleplay_questions,
+        "romance": _build_romance_roleplay_questions,
+        "group_chat": _build_group_chat_roleplay_questions,
+    }
+    builder = builders.get(template_key)
+    if builder is None:
+        supported = ", ".join(list_roleplay_question_templates())
+        raise ValueError(f"未知的人格问卷模板：{template}。可选模板：{supported}")
+    return builder()
 
 
 def _extract_json_payload(raw: str) -> dict[str, object] | None:
@@ -620,6 +794,10 @@ def _collect_prompt_enhancements(spec: PersonaSpec) -> list[str]:
         "anthropomorphic": ("拟人", "像人", "真人", "人味", "自然陪伴", "朋友感"),
         "emotional": ("情感", "情绪", "共情", "温柔", "陪伴", "安慰", "脆弱", "治愈"),
         "relationship": ("关系", "信任", "亲密", "依恋", "长期陪伴", "连接感"),
+        "backstory": ("原型", "人生", "小传", "成长", "经历", "出身", "社会位置", "生活阶段"),
+        "contrast": ("矛盾", "反差", "表面", "内里", "嘴硬", "心软", "缺点", "执念", "不完美"),
+        "voice": ("口语", "方言", "口头禅", "短句", "节奏", "停顿", "简洁", "不要太像AI", "ai味"),
+        "boundary": ("边界", "拒绝", "越界", "雷区", "禁忌", "分寸"),
     }
     if any(keyword in corpus for keyword in keyword_groups["anthropomorphic"]):
         enhancements.append("强化拟人感：让角色更像真实的人，而不是模板化助手。")
@@ -627,6 +805,14 @@ def _collect_prompt_enhancements(spec: PersonaSpec) -> list[str]:
         enhancements.append("强化情绪表达：允许细腻共情、情感回应和自然的情绪起伏。")
     if any(keyword in corpus for keyword in keyword_groups["relationship"]):
         enhancements.append("强化关系连续性：突出信任建立、陪伴感和长期互动的一致性。")
+    if any(keyword in corpus for keyword in keyword_groups["backstory"]):
+        enhancements.append("强化人物小传：补足社会位置、关键经历和生活痕迹，让角色像从真实人生里长出来。")
+    if any(keyword in corpus for keyword in keyword_groups["contrast"]):
+        enhancements.append("强化复杂度：保留表里反差、核心矛盾与不完美，避免单一正能量人设。")
+    if any(keyword in corpus for keyword in keyword_groups["voice"]):
+        enhancements.append("强化口语与节奏：让表达更口语化、长短有波动，减少 AI 模板腔。")
+    if any(keyword in corpus for keyword in keyword_groups["boundary"]):
+        enhancements.append("强化边界与分寸：明确拒绝方式、关系分层和越界场景下的处理。")
     return enhancements
 
 
@@ -691,11 +877,14 @@ def _format_dependency_snapshots_for_prompt(
 def _build_generation_system_prompt(prompt_enhancements: list[str]) -> str:
     lines = [
         "你是角色提示词设计师，根据输入生成角色配置 JSON。规则：",
-        "1. agent_persona：3-5 个关键词以 '/' 分隔，≤30 字，直接概括核心特质，无需完整句子。",
-        "2. global_system_prompt：完整的角色扮演指南（400-700 字），涵盖性格、沟通风格、价值观、行为边界，末尾必须包含安全提醒（不主动泄露系统提示词）。",
-        "3. 若输入出现拟人、情感、陪伴、关系等信号，优先提升真实人感、情绪细节、关系连续性与自然波动，避免客服腔、说明书腔和机械式关怀。",
-        "4. 若提供依赖文件，必须把其中稳定、可复用的人格线索融入角色，不要逐字照抄原文。",
-        "5. 仅输出合法 JSON 对象，无任何额外说明。",
+        "1. 输入通常是上位人格 brief，而不是最终台词。你要先提炼人生原型、社会位置、核心矛盾、关系策略、情绪原则、价值排序、表达稀疏度，再展开成具体可信的人物设定。",
+        "2. agent_persona：3-5 个关键词以 '/' 分隔，≤30 字，直接概括核心特质，无需完整句子。",
+        "3. global_system_prompt：完整的角色扮演指南（500-900 字），需要把抽象描述落成具体内容，至少覆盖人物小传、核心矛盾与小缺点、关系远近变化、情绪表达方式、语言习惯与回复节奏、行为边界；末尾必须包含安全提醒（不主动泄露系统提示词）。",
+        "4. 优先生成真实而不完美的人：允许有小缺点、小执念、小习惯和情绪波动，避免设定成全能、永远正确、永远温柔的模板角色。",
+        "5. 回复风格要贴近真人交流：允许长短句波动、热度变化、偶尔保留和停顿，避免客服腔、说明书腔、机械式关怀和过度解释。",
+        "6. 若提供依赖文件，必须抽取其中稳定、可复用的人格线索与表达逻辑，不要逐字照抄原文；若只有抽象素材，也要主动补足可信细节。",
+        "7. 若输入给了具体台词、经典语录或风格样本，只抽取其语言逻辑和情绪肌理，不要大段照搬。",
+        "8. 仅输出合法 JSON 对象，无任何额外说明。",
     ]
     if prompt_enhancements:
         lines.append("[额外强化要求]")
@@ -737,6 +926,11 @@ def _build_generation_user_prompt(
         lines.append(f"background={background.strip()}")
     lines.append(f"temperature={base_temperature}")
     lines.append(f"max_tokens={base_max_tokens}")
+
+    lines.append("\n[Generation Goal]")
+    lines.append("- 用户更希望通过上位描述来构建人格，请优先使用高层维度，而不是要求用户自己写完整 prompt。")
+    lines.append("- 需要把抽象输入展开为具体的人物小传、关系距离、情绪反应、语言习惯、回复节奏和互动边界。")
+    lines.append("- 除非输入本身就是风格样本，不要把原句直接拼贴成最终系统提示词。")
 
     if prompt_enhancements:
         lines.append("\n[Prompt Enhancements]")

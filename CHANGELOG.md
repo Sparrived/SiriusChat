@@ -4,6 +4,18 @@
 
 ## [Unreleased]
 
+## [0.22.0] - 2026-04-13
+
+### Added
+- **人格问卷模板 API**：新增 `list_roleplay_question_templates()`，并让 `generate_humanized_roleplay_questions(template=...)` 支持 `default`、`companion`、`romance`、`group_chat` 四类场景模板，方便外部系统按陪伴型、恋爱向、群聊型等场景直接切换问卷。
+- **CLI 模板辅助命令**：`sirius-chat` 新增 `--list-roleplay-question-templates` 与 `--print-roleplay-questions-template <template>`，无需先加载会话配置即可直接导出模板枚举和问题清单 JSON。
+- **模板骨架示例脚本**：新增 `examples/roleplay_template_selection.py`，可按模板导出 `PersonaSpec` 问卷骨架，便于外部表单、配置后台或 Agent 平台直接接入。
+
+### Changed
+- **问卷升级为上位人格 brief 优先**：默认问卷从“直接写风格/台词”调整为优先收集人物原型、核心矛盾、关系策略、情绪原则、表达节奏、边界与小缺点，再交给 LLM 具体化。
+- **人格生成 prompt 继续强化**：生成器现在会显式要求模型把抽象人格输入展开为具体的人物小传、语言习惯、回复节奏和互动边界，并新增对人物小传、反差感、口语节奏、边界分寸等维度的自动强化检测。
+- **外部接入文档更新**：同步更新 `README.md`、`docs/architecture.md`、`docs/external-usage.md`、`docs/full-architecture-flow.md`、`docs/migration-roleplay-v0.20.md`、`docs/api.md`、`docs/api.json` 以及相关 SKILL，统一反映模板化问卷与高层人格输入流程。
+
 ## [0.21.0] - 2026-04-13
 
 ### Added

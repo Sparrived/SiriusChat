@@ -610,9 +610,13 @@ the agent has no persisted spec (run the initial generation first).
 
 Create session configuration from a selected agent preset.
 
-#### `generate_humanized_roleplay_questions() -> list[RolePlayQuestion]`
+#### `generate_humanized_roleplay_questions(template: str) -> list[RolePlayQuestion]`
 
 Generate humanized roleplay questions for user interaction.
+
+#### `list_roleplay_question_templates() -> list[str]`
+
+List available roleplay questionnaire templates.
 
 #### `load_generated_agent_library(work_path: Path) -> tuple[dict[str, GeneratedSessionPreset], str]`
 

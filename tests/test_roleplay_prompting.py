@@ -2,6 +2,8 @@ import asyncio
 from pathlib import Path
 import shutil
 
+import pytest
+
 from sirius_chat.api import (
     GENERATED_AGENTS_FILE_NAME,
     Agent,
@@ -18,6 +20,7 @@ from sirius_chat.api import (
     abuild_roleplay_prompt_from_answers_and_apply,
     create_async_engine,
     generate_humanized_roleplay_questions,
+    list_roleplay_question_templates,
     load_generated_agent_library,
     load_persona_generation_traces,
     load_persona_spec,
@@ -81,12 +84,43 @@ def test_generate_humanized_roleplay_questions_covers_persona_dimensions() -> No
     questions = generate_humanized_roleplay_questions()
     assert len(questions) >= 9
     joined = "\n".join(item.question for item in questions)
-    assert "性格" in joined or "特质" in joined
-    assert "聊天" in joined or "语言" in joined
-    assert "情绪" in joined or "压力" in joined
-    assert "冲突" in joined
+    details = "\n".join(item.details for item in questions)
+    assert "原型" in joined or "人生" in joined
+    assert "矛盾" in joined or "张力" in joined
+    assert "关系" in joined or "信任" in joined
+    assert "情绪" in joined
     assert "价值" in joined or "看重" in joined
-    assert "拟人" in joined or "情感温度" in joined
+    assert "小缺点" in joined or "不完美" in details
+    assert "不要直接写台词" in joined or "不要直接写完整回复" in details
+
+
+def test_list_roleplay_question_templates_returns_supported_templates() -> None:
+    assert list_roleplay_question_templates() == ["default", "companion", "romance", "group_chat"]
+
+
+@pytest.mark.parametrize(
+    ("template_name", "expected_terms"),
+    [
+        ("companion", ["陪伴", "安全感", "边界"]),
+        ("romance", ["恋爱", "亲密", "边界"]),
+        ("group_chat", ["群聊", "多人", "关系"]),
+    ],
+)
+def test_generate_humanized_roleplay_questions_supports_scene_templates(
+    template_name: str,
+    expected_terms: list[str],
+) -> None:
+    questions = generate_humanized_roleplay_questions(template=template_name)
+    joined = "\n".join(item.question + item.details for item in questions)
+
+    assert len(questions) >= 8
+    for term in expected_terms:
+        assert term in joined
+
+
+def test_generate_humanized_roleplay_questions_raises_on_unknown_template() -> None:
+    with pytest.raises(ValueError, match="未知的人格问卷模板"):
+        generate_humanized_roleplay_questions(template="mystery")
 
 
 def test_abuild_roleplay_prompt_from_answers_and_apply_one_step() -> None:
@@ -465,7 +499,41 @@ def test_generation_prompt_strengthens_anthropomorphic_and_emotional_keywords() 
         request = provider.requests[0]
         assert "强化拟人感" in request.system_prompt
         assert "强化情绪表达" in request.system_prompt
+        assert "上位人格 brief" in request.system_prompt
+        assert "小缺点" in request.system_prompt
+        assert "[Generation Goal]" in str(request.messages[0]["content"])
         assert "[Prompt Enhancements]" in str(request.messages[0]["content"])
+
+    asyncio.run(_run())
+
+
+def test_generation_prompt_requests_concrete_expansion_from_high_level_brief() -> None:
+    async def _run() -> None:
+        provider = MockProvider(
+            responses=[
+                '{"agent_persona":"慢热/可靠/克制","global_system_prompt":"生成结果","temperature":0.5,"max_tokens":512}'
+            ]
+        )
+        spec = PersonaSpec(
+            agent_name="临川",
+            answers=[
+                RolePlayAnswer(
+                    question="这个角色最像哪类真人或人生原型？",
+                    answer="像一个晚熟但可靠的老朋友，关系推进慢，但会长期在场。",
+                )
+            ],
+        )
+
+        await agenerate_from_persona_spec(
+            provider,
+            spec,
+            model="test-model",
+        )
+
+        request = provider.requests[0]
+        assert "先提炼人生原型" in request.system_prompt
+        assert "再展开成具体可信的人物设定" in request.system_prompt
+        assert "不要把原句直接拼贴成最终系统提示词" in str(request.messages[0]["content"])
 
     asyncio.run(_run())
 

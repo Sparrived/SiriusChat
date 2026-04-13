@@ -239,3 +239,44 @@ def test_cli_writes_default_output_under_relative_work_path(tmp_path, monkeypatc
     assert exit_code == 0
     assert (work_path / "transcript.json").exists()
     assert not (work_path / "runtime" / "transcript.json").exists()
+
+
+def test_cli_lists_roleplay_question_templates_without_loading_session() -> None:
+    outputs: list[str] = []
+
+    exit_code = cli_module.main(
+        ["--list-roleplay-question-templates"],
+        print_func=outputs.append,
+    )
+
+    assert exit_code == 0
+    assert outputs
+    payload = json.loads(outputs[0])
+    assert payload == ["default", "companion", "romance", "group_chat"]
+
+
+def test_cli_prints_roleplay_questions_for_selected_template() -> None:
+    outputs: list[str] = []
+
+    exit_code = cli_module.main(
+        ["--print-roleplay-questions-template", "companion"],
+        print_func=outputs.append,
+    )
+
+    assert exit_code == 0
+    payload = json.loads(outputs[0])
+    assert payload["template"] == "companion"
+    assert payload["questions"]
+    assert any("陪伴" in item["question"] or "陪伴" in item["details"] for item in payload["questions"])
+
+
+def test_cli_returns_error_for_unknown_roleplay_template() -> None:
+    outputs: list[str] = []
+
+    exit_code = cli_module.main(
+        ["--print-roleplay-questions-template", "mystery"],
+        print_func=outputs.append,
+    )
+
+    assert exit_code == 1
+    assert any("未知的人格问卷模板" in item for item in outputs)

@@ -149,7 +149,7 @@ flowchart LR
 | `sirius_chat/core/events.py` | 对话上下文、事件特征原始数据 | 事件摘要、`SessionEvent` 数据结构 |
 | `sirius_chat/background_tasks.py` | `BackgroundTaskConfig`、归纳回调函数 | 定时触发事件/摘要/事实归纳任务，写回持久化 |
 | `sirius_chat/memory/` | 用户信息、对话历史、事件数据 | 记忆库、事件落盘、用户档案提取 |
-| `sirius_chat/roleplay_prompting.py` | 角色问答、关键词、依赖文件、agent 名称、模型 | `GeneratedSessionPreset`、`generated_agents.json`、`generated_agent_traces/<agent_key>.json`、可直接创建的 `SessionConfig` |
+| `sirius_chat/roleplay_prompting.py` | 角色问答模板（default / companion / romance / group_chat）、高层人格回答、关键词、依赖文件、agent 名称、模型 | `GeneratedSessionPreset`、`generated_agents.json`、`generated_agent_traces/<agent_key>.json`、可直接创建的 `SessionConfig` |
 | `sirius_chat/token/usage.py` | `Transcript.token_usage_records` | baseline 与按 actor/task/model 聚合报表（内存级） |
 | `sirius_chat/token/store.py` | `TokenUsageRecord`、`session_id` | SQLite 持久化（`{work_path}/token_usage.db`）、跨会话查询 |
 | `sirius_chat/token/analytics.py` | `TokenUsageStore` | 全局/会话/用户/任务/模型/时间维度分析报告 |

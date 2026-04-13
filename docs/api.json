@@ -2272,9 +2272,22 @@
         {
           "name": "generate_humanized_roleplay_questions",
           "is_async": false,
-          "params": [],
+          "params": [
+            {
+              "name": "template",
+              "annotation": "str",
+              "kind": "positional"
+            }
+          ],
           "return_type": "list[RolePlayQuestion]",
           "docstring": "Generate humanized roleplay questions for user interaction."
+        },
+        {
+          "name": "list_roleplay_question_templates",
+          "is_async": false,
+          "params": [],
+          "return_type": "list[str]",
+          "docstring": "List available roleplay questionnaire templates."
         },
         {
           "name": "load_generated_agent_library",

@@ -49,6 +49,7 @@ from sirius_chat.api import (
     find_user_by_channel_uid,
     full_report,
     generate_humanized_roleplay_questions,
+    list_roleplay_question_templates,
     group_by_actor,
     group_by_model,
     group_by_session,
@@ -177,6 +178,7 @@ __all__ = [
     "arun_live_message",
     "find_user_by_channel_uid",
     "generate_humanized_roleplay_questions",
+    "list_roleplay_question_templates",
     "load_generated_agent_library",
     "load_persona_generation_traces",
     "persist_generated_agent_profile",
@@ -237,6 +239,7 @@ agenerate_agent_prompts_from_answers.__doc__ = "Generate agent prompts from user
 build_token_usage_baseline.__doc__ = "Build a baseline for token usage metrics."
 create_session_config_from_selected_agent.__doc__ = "Create session configuration from a selected agent preset."
 generate_humanized_roleplay_questions.__doc__ = "Generate humanized roleplay questions for user interaction."
+list_roleplay_question_templates.__doc__ = "List available roleplay questionnaire templates."
 load_generated_agent_library.__doc__ = "Load the generated agent profile library."
 persist_generated_agent_profile.__doc__ = "Persist a generated agent profile to storage."
 select_generated_agent_profile.__doc__ = "Select a generated agent profile from the library."

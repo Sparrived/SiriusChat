@@ -89,6 +89,16 @@ sirius-chat --config examples/session.json --work-path data/session_runtime \
 python main.py --config examples/session.json --work-path data/session_runtime --store json
 ```
 
+**人格问卷模板辅助命令：**
+
+```bash
+# 列出可用模板
+sirius-chat --list-roleplay-question-templates
+
+# 导出指定模板的问题清单 JSON
+sirius-chat --print-roleplay-questions-template companion
+```
+
 **禁用自动恢复:**
 
 ```bash
@@ -496,26 +506,47 @@ baseline = build_token_usage_baseline(transcript.token_usage_records)
 
 ```python
 from sirius_chat.api import (
+  RolePlayAnswer,
   aregenerate_agent_prompt_from_dependencies,
   abuild_roleplay_prompt_from_answers_and_apply,
-    generate_humanized_roleplay_questions,
+  generate_humanized_roleplay_questions,
+  list_roleplay_question_templates,
   load_persona_generation_traces,
-    load_generated_agent_library,
-    select_generated_agent_profile,
+  load_generated_agent_library,
+  select_generated_agent_profile,
 )
 
-# 生成问题清单
-questions = generate_humanized_roleplay_questions()
+# 查看可用问卷模板，并选择更贴合场景的一套高层问题
+print(list_roleplay_question_templates())
+questions = generate_humanized_roleplay_questions(template="companion")
+
+answers = [
+    RolePlayAnswer(
+        question=questions[0].question,
+        answer="像一个晚熟但可靠的陪伴者，平时不抢话，但会长期在场，熟了以后很护短。",
+        perspective=questions[0].perspective,
+    ),
+    RolePlayAnswer(
+        question=questions[1].question,
+        answer="用户低落时先接住情绪，再慢慢帮对方理清思路，不会一上来就讲道理。",
+        perspective=questions[1].perspective,
+    ),
+    RolePlayAnswer(
+        question=questions[6].question,
+        answer="偶尔嘴硬、会记小事，也会在疲惫时变得更安静，但不会无限兜底。",
+        perspective=questions[6].perspective,
+    ),
+]
 
 # 直接生成并写入 SessionConfig，同时挂接本地素材文件
 prompt = await abuild_roleplay_prompt_from_answers_and_apply(
     provider=provider,
-  config=config,
-  model="deepseek-ai/DeepSeek-V3.2",
-  agent_name="我的助手",
-  answers={...},
-  dependency_files=["persona/notes.md", "persona/style_examples.txt"],
-  persona_key="assistant_v2",
+    config=config,
+    model="deepseek-ai/DeepSeek-V3.2",
+    agent_name="我的助手",
+    answers=answers,
+    dependency_files=["persona/notes.md", "persona/style_examples.txt"],
+    persona_key="assistant_v2",
 )
 
 # 查看完整生成轨迹
@@ -523,21 +554,26 @@ traces = load_persona_generation_traces(config.work_path, "assistant_v2")
 
 # 当依赖文件变化后，直接基于文件重生同一个人格
 updated = await aregenerate_agent_prompt_from_dependencies(
-  provider,
-  work_path=config.work_path,
-  agent_key="assistant_v2",
-  model="deepseek-ai/DeepSeek-V3.2",
+    provider,
+    work_path=config.work_path,
+    agent_key="assistant_v2",
+    model="deepseek-ai/DeepSeek-V3.2",
 )
 
 # 管理生成的 Agent 资产
-agents = load_generated_agent_library("./data/session")
-selected = select_generated_agent_profile("./data/session", "agent_key_1")
+library, selected_key = load_generated_agent_library(config.work_path)
+selected = select_generated_agent_profile(config.work_path, "assistant_v2")
 ```
 
 说明：
 
+- 推荐先用高层人格 brief 来描述人物原型、核心矛盾、关系策略、情绪原则、边界和小缺点，再让生成器落成具体人物小传与语言习惯。
+- `generate_humanized_roleplay_questions(template=...)` 支持 `default`、`companion`、`romance`、`group_chat` 四类问卷模板，可配合 `list_roleplay_question_templates()` 做前端下拉或外部配置。
+- 若外部系统只想先拿模板问题，不想立刻接入 Python API，可直接用 `sirius-chat --list-roleplay-question-templates` 和 `sirius-chat --print-roleplay-questions-template <template>`。
 - 生成器会自动识别“拟人”“情感”“陪伴”“共情”等关键词并加强 prompt，让角色更自然、更有人味。
 - 完整生成过程会本地化到 `<work_path>/generated_agent_traces/<agent_key>.json`，便于审计和回滚。
+- 外部调用方可直接按 `template + answers + dependency_files` 组织输入，示例输入规范见 [docs/external-usage.md](docs/external-usage.md)。
+- 可直接参考 `examples/roleplay_template_selection.py` 导出 `PersonaSpec` 骨架，再交给外部表单或配置后台填充。
 - 面向外部调用方的迁移说明见 [docs/migration-roleplay-v0.20.md](docs/migration-roleplay-v0.20.md)。
 
 ### SKILL 系统

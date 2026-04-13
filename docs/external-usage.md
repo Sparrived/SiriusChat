@@ -541,30 +541,53 @@ user_messages = [m for m in transcript.messages if m.role == "user"]
 
 ```python
 from sirius_chat.api import (
+    PersonaSpec,
     RolePlayAnswer,
     aregenerate_agent_prompt_from_dependencies,
     agenerate_agent_prompts_from_answers,
     abuild_roleplay_prompt_from_answers_and_apply,
     create_session_config_from_selected_agent,
     generate_humanized_roleplay_questions,
+    list_roleplay_question_templates,
     load_generated_agent_library,
     load_persona_generation_traces,
     select_generated_agent_profile,
 )
 
-questions = generate_humanized_roleplay_questions()
+templates = list_roleplay_question_templates()
+print(templates)  # ['default', 'companion', 'romance', 'group_chat']
+
+questions = generate_humanized_roleplay_questions(template="companion")
 answers = [
-    RolePlayAnswer(question=questions[0].question, answer="谨慎慢热，但责任感强", perspective=questions[0].perspective),
-    RolePlayAnswer(question=questions[1].question, answer="说话短句、克制，偶尔重复确认", perspective=questions[1].perspective),
+    RolePlayAnswer(
+        question=questions[0].question,
+        answer="像一个晚熟但可靠的陪伴者，平时不抢话，但会长期在场，熟了以后很护短。",
+        perspective=questions[0].perspective,
+    ),
+    RolePlayAnswer(
+        question=questions[1].question,
+        answer="对方低落时先接住情绪，再慢慢帮对方理清思路，不会一上来就讲道理。",
+        perspective=questions[1].perspective,
+    ),
+    RolePlayAnswer(
+        question=questions[6].question,
+        answer="偶尔嘴硬、会记小事，也会在疲惫时变得更安静，但不会无限兜底。",
+        perspective=questions[6].perspective,
+    ),
 ]
+
+spec = PersonaSpec(
+    agent_name=config.agent.name,
+    answers=answers,
+    dependency_files=["persona/notes.md", "persona/style_examples.txt"],
+)
 
 prompt = await abuild_roleplay_prompt_from_answers_and_apply(
     provider,
     config=config,
     model="deepseek-ai/DeepSeek-V3.2",
     agent_name=config.agent.name,
-    answers=answers,
-    dependency_files=["persona/notes.md", "persona/style_examples.txt"],
+    persona_spec=spec,
     persona_key="beichen_v2",
 )
 print(prompt)
@@ -585,14 +608,65 @@ print(updated.agent.persona)
 
 说明：
 
-- `generate_humanized_roleplay_questions()` 会生成覆盖拟人化关键维度的问题模板。
+- `list_roleplay_question_templates()` 返回可用模板名，适合直接暴露给前端表单、配置文件或外部控制台。
+- `generate_humanized_roleplay_questions(template=...)` 会生成覆盖拟人化关键维度的上位问题模板；当前内置 `default`、`companion`、`romance`、`group_chat` 四类模板。
+- 如果外部系统暂时不想嵌入 Python API，也可以直接使用 CLI 辅助命令：`sirius-chat --list-roleplay-question-templates` 和 `sirius-chat --print-roleplay-questions-template <template>`。
 - `agenerate_agent_prompts_from_answers(...)` 会从回答中生成完整 `GeneratedSessionPreset`（`agent + global_system_prompt`）。
 - 生成时会显式输入 `agent_name`，确保主 AI 命名与提示词一致。
 - `abuild_roleplay_prompt_from_answers_and_apply(...)` 会把生成结果写入 `config.preset`，并把完整生成过程本地化到 `<work_path>/generated_agent_traces/<agent_key>.json`。
+- 生成器会把这些抽象输入主动展开为具体的人物小传、语言习惯、回复节奏和互动边界；除非你提供的是风格样本，否则不必自己先写完整台词或整段系统提示词。
 - `dependency_files=[...]` 适合挂接角色卡、设定稿、语气样本、对白模板等本地素材；框架会读取文件内容参与生成，并记录快照与 sha256。
 - 当输入中出现“拟人”“情感”“陪伴”“关系”“共情”等信号时，生成器会自动强化 prompt，使角色更有真实人感和情绪温度。
 - `load_persona_generation_traces(...)` 可用于审计生成过程、追踪提示词来源、比对不同版本人格。
 - `aregenerate_agent_prompt_from_dependencies(...)` 会重新读取最新依赖文件并重生同一个 agent key，适合外部系统在素材更新后做无问卷刷新。
+
+推荐的外部输入规范：
+
+```python
+persona_input = {
+    "template": "companion",
+    "agent_name": "北辰",
+    "agent_alias": "阿辰",
+    "trait_keywords": ["克制", "可靠", "慢热"],
+    "answers": [
+        {
+            "question": "像哪类长期在场的人？",
+            "answer": "像一个不吵闹但很稳定的陪伴者，熟了以后很护短。",
+            "perspective": "objective",
+        },
+        {
+            "question": "对方低落时第一反应是什么？",
+            "answer": "先接住情绪，再慢慢帮对方理思路，不会抢着下判断。",
+            "perspective": "subjective",
+        },
+    ],
+    "background": "成年后长期承担照顾者角色，因此很会留意他人情绪，但也有自己的疲惫。",
+    "dependency_files": ["persona/notes.md", "persona/style_examples.txt"],
+    "output_language": "zh-CN",
+}
+```
+
+字段建议：
+
+- `template`：从 `list_roleplay_question_templates()` 里选择一种问卷场景。
+- `answers`：回答高层问题，优先写人物原型、关系策略、情绪原则、表达节奏、边界和小缺点，不要直接写完整 prompt。
+- `trait_keywords`：可选，用于锚定 3-5 个核心标签。
+- `background`：可选，适合写“人物小传母题”或关键经历。
+- `dependency_files`：可选，适合挂接角色卡、语气样本、设定稿。
+- `output_language`：生成语言，默认 `zh-CN`。
+
+外部接入推荐流程：
+
+1. 通过 `list_roleplay_question_templates()` 选择模板。
+2. 用 `generate_humanized_roleplay_questions(template=...)` 生成问卷，并收集高层回答。
+3. 组装 `PersonaSpec` 或直接把 `answers + dependency_files` 传给生成 API。
+4. 用 `abuild_roleplay_prompt_from_answers_and_apply(...)` 写入当前 `SessionConfig`，或用 `agenerate_from_persona_spec(...)` 先生成资产再持久化。
+
+如果你需要一个可直接输出问卷骨架的示例脚本，可运行：
+
+```bash
+python examples/roleplay_template_selection.py --template companion
+```
 
 agent-first 会话创建示例：
 
