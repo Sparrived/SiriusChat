@@ -28,6 +28,15 @@ from sirius_chat.async_engine.utils import (
     normalize_multimodal_inputs,
 )
 from sirius_chat.async_engine.prompts import build_system_prompt
+from sirius_chat.async_engine.orchestration import (
+    TASK_MEMORY_EXTRACT,
+    TASK_EVENT_EXTRACT,
+    TASK_MEMORY_MANAGER,
+    TASK_INTENT_ANALYSIS,
+    SUPPORTED_MULTIMODAL_TYPES,
+    get_system_prompt_for_task,
+)
+from sirius_chat.memory.self.models import DiaryEntry, GlossaryTerm
 from sirius_chat.exceptions import OrchestrationConfigError
 from sirius_chat.skills.registry import SkillRegistry
 from sirius_chat.skills.executor import SkillExecutor, parse_skill_calls, strip_skill_calls
@@ -79,7 +88,7 @@ class LiveSessionContext:
     llm_semaphore: asyncio.Semaphore | None = None  # Concurrency limiter for LLM calls
 
 
-@dataclass(slots=True)
+@dataclass
 class AsyncRolePlayEngine:
     provider: LLMProvider | AsyncLLMProvider
     _live_session_contexts: dict[int, LiveSessionContext] = field(default_factory=dict, init=False, repr=False)
@@ -92,13 +101,8 @@ class AsyncRolePlayEngine:
     _shared_self_memory: dict[str, SelfMemoryManager] = field(default_factory=dict, init=False, repr=False)
     _shared_event_stores: dict[str, EventMemoryManager] = field(default_factory=dict, init=False, repr=False)
 
-    _TASK_MEMORY_EXTRACT = "memory_extract"
-    _TASK_EVENT_EXTRACT = "event_extract"
-    _TASK_MEMORY_MANAGER = "memory_manager"
-    _TASK_INTENT_ANALYSIS = "intent_analysis"
     _TASK_TIMEOUT_SECONDS_DEFAULT = 45.0
     _TASK_TIMEOUT_SECONDS_CHAT_MAIN = 90.0
-    _SUPPORTED_MULTIMODAL_TYPES = {"image", "video", "audio", "text"}
     _MEMORY_METADATA_LINE_PATTERNS = (
         re.compile(
             r"^\s*置信度\s*[：:]\s*\d+(?:\.\d+)?%\s*\|\s*类型\s*[：:]\s*[^|]+\|\s*来源\s*[：:]\s*[^|]+\|\s*时间\s*[：:]\s*[^|]+\|\s*内容\s*[：:]\s*.+$"
@@ -125,8 +129,8 @@ class AsyncRolePlayEngine:
     
     # 所有需要模型支持的必需任务
     _REQUIRED_TASKS = [
-        "memory_extract",
-        "event_extract",
+        TASK_MEMORY_EXTRACT,
+        TASK_EVENT_EXTRACT,
     ]
 
     def validate_orchestration_config(self, config: SessionConfig) -> None:
@@ -192,6 +196,10 @@ class AsyncRolePlayEngine:
                 self._orchestration_log_cache.add(log_key)
             return
 
+        raise OrchestrationConfigError(
+            {task: [task] for task in self._REQUIRED_TASKS},
+        )
+
     def _get_task_timeout_seconds(self, task_name: str) -> float:
         if task_name == "chat_main":
             return self._TASK_TIMEOUT_SECONDS_CHAT_MAIN
@@ -213,7 +221,7 @@ class AsyncRolePlayEngine:
         orchestration = config.orchestration
         model = orchestration.resolve_model_for_task(
             task_name,
-            default_model=config.agent.model if task_name == self._TASK_INTENT_ANALYSIS else "",
+            default_model=config.agent.model if task_name == TASK_INTENT_ANALYSIS else "",
         )
         if model:
             return model
@@ -355,15 +363,9 @@ class AsyncRolePlayEngine:
                     _ctx: LiveSessionContext = created,
                 ) -> None:
                     """Periodically consolidate events + notes + facts for all users."""
-                    class _Adapter:
-                        def __init__(self, engine: AsyncRolePlayEngine) -> None:
-                            self._engine = engine
-                        async def generate_async(self, request: GenerationRequest) -> str:
-                            return await self._engine._call_provider(request)
-
-                    adapter = _Adapter(_engine)
+                    adapter = _engine._make_provider_adapter()
                     try:
-                        model = _engine.get_model_for_task(_config, _engine._TASK_EVENT_EXTRACT)
+                        model = _engine.get_model_for_task(_config, TASK_EVENT_EXTRACT)
                     except ValueError:
                         model = _config.agent.model
 
@@ -469,6 +471,19 @@ class AsyncRolePlayEngine:
             return mode
         return "auto"
 
+    @staticmethod
+    def _participant_from_profile(profile: object) -> "Participant":
+        """Create a Participant from a UserProfile, copying all relevant fields."""
+        return Participant(
+            name=profile.name,  # type: ignore[attr-defined]
+            user_id=profile.user_id,  # type: ignore[attr-defined]
+            persona=profile.persona,  # type: ignore[attr-defined]
+            identities=dict(profile.identities),  # type: ignore[attr-defined]
+            aliases=list(profile.aliases),  # type: ignore[attr-defined]
+            traits=list(profile.traits),  # type: ignore[attr-defined]
+            metadata=dict(profile.metadata),  # type: ignore[attr-defined]
+        )
+
     def _resolve_participant_for_turn(
         self,
         *,
@@ -489,15 +504,7 @@ class AsyncRolePlayEngine:
                 participant = context.known_by_id.get(mapped_user_id)
                 if participant is None and mapped_user_id in transcript.user_memory.entries:
                     profile = transcript.user_memory.entries[mapped_user_id].profile
-                    participant = Participant(
-                        name=profile.name,
-                        user_id=profile.user_id,
-                        persona=profile.persona,
-                        identities=dict(profile.identities),
-                        aliases=list(profile.aliases),
-                        traits=list(profile.traits),
-                        metadata=dict(profile.metadata),
-                    )
+                    participant = self._participant_from_profile(profile)
                     context.known_by_id[participant.user_id] = participant
 
         resolved_id = context.known_by_label.get(normalized)
@@ -509,15 +516,7 @@ class AsyncRolePlayEngine:
                 participant = context.known_by_id.get(memory_user_id)
                 if participant is None and memory_user_id in transcript.user_memory.entries:
                     profile = transcript.user_memory.entries[memory_user_id].profile
-                    participant = Participant(
-                        name=profile.name,
-                        user_id=profile.user_id,
-                        persona=profile.persona,
-                        identities=dict(profile.identities),
-                        aliases=list(profile.aliases),
-                        traits=list(profile.traits),
-                        metadata=dict(profile.metadata),
-                    )
+                    participant = self._participant_from_profile(profile)
                     context.known_by_id[participant.user_id] = participant
         if participant is None:
             identities = {}
@@ -545,15 +544,8 @@ class AsyncRolePlayEngine:
 
         # 最终化事件记忆：对积累的事件进行 LLM 验证
         try:
-            class ProviderAdapter:
-                def __init__(self, engine: AsyncRolePlayEngine) -> None:
-                    self.engine = engine
-
-                async def generate_async(self, request: GenerationRequest) -> str:
-                    return await self.engine._call_provider(request)
-
             finalize_result = await context.event_store.finalize_pending_events(
-                provider_async=ProviderAdapter(self),
+                provider_async=self._make_provider_adapter(),
                 model_name=config.agent.model,
                 min_mentions=3,
             )
@@ -630,6 +622,21 @@ class AsyncRolePlayEngine:
             raise RuntimeError("配置的提供商未实现 generate/generate_async 方法。")
         sync_fn = cast(Callable[[GenerationRequest], str], generate_sync)
         return await asyncio.to_thread(sync_fn, request_payload)
+
+    def _make_provider_adapter(self) -> object:
+        """Return a lightweight async-provider adapter wrapping this engine.
+
+        The returned object satisfies the ``provider_async`` protocol expected
+        by memory / event sub-systems (``generate_async(request) -> str``).
+        Calling code no longer needs to define an inline adapter class.
+        """
+        engine = self
+
+        class _ProviderAdapter:
+            async def generate_async(self, request: GenerationRequest) -> str:
+                return await engine._call_provider(request)
+
+        return _ProviderAdapter()
 
     async def _call_provider_with_retry(
         self,
@@ -714,7 +721,7 @@ class AsyncRolePlayEngine:
         content: str,
         task_token_usage: dict[str, int],
     ) -> None:
-        task_name = self._TASK_MEMORY_EXTRACT
+        task_name = TASK_MEMORY_EXTRACT
         # 检查任务是否启用
         if not config.orchestration.task_enabled.get(task_name, True):
             return  # 任务被禁用
@@ -723,11 +730,7 @@ class AsyncRolePlayEngine:
 
         self._record_task_stat(transcript, task_name, "attempted")
 
-        system_prompt = (
-            "你是用户画像提取器。请从输入中提取 JSON，并严格输出 JSON 对象，"
-            "字段仅包含 inferred_persona(string)、inferred_traits(array[string])、"
-            "inferred_aliases(array[string])、preference_tags(array[string])、summary_note(string)。"
-        )
+        system_prompt = get_system_prompt_for_task(task_name)
         task_input = self._build_memory_extract_task_input(
             transcript=transcript,
             participant=participant,
@@ -808,7 +811,7 @@ class AsyncRolePlayEngine:
             multimodal_inputs,
             max_items=max_items,
             max_value_length=max_value_length,
-            supported_types=AsyncRolePlayEngine._SUPPORTED_MULTIMODAL_TYPES,
+            supported_types=SUPPORTED_MULTIMODAL_TYPES,
         )
 
     async def _run_self_memory_extract_task(
@@ -877,8 +880,6 @@ class AsyncRolePlayEngine:
         if parsed is None:
             return
 
-        from sirius_chat.memory.self.models import DiaryEntry, GlossaryTerm
-
         # Process diary entries
         diary_items = parsed.get("diary")
         if isinstance(diary_items, list):
@@ -923,21 +924,6 @@ class AsyncRolePlayEngine:
             len(glossary_items) if isinstance(glossary_items, list) else 0,
         )
 
-    async def _run_event_extract_task(
-        self,
-        *,
-        config: SessionConfig,
-        transcript: Transcript,
-        participant: Participant,
-        content: str,
-        task_token_usage: dict[str, int],
-    ) -> dict[str, object] | None:
-        """Legacy per-message event extraction — kept for external callers.
-
-        In v2 the engine uses ``_run_batch_event_extract`` instead.
-        """
-        return None
-
     async def _run_batch_event_extract(
         self,
         *,
@@ -951,7 +937,7 @@ class AsyncRolePlayEngine:
 
         Observations are directly written into user memory facts.
         """
-        task_name = self._TASK_EVENT_EXTRACT
+        task_name = TASK_EVENT_EXTRACT
         if not config.orchestration.task_enabled.get(task_name, True):
             return []
 
@@ -966,18 +952,11 @@ class AsyncRolePlayEngine:
             self._record_task_stat(transcript, task_name, "skipped_budget")
             return []
 
-        class _ProviderAdapter:
-            def __init__(self, engine: AsyncRolePlayEngine) -> None:
-                self._engine = engine
-
-            async def generate_async(self, request: GenerationRequest) -> str:
-                return await self._engine._call_provider(request)
-
         try:
             new_observations = await event_store.extract_observations(
                 user_id=participant.user_id,
                 user_name=participant.name,
-                provider_async=_ProviderAdapter(self),
+                provider_async=self._make_provider_adapter(),
                 model_name=model,
                 temperature=float(config.orchestration.task_temperatures.get(task_name, 0.3)),
                 max_tokens=int(config.orchestration.task_max_tokens.get(task_name, 512)),
@@ -1031,7 +1010,7 @@ class AsyncRolePlayEngine:
         task_token_usage: dict[str, int],
     ) -> None:
         """汇聚、去重、标注、验证用户的记忆事实。"""
-        task_name = self._TASK_MEMORY_MANAGER
+        task_name = TASK_MEMORY_MANAGER
         model = config.orchestration.memory_manager_model.strip()
         if not model:
             return  # memory_manager 可选
@@ -1203,7 +1182,7 @@ class AsyncRolePlayEngine:
     ) -> IntentAnalysis:
         """执行新版意图分析（携带参与者上下文）。"""
         agent_alias = str(config.agent.metadata.get("alias", "")).strip()
-        task_name = self._TASK_INTENT_ANALYSIS
+        task_name = TASK_INTENT_ANALYSIS
 
         # 从最近消息中提取参与者名称（排除 AI 自身）
         participant_names: list[str] = []
@@ -1409,16 +1388,6 @@ class AsyncRolePlayEngine:
 
         chat_history: list[dict[str, object]] = []
 
-        # Determine whether the current batch contains images.
-        # When no images are present in the latest user turn, historical
-        # image URLs are replaced with text descriptors to avoid forcing
-        # the provider into (more expensive) vision mode.
-        current_batch_has_images = any(
-            item.get("type") == "image" and item.get("value")
-            for msg in reversed(transcript.messages)
-            if msg.role == "user"
-            for item in msg.multimodal_inputs
-        ) if transcript.messages else False
         # Narrow check: only look at the LAST user message group
         # (messages after the last assistant reply).
         _last_assistant_idx = -1
@@ -1916,7 +1885,7 @@ class AsyncRolePlayEngine:
         # ============================================================================
         # 事件系统 v2：缓冲消息 + 批量提取观察
         # ============================================================================
-        event_enabled = config.orchestration.task_enabled.get(self._TASK_EVENT_EXTRACT, True)
+        event_enabled = config.orchestration.task_enabled.get(TASK_EVENT_EXTRACT, True)
         if event_enabled:
             event_store.buffer_message(user_id=participant.user_id, content=content)
 
