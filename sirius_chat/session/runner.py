@@ -8,7 +8,7 @@ from sirius_chat.async_engine import AsyncRolePlayEngine
 from sirius_chat.config import SessionConfig
 from sirius_chat.models import Message, Participant, Transcript
 from sirius_chat.providers.base import AsyncLLMProvider, LLMProvider
-from sirius_chat.session.store import JsonSessionStore, SessionStore
+from sirius_chat.session.store import JsonSessionStore, SessionStore, SqliteSessionStore
 
 
 PRIMARY_USER_FILE_NAME = "primary_user.json"
@@ -66,7 +66,7 @@ class JsonPersistentSessionRunner:
         self.work_path.mkdir(parents=True, exist_ok=True)
         self.config.work_path = self.work_path
         self.engine = AsyncRolePlayEngine(provider=self.provider)
-        self.store = self.session_store if self.session_store is not None else JsonSessionStore(self.work_path)
+        self.store = self.session_store if self.session_store is not None else SqliteSessionStore(self.work_path)
 
     @property
     def _primary_user_path(self) -> Path:
@@ -142,5 +142,5 @@ class JsonPersistentSessionRunner:
         if clear_transcript:
             self.transcript = None
             if self.store.exists():
-                self.store.path.unlink(missing_ok=True)
+                self.store.clear()
         self._persist_primary_user()

@@ -1,15 +1,16 @@
 from __future__ import annotations
 
 import uuid
-from dataclasses import asdict, dataclass, field, fields, MISSING
+from dataclasses import dataclass, field, fields, MISSING
 from typing import Any
 
+from sirius_chat.mixins import JsonSerializable
 from sirius_chat.memory import UserMemoryEntry, UserMemoryManager, UserProfile
 from sirius_chat.config import TokenUsageRecord, OrchestrationPolicy
 
 
 @dataclass(slots=True)
-class Message:
+class Message(JsonSerializable):
     role: str
     content: str
     speaker: str | None = None
@@ -31,26 +32,9 @@ class Message:
     def __post_init__(self) -> None:
         self.content = self._trim_content_tail(self.content)
 
-    def to_dict(self) -> dict[str, Any]:
-        """Serialize to dict; automatically includes any future fields."""
-        return asdict(self)
-
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "Message":
-        """Deserialize from dict; new fields with defaults are handled automatically."""
-        kwargs: dict[str, Any] = {}
-        for f in fields(cls):
-            if f.name in data:
-                kwargs[f.name] = data[f.name]
-            elif f.default is not MISSING:
-                kwargs[f.name] = f.default
-            elif f.default_factory is not MISSING:  # type: ignore[misc]
-                kwargs[f.name] = f.default_factory()  # type: ignore[misc]
-        return cls(**kwargs)
-
 
 @dataclass(slots=True)
-class ReplyRuntimeState:
+class ReplyRuntimeState(JsonSerializable):
     # 按用户记录最近一次发言时间（ISO 8601）
     user_last_turn_at: dict[str, str] = field(default_factory=dict)
     # 群聊窗口内消息时间序列（ISO 8601）
@@ -60,26 +44,9 @@ class ReplyRuntimeState:
     # 滑动窗口内 AI 回复时间序列（用于频率限制）
     assistant_reply_timestamps: list[str] = field(default_factory=list)
 
-    def to_dict(self) -> dict[str, Any]:
-        """Serialize to dict; automatically includes any future fields."""
-        return asdict(self)
-
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "ReplyRuntimeState":
-        """Deserialize from dict; new fields with defaults are handled automatically."""
-        kwargs: dict[str, Any] = {}
-        for f in fields(cls):
-            if f.name in data:
-                kwargs[f.name] = data[f.name]
-            elif f.default is not MISSING:
-                kwargs[f.name] = f.default
-            elif f.default_factory is not MISSING:  # type: ignore[misc]
-                kwargs[f.name] = f.default_factory()  # type: ignore[misc]
-        return cls(**kwargs)
-
 
 @dataclass(slots=True)
-class Participant:
+class Participant(JsonSerializable):
     """Multi-user participant representation with auto-generated unique user_id.
     
     Attributes:
@@ -219,7 +186,7 @@ class Transcript:
             "messages": [msg.to_dict() for msg in self.messages],
             "user_memory": self.user_memory.to_dict(),
             "reply_runtime": self.reply_runtime.to_dict(),
-            "token_usage_records": [asdict(r) for r in self.token_usage_records],
+            "token_usage_records": [r.to_dict() for r in self.token_usage_records],
         }
         # Auto-include any simple fields not handled above (forward-compatible)
         for f in fields(self):
@@ -256,18 +223,7 @@ class Transcript:
             messages=[Message.from_dict(item) for item in payload.get("messages", [])],
             reply_runtime=reply_runtime,
             token_usage_records=[
-                TokenUsageRecord(
-                    actor_id=str(item.get("actor_id", "unknown")),
-                    task_name=str(item.get("task_name", "unknown")),
-                    model=str(item.get("model", "")),
-                    prompt_tokens=int(item.get("prompt_tokens", 0)),
-                    completion_tokens=int(item.get("completion_tokens", 0)),
-                    total_tokens=int(item.get("total_tokens", 0)),
-                    input_chars=int(item.get("input_chars", 0)),
-                    output_chars=int(item.get("output_chars", 0)),
-                    estimation_method=str(item.get("estimation_method", "char_div4")),
-                    retries_used=int(item.get("retries_used", 0)),
-                )
+                TokenUsageRecord.from_dict(item)
                 for item in payload.get("token_usage_records", [])
             ],
             **simple_kwargs,

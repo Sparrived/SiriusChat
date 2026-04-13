@@ -38,7 +38,7 @@ def test_json_persistent_session_runner_auto_persistence_and_reset(tmp_path: Pat
 
         assert msg.content == "回复1"
         profile_path = tmp_path / "primary_user.json"
-        state_path = tmp_path / "session_state.json"
+        state_path = tmp_path / "session_state.db"
         assert profile_path.exists()
         assert state_path.exists()
 
@@ -50,7 +50,7 @@ def test_json_persistent_session_runner_auto_persistence_and_reset(tmp_path: Pat
         assert len(payload["runtime"]["recent_messages"]) > 0
 
         await runner.reset_primary_user(Participant(name="小李", user_id="u_li"), clear_transcript=True)
-        assert not state_path.exists()
+        assert not runner.store.exists()  # session state cleared (rows gone)
         payload2 = json.loads(profile_path.read_text(encoding="utf-8"))
         assert payload2["user_id"] == "u_li"
 

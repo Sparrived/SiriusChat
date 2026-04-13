@@ -4,7 +4,21 @@
 
 ## [Unreleased]
 
-## [0.18.0] - 2026-04-13
+## [0.19.0] - 2026-04-13
+
+### Added
+- **`sirius_chat/mixins.py`**：新增公开 Mixin 模块，将 `JsonSerializable` 迁入正式公开命名空间（原 `_mixin.py` 成为向后兼容垫片）。
+- **`SessionStore.clear()`**：两种 Store 均新增 `clear()` 方法——`JsonSessionStore.clear()` 删除文件，`SqliteSessionStore.clear()` 清空行保留文件（避免 Windows 文件锁）。
+- **序列化线路扩展**：`UserProfile` 和 `Participant` 继承 `JsonSerializable`，自动获得 `to_dict()` / `from_dict()`。
+- 新增迁移文档 `docs/migration-v0.19.md`。
+
+### Changed
+- **默认 Session Store 改为 SQLite**：`JsonPersistentSessionRunner` 默认使用 `SqliteSessionStore`（`session_state.db`）代替 `JsonSessionStore`。已有 `session_state.json` 用户可显式传入 `JsonSessionStore` 或使用迁移脚本，详见迁移文档。
+- **`JsonPersistentSessionRunner.reset_primary_user()`**：改用 `store.clear()`，兼容两种持久化后端，修复 Windows 文件锁导致的 `PermissionError`。
+- **`UserMemoryFileStore._entry_to_payload()`**：由手工字段枚举改为 `entry.profile.to_dict()`；实际效果：保存的 `users/*.json` 现在额外包含 `identities` 和 `metadata` 字段（原先被遗漏），已有文件完全向后兼容。
+- 所有模型文件内部导入从 `sirius_chat._mixin` 统一改为 `sirius_chat.mixins`。
+
+
 
 ### Changed
 - **持久化模型自戒序列化**：`Message`、`ReplyRuntimeState`、`TokenUsageRecord`、`EventMemoryEntry`、`DiaryEntry`、`GlossaryTerm`、`MemoryFact` 的 `to_dict()` 匹中改用 `dataclasses.asdict()`，`from_dict()` 改用 `dataclasses.fields()` 反射加载。以后再向这些类新增字段（带默认值）时，无需手动更新序列化方法即可自动持久化。

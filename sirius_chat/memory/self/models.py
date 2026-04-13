@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field, fields, MISSING
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
+
+from sirius_chat.mixins import JsonSerializable
 
 
 @dataclass(slots=True)
-class DiaryEntry:
+class DiaryEntry(JsonSerializable):
     """A single diary entry recorded by the AI.
 
     The AI autonomously decides what to record. Each entry carries importance
@@ -56,26 +58,9 @@ class DiaryEntry:
         except (ValueError, TypeError):
             return 0.0
 
-    def to_dict(self) -> dict:
-        """Serialize to dict; automatically includes any future fields."""
-        return asdict(self)
-
-    @classmethod
-    def from_dict(cls, data: dict) -> DiaryEntry:
-        """Deserialize from dict; new fields with defaults are handled automatically."""
-        kwargs: dict = {}
-        for f in fields(cls):
-            if f.name in data:
-                kwargs[f.name] = data[f.name]
-            elif f.default is not MISSING:
-                kwargs[f.name] = f.default
-            elif f.default_factory is not MISSING:  # type: ignore[misc]
-                kwargs[f.name] = f.default_factory()  # type: ignore[misc]
-        return cls(**kwargs)
-
 
 @dataclass(slots=True)
-class GlossaryTerm:
+class GlossaryTerm(JsonSerializable):
     """A term/noun definition learned by the AI from conversations.
 
     The AI collects terms it encounters but does not fully understand,
@@ -112,23 +97,6 @@ class GlossaryTerm:
             self.first_seen_at = now
         if not self.last_updated_at:
             self.last_updated_at = now
-
-    def to_dict(self) -> dict:
-        """Serialize to dict; automatically includes any future fields."""
-        return asdict(self)
-
-    @classmethod
-    def from_dict(cls, data: dict) -> GlossaryTerm:
-        """Deserialize from dict; new fields with defaults are handled automatically."""
-        kwargs: dict = {}
-        for f in fields(cls):
-            if f.name in data:
-                kwargs[f.name] = data[f.name]
-            elif f.default is not MISSING:
-                kwargs[f.name] = f.default
-            elif f.default_factory is not MISSING:  # type: ignore[misc]
-                kwargs[f.name] = f.default_factory()  # type: ignore[misc]
-        return cls(**kwargs)
 
 
 @dataclass(slots=True)

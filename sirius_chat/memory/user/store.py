@@ -35,15 +35,7 @@ class UserMemoryFileStore:
     def _entry_to_payload(entry: UserMemoryEntry) -> dict[str, Any]:
         """Convert entry to serializable payload."""
         return {
-            "profile": {
-                "user_id": entry.profile.user_id,
-                "name": entry.profile.name,
-                "persona": entry.profile.persona,
-                "identities": entry.profile.identities,
-                "aliases": entry.profile.aliases,
-                "traits": entry.profile.traits,
-                "metadata": entry.profile.metadata,
-            },
+            "profile": entry.profile.to_dict(),
             "runtime": {
                 "inferred_persona": entry.runtime.inferred_persona,
                 "inferred_traits": entry.runtime.inferred_traits,

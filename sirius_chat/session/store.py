@@ -22,6 +22,9 @@ class SessionStore(Protocol):
     def save(self, transcript: Transcript) -> None:
         ...
 
+    def clear(self) -> None:
+        ...
+
 
 class JsonSessionStore:
     def __init__(self, work_path: str | Path, filename: str = "session_state.json") -> None:
@@ -49,6 +52,9 @@ class JsonSessionStore:
             json.dumps(transcript.to_dict(), ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
+
+    def clear(self) -> None:
+        self._path.unlink(missing_ok=True)
 
 
 class SqliteSessionStore:
@@ -101,3 +107,10 @@ class SqliteSessionStore:
                 "INSERT INTO session_state(id, payload) VALUES(1, ?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload",
                 (payload,),
             )
+
+    def clear(self) -> None:
+        """Remove the saved session state (deletes rows; keeps schema intact)."""
+        if not self._path.exists():
+            return
+        with self._connect() as conn:
+            conn.execute("DELETE FROM session_state")
