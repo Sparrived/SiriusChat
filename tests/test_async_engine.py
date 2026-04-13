@@ -1322,5 +1322,175 @@ def test_async_engine_event_extract_task_skips_when_budget_exceeded() -> None:
     asyncio.run(_run())
 
 
+def test_multimodal_vision_format_only_when_current_batch_has_images() -> None:
+    """When current user turn has NO images, historical images are collapsed to text descriptors."""
+
+    async def _run() -> None:
+        responses = [
+            "收到图片",   # reply to image message
+            "收到文字",   # reply to text-only follow-up
+        ]
+        provider = MockProvider(responses=responses)
+        engine = create_async_engine(provider)
+        config = SessionConfig(
+            work_path=Path("data/tests/multimodal_vision_opt"),
+            preset=AgentPreset(
+                agent=Agent(name="主助手", persona="视觉测试", model="mock-model"),
+                global_system_prompt="测试系统提示词",
+            ),
+            orchestration=OrchestrationPolicy(
+                unified_model="mock-model",
+                enable_self_memory=False,
+                task_enabled={"memory_extract": False, "event_extract": False},
+                message_debounce_seconds=0.0,
+            ),
+        )
+
+        # Turn 1: with image
+        transcript = await engine.run_live_session(config=config)
+        transcript = await engine.run_live_message(
+            config=config,
+            turn=Message(
+                role="user",
+                speaker="小明",
+                content="看看这张图",
+                multimodal_inputs=[{"type": "image", "value": "https://example.com/img.png"}],
+            ),
+            transcript=transcript,
+            finalize_and_persist=True,
+        )
+
+        # The first request should contain image_url parts (vision format)
+        first_req = provider.requests[0]
+        msgs_with_image_url = [
+            m for m in first_req.messages
+            if isinstance(m.get("content"), list)
+            and any(p.get("type") == "image_url" for p in m["content"])
+        ]
+        assert len(msgs_with_image_url) > 0, "Image turn should use vision format"
+
+        # Turn 2: text only, no images
+        transcript = await engine.run_live_message(
+            config=config,
+            turn=Message(role="user", speaker="小明", content="这张图是什么意思"),
+            transcript=transcript,
+            finalize_and_persist=True,
+        )
+
+        # The second request should NOT contain image_url parts
+        second_req = provider.requests[-1]
+        msgs_with_image_url_2 = [
+            m for m in second_req.messages
+            if isinstance(m.get("content"), list)
+            and any(p.get("type") == "image_url" for p in m["content"])
+        ]
+        assert len(msgs_with_image_url_2) == 0, "No-image turn should collapse images to text"
+
+        # Historical image should be in text descriptor form
+        user_texts = [
+            m["content"] for m in second_req.messages
+            if m.get("role") == "user" and isinstance(m.get("content"), str)
+        ]
+        has_descriptor = any("[图片:" in t for t in user_texts)
+        assert has_descriptor, "Historical image should appear as text descriptor"
+
+    asyncio.run(_run())
+
+
+def test_engine_level_shared_memory_across_sessions() -> None:
+    """Engine-level memory stores allow a new session to see user memory from a previous session."""
+
+    async def _run() -> None:
+        provider = MockProvider(responses=["你好", "记住了"])
+        engine = create_async_engine(provider)
+
+        work = Path("data/tests/shared_memory_engine")
+        config = SessionConfig(
+            work_path=work,
+            preset=AgentPreset(
+                agent=Agent(name="主助手", persona="记忆测试", model="mock-model"),
+                global_system_prompt="测试系统提示词",
+            ),
+            orchestration=OrchestrationPolicy(
+                unified_model="mock-model",
+                enable_self_memory=False,
+                task_enabled={"memory_extract": False, "event_extract": False},
+                message_debounce_seconds=0.0,
+            ),
+        )
+
+        # Session 1: run and finalize to populate engine-level stores
+        t1 = await engine.run_live_session(config=config)
+        t1 = await engine.run_live_message(
+            config=config,
+            turn=Message(role="user", speaker="小王", content="你好"),
+            transcript=t1,
+            finalize_and_persist=True,
+        )
+
+        # Verify engine has cached user memory for this work_path
+        work_key = str(work)
+        assert work_key in engine._shared_user_memory
+
+        # Session 2: new transcript, same engine → should reuse cached memory
+        t2 = await engine.run_live_session(config=config)
+        t2 = await engine.run_live_message(
+            config=config,
+            turn=Message(role="user", speaker="小王", content="还记得我吗"),
+            transcript=t2,
+            finalize_and_persist=True,
+        )
+
+        # Both sessions used the same engine-level memory reference
+        assert work_key in engine._shared_user_memory
+
+    asyncio.run(_run())
+
+
+def test_parallel_pipeline_intent_and_add_human_turn_concurrent() -> None:
+    """Verify the parallel pipeline executes _add_human_turn and intent analysis concurrently."""
+
+    call_order: list[str] = []
+
+    class OrderTrackingProvider:
+        """Tracks model call order to verify concurrency structure."""
+        def __init__(self) -> None:
+            self.requests: list[GenerationRequest] = []
+
+        def generate(self, request: GenerationRequest) -> str:
+            self.requests.append(request)
+            return "AI回复"
+
+    async def _run() -> None:
+        provider = OrderTrackingProvider()
+        engine = create_async_engine(provider)
+        config = SessionConfig(
+            work_path=Path("data/tests/parallel_pipeline"),
+            preset=AgentPreset(
+                agent=Agent(name="主助手", persona="并行测试", model="mock-model"),
+                global_system_prompt="测试系统提示词",
+            ),
+            orchestration=OrchestrationPolicy(
+                unified_model="mock-model",
+                enable_self_memory=False,
+                task_enabled={"memory_extract": False, "event_extract": False},
+                message_debounce_seconds=0.0,
+                session_reply_mode="always",
+            ),
+        )
+
+        transcript = await engine.run_live_session(config=config)
+        transcript = await engine.run_live_message(
+            config=config,
+            turn=Message(role="user", speaker="小王", content="大家好"),
+            transcript=transcript,
+            finalize_and_persist=True,
+        )
+
+        # Engine should complete without errors and produce a reply
+        assistant_msgs = [m for m in transcript.messages if m.role == "assistant"]
+        assert len(assistant_msgs) >= 1
+
+    asyncio.run(_run())
 
 

@@ -24,11 +24,9 @@ flowchart TD
     G3 --> G4["事件特征→用户事实<br/>emotional_pattern<br/>user_interest<br/>social_context"]
 
     G4 --> H{orchestration<br/>enabled?}
-    H -- 并行辅助任务 --> I["memory_extract<br/>用户画像提取<br/>（携带上下文）"]
-    H -- 并行辅助任务 --> J2["event_extract<br/>事件特征提取"]
-    H -- 并行辅助任务 --> J3["intent_analysis<br/>意图分类 + target 识别<br/>支持预算 / 重试 / 专用模型"]
+    H -- "并行流水线 (asyncio.gather)" --> I["_add_human_turn 分支<br/>memory_extract + event_extract<br/>用户画像与事件提取"]
+    H -- "并行流水线 (asyncio.gather)" --> J3["intent_analysis 分支<br/>意图分类 + target 识别<br/>支持预算 / 重试 / 专用模型"]
     I --> K
-    J2 --> K
     J3 --> K["参与决策<br/>HeatAnalyzer → IntentAnalyzer v2<br/>→ EngagementCoordinator"]
 
     K --> K2{skills<br/>enabled?}
@@ -37,7 +35,7 @@ flowchart TD
     K2 -- 否 --> L
     K4 --> L
 
-    L["构建系统提示词<br/>主 AI + 参与者记忆<br/>+ 会话摘要 + 环境上下文<br/>分割指令（可选）<br/>安全提醒注入"] --> M["调用 Provider<br/>自动路由或指定<br/>图片直接随主请求发送<br/>生成 assistant 回复"]
+    L["构建系统提示词<br/>主 AI + 参与者记忆<br/>+ 会话摘要 + 环境上下文<br/>分割指令（可选）<br/>安全提醒注入"] --> M["调用 Provider<br/>自动路由或指定<br/>图片仅在当前批次含图时发送 vision 格式<br/>无图时历史图片折叠为文本描述符<br/>生成 assistant 回复"]
     M --> N["Token 记录双写<br/>① Transcript.token_usage_records 内存<br/>② TokenUsageStore → token_usage.db SQLite"]
     N --> O["自动压缩历史<br/>session_summary<br/>超过长度阈值时"]
     O --> P["输出更新后<br/>Transcript"]
@@ -180,6 +178,7 @@ flowchart LR
 - `generated_agents.json`: 由提示词生成器输出并持久化的 agent 资产库。
 - `session_state.json` / `session_state.db`: 会话持久化与恢复状态。
 - `events/events.json`: 事件记忆持久化文件（用于跨会话事件命中）。
+- ✨ **(v0.17.0)** 引擎级共享记忆缓存：`AsyncRolePlayEngine` 按 `work_path` 键保存 `UserMemoryManager`、`SelfMemoryManager`、`EventObservationStore` 实例，跨 Session 复用，持久化时同步回写。
 
 ## 5. 代码更新后的强制同步规则
 

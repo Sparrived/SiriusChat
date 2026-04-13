@@ -4,6 +4,17 @@
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-04-12
+
+### Added
+- 引擎级记忆共享：`AsyncRolePlayEngine` 维护 `_shared_user_memory`、`_shared_self_memory`、`_shared_event_stores`，按 `work_path` 键索引，跨 Session 复用内存中的记忆数据，避免重复磁盘 I/O。
+- 预处理并行流水线：`_process_live_turn` 中 `_add_human_turn`（含 memory_extract、event_extract）与 `intent_analysis` 通过 `asyncio.gather()` 并发执行，降低主模型调用前延迟。
+- 新增迁移文档 `docs/migration-v0.17.md`。
+
+### Changed
+- 消息合并策略优化：debounce 窗口内同用户短消息（≤ 30 字符且单行）改用中文逗号 `，` 拼接，长消息及多行消息保留 `\n` 拼接。
+- 多模态智能降级：仅当当前批次（最后一次 assistant 回复后的用户消息）含图片时，才以 vision 格式（`image_url`）发送历史图片；否则历史图片折叠为文本描述符 `[图片: url...]`，避免无图轮次触发 vision 定价。
+
 ## [0.16.1] - 2026-04-11
 
 ### Fixed

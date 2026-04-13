@@ -120,15 +120,22 @@ def test_merge_pending_turns_single_message() -> None:
 
 
 def test_merge_pending_turns_combines_content() -> None:
-    """Multiple messages from same user merge content with newlines."""
+    """Short messages from same user are comma-joined; long messages use newlines."""
     engine = AsyncRolePlayEngine(MockProvider())
+    # Short messages (≤30 chars, single-line) → comma join
     m1 = Message(role="user", content="line one", speaker="Bob", channel="chat")
     m2 = Message(role="user", content="line two", speaker="Bob", channel="chat")
     m3 = Message(role="user", content="line three", speaker="Bob", channel="chat")
     result = engine._merge_pending_turns([m1, m2, m3])
-    assert result.content == "line one\nline two\nline three"
+    assert result.content == "line one\uff0cline two\uff0cline three"
     assert result.speaker == "Bob"
     assert result.channel == "chat"
+
+    # Long messages (>30 chars) → newline join
+    m4 = Message(role="user", content="A" * 40, speaker="Bob", channel="chat")
+    m5 = Message(role="user", content="B" * 40, speaker="Bob", channel="chat")
+    result2 = engine._merge_pending_turns([m4, m5])
+    assert result2.content == "A" * 40 + "\n" + "B" * 40
 
 
 def test_merge_pending_turns_combines_multimodal() -> None:
@@ -143,7 +150,7 @@ def test_merge_pending_turns_combines_multimodal() -> None:
         multimodal_inputs=[{"type": "image", "value": "url2"}],
     )
     result = engine._merge_pending_turns([m1, m2])
-    assert result.content == "pic1\npic2"
+    assert result.content == "pic1\uff0cpic2"  # Short messages → comma join
     assert len(result.multimodal_inputs) == 2
     assert result.multimodal_inputs[0]["value"] == "url1"
     assert result.multimodal_inputs[1]["value"] == "url2"
@@ -156,7 +163,7 @@ def test_merge_pending_turns_skips_blank_content() -> None:
     m2 = Message(role="user", content="   ", speaker="Dan")
     m3 = Message(role="user", content="world", speaker="Dan")
     result = engine._merge_pending_turns([m1, m2, m3])
-    assert result.content == "hello\nworld"
+    assert result.content == "hello\uff0cworld"  # Short messages → comma join
 
 
 def test_debounce_config_default_five() -> None:

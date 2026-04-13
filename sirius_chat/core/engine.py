@@ -85,6 +85,13 @@ class AsyncRolePlayEngine:
     _live_session_contexts: dict[int, LiveSessionContext] = field(default_factory=dict, init=False, repr=False)
     _orchestration_log_cache: set[str] = field(default_factory=set, init=False, repr=False)
 
+    # ── Engine-level shared memory stores ──
+    # Keyed by str(work_path) so that different sessions using the same
+    # work_path share user memory, self-memory, and event memory.
+    _shared_user_memory: dict[str, UserMemoryManager] = field(default_factory=dict, init=False, repr=False)
+    _shared_self_memory: dict[str, SelfMemoryManager] = field(default_factory=dict, init=False, repr=False)
+    _shared_event_stores: dict[str, EventMemoryManager] = field(default_factory=dict, init=False, repr=False)
+
     _TASK_MEMORY_EXTRACT = "memory_extract"
     _TASK_EVENT_EXTRACT = "event_extract"
     _TASK_MEMORY_MANAGER = "memory_manager"
@@ -232,10 +239,26 @@ class AsyncRolePlayEngine:
         if existing is not None:
             return existing
 
+        work_key = str(config.work_path)
         file_store = UserMemoryFileStore(config.work_path)
         event_file_store = EventMemoryFileStore(config.work_path)
-        event_store = event_file_store.load()
-        transcript.user_memory.merge_from(file_store.load_all())
+
+        # ── Engine-level shared memory: load once, reuse across sessions ──
+        if work_key in self._shared_user_memory:
+            # Reuse engine-level user memory (already loaded from disk)
+            shared_umem = self._shared_user_memory[work_key]
+            transcript.user_memory.merge_from(shared_umem)
+        else:
+            # First session for this work_path — load from disk and cache
+            loaded_manager = file_store.load_all()
+            self._shared_user_memory[work_key] = loaded_manager
+            transcript.user_memory.merge_from(loaded_manager)
+
+        if work_key in self._shared_event_stores:
+            event_store = self._shared_event_stores[work_key]
+        else:
+            event_store = event_file_store.load()
+            self._shared_event_stores[work_key] = event_store
 
         known_by_id: dict[str, Participant] = {}
         known_by_label: dict[str, str] = {}
@@ -268,15 +291,19 @@ class AsyncRolePlayEngine:
             ),
         )
 
-        # Load AI self-memory (diary + glossary)
+        # ── Engine-level shared self-memory ──
         if config.orchestration.enable_self_memory:
-            self_store = SelfMemoryFileStore(config.work_path)
-            created.self_memory = self_store.load()
-            created.self_memory_store = self_store
-            # Apply diary decay on load
-            removed = created.self_memory.apply_diary_decay()
-            if removed > 0:
-                logger.info("自我记忆日记衰退：移除 %d 条过期条目", removed)
+            if work_key in self._shared_self_memory:
+                created.self_memory = self._shared_self_memory[work_key]
+            else:
+                self_store = SelfMemoryFileStore(config.work_path)
+                created.self_memory = self_store.load()
+                self._shared_self_memory[work_key] = created.self_memory
+                # Apply diary decay on first load
+                removed = created.self_memory.apply_diary_decay()
+                if removed > 0:
+                    logger.info("自我记忆日记衰退：移除 %d 条过期条目", removed)
+            created.self_memory_store = SelfMemoryFileStore(config.work_path)
 
         skills_dir = config.work_path / "skills"
         SkillRegistry.ensure_skills_directory(skills_dir)
@@ -543,6 +570,13 @@ class AsyncRolePlayEngine:
             context.self_memory_store.save(context.self_memory)
         if context.skill_executor is not None:
             context.skill_executor.save_all_stores()
+
+        # ── Sync back to engine-level shared stores ──
+        work_key = str(config.work_path)
+        self._shared_user_memory[work_key] = transcript.user_memory
+        if config.orchestration.enable_self_memory:
+            self._shared_self_memory[work_key] = context.self_memory
+        self._shared_event_stores[work_key] = context.event_store
 
     @staticmethod
     def _parse_runtime_datetime(raw: str) -> datetime | None:
@@ -1371,6 +1405,33 @@ class AsyncRolePlayEngine:
             )
 
         chat_history: list[dict[str, object]] = []
+
+        # Determine whether the current batch contains images.
+        # When no images are present in the latest user turn, historical
+        # image URLs are replaced with text descriptors to avoid forcing
+        # the provider into (more expensive) vision mode.
+        current_batch_has_images = any(
+            item.get("type") == "image" and item.get("value")
+            for msg in reversed(transcript.messages)
+            if msg.role == "user"
+            for item in msg.multimodal_inputs
+        ) if transcript.messages else False
+        # Narrow check: only look at the LAST user message group
+        # (messages after the last assistant reply).
+        _last_assistant_idx = -1
+        for _idx, _msg in enumerate(transcript.messages):
+            if _msg.role == "assistant":
+                _last_assistant_idx = _idx
+        current_batch_has_images = False
+        for _msg in transcript.messages[_last_assistant_idx + 1:]:
+            if _msg.role == "user":
+                for _item in _msg.multimodal_inputs:
+                    if _item.get("type") == "image" and _item.get("value"):
+                        current_batch_has_images = True
+                        break
+            if current_batch_has_images:
+                break
+
         for message in transcript.messages:
             role = str(message.role or "").strip().lower()
             if role == "system":
@@ -1381,13 +1442,21 @@ class AsyncRolePlayEngine:
                 item for item in message.multimodal_inputs
                 if item.get("type") == "image" and item.get("value")
             ]
-            if image_inputs and role == "user":
+            if image_inputs and role == "user" and current_batch_has_images:
+                # Current batch contains images → send vision format
                 content_parts: list[dict[str, object]] = [{"type": "text", "text": text_content}]
                 for image in image_inputs:
                     content_parts.append(
                         {"type": "image_url", "image_url": {"url": image["value"]}}
                     )
                 chat_history.append({"role": message.role, "content": content_parts})
+            elif image_inputs and role == "user":
+                # No images in current batch → collapse to text descriptors
+                desc_parts = [f"[图片: {img['value'][:60]}...]" for img in image_inputs]
+                chat_history.append({
+                    "role": message.role,
+                    "content": f"{text_content}\n{'  '.join(desc_parts)}",
+                })
             else:
                 chat_history.append({"role": message.role, "content": text_content})
 
@@ -2211,10 +2280,24 @@ class AsyncRolePlayEngine:
 
     @staticmethod
     def _merge_pending_turns(messages: list[Message]) -> Message:
-        """Merge multiple buffered messages from the same user into one."""
+        """Merge multiple buffered messages from the same user into one.
+
+        Short messages (≤ 30 chars, single-line) are joined with ``，``
+        to read as a natural continuation; longer or multi-line messages
+        are joined with newlines to preserve structure.
+        """
         if len(messages) == 1:
             return messages[0]
-        merged_content = "\n".join(m.content for m in messages if m.content.strip())
+
+        parts: list[str] = [m.content for m in messages if m.content.strip()]
+        if not parts:
+            merged_content = ""
+        elif all(len(p) <= 30 and "\n" not in p for p in parts):
+            # All short single-line fragments → natural comma join
+            merged_content = "，".join(parts)
+        else:
+            merged_content = "\n".join(parts)
+
         # Collect all multimodal inputs
         merged_multimodal: list[dict[str, str]] = []
         for m in messages:
@@ -2274,27 +2357,11 @@ class AsyncRolePlayEngine:
         group_recent_turns = [item for item in group_recent_turns if item.timestamp() >= group_window_start]
         group_recent_count = len(group_recent_turns)
 
-        event_hit_payload = await self._add_human_turn(
-            config,
-            transcript,
-            participant,
-            turn.content,
-            task_token_usage=context.task_token_usage,
-            event_store=context.event_store,
-            known_entities=known_entities,
-            channel=turn.channel,
-            channel_user_id=turn.channel_user_id,
-            multimodal_inputs=turn.multimodal_inputs,
-            user_message_count_since_extract=context.user_message_count_since_extract,
-        )
+        event_hit_payload: dict[str, object] = {}
 
-        assistant_interval_seconds: float | None = None
-        if last_assistant_reply_at is not None:
-            assistant_interval_seconds = max(
-                0.0,
-                (now - last_assistant_reply_at).total_seconds(),
-            )
-
+        # ── Parallel pre-processing pipeline ──
+        # Run human-turn processing (memory_extract, event_extract) and intent
+        # analysis concurrently to reduce total latency before the main LLM call.
         resolved_session_mode = (
             str(session_reply_mode).strip().lower()
             if session_reply_mode is not None and str(session_reply_mode).strip()
@@ -2311,21 +2378,56 @@ class AsyncRolePlayEngine:
         )
         should_reply = self._should_reply_for_turn(effective_turn)
 
-        # ── Engagement System: heat + intent → decision ──
-        intent: IntentAnalysis | None = None
-        engagement: EngagementDecision | None = None
-        if should_reply and resolved_session_mode in ("auto", "smart"):
-            heat = self._build_heat_analysis(
-                transcript=transcript,
-                config=config,
-                group_recent_count=group_recent_count,
+        need_engagement = should_reply and resolved_session_mode in ("auto", "smart")
+
+        # Build coroutines to run concurrently
+        async def _run_add_human_turn() -> dict[str, object]:
+            return await self._add_human_turn(
+                config,
+                transcript,
+                participant,
+                turn.content,
+                task_token_usage=context.task_token_usage,
+                event_store=context.event_store,
+                known_entities=known_entities,
+                channel=turn.channel,
+                channel_user_id=turn.channel_user_id,
+                multimodal_inputs=turn.multimodal_inputs,
+                user_message_count_since_extract=context.user_message_count_since_extract,
             )
-            intent = await self._run_engagement_intent_analysis(
+
+        async def _run_intent_if_needed() -> IntentAnalysis | None:
+            if not need_engagement:
+                return None
+            return await self._run_engagement_intent_analysis(
                 config=config,
                 transcript=transcript,
                 participant=participant,
                 content=turn.content,
                 task_token_usage=context.task_token_usage,
+            )
+
+        # Execute both in parallel
+        event_hit_payload, intent = await asyncio.gather(
+            _run_add_human_turn(),
+            _run_intent_if_needed(),
+        )
+
+        assistant_interval_seconds: float | None = None
+        if last_assistant_reply_at is not None:
+            assistant_interval_seconds = max(
+                0.0,
+                (now - last_assistant_reply_at).total_seconds(),
+            )
+
+        # ── Engagement System: heat + intent → decision ──
+        # Intent analysis was already gathered in the parallel pipeline above.
+        engagement: EngagementDecision | None = None
+        if need_engagement:
+            heat = self._build_heat_analysis(
+                transcript=transcript,
+                config=config,
+                group_recent_count=group_recent_count,
             )
             engagement = EngagementCoordinator.decide(
                 heat=heat,

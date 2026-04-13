@@ -54,6 +54,11 @@ description: "当你需要在不通读全部代码的情况下快速理解 Siriu
 - `OrchestrationPolicy` 用于任务路由与预算控制，支持 `memory_extract`、`event_extract`、`intent_analysis`、`memory_manager` 等任务的模型配置与预算限制。`reply_mode=auto` 下的 LLM 意图分析已纳入 `intent_analysis` 任务；若关闭该任务或调用失败，则回退关键词路径。同时支持提示词驱动的内容分割（`enable_prompt_driven_splitting=True`）。✨ `memory_manager` 是新增的可选 LLM 任务，用于汇聚、去重、标注、冲突检测记忆。
 - ✨ **(v0.13.0)** `OrchestrationPolicy` 新增 AI 自身记忆配置（`enable_self_memory`、`self_memory_extract_batch_size`、`self_memory_max_diary_prompt_entries`、`self_memory_max_glossary_prompt_terms`）。
 - ✨ **(v0.15.0)** AI 自身记忆触发机制回归为**主流程计数/字数触发**：`self_memory_extract_batch_size` 控制每 N 条 AI 回复触发一次，`self_memory_min_chars` 允许超长回复即时触发。旧的 `self_memory_extract_interval_seconds` 已移除。图片不再走 `multimodal_parse` 辅助任务，而是直接以 vision 格式发送给主模型。
+- ✨ **(v0.17.0)** 四项核心优化：
+  - **消息合并策略**：debounce 窗口内短消息（≤30 字符单行）用中文逗号 `，` 拼接，长/多行消息保留 `\n`
+  - **多模态智能降级**：仅当前批次含图时以 vision 格式发送历史图片，否则折叠为文本描述符 `[图片: url...]`
+  - **引擎级记忆共享**：`AsyncRolePlayEngine` 按 `work_path` 键缓存 `UserMemoryManager` / `SelfMemoryManager` / `EventObservationStore`，跨 Session 复用
+  - **预处理并行流水线**：`_add_human_turn`（含 memory_extract + event_extract）与 `intent_analysis` 通过 `asyncio.gather()` 并发执行
 - ✨ **(v0.14.0)** 回复决策重写：旧意愿分系统替换为三级参与决策架构，仅保留 `engagement_sensitivity` 和 `heat_window_seconds` 两个参数。回复频率限制集成到 `EngagementCoordinator` 中。
 - ✨ **(v0.14.1)** 彻底移除旧版兼容代码：删除全部 `auto_reply_*` 参数、`ReplyWillingnessDecision`、`core/intent.py`。迁移详见 `docs/migration-v0.14.md`。
 - ✨ **async_engine 包重构** (P0-003)：将 924 行单文件分解为多个职责明确的模块
