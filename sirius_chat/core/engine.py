@@ -88,24 +88,53 @@ class _PendingTurn:
 
 
 @dataclass(slots=True)
-class LiveSessionContext:
+class SessionStores:
+    """Storage layer: file-backed persistent stores (disk I/O boundary)."""
     file_store: UserMemoryFileStore
     event_file_store: EventMemoryFileStore
+    token_store: TokenUsageStore | None = None
+    self_memory_store: SelfMemoryFileStore | None = None
+
+
+@dataclass(slots=True)
+class SessionSubsystems:
+    """Subsystem layer: in-memory domain managers and infrastructure services."""
     event_store: EventMemoryManager
+    event_bus: SessionEventBus = field(default_factory=SessionEventBus)
+    bg_task_manager: BackgroundTaskManager | None = None
+    skill_registry: SkillRegistry | None = None
+    skill_executor: SkillExecutor | None = None
+    self_memory: SelfMemoryManager = field(default_factory=SelfMemoryManager)
+
+
+@dataclass(slots=True)
+class SessionCounters:
+    """Runtime counters: message counts and token usage tracking."""
     task_token_usage: dict[str, int] = field(default_factory=dict)
     user_message_count_since_extract: dict[str, int] = field(default_factory=dict)
+    self_memory_turn_counter: int = 0
+
+
+@dataclass(slots=True)
+class LiveSessionContext:
+    """Per-session live context.
+
+    Fields are organized into focused sub-objects by abstraction layer:
+    - ``stores``: file-backed persistent stores (storage layer)
+    - ``subsystems``: in-memory domain managers and infrastructure (subsystem layer)
+    - ``counters``: runtime message/turn counters (counter layer)
+
+    Remaining flat fields hold request-intermediate state and concurrency primitives.
+    """
+    stores: SessionStores
+    subsystems: SessionSubsystems
+    counters: SessionCounters = field(default_factory=SessionCounters)
+    # ── Request intermediate state & participant registry ──
     known_by_id: dict[str, Participant] = field(default_factory=dict)
     known_by_label: dict[str, str] = field(default_factory=dict)
     pending_turn: _PendingTurn | None = None
-    skill_registry: SkillRegistry | None = None
-    skill_executor: SkillExecutor | None = None
-    event_bus: SessionEventBus = field(default_factory=SessionEventBus)
-    bg_task_manager: BackgroundTaskManager | None = None
-    token_store: TokenUsageStore | None = None
-    self_memory: SelfMemoryManager = field(default_factory=SelfMemoryManager)
-    self_memory_store: SelfMemoryFileStore | None = None
-    self_memory_turn_counter: int = 0  # AI reply count since last self-memory extract
-    llm_semaphore: asyncio.Semaphore | None = None  # Concurrency limiter for LLM calls
+    # ── Concurrency control ──
+    llm_semaphore: asyncio.Semaphore | None = None
 
 
 @dataclass
@@ -287,30 +316,34 @@ class AsyncRolePlayEngine:
                     known_by_label[label.strip().lower()] = participant.user_id
 
         created = LiveSessionContext(
-            file_store=file_store,
-            event_file_store=event_file_store,
-            event_store=event_store,
+            stores=SessionStores(
+                file_store=file_store,
+                event_file_store=event_file_store,
+                token_store=TokenUsageStore(
+                    config.work_path / "token_usage.db",
+                    session_id=str(config.work_path),
+                ),
+            ),
+            subsystems=SessionSubsystems(
+                event_store=event_store,
+            ),
             known_by_id=known_by_id,
             known_by_label=known_by_label,
-            token_store=TokenUsageStore(
-                config.work_path / "token_usage.db",
-                session_id=str(config.work_path),
-            ),
         )
 
         # ── Engine-level shared self-memory ──
         if config.orchestration.enable_self_memory:
             if work_key in self._shared_self_memory:
-                created.self_memory = self._shared_self_memory[work_key]
+                created.subsystems.self_memory = self._shared_self_memory[work_key]
             else:
                 self_store = SelfMemoryFileStore(config.work_path)
-                created.self_memory = self_store.load()
-                self._shared_self_memory[work_key] = created.self_memory
+                created.subsystems.self_memory = self_store.load()
+                self._shared_self_memory[work_key] = created.subsystems.self_memory
                 # Apply diary decay on first load
-                removed = created.self_memory.apply_diary_decay()
+                removed = created.subsystems.self_memory.apply_diary_decay()
                 if removed > 0:
                     logger.info("%s 翻了翻旧日记，淡忘了 %d 条已久远的记忆碎片", config.agent.name, removed)
-            created.self_memory_store = SelfMemoryFileStore(config.work_path)
+            created.stores.self_memory_store = SelfMemoryFileStore(config.work_path)
 
         skills_dir = config.work_path / "skills"
         SkillRegistry.ensure_skills_directory(skills_dir)
@@ -323,8 +356,8 @@ class AsyncRolePlayEngine:
                 auto_install_deps=config.orchestration.auto_install_skill_deps,
             )
             if loaded_count > 0:
-                created.skill_registry = registry
-                created.skill_executor = SkillExecutor(config.work_path)
+                created.subsystems.skill_registry = registry
+                created.subsystems.skill_executor = SkillExecutor(config.work_path)
                 logger.info("%s 学会了 %d 项新技能，随时可以施展", config.agent.name, loaded_count)
             else:
                 logger.debug("SKILL系统已启用但未找到任何SKILL文件: %s", skills_dir)
@@ -367,8 +400,8 @@ class AsyncRolePlayEngine:
                         model = _config.agent.model
 
                     # Consolidate events
-                    for uid in _ctx.event_store.get_all_user_ids():
-                        await _ctx.event_store.consolidate_entries(
+                    for uid in _ctx.subsystems.event_store.get_all_user_ids():
+                        await _ctx.subsystems.event_store.consolidate_entries(
                             user_id=uid,
                             provider_async=adapter,
                             model_name=model,
@@ -391,19 +424,19 @@ class AsyncRolePlayEngine:
                         )
 
                     # Persist after consolidation
-                    _ctx.file_store.save_all(_transcript.user_memory)
-                    _ctx.event_file_store.save(_ctx.event_store)
+                    _ctx.stores.file_store.save_all(_transcript.user_memory)
+                    _ctx.stores.event_file_store.save(_ctx.subsystems.event_store)
 
                     # Diary decay during consolidation
-                    if _ctx.self_memory_store is not None:
-                        removed = _ctx.self_memory.apply_diary_decay()
+                    if _ctx.stores.self_memory_store is not None:
+                        removed = _ctx.subsystems.self_memory.apply_diary_decay()
                         if removed > 0:
                             logger.info("在整理记忆的间隙，悄悄遗忘了 %d 条已褪色的往事", removed)
-                        _ctx.self_memory_store.save(_ctx.self_memory)
+                        _ctx.stores.self_memory_store.save(_ctx.subsystems.self_memory)
 
                 bg_manager.set_consolidation_callback(_consolidation_callback)
 
-            created.bg_task_manager = bg_manager
+            created.subsystems.bg_task_manager = bg_manager
 
         self._live_session_contexts[key] = created
         return created
@@ -425,16 +458,16 @@ class AsyncRolePlayEngine:
         skills_dir = config.work_path / "skills"
         SkillRegistry.ensure_skills_directory(skills_dir)
 
-        registry = context.skill_registry
-        executor = context.skill_executor
+        registry = context.subsystems.skill_registry
+        executor = context.subsystems.skill_executor
 
         # Initialize missing components, then (re)load skill files.
         if registry is None:
             registry = SkillRegistry()
-            context.skill_registry = registry
+            context.subsystems.skill_registry = registry
         if executor is None:
             executor = SkillExecutor(config.work_path)
-            context.skill_executor = executor
+            context.subsystems.skill_executor = executor
 
         if not registry.all_skills():
             loaded_count = registry.load_from_directory(
@@ -536,12 +569,12 @@ class AsyncRolePlayEngine:
         context: LiveSessionContext,
     ) -> None:
         # Stop background tasks gracefully
-        if context.bg_task_manager is not None:
-            await context.bg_task_manager.stop()
+        if context.subsystems.bg_task_manager is not None:
+            await context.subsystems.bg_task_manager.stop()
 
         # 最终化事件记忆：对积累的事件进行 LLM 验证
         try:
-            finalize_result = await context.event_store.finalize_pending_events(
+            finalize_result = await context.subsystems.event_store.finalize_pending_events(
                 provider_async=self._make_provider_adapter(),
                 model_name=config.agent.model,
                 min_mentions=3,
@@ -556,19 +589,19 @@ class AsyncRolePlayEngine:
         except Exception as e:
             logger.warning(f"事件记忆最终化失败，继续执行: {e}")
 
-        context.file_store.save_all(transcript.user_memory)
-        context.event_file_store.save(context.event_store)
-        if context.self_memory_store is not None:
-            context.self_memory_store.save(context.self_memory)
-        if context.skill_executor is not None:
-            context.skill_executor.save_all_stores()
+        context.stores.file_store.save_all(transcript.user_memory)
+        context.stores.event_file_store.save(context.subsystems.event_store)
+        if context.stores.self_memory_store is not None:
+            context.stores.self_memory_store.save(context.subsystems.self_memory)
+        if context.subsystems.skill_executor is not None:
+            context.subsystems.skill_executor.save_all_stores()
 
         # ── Sync back to engine-level shared stores ──
         work_key = str(config.work_path)
         self._shared_user_memory[work_key] = transcript.user_memory
         if config.orchestration.enable_self_memory:
-            self._shared_self_memory[work_key] = context.self_memory
-        self._shared_event_stores[work_key] = context.event_store
+            self._shared_self_memory[work_key] = context.subsystems.self_memory
+        self._shared_event_stores[work_key] = context.subsystems.event_store
 
     @staticmethod
     def _parse_runtime_datetime(raw: str) -> datetime | None:
@@ -678,8 +711,8 @@ class AsyncRolePlayEngine:
                 )
                 transcript.add_token_usage_record(record)
                 ctx = self._live_session_contexts.get(id(transcript))
-                if ctx is not None and ctx.token_store is not None:
-                    ctx.token_store.add(record)
+                if ctx is not None and ctx.stores.token_store is not None:
+                    ctx.stores.token_store.add(record)
                 return content
             except asyncio.TimeoutError as exc:
                 last_error = RuntimeError(
@@ -1372,8 +1405,8 @@ class AsyncRolePlayEngine:
         context = self._get_or_create_live_context(config=config, transcript=transcript)
 
         # Start background consolidation if configured
-        if context.bg_task_manager is not None and not context.bg_task_manager.is_running():
-            await context.bg_task_manager.start()
+        if context.subsystems.bg_task_manager is not None and not context.subsystems.bg_task_manager.is_running():
+            await context.subsystems.bg_task_manager.start()
 
         return transcript
 
@@ -1405,7 +1438,7 @@ class AsyncRolePlayEngine:
                 "未找到与此 transcript 关联的活跃会话。"
                 "请先调用 run_live_session() 初始化会话。"
             )
-        async for event in context.event_bus.subscribe(max_queue_size=max_queue_size):
+        async for event in context.subsystems.event_bus.subscribe(max_queue_size=max_queue_size):
             yield event
 
     async def run_live_message(
@@ -1487,7 +1520,7 @@ class AsyncRolePlayEngine:
 
         async def _consume_events() -> None:
             try:
-                async for evt in context.event_bus.subscribe():
+                async for evt in context.subsystems.event_bus.subscribe():
                     if evt.type in (
                         SessionEventType.PROCESSING_COMPLETED,
                         SessionEventType.REPLY_SKIPPED,
@@ -1513,10 +1546,10 @@ class AsyncRolePlayEngine:
         consume_task = asyncio.create_task(_consume_events())
         # Wait until subscription is registered to avoid missing early events.
         for _ in range(100):
-            if consume_task.done() or context.event_bus.subscriber_count > 0:
+            if consume_task.done() or context.subsystems.event_bus.subscriber_count > 0:
                 break
             await asyncio.sleep(0)
-        if context.event_bus.subscriber_count == 0:
+        if context.subsystems.event_bus.subscriber_count == 0:
             logger.warning("on_reply consumer was not subscribed before processing")
 
         try:
@@ -1764,13 +1797,13 @@ class AsyncRolePlayEngine:
                 transcript,
                 participant,
                 turn.content,
-                task_token_usage=context.task_token_usage,
-                event_store=context.event_store,
+                task_token_usage=context.counters.task_token_usage,
+                event_store=context.subsystems.event_store,
                 known_entities=known_entities,
                 channel=turn.channel,
                 channel_user_id=turn.channel_user_id,
                 multimodal_inputs=turn.multimodal_inputs,
-                user_message_count_since_extract=context.user_message_count_since_extract,
+                user_message_count_since_extract=context.counters.user_message_count_since_extract,
             )
 
         async def _run_intent_if_needed() -> IntentAnalysis | None:
@@ -1781,7 +1814,7 @@ class AsyncRolePlayEngine:
                 transcript=transcript,
                 participant=participant,
                 content=turn.content,
-                task_token_usage=context.task_token_usage,
+                task_token_usage=context.counters.task_token_usage,
             )
 
         # Execute both in parallel
@@ -1823,7 +1856,7 @@ class AsyncRolePlayEngine:
             )
 
         # Emit user message event
-        await context.event_bus.emit(SessionEvent(
+        await context.subsystems.event_bus.emit(SessionEvent(
             type=SessionEventType.MESSAGE_ADDED,
             message=turn,
             data={"participant_user_id": participant.user_id},
@@ -1844,7 +1877,7 @@ class AsyncRolePlayEngine:
             is_mentioned=is_mentioned,
         ):
             should_reply = False
-            await context.event_bus.emit(SessionEvent(
+            await context.subsystems.event_bus.emit(SessionEvent(
                 type=SessionEventType.REPLY_SKIPPED,
                 data={"speaker": turn.speaker, "reason": "frequency_limit"},
             ))
@@ -1856,7 +1889,7 @@ class AsyncRolePlayEngine:
                 resolved_session_mode,
             )
 
-            await context.event_bus.emit(SessionEvent(
+            await context.subsystems.event_bus.emit(SessionEvent(
                 type=SessionEventType.PROCESSING_STARTED,
                 data={"speaker": turn.speaker},
             ))
@@ -1869,12 +1902,12 @@ class AsyncRolePlayEngine:
                 assistant_message = await self._generate_assistant_message(
                     config,
                     transcript,
-                    skill_registry=context.skill_registry,
-                    skill_executor=context.skill_executor,
+                    skill_registry=context.subsystems.skill_registry,
+                    skill_executor=context.subsystems.skill_executor,
                     environment_context=environment_context,
-                    event_bus=context.event_bus,
+                    event_bus=context.subsystems.event_bus,
                     skip_sections=intent.skip_sections if intent else [],
-                    self_memory=context.self_memory if config.orchestration.enable_self_memory else None,
+                    self_memory=context.subsystems.self_memory if config.orchestration.enable_self_memory else None,
                 )
             last_assistant_reply_at = datetime.now(timezone.utc)
 
@@ -1892,16 +1925,16 @@ class AsyncRolePlayEngine:
             ]
 
             if config.orchestration.enable_self_memory:
-                context.self_memory_turn_counter += 1
+                context.counters.self_memory_turn_counter += 1
                 batch_size = max(1, int(config.orchestration.self_memory_extract_batch_size))
                 min_chars = int(getattr(config.orchestration, "self_memory_min_chars", 0))
                 reply_content = assistant_message.content
-                trigger_by_count = context.self_memory_turn_counter % batch_size == 0
+                trigger_by_count = context.counters.self_memory_turn_counter % batch_size == 0
                 trigger_by_chars = min_chars > 0 and len(reply_content) >= min_chars
                 if trigger_by_count or trigger_by_chars:
                     logger.debug(
                         "自我记忆提取触发 | 轮次=%d batch=%d chars=%d",
-                        context.self_memory_turn_counter,
+                        context.counters.self_memory_turn_counter,
                         batch_size,
                         len(reply_content),
                     )
@@ -1911,11 +1944,11 @@ class AsyncRolePlayEngine:
                         context=context,
                         assistant_content=reply_content,
                     )
-                    context.self_memory_turn_counter = 0
-                    if context.self_memory_store is not None:
-                        context.self_memory_store.save(context.self_memory)
+                    context.counters.self_memory_turn_counter = 0
+                    if context.stores.self_memory_store is not None:
+                        context.stores.self_memory_store.save(context.subsystems.self_memory)
 
-            await context.event_bus.emit(SessionEvent(
+            await context.subsystems.event_bus.emit(SessionEvent(
                 type=SessionEventType.PROCESSING_COMPLETED,
                 message=assistant_message,
             ))
@@ -1925,7 +1958,7 @@ class AsyncRolePlayEngine:
                 turn.speaker,
                 engagement.reason if engagement else "mode_never",
             )
-            await context.event_bus.emit(SessionEvent(
+            await context.subsystems.event_bus.emit(SessionEvent(
                 type=SessionEventType.REPLY_SKIPPED,
                 data={"speaker": turn.speaker},
             ))

@@ -228,7 +228,7 @@ class TestEngineEventIntegration:
         key = id(transcript)
         ctx = engine._live_session_contexts.get(key)
         if ctx:
-            await ctx.event_bus.close()
+            await ctx.subsystems.event_bus.close()
         await asyncio.sleep(0)
         collector.cancel()
         try:
@@ -288,7 +288,7 @@ class TestEngineEventIntegration:
         key = id(transcript)
         ctx = engine._live_session_contexts.get(key)
         if ctx:
-            await ctx.event_bus.close()
+            await ctx.subsystems.event_bus.close()
         await asyncio.sleep(0)
         collector.cancel()
         try:
@@ -326,7 +326,7 @@ class TestEngineEventIntegration:
         key = id(transcript)
         ctx = engine._live_session_contexts.get(key)
         if ctx:
-            await ctx.event_bus.close()
+            await ctx.subsystems.event_bus.close()
         await asyncio.sleep(0)
         collector.cancel()
         try:

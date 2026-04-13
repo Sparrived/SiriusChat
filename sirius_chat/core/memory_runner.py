@@ -254,7 +254,7 @@ async def run_self_memory_extract_task(
                 category=str(item.get("category", "observation")),
                 related_user_ids=[],
             )
-            context.self_memory.add_diary_entry(entry)
+            context.subsystems.self_memory.add_diary_entry(entry)
 
     glossary_items = parsed.get("glossary")
     if isinstance(glossary_items, list):
@@ -273,7 +273,7 @@ async def run_self_memory_extract_task(
                 domain=str(item.get("domain", "custom")),
                 context_examples=[assistant_content[:80]] if assistant_content.strip() else [],
             )
-            context.self_memory.add_or_update_term(term)
+            context.subsystems.self_memory.add_or_update_term(term)
 
     logger.debug(
         "自我记忆提取完成 | diary=%d glossary=%d",
