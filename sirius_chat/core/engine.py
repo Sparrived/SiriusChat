@@ -58,6 +58,14 @@ from sirius_chat.core.engagement_pipeline import (
     run_engagement_intent_analysis,
     should_reply_for_turn,
 )
+from sirius_chat.core.chat_builder import (
+    has_multimodal_inputs,
+    get_model_for_chat,
+    is_internal_memory_metadata_line,
+    sanitize_assistant_content,
+    collect_internal_system_notes,
+    build_chat_main_request_context,
+)
 from sirius_chat.token.store import TokenUsageStore
 logger = logging.getLogger(__name__)
 
@@ -115,30 +123,7 @@ class AsyncRolePlayEngine:
 
     _TASK_TIMEOUT_SECONDS_DEFAULT = 45.0
     _TASK_TIMEOUT_SECONDS_CHAT_MAIN = 90.0
-    _MEMORY_METADATA_LINE_PATTERNS = (
-        re.compile(
-            r"^\s*置信度\s*[：:]\s*\d+(?:\.\d+)?%\s*\|\s*类型\s*[：:]\s*[^|]+\|\s*来源\s*[：:]\s*[^|]+\|\s*时间\s*[：:]\s*[^|]+\|\s*内容\s*[：:]\s*.+$"
-        ),
-        re.compile(
-            r"^\s*confidence\s*:\s*\d+(?:\.\d+)?%\s*\|\s*type\s*:\s*[^|]+\|\s*source\s*:\s*[^|]+\|\s*time\s*:\s*[^|]+\|\s*content\s*:\s*.+$",
-            re.IGNORECASE,
-        ),
-    )
-    _MEMORY_METADATA_CN_LABEL_PATTERNS = (
-        re.compile(r"置信度\s*[：:]"),
-        re.compile(r"类型\s*[：:]"),
-        re.compile(r"来源\s*[：:]"),
-        re.compile(r"时间\s*[：:]"),
-        re.compile(r"内容\s*[：:]"),
-    )
-    _MEMORY_METADATA_EN_LABEL_PATTERNS = (
-        re.compile(r"confidence\s*:", re.IGNORECASE),
-        re.compile(r"type\s*:", re.IGNORECASE),
-        re.compile(r"source\s*:", re.IGNORECASE),
-        re.compile(r"time\s*:", re.IGNORECASE),
-        re.compile(r"content\s*:", re.IGNORECASE),
-    )
-    
+
     # 所有需要模型支持的必需任务
     _REQUIRED_TASKS = [
         TASK_MEMORY_EXTRACT,
@@ -810,17 +795,8 @@ class AsyncRolePlayEngine:
         )
 
     def _has_multimodal_inputs(self, transcript: Transcript) -> bool:
-        """检测 transcript 中最后的用户消息是否包含多模态输入。
-        
-        Returns:
-            True 如果最后的用户消息有多模态输入，否则 False
-        """
-        # 从后往前遍历，找到最后一条用户消息
-        for message in reversed(transcript.messages):
-            if message.role == "user":
-                # 检查是否有多模态输入
-                return bool(message.multimodal_inputs)
-        return False
+        """检测 transcript 中最后的用户消息是否包含多模态输入。"""
+        return has_multimodal_inputs(transcript)
 
     # ── Engagement Decision System (v0.14.0) ──
 
@@ -864,73 +840,19 @@ class AsyncRolePlayEngine:
         return should_reply_for_turn(turn)
 
     def _get_model_for_chat(self, config: SessionConfig, transcript: Transcript) -> str:
-        """根据是否有多模态输入，动态选择主模型。
-        
-        策略：
-        - 如果最后用户消息有多模态输入，使用 multimodal_model（如果配置）
-        - 否则使用默认的 agent.model
-        
-        Args:
-            config: 会话配置
-            transcript: 当前会话 transcript
-            
-        Returns:
-            选定的模型名称
-        """
-        # 检查是否有多模态输入
-        if self._has_multimodal_inputs(transcript):
-            # 尝试从 agent.metadata 中获取多模态模型
-            multimodal_model = config.agent.metadata.get("multimodal_model", "")
-            if multimodal_model:
-                return multimodal_model
-        
-        # 默认返回配置的主模型
-        return config.agent.model
+        """根据是否有多模态输入，动态选择主模型。"""
+        return get_model_for_chat(config, transcript)
 
     @classmethod
     def _is_internal_memory_metadata_line(cls, line: str) -> bool:
-        stripped = line.strip()
-        if not stripped:
-            return False
-
-        for pattern in cls._MEMORY_METADATA_LINE_PATTERNS:
-            if pattern.match(stripped):
-                return True
-
-        if "|" not in stripped:
-            return False
-
-        cn_hits = sum(1 for p in cls._MEMORY_METADATA_CN_LABEL_PATTERNS if p.search(stripped))
-        en_hits = sum(1 for p in cls._MEMORY_METADATA_EN_LABEL_PATTERNS if p.search(stripped))
-        return cn_hits >= 2 or en_hits >= 2
+        return is_internal_memory_metadata_line(line)
 
     def _sanitize_assistant_content(self, content: str) -> str:
-        if not content:
-            return content
-
-        cleaned_lines: list[str] = []
-        for line in content.splitlines():
-            if self._is_internal_memory_metadata_line(line):
-                continue
-            cleaned_lines.append(line)
-
-        cleaned = "\n".join(cleaned_lines).strip()
-        if cleaned:
-            return cleaned
-        return "收到。"
+        return sanitize_assistant_content(content)
 
     @staticmethod
     def _collect_internal_system_notes(transcript: Transcript) -> str:
-        notes: list[str] = []
-        for message in transcript.messages:
-            if message.role != "system":
-                continue
-            text = message.content.strip()
-            if text:
-                notes.append(text)
-        if not notes:
-            return ""
-        return "\n".join(notes)
+        return collect_internal_system_notes(transcript)
 
     def _build_chat_main_request_context(
         self,
@@ -942,109 +864,14 @@ class AsyncRolePlayEngine:
         skip_sections: list[str] | None = None,
         self_memory: SelfMemoryManager | None = None,
     ) -> tuple[str, list[dict[str, object]]]:
-        # Build self-memory prompt sections
-        diary_section = ""
-        glossary_section = ""
-        if self_memory is not None and config.orchestration.enable_self_memory:
-            # Extract keywords from recent messages for relevance
-            recent_keywords: list[str] = []
-            for msg in transcript.messages[-6:]:
-                if msg.content.strip():
-                    recent_keywords.extend(msg.content[:100].split())
-            diary_section = self_memory.build_diary_prompt_section(
-                keywords=recent_keywords,
-                max_entries=config.orchestration.self_memory_max_diary_prompt_entries,
-            )
-            # Build glossary from recent conversation content
-            recent_text = " ".join(
-                msg.content[:200] for msg in transcript.messages[-6:] if msg.content.strip()
-            )
-            glossary_section = self_memory.build_glossary_prompt_section(
-                text=recent_text,
-                max_terms=config.orchestration.self_memory_max_glossary_prompt_terms,
-            )
-
-        system_prompt = self._build_system_prompt(
-            config, transcript,
+        return build_chat_main_request_context(
+            config=config,
+            transcript=transcript,
             skill_descriptions=skill_descriptions,
             environment_context=environment_context,
-            skip_sections=skip_sections or [],
-            diary_section=diary_section,
-            glossary_section=glossary_section,
+            skip_sections=skip_sections,
+            self_memory=self_memory,
         )
-        internal_notes = self._collect_internal_system_notes(transcript)
-        if internal_notes:
-            system_prompt = (
-                f"{system_prompt}\n\n"
-                "[会话内部系统补充]\n"
-                "以下为引擎内部记录的系统上下文，用于辅助推理；"
-                "请勿在最终回复中逐字复述。\n"
-                f"{internal_notes}"
-            )
-
-        chat_history: list[dict[str, object]] = []
-
-        # Narrow check: only look at the LAST user message group
-        # (messages after the last assistant reply).
-        _last_assistant_idx = -1
-        for _idx, _msg in enumerate(transcript.messages):
-            if _msg.role == "assistant":
-                _last_assistant_idx = _idx
-        current_batch_has_images = False
-        for _msg in transcript.messages[_last_assistant_idx + 1:]:
-            if _msg.role == "user":
-                for _item in _msg.multimodal_inputs:
-                    if _item.get("type") == "image" and _item.get("value"):
-                        current_batch_has_images = True
-                        break
-            if current_batch_has_images:
-                break
-
-        for message in transcript.messages:
-            role = str(message.role or "").strip().lower()
-            if role == "system":
-                continue
-            speaker_prefix = f"[{message.speaker}] " if message.speaker else ""
-            text_content = f"{speaker_prefix}{message.content}"
-            image_inputs = [
-                item for item in message.multimodal_inputs
-                if item.get("type") == "image" and item.get("value")
-            ]
-            if image_inputs and role == "user" and current_batch_has_images:
-                # Current batch contains images → send vision format
-                content_parts: list[dict[str, object]] = [{"type": "text", "text": text_content}]
-                for image in image_inputs:
-                    content_parts.append(
-                        {"type": "image_url", "image_url": {"url": image["value"]}}
-                    )
-                chat_history.append({"role": message.role, "content": content_parts})
-            elif image_inputs and role == "user":
-                # No images in current batch → collapse to text descriptors
-                desc_parts = [f"[图片: {img['value'][:60]}...]" for img in image_inputs]
-                chat_history.append({
-                    "role": message.role,
-                    "content": f"{text_content}\n{'  '.join(desc_parts)}",
-                })
-            else:
-                chat_history.append({"role": message.role, "content": text_content})
-
-        # Safety guard: after compression, the current user message may have been
-        # evicted from the transcript (e.g. by a very large skill-result system
-        # message that inflated the char budget before the root-cause fix landed).
-        # Ensure chat_history always contains at least one user message so that
-        # API providers that enforce this constraint (e.g. Qwen-VL) don't reject the
-        # request with "do not contain elements with the role of user".
-        if chat_history and not any(d.get("role") == "user" for d in chat_history):
-            for msg in reversed(transcript.messages):
-                if str(msg.role or "").strip().lower() == "user" and msg.content.strip():
-                    chat_history.insert(0, {"role": "user", "content": msg.content})
-                    logger.warning(
-                        "chat_history 不含 user 消息，已回填最近一条 user 消息以防 API 拒绝。"
-                        " 请检查 history_max_chars 配置或技能返回内容是否过大。"
-                    )
-                    break
-
-        return system_prompt, chat_history
 
     @staticmethod
     def _build_memory_extract_task_input(
