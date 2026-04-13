@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 
 @dataclass(slots=True)
@@ -36,11 +36,13 @@ def estimate_generation_request_input_tokens(request: GenerationRequest) -> int:
     return max(1, (len(merged) + 3) // 4)
 
 
+@runtime_checkable
 class LLMProvider(Protocol):
     def generate(self, request: GenerationRequest) -> str:
         """Generate one assistant message from the upstream provider."""
 
 
+@runtime_checkable
 class AsyncLLMProvider(Protocol):
     async def generate_async(self, request: GenerationRequest) -> str:
         """Generate one assistant message asynchronously from the upstream provider."""

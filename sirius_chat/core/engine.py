@@ -613,15 +613,11 @@ class AsyncRolePlayEngine:
         )
 
     async def _call_provider(self, request_payload: GenerationRequest) -> str:
-        generate_async = getattr(self.provider, "generate_async", None)
-        if callable(generate_async):
-            async_fn = cast(Callable[[GenerationRequest], Awaitable[str]], generate_async)
-            return await async_fn(request_payload)
-        generate_sync = getattr(self.provider, "generate", None)
-        if not callable(generate_sync):
-            raise RuntimeError("配置的提供商未实现 generate/generate_async 方法。")
-        sync_fn = cast(Callable[[GenerationRequest], str], generate_sync)
-        return await asyncio.to_thread(sync_fn, request_payload)
+        if isinstance(self.provider, AsyncLLMProvider):
+            return await self.provider.generate_async(request_payload)
+        if isinstance(self.provider, LLMProvider):
+            return await asyncio.to_thread(self.provider.generate, request_payload)
+        raise RuntimeError("配置的提供商未实现 generate/generate_async 方法。")
 
     def _make_provider_adapter(self) -> object:
         """Return a lightweight async-provider adapter wrapping this engine.
