@@ -1,6 +1,8 @@
 """API 文档自动生成脚本——P1-005 实施"""
 
 import ast
+import importlib
+import inspect
 import sys
 import json
 from pathlib import Path
@@ -62,6 +64,82 @@ def extract_function_signature(node: ast.FunctionDef | ast.AsyncFunctionDef) -> 
     }
 
 
+def extract_runtime_function_signature(name: str, obj: Any) -> dict:
+    """提取运行时函数签名信息，支持转发/重导出函数。"""
+    try:
+        signature = inspect.signature(obj)
+    except (TypeError, ValueError):
+        signature = None
+
+    params = []
+    if signature is not None:
+        for param in signature.parameters.values():
+            annotation = None
+            if param.annotation is not inspect._empty:
+                annotation = str(param.annotation).replace("typing.", "")
+            kind = "keyword-only" if param.kind == inspect.Parameter.KEYWORD_ONLY else "positional"
+            params.append({
+                "name": param.name,
+                "annotation": annotation,
+                "kind": kind,
+            })
+
+    return_type = None
+    if signature is not None and signature.return_annotation is not inspect._empty:
+        return_type = str(signature.return_annotation).replace("typing.", "")
+
+    return {
+        "name": name,
+        "is_async": inspect.iscoroutinefunction(obj),
+        "params": params,
+        "return_type": return_type,
+        "docstring": inspect.getdoc(obj),
+    }
+
+
+def extract_runtime_class_info(name: str, obj: type[Any]) -> dict:
+    """提取运行时类信息，支持转发/重导出类。"""
+    methods = []
+    for method_name, method in inspect.getmembers(obj, predicate=inspect.isfunction):
+        if method_name.startswith("_"):
+            continue
+        methods.append(extract_runtime_function_signature(method_name, method))
+    return {
+        "name": name,
+        "docstring": inspect.getdoc(obj),
+        "methods": methods,
+    }
+
+
+def parse_runtime_exports(module_name: str) -> dict:
+    """解析 api 模块的运行时导出，覆盖纯转发模块。"""
+    try:
+        module = importlib.import_module(f"sirius_chat.api.{module_name}")
+    except Exception as exc:
+        print(f"⚠️  运行时导入 sirius_chat.api.{module_name} 失败: {exc}", file=sys.stderr)
+        return {"functions": [], "classes": []}
+
+    exported_names = getattr(module, "__all__", [])
+    if not isinstance(exported_names, list):
+        return {"functions": [], "classes": []}
+
+    functions = []
+    classes = []
+    for name in exported_names:
+        obj = getattr(module, name, None)
+        if obj is None:
+            continue
+        if inspect.isfunction(obj) or inspect.iscoroutinefunction(obj):
+            functions.append(extract_runtime_function_signature(name, obj))
+        elif inspect.isclass(obj):
+            classes.append(extract_runtime_class_info(name, obj))
+
+    return {
+        "functions": functions,
+        "classes": classes,
+    }
+
+
 def parse_api_module(file_path: Path) -> dict:
     """解析 API 模块文件."""
     try:
@@ -92,6 +170,17 @@ def parse_api_module(file_path: Path) -> dict:
                         class_info["methods"].append(extract_function_signature(item))
                 classes.append(class_info)
     
+    runtime_data = parse_runtime_exports(file_path.stem)
+    existing_function_names = {item["name"] for item in functions}
+    existing_class_names = {item["name"] for item in classes}
+
+    for item in runtime_data["functions"]:
+        if item["name"] not in existing_function_names:
+            functions.append(item)
+    for item in runtime_data["classes"]:
+        if item["name"] not in existing_class_names:
+            classes.append(item)
+
     return {
         "functions": functions,
         "classes": classes,

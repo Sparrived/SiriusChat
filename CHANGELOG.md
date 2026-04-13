@@ -4,6 +4,19 @@
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-04-13
+
+### Added
+- **人格生成依赖文件输入**：`PersonaSpec`、`agenerate_agent_prompts_from_answers(...)`、`abuild_roleplay_prompt_from_answers_and_apply(...)`、`aupdate_agent_prompt(...)` 现支持 `dependency_files`，可把角色卡、设定稿、语气样本等本地文件作为人格生成素材。
+- **依赖文件重生 API**：新增 `aregenerate_agent_prompt_from_dependencies(...)`，允许在素材文件更新后直接基于最新文件内容重生既有 `agent_key` 的人格。
+- **完整本地生成轨迹**：新增 `generated_agent_traces/<agent_key>.json` 持久化产物，并提供 `load_persona_generation_traces(...)` 对外读取入口；轨迹中包含 prompt、原始模型返回、解析结果、依赖文件快照与最终输出 preset。
+- **外部迁移文档**：新增 `docs/migration-roleplay-v0.20.md`，面向外部调用方说明如何从旧的人格生成流迁移到依赖文件 + 轨迹 + 重生模式。
+
+### Changed
+- **人格生成 prompt 强化**：当输入中包含“拟人”“情感”“陪伴”“关系”“共情”等信号时，生成器会自动加强 prompt，显式要求模型提升真实人感、情绪细节和关系连续性，避免机械助手腔。
+- **问题清单增强**：`generate_humanized_roleplay_questions()` 新增一条聚焦“拟人感 / 情感温度 / 陪伴方式”的问题，用于更直接采集情绪表达与关系边界。
+- **对外文档与 SKILL 同步**：更新 `README.md`、`docs/architecture.md`、`docs/external-usage.md`、`docs/full-architecture-flow.md`、`docs/api.md`、`docs/api.json` 以及相关 SKILL，统一反映新的角色生成工作流。
+
 ## [0.20.0] - 2026-04-13
 
 ### Changed (Internal)

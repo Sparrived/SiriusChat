@@ -495,9 +495,11 @@ baseline = build_token_usage_baseline(transcript.token_usage_records)
 ### 角色扮演前置内容生成
 
 ```python
-from sirius_chat.roleplay_prompting import (
+from sirius_chat.api import (
+  aregenerate_agent_prompt_from_dependencies,
+  abuild_roleplay_prompt_from_answers_and_apply,
     generate_humanized_roleplay_questions,
-    agenerate_agent_prompts_from_answers,
+  load_persona_generation_traces,
     load_generated_agent_library,
     select_generated_agent_profile,
 )
@@ -505,17 +507,38 @@ from sirius_chat.roleplay_prompting import (
 # 生成问题清单
 questions = generate_humanized_roleplay_questions()
 
-# 基于答案生成 Agent 配置
-preset = await agenerate_agent_prompts_from_answers(
-    answers={...},
-    agent_name="我的助手",
+# 直接生成并写入 SessionConfig，同时挂接本地素材文件
+prompt = await abuild_roleplay_prompt_from_answers_and_apply(
     provider=provider,
+  config=config,
+  model="deepseek-ai/DeepSeek-V3.2",
+  agent_name="我的助手",
+  answers={...},
+  dependency_files=["persona/notes.md", "persona/style_examples.txt"],
+  persona_key="assistant_v2",
+)
+
+# 查看完整生成轨迹
+traces = load_persona_generation_traces(config.work_path, "assistant_v2")
+
+# 当依赖文件变化后，直接基于文件重生同一个人格
+updated = await aregenerate_agent_prompt_from_dependencies(
+  provider,
+  work_path=config.work_path,
+  agent_key="assistant_v2",
+  model="deepseek-ai/DeepSeek-V3.2",
 )
 
 # 管理生成的 Agent 资产
 agents = load_generated_agent_library("./data/session")
 selected = select_generated_agent_profile("./data/session", "agent_key_1")
 ```
+
+说明：
+
+- 生成器会自动识别“拟人”“情感”“陪伴”“共情”等关键词并加强 prompt，让角色更自然、更有人味。
+- 完整生成过程会本地化到 `<work_path>/generated_agent_traces/<agent_key>.json`，便于审计和回滚。
+- 面向外部调用方的迁移说明见 [docs/migration-roleplay-v0.20.md](docs/migration-roleplay-v0.20.md)。
 
 ### SKILL 系统
 
@@ -538,6 +561,7 @@ SKILL 系统支持可扩展任务编排：
 | [🔧 configuration.md](docs/configuration.md) | 所有配置字段说明和最佳实践 |
 | [📋 full-architecture-flow.md](docs/full-architecture-flow.md) | 详细数据流图解 |
 | [🎬 external-usage.md](docs/external-usage.md) | 库调用指南与集成文档 |
+| [🔄 migration-roleplay-v0.20.md](docs/migration-roleplay-v0.20.md) | 外部人格生成能力迁移指南 |
 | [📘 skill-authoring.md](docs/skill-authoring.md) | SKILL 系统编写规范 |
 | [🛠️ best-practices.md](docs/best-practices.md) | 最佳实践与模式 |
 

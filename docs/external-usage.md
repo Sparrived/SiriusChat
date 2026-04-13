@@ -542,11 +542,13 @@ user_messages = [m for m in transcript.messages if m.role == "user"]
 ```python
 from sirius_chat.api import (
     RolePlayAnswer,
+    aregenerate_agent_prompt_from_dependencies,
     agenerate_agent_prompts_from_answers,
     abuild_roleplay_prompt_from_answers_and_apply,
     create_session_config_from_selected_agent,
     generate_humanized_roleplay_questions,
     load_generated_agent_library,
+    load_persona_generation_traces,
     select_generated_agent_profile,
 )
 
@@ -562,8 +564,23 @@ prompt = await abuild_roleplay_prompt_from_answers_and_apply(
     model="deepseek-ai/DeepSeek-V3.2",
     agent_name=config.agent.name,
     answers=answers,
+    dependency_files=["persona/notes.md", "persona/style_examples.txt"],
+    persona_key="beichen_v2",
 )
 print(prompt)
+
+# 查看完整本地生成轨迹
+traces = load_persona_generation_traces(config.work_path, "beichen_v2")
+print(traces[-1].generated_at, traces[-1].operation)
+
+# 当依赖文件被更新后，直接重新生成人格
+updated = await aregenerate_agent_prompt_from_dependencies(
+    provider,
+    work_path=config.work_path,
+    agent_key="beichen_v2",
+    model="deepseek-ai/DeepSeek-V3.2",
+)
+print(updated.agent.persona)
 ```
 
 说明：
@@ -571,7 +588,11 @@ print(prompt)
 - `generate_humanized_roleplay_questions()` 会生成覆盖拟人化关键维度的问题模板。
 - `agenerate_agent_prompts_from_answers(...)` 会从回答中生成完整 `GeneratedSessionPreset`（`agent + global_system_prompt`）。
 - 生成时会显式输入 `agent_name`，确保主 AI 命名与提示词一致。
-- `abuild_roleplay_prompt_from_answers_and_apply(...)` 会把生成结果写入 `config.preset`。
+- `abuild_roleplay_prompt_from_answers_and_apply(...)` 会把生成结果写入 `config.preset`，并把完整生成过程本地化到 `<work_path>/generated_agent_traces/<agent_key>.json`。
+- `dependency_files=[...]` 适合挂接角色卡、设定稿、语气样本、对白模板等本地素材；框架会读取文件内容参与生成，并记录快照与 sha256。
+- 当输入中出现“拟人”“情感”“陪伴”“关系”“共情”等信号时，生成器会自动强化 prompt，使角色更有真实人感和情绪温度。
+- `load_persona_generation_traces(...)` 可用于审计生成过程、追踪提示词来源、比对不同版本人格。
+- `aregenerate_agent_prompt_from_dependencies(...)` 会重新读取最新依赖文件并重生同一个 agent key，适合外部系统在素材更新后做无问卷刷新。
 
 agent-first 会话创建示例：
 
@@ -595,6 +616,8 @@ session_config = create_session_config_from_selected_agent(
 
 - 推荐流程为“先生成 agent 资产，再按 `agent_key` 选择后创建会话”，避免会话先创建后再反向覆盖主 AI 设定。
 - 生成资产保存在 `<work_path>/generated_agents.json`，可跨次会话复用。
+- 完整生成轨迹保存在 `<work_path>/generated_agent_traces/<agent_key>.json`。
+- 外部迁移建议见 `docs/migration-roleplay-v0.20.md`。
 
 说明：
 

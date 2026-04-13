@@ -47,7 +47,7 @@ sirius_chat/
 ├── user_memory.py            - 用户记忆管理
 ├── session_store.py          - 会话持久化
 ├── token_usage.py            - Token 消耗分析
-├── roleplay_prompting.py     - 拟人化提示词
+├── roleplay_prompting.py     - 拟人化提示词、依赖文件驱动人格生成、生成轨迹持久化
 ├── cli.py                    - CLI 入口
 └── api/                      - 对外 API 统一层
 ```
@@ -72,6 +72,7 @@ sirius_chat/
 | `docs/configuration.md` | 配置项详解 | 配置选项新增、参数变化 |
 | `docs/quickstart.md` | 快速启动指南 | 命令名称、基本用法变化 |
 | `README.md` | 项目总览 | 用法、特性、依赖版本 |
+| `docs/migration-roleplay-v0.20.md` | 外部人格生成迁移指南 | roleplay_prompting 对外用法变化 |
 
 ### SKILL 文件
 

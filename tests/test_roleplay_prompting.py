@@ -1,10 +1,12 @@
 import asyncio
 from pathlib import Path
+import shutil
 
 from sirius_chat.api import (
     GENERATED_AGENTS_FILE_NAME,
     Agent,
     AgentPreset,
+    aregenerate_agent_prompt_from_dependencies,
     Message,
     PersonaSpec,
     RolePlayAnswer,
@@ -17,6 +19,7 @@ from sirius_chat.api import (
     create_async_engine,
     generate_humanized_roleplay_questions,
     load_generated_agent_library,
+    load_persona_generation_traces,
     load_persona_spec,
     persist_generated_agent_profile,
     select_generated_agent_profile,
@@ -76,13 +79,14 @@ def test_generated_prompt_is_used_by_engine() -> None:
 
 def test_generate_humanized_roleplay_questions_covers_persona_dimensions() -> None:
     questions = generate_humanized_roleplay_questions()
-    assert len(questions) >= 8  # 精简到8个核心问题
+    assert len(questions) >= 9
     joined = "\n".join(item.question for item in questions)
     assert "性格" in joined or "特质" in joined
     assert "聊天" in joined or "语言" in joined
     assert "情绪" in joined or "压力" in joined
     assert "冲突" in joined
     assert "价值" in joined or "看重" in joined
+    assert "拟人" in joined or "情感温度" in joined
 
 
 def test_abuild_roleplay_prompt_from_answers_and_apply_one_step() -> None:
@@ -131,7 +135,7 @@ def test_agenerate_agent_prompts_from_answers_includes_agent_name() -> None:
             agent_name="阿星",
             answers=[RolePlayAnswer(question="风格", answer="先倾听，再行动")],
         )
-        payload = provider.requests[0].messages[0]["content"]
+        payload = str(provider.requests[0].messages[0]["content"])
         assert "name=阿星" in payload  # 新格式中的 name 字段
         assert prompts.agent.persona == "冷静执行派"
         assert "阿星" in prompts.global_system_prompt
@@ -269,7 +273,7 @@ def test_agenerate_from_persona_spec_tag_based() -> None:
         preset = await agenerate_from_persona_spec(
             provider, spec, model="test-model"
         )
-        payload = provider.requests[0].messages[0]["content"]
+        payload = str(provider.requests[0].messages[0]["content"])
         assert "keywords=热情/直接/逻辑清晰" in payload
         assert "name=北辰" in payload
         assert preset.agent.persona == "热情/直接/逻辑清晰"
@@ -295,7 +299,7 @@ def test_agenerate_from_persona_spec_hybrid_includes_both_inputs() -> None:
         preset = await agenerate_from_persona_spec(
             provider, spec, model="test-model"
         )
-        payload = provider.requests[0].messages[0]["content"]
+        payload = str(provider.requests[0].messages[0]["content"])
         assert "keywords=沉稳/共情" in payload
         assert "[Q&A]" in payload
         assert "background=曾在医疗行业工作" in payload
@@ -437,4 +441,153 @@ def test_persona_spec_merge_ignores_none_values() -> None:
     assert merged.background == "新背景"
     assert merged.trait_keywords == ["热情"]  # None not applied
     assert merged.agent_name == "测试"  # unchanged
+
+
+def test_generation_prompt_strengthens_anthropomorphic_and_emotional_keywords() -> None:
+    async def _run() -> None:
+        provider = MockProvider(
+            responses=[
+                '{"agent_persona":"温柔/拟人/陪伴","global_system_prompt":"像真实朋友一样陪伴","temperature":0.5,"max_tokens":512}'
+            ]
+        )
+        spec = PersonaSpec(
+            agent_name="星栖",
+            trait_keywords=["拟人", "情感陪伴", "共情"],
+            background="希望像真人朋友一样自然交流",
+        )
+
+        await agenerate_from_persona_spec(
+            provider,
+            spec,
+            model="test-model",
+        )
+
+        request = provider.requests[0]
+        assert "强化拟人感" in request.system_prompt
+        assert "强化情绪表达" in request.system_prompt
+        assert "[Prompt Enhancements]" in str(request.messages[0]["content"])
+
+    asyncio.run(_run())
+
+
+def test_abuild_persists_persona_generation_trace_locally() -> None:
+    async def _run() -> None:
+        work_path = Path("data/tests/roleplay_trace_persist")
+        if work_path.exists():
+            shutil.rmtree(work_path)
+        provider = MockProvider(
+            responses=[
+                '{"agent_persona":"沉稳/共情","global_system_prompt":"完整提示词","temperature":0.4,"max_tokens":640}'
+            ]
+        )
+        config = SessionConfig(
+            work_path=work_path,
+            preset=AgentPreset(
+                agent=Agent(name="北辰", persona="默认", model="mock-model"),
+                global_system_prompt="初始提示词",
+            ),
+        )
+
+        await abuild_roleplay_prompt_from_answers_and_apply(
+            provider,
+            config=config,
+            model="test-model",
+            answers=[RolePlayAnswer(question="风格", answer="沉稳但有温度")],
+            persona_key="trace_case",
+        )
+
+        traces = load_persona_generation_traces(config.work_path, "trace_case")
+        assert len(traces) == 1
+        assert traces[0].operation == "build"
+        assert "name=北辰" in traces[0].user_prompt
+        assert "agent_persona" in traces[0].raw_response
+
+    asyncio.run(_run())
+
+
+def test_agenerate_from_persona_spec_supports_dependency_files_only() -> None:
+    async def _run() -> None:
+        work_path = Path("data/tests/roleplay_dependency_only")
+        if work_path.exists():
+            shutil.rmtree(work_path)
+        dependency_file = work_path / "persona" / "notes.txt"
+        dependency_file.parent.mkdir(parents=True, exist_ok=True)
+        dependency_file.write_text("角色长期像朋友一样陪伴用户，情绪表达要自然。", encoding="utf-8")
+
+        provider = MockProvider(
+            responses=[
+                '{"agent_persona":"陪伴/温柔/拟人","global_system_prompt":"依赖文件驱动生成","temperature":0.45,"max_tokens":700}'
+            ]
+        )
+        spec = PersonaSpec(
+            agent_name="鹿鸣",
+            dependency_files=["persona/notes.txt"],
+        )
+
+        preset = await agenerate_from_persona_spec(
+            provider,
+            spec,
+            model="test-model",
+            dependency_root=work_path,
+        )
+
+        assert preset.agent.persona == "陪伴/温柔/拟人"
+        payload = str(provider.requests[0].messages[0]["content"])
+        assert "[Dependency Files]" in payload
+        assert "角色长期像朋友一样陪伴用户" in payload
+
+    asyncio.run(_run())
+
+
+def test_aregenerate_agent_prompt_from_dependencies_rereads_files() -> None:
+    async def _run() -> None:
+        work_path = Path("data/tests/roleplay_dependency_regenerate")
+        if work_path.exists():
+            shutil.rmtree(work_path)
+        dependency_file = work_path / "persona.txt"
+        dependency_file.parent.mkdir(parents=True, exist_ok=True)
+        dependency_file.write_text("初版：更像克制的搭档。", encoding="utf-8")
+
+        provider = MockProvider(
+            responses=[
+                '{"agent_persona":"克制/理性","global_system_prompt":"第一版人格","temperature":0.3,"max_tokens":512}',
+                '{"agent_persona":"克制/理性/柔软","global_system_prompt":"第二版人格","temperature":0.35,"max_tokens":576}',
+            ]
+        )
+        config = SessionConfig(
+            work_path=work_path,
+            preset=AgentPreset(
+                agent=Agent(name="青岚", persona="默认", model="mock-model"),
+                global_system_prompt="初始提示词",
+            ),
+        )
+
+        await abuild_roleplay_prompt_from_answers_and_apply(
+            provider,
+            config=config,
+            model="test-model",
+            trait_keywords=["克制", "理性"],
+            dependency_files=["persona.txt"],
+            persona_key="regen_case",
+        )
+
+        dependency_file.write_text("二版：保留理性，但情绪更柔软，更像真实朋友。", encoding="utf-8")
+
+        updated = await aregenerate_agent_prompt_from_dependencies(
+            provider,
+            work_path=work_path,
+            agent_key="regen_case",
+            model="test-model",
+        )
+
+        assert updated.agent.persona == "克制/理性/柔软"
+        second_request = str(provider.requests[1].messages[0]["content"])
+        assert "二版：保留理性，但情绪更柔软" in second_request
+
+        traces = load_persona_generation_traces(work_path, "regen_case")
+        assert len(traces) == 2
+        assert traces[-1].operation == "regenerate_from_dependencies"
+        assert traces[-1].dependency_snapshots[0].content.startswith("二版：")
+
+    asyncio.run(_run())
 

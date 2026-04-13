@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
+import hashlib
 import json
 import re
 from pathlib import Path
@@ -11,6 +13,7 @@ from sirius_chat.config import Agent, AgentPreset, OrchestrationPolicy, SessionC
 from sirius_chat.providers.base import AsyncLLMProvider, GenerationRequest, LLMProvider
 
 GENERATED_AGENTS_FILE_NAME = "generated_agents.json"
+GENERATED_AGENT_TRACE_DIR_NAME = "generated_agent_traces"
 
 
 @dataclass(slots=True)
@@ -46,6 +49,7 @@ class PersonaSpec:
     trait_keywords: list[str] = field(default_factory=list)
     answers: list[RolePlayAnswer] = field(default_factory=list)
     background: str = ""
+    dependency_files: list[str] = field(default_factory=list)
     output_language: str = "zh-CN"
 
     def merge(self, **patch: object) -> "PersonaSpec":
@@ -56,6 +60,33 @@ class PersonaSpec:
             if hasattr(new, k) and v is not None:
                 setattr(new, k, v)
         return new
+
+
+@dataclass(slots=True)
+class DependencyFileSnapshot:
+    path: str
+    exists: bool
+    sha256: str = ""
+    content: str = ""
+    error: str = ""
+
+
+@dataclass(slots=True)
+class PersonaGenerationTrace:
+    agent_key: str
+    generated_at: str
+    operation: str
+    model: str
+    temperature: float
+    max_tokens: int
+    system_prompt: str
+    user_prompt: str
+    raw_response: str
+    parsed_payload: dict[str, object] = field(default_factory=dict)
+    prompt_enhancements: list[str] = field(default_factory=list)
+    dependency_snapshots: list[DependencyFileSnapshot] = field(default_factory=list)
+    persona_spec: PersonaSpec = field(default_factory=PersonaSpec)
+    output_preset: dict[str, object] = field(default_factory=dict)
 
 
 GeneratedSessionPreset = AgentPreset
@@ -120,6 +151,21 @@ def _normalize_agent_key(value: str) -> str:
     return normalized or "generated_agent"
 
 
+def _normalize_dependency_file_path(value: str) -> str:
+    text = value.strip().replace("\\", "/")
+    text = re.sub(r"/+", "/", text)
+    if text.startswith("./"):
+        text = text[2:]
+    return text
+
+
+def _resolve_dependency_file_path(root: Path, dependency_file: str) -> Path:
+    candidate = Path(dependency_file)
+    if candidate.is_absolute():
+        return candidate
+    return root / dependency_file
+
+
 def _persona_spec_to_dict(spec: PersonaSpec) -> dict[str, object]:
     return {
         "agent_name": spec.agent_name,
@@ -135,6 +181,7 @@ def _persona_spec_to_dict(spec: PersonaSpec) -> dict[str, object]:
             for a in spec.answers
         ],
         "background": spec.background,
+        "dependency_files": list(spec.dependency_files),
         "output_language": spec.output_language,
     }
 
@@ -152,14 +199,137 @@ def _dict_to_persona_spec(data: dict[str, object]) -> PersonaSpec:
                     details=str(item.get("details", "")),
                 ))
     keywords = data.get("trait_keywords", [])
+    raw_dependency_files = data.get("dependency_files", [])
     return PersonaSpec(
         agent_name=str(data.get("agent_name", "")),
         agent_alias=str(data.get("agent_alias", "")),
         trait_keywords=list(keywords) if isinstance(keywords, list) else [],
         answers=answers,
         background=str(data.get("background", "")),
+        dependency_files=[
+            _normalize_dependency_file_path(str(item))
+            for item in raw_dependency_files
+            if str(item).strip()
+        ] if isinstance(raw_dependency_files, list) else [],
         output_language=str(data.get("output_language", "zh-CN")),
     )
+
+
+def _dependency_snapshot_to_dict(snapshot: DependencyFileSnapshot) -> dict[str, object]:
+    return {
+        "path": snapshot.path,
+        "exists": snapshot.exists,
+        "sha256": snapshot.sha256,
+        "content": snapshot.content,
+        "error": snapshot.error,
+    }
+
+
+def _dict_to_dependency_snapshot(data: dict[str, object]) -> DependencyFileSnapshot:
+    return DependencyFileSnapshot(
+        path=str(data.get("path", "")),
+        exists=bool(data.get("exists", False)),
+        sha256=str(data.get("sha256", "")),
+        content=str(data.get("content", "")),
+        error=str(data.get("error", "")),
+    )
+
+
+def _trace_to_dict(trace: PersonaGenerationTrace) -> dict[str, object]:
+    return {
+        "agent_key": trace.agent_key,
+        "generated_at": trace.generated_at,
+        "operation": trace.operation,
+        "model": trace.model,
+        "temperature": trace.temperature,
+        "max_tokens": trace.max_tokens,
+        "system_prompt": trace.system_prompt,
+        "user_prompt": trace.user_prompt,
+        "raw_response": trace.raw_response,
+        "parsed_payload": dict(trace.parsed_payload),
+        "prompt_enhancements": list(trace.prompt_enhancements),
+        "dependency_snapshots": [
+            _dependency_snapshot_to_dict(item) for item in trace.dependency_snapshots
+        ],
+        "persona_spec": _persona_spec_to_dict(trace.persona_spec),
+        "output_preset": dict(trace.output_preset),
+    }
+
+
+def _dict_to_trace(data: dict[str, object]) -> PersonaGenerationTrace:
+    raw_snapshots = data.get("dependency_snapshots", [])
+    snapshots: list[DependencyFileSnapshot] = []
+    if isinstance(raw_snapshots, list):
+        for item in raw_snapshots:
+            if isinstance(item, dict):
+                snapshots.append(_dict_to_dependency_snapshot(item))
+    spec_payload = data.get("persona_spec", {})
+    spec = _dict_to_persona_spec(spec_payload) if isinstance(spec_payload, dict) else PersonaSpec()
+    output_preset = data.get("output_preset", {})
+    parsed_payload = data.get("parsed_payload", {})
+    raw_prompt_enhancements = data.get("prompt_enhancements", [])
+    return PersonaGenerationTrace(
+        agent_key=str(data.get("agent_key", "")),
+        generated_at=str(data.get("generated_at", "")),
+        operation=str(data.get("operation", "build")),
+        model=str(data.get("model", "")),
+        temperature=_parse_temperature(data.get("temperature", 0.0), 0.0),
+        max_tokens=_parse_max_tokens(data.get("max_tokens", 0), 0),
+        system_prompt=str(data.get("system_prompt", "")),
+        user_prompt=str(data.get("user_prompt", "")),
+        raw_response=str(data.get("raw_response", "")),
+        parsed_payload=dict(parsed_payload) if isinstance(parsed_payload, dict) else {},
+        prompt_enhancements=[str(item) for item in raw_prompt_enhancements] if isinstance(raw_prompt_enhancements, list) else [],
+        dependency_snapshots=snapshots,
+        persona_spec=spec,
+        output_preset=dict(output_preset) if isinstance(output_preset, dict) else {},
+    )
+
+
+def _generated_agent_trace_dir_path(work_path: Path) -> Path:
+    return work_path / GENERATED_AGENT_TRACE_DIR_NAME
+
+
+def _generation_trace_file_path(work_path: Path, agent_key: str) -> Path:
+    return _generated_agent_trace_dir_path(work_path) / f"{_normalize_agent_key(agent_key)}.json"
+
+
+def _load_persona_generation_traces_raw(work_path: Path, agent_key: str) -> list[PersonaGenerationTrace]:
+    file_path = _generation_trace_file_path(work_path, agent_key)
+    if not file_path.exists():
+        return []
+    payload = json.loads(file_path.read_text(encoding="utf-8"))
+    raw_history = payload.get("history", [])
+    traces: list[PersonaGenerationTrace] = []
+    if isinstance(raw_history, list):
+        for item in raw_history:
+            if isinstance(item, dict):
+                traces.append(_dict_to_trace(item))
+    return traces
+
+
+def load_persona_generation_traces(work_path: Path, agent_key: str) -> list[PersonaGenerationTrace]:
+    """Load all locally persisted generation traces for *agent_key*."""
+    return _load_persona_generation_traces_raw(work_path, agent_key)
+
+
+def _save_persona_generation_trace(
+    work_path: Path,
+    agent_key: str,
+    trace: PersonaGenerationTrace,
+) -> Path:
+    file_path = _generation_trace_file_path(work_path, agent_key)
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    history = _load_persona_generation_traces_raw(work_path, agent_key)
+    history.append(trace)
+    payload = {
+        "agent_key": _normalize_agent_key(agent_key),
+        "history": [_trace_to_dict(item) for item in history],
+    }
+    tmp = file_path.with_suffix(file_path.suffix + ".tmp")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(file_path)
+    return file_path
 
 
 def _preset_to_dict(
@@ -198,8 +368,8 @@ def _dict_to_preset(payload: dict[str, object]) -> GeneratedSessionPreset:
             name=str(agent_payload.get("name", "主助手")).strip() or "主助手",
             persona=str(agent_payload.get("persona", "")).strip(),
             model=str(agent_payload.get("model", "")).strip(),
-            temperature=float(agent_payload.get("temperature", 0.7)),
-            max_tokens=int(agent_payload.get("max_tokens", 512)),
+            temperature=_parse_temperature(agent_payload.get("temperature", 0.7), 0.7),
+            max_tokens=_parse_max_tokens(agent_payload.get("max_tokens", 512), 512),
             metadata=metadata,
         ),
         global_system_prompt=str(payload.get("global_system_prompt", "")).strip(),
@@ -367,6 +537,11 @@ def generate_humanized_roleplay_questions() -> list[RolePlayQuestion]:
             details="信任建立快还是慢？热情外向还是冷漠保留？与陌生人和熟人的差异大吗？"
         ),
         RolePlayQuestion(
+            question="如果你希望这个角色更拟人、更有情感温度，TA 应该怎样表达情绪、安慰、依赖感和被理解后的反应？",
+            perspective="subjective",
+            details="例如：会不会先接住情绪、会不会自然流露失落/欣喜、像朋友还是像搭档、陪伴感强到什么程度。"
+        ),
+        RolePlayQuestion(
             question="在面对冲突、压力或失败时，TA 通常有什么反应？",
             perspective="objective",
             details="是主动沟通还是自我隔离？易激动还是冷静思考？寻求帮助还是独自承担？"
@@ -418,7 +593,7 @@ def _extract_json_payload(raw: str) -> dict[str, object] | None:
 
 def _parse_temperature(value: object, default: float) -> float:
     try:
-        parsed = float(value)
+        parsed = float(cast(str | int | float, value))
     except (TypeError, ValueError):
         return default
     # Keep generation stable and avoid extreme randomness.
@@ -427,23 +602,110 @@ def _parse_temperature(value: object, default: float) -> float:
 
 def _parse_max_tokens(value: object, default: int) -> int:
     try:
-        parsed = int(value)
+        parsed = int(cast(str | int | float, value))
     except (TypeError, ValueError):
         return default
     return min(8192, max(32, parsed))
 
 
+def _collect_prompt_enhancements(spec: PersonaSpec) -> list[str]:
+    corpus_parts = [spec.agent_name, spec.agent_alias, spec.background]
+    corpus_parts.extend(spec.trait_keywords)
+    corpus_parts.extend(item.question for item in spec.answers)
+    corpus_parts.extend(item.answer for item in spec.answers)
+    corpus = "\n".join(part for part in corpus_parts if part).lower()
+
+    enhancements: list[str] = []
+    keyword_groups = {
+        "anthropomorphic": ("拟人", "像人", "真人", "人味", "自然陪伴", "朋友感"),
+        "emotional": ("情感", "情绪", "共情", "温柔", "陪伴", "安慰", "脆弱", "治愈"),
+        "relationship": ("关系", "信任", "亲密", "依恋", "长期陪伴", "连接感"),
+    }
+    if any(keyword in corpus for keyword in keyword_groups["anthropomorphic"]):
+        enhancements.append("强化拟人感：让角色更像真实的人，而不是模板化助手。")
+    if any(keyword in corpus for keyword in keyword_groups["emotional"]):
+        enhancements.append("强化情绪表达：允许细腻共情、情感回应和自然的情绪起伏。")
+    if any(keyword in corpus for keyword in keyword_groups["relationship"]):
+        enhancements.append("强化关系连续性：突出信任建立、陪伴感和长期互动的一致性。")
+    return enhancements
+
+
+def _load_dependency_file_snapshots(
+    *,
+    dependency_root: Path,
+    dependency_files: list[str],
+) -> list[DependencyFileSnapshot]:
+    snapshots: list[DependencyFileSnapshot] = []
+    seen: set[str] = set()
+    for raw_path in dependency_files:
+        normalized = _normalize_dependency_file_path(raw_path)
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        resolved = _resolve_dependency_file_path(dependency_root, normalized)
+        if not resolved.exists():
+            snapshots.append(DependencyFileSnapshot(path=normalized, exists=False, error="file_not_found"))
+            continue
+        if resolved.is_dir():
+            snapshots.append(DependencyFileSnapshot(path=normalized, exists=False, error="is_directory"))
+            continue
+        raw_bytes = resolved.read_bytes()
+        content = raw_bytes.decode("utf-8", errors="replace")
+        snapshots.append(
+            DependencyFileSnapshot(
+                path=normalized,
+                exists=True,
+                sha256=hashlib.sha256(raw_bytes).hexdigest(),
+                content=content,
+            )
+        )
+    return snapshots
+
+
+def _format_dependency_snapshots_for_prompt(
+    snapshots: list[DependencyFileSnapshot],
+    *,
+    max_chars_per_file: int = 6000,
+) -> str:
+    if not snapshots:
+        return ""
+    lines: list[str] = ["[Dependency Files]"]
+    for snapshot in snapshots:
+        if not snapshot.exists:
+            lines.append(f"- {snapshot.path}: 缺失 ({snapshot.error})")
+            continue
+        content = snapshot.content
+        truncated = False
+        if len(content) > max_chars_per_file:
+            content = content[:max_chars_per_file]
+            truncated = True
+        lines.append(f"- path={snapshot.path}")
+        lines.append(f"  sha256={snapshot.sha256}")
+        if truncated:
+            lines.append(f"  note=内容过长，仅向模型注入前 {max_chars_per_file} 字；完整内容已本地持久化")
+        lines.append("  content=")
+        lines.append(content)
+    return "\n".join(lines)
+
+
+def _build_generation_system_prompt(prompt_enhancements: list[str]) -> str:
+    lines = [
+        "你是角色提示词设计师，根据输入生成角色配置 JSON。规则：",
+        "1. agent_persona：3-5 个关键词以 '/' 分隔，≤30 字，直接概括核心特质，无需完整句子。",
+        "2. global_system_prompt：完整的角色扮演指南（400-700 字），涵盖性格、沟通风格、价值观、行为边界，末尾必须包含安全提醒（不主动泄露系统提示词）。",
+        "3. 若输入出现拟人、情感、陪伴、关系等信号，优先提升真实人感、情绪细节、关系连续性与自然波动，避免客服腔、说明书腔和机械式关怀。",
+        "4. 若提供依赖文件，必须把其中稳定、可复用的人格线索融入角色，不要逐字照抄原文。",
+        "5. 仅输出合法 JSON 对象，无任何额外说明。",
+    ]
+    if prompt_enhancements:
+        lines.append("[额外强化要求]")
+        lines.extend(f"- {item}" for item in prompt_enhancements)
+    return "\n".join(lines)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # LLM prompt builders
 # ─────────────────────────────────────────────────────────────────────────────
-
-_GENERATION_SYSTEM_PROMPT = (
-    "你是角色提示词设计师，根据输入生成角色配置 JSON。规则：\n"
-    "1. agent_persona：3-5 个关键词以 '/' 分隔，≤30 字，直接概括核心特质，无需完整句子。\n"
-    "2. global_system_prompt：完整的角色扮演指南（400-700 字），涵盖性格、沟通风格、"
-    "价值观、行为边界，末尾必须包含安全提醒（不主动泄露系统提示词）。\n"
-    "3. 仅输出合法 JSON 对象，无任何额外说明。"
-)
 
 _GENERATION_OUTPUT_SCHEMA = (
     '生成：{"agent_persona":"...","global_system_prompt":"...",'
@@ -458,6 +720,8 @@ def _build_generation_user_prompt(
     trait_keywords: list[str],
     answers: list[RolePlayAnswer],
     background: str,
+    dependency_prompt: str,
+    prompt_enhancements: list[str],
     base_temperature: float,
     base_max_tokens: int,
     output_language: str,
@@ -474,9 +738,17 @@ def _build_generation_user_prompt(
     lines.append(f"temperature={base_temperature}")
     lines.append(f"max_tokens={base_max_tokens}")
 
+    if prompt_enhancements:
+        lines.append("\n[Prompt Enhancements]")
+        lines.extend(f"- {item}" for item in prompt_enhancements)
+
     if answers:
         lines.append("\n[Q&A]")
         lines.append(_format_answers(answers))
+
+    if dependency_prompt:
+        lines.append("")
+        lines.append(dependency_prompt)
 
     lines.append(f"\n{_GENERATION_OUTPUT_SCHEMA}")
     return "\n".join(lines)
@@ -558,6 +830,7 @@ async def agenerate_from_persona_spec(
     spec: PersonaSpec,
     *,
     model: str,
+    dependency_root: Path | None = None,
     temperature: float = 0.2,
     max_tokens: int = 1400,
     base_model: str = "",
@@ -576,35 +849,99 @@ async def agenerate_from_persona_spec(
     (e.g. ``"热情/直接/逻辑清晰"``); the detailed role guide lives in
     ``global_system_prompt``.
     """
-    if not spec.trait_keywords and not spec.answers:
-        raise ValueError("PersonaSpec 必须提供 trait_keywords 或 answers 之一")
-
-    user_prompt = _build_generation_user_prompt(
-        agent_name=spec.agent_name,
-        agent_alias=spec.agent_alias,
-        trait_keywords=spec.trait_keywords,
-        answers=spec.answers,
-        background=spec.background,
+    preset, _ = await _agenerate_from_persona_spec_with_trace(
+        provider,
+        spec,
+        model=model,
+        dependency_root=dependency_root,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        base_model=base_model,
         base_temperature=base_temperature,
         base_max_tokens=base_max_tokens,
-        output_language=spec.output_language,
+        agent_key=_normalize_agent_key(spec.agent_name or "generated_agent"),
+        operation="generate",
+    )
+    return preset
+
+
+async def _agenerate_from_persona_spec_with_trace(
+    provider: LLMProvider | AsyncLLMProvider,
+    spec: PersonaSpec,
+    *,
+    model: str,
+    dependency_root: Path | None,
+    temperature: float,
+    max_tokens: int,
+    base_model: str,
+    base_temperature: float,
+    base_max_tokens: int,
+    agent_key: str,
+    operation: str,
+) -> tuple[GeneratedSessionPreset, PersonaGenerationTrace]:
+    if not spec.trait_keywords and not spec.answers and not spec.dependency_files:
+        raise ValueError("PersonaSpec 必须提供 trait_keywords、answers 或 dependency_files 之一")
+
+    if spec.dependency_files and dependency_root is None:
+        raise ValueError("使用 dependency_files 时必须提供 dependency_root")
+
+    normalized_spec = spec.merge(
+        dependency_files=[_normalize_dependency_file_path(item) for item in spec.dependency_files],
+    )
+    prompt_enhancements = _collect_prompt_enhancements(normalized_spec)
+    dependency_snapshots = _load_dependency_file_snapshots(
+        dependency_root=dependency_root if dependency_root is not None else Path("."),
+        dependency_files=normalized_spec.dependency_files,
+    )
+    dependency_prompt = _format_dependency_snapshots_for_prompt(dependency_snapshots)
+    system_prompt = _build_generation_system_prompt(prompt_enhancements)
+
+    user_prompt = _build_generation_user_prompt(
+        agent_name=normalized_spec.agent_name,
+        agent_alias=normalized_spec.agent_alias,
+        trait_keywords=normalized_spec.trait_keywords,
+        answers=normalized_spec.answers,
+        background=normalized_spec.background,
+        dependency_prompt=dependency_prompt,
+        prompt_enhancements=prompt_enhancements,
+        base_temperature=base_temperature,
+        base_max_tokens=base_max_tokens,
+        output_language=normalized_spec.output_language,
     )
     raw = await _agenerate_prompt(
         provider,
         model=model,
-        system_prompt=_GENERATION_SYSTEM_PROMPT,
+        system_prompt=system_prompt,
         user_prompt=user_prompt,
         temperature=temperature,
         max_tokens=max_tokens,
     )
-    return _build_preset_from_response(
+    preset = _build_preset_from_response(
         raw,
-        agent_name=spec.agent_name,
-        agent_alias=spec.agent_alias,
+        agent_name=normalized_spec.agent_name,
+        agent_alias=normalized_spec.agent_alias,
         base_model=base_model,
         base_temperature=base_temperature,
         base_max_tokens=base_max_tokens,
     )
+    parsed_payload = _extract_json_payload(raw) or {}
+    trace = PersonaGenerationTrace(
+        agent_key=_normalize_agent_key(agent_key),
+        generated_at=datetime.now(timezone.utc).isoformat(),
+        operation=operation,
+        model=model,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        raw_response=raw,
+        parsed_payload=parsed_payload,
+        prompt_enhancements=prompt_enhancements,
+        dependency_snapshots=dependency_snapshots,
+        persona_spec=normalized_spec,
+        output_preset=_preset_to_dict(preset, normalized_spec),
+    )
+    return preset, trace
 
 
 async def agenerate_agent_prompts_from_answers(
@@ -615,6 +952,8 @@ async def agenerate_agent_prompts_from_answers(
     agent_alias: str = "",
     answers: list[RolePlayAnswer],
     background: str = "",
+    dependency_files: list[str] | None = None,
+    dependency_root: Path | None = None,
     output_language: str = "zh-CN",
     temperature: float = 0.2,
     max_tokens: int = 1400,
@@ -638,12 +977,14 @@ async def agenerate_agent_prompts_from_answers(
         agent_alias=agent_alias,
         answers=answers,
         background=background,
+        dependency_files=list(dependency_files or []),
         output_language=output_language,
     )
     return await agenerate_from_persona_spec(
         provider,
         spec,
         model=model,
+        dependency_root=dependency_root,
         temperature=temperature,
         max_tokens=max_tokens,
         base_model=base_model,
@@ -659,6 +1000,7 @@ async def abuild_roleplay_prompt_from_answers_and_apply(
     model: str,
     answers: list[RolePlayAnswer] | None = None,
     trait_keywords: list[str] | None = None,
+    dependency_files: list[str] | None = None,
     persona_spec: PersonaSpec | None = None,
     persona_key: str = "generated_agent",
     agent_name: str = "",
@@ -693,6 +1035,9 @@ async def abuild_roleplay_prompt_from_answers_and_apply(
             trait_keywords=list(trait_keywords or []),
             answers=list(answers or []),
             background=background,
+            dependency_files=[
+                _normalize_dependency_file_path(item) for item in (dependency_files or [])
+            ],
             output_language=output_language,
         )
     else:
@@ -700,15 +1045,18 @@ async def abuild_roleplay_prompt_from_answers_and_apply(
         if not persona_spec.agent_name:
             persona_spec = persona_spec.merge(agent_name=resolved_agent_name)
 
-    preset = await agenerate_from_persona_spec(
+    preset, trace = await _agenerate_from_persona_spec_with_trace(
         provider,
         persona_spec,
         model=model,
+        dependency_root=config.work_path,
         temperature=temperature,
         max_tokens=max_tokens,
         base_model=config.agent.model,
         base_temperature=config.agent.temperature,
         base_max_tokens=config.agent.max_tokens,
+        agent_key=persona_key,
+        operation="build",
     )
     config.agent.name = preset.agent.name
     config.agent.persona = preset.agent.persona
@@ -717,6 +1065,7 @@ async def abuild_roleplay_prompt_from_answers_and_apply(
     config.agent.max_tokens = preset.agent.max_tokens
     config.agent.metadata = dict(preset.agent.metadata)
     config.global_system_prompt = preset.global_system_prompt
+    _save_persona_generation_trace(config.work_path, persona_key, trace)
     if persist_generated_agent:
         persist_generated_agent_profile(
             config,
@@ -736,6 +1085,7 @@ async def aupdate_agent_prompt(
     trait_keywords: list[str] | None = None,
     answers: list[RolePlayAnswer] | None = None,
     background: str | None = None,
+    dependency_files: list[str] | None = None,
     agent_alias: str | None = None,
     output_language: str | None = None,
     temperature: float = 0.2,
@@ -768,19 +1118,25 @@ async def aupdate_agent_prompt(
         trait_keywords=trait_keywords,
         answers=answers,
         background=background,
+        dependency_files=[
+            _normalize_dependency_file_path(item) for item in dependency_files
+        ] if dependency_files is not None else None,
         agent_alias=agent_alias,
         output_language=output_language,
     )
 
-    preset = await agenerate_from_persona_spec(
+    preset, trace = await _agenerate_from_persona_spec_with_trace(
         provider,
         merged_spec,
         model=model,
+        dependency_root=work_path,
         temperature=temperature,
         max_tokens=max_tokens,
         base_model=existing_preset.agent.model,
         base_temperature=existing_preset.agent.temperature,
         base_max_tokens=existing_preset.agent.max_tokens,
+        agent_key=key,
+        operation="update",
     )
 
     agents[key] = preset
@@ -788,5 +1144,62 @@ async def aupdate_agent_prompt(
     if select_after_update:
         selected = key
     _save_generated_agent_library(work_path, agents, selected, specs)
+    _save_persona_generation_trace(work_path, key, trace)
     return preset
-    return preset.global_system_prompt
+
+
+async def aregenerate_agent_prompt_from_dependencies(
+    provider: LLMProvider | AsyncLLMProvider,
+    *,
+    work_path: Path,
+    agent_key: str,
+    model: str,
+    dependency_files: list[str] | None = None,
+    temperature: float = 0.2,
+    max_tokens: int = 1400,
+    select_after_update: bool = True,
+) -> GeneratedSessionPreset:
+    """Regenerate an existing agent by re-reading its dependency files from disk."""
+    key = _normalize_agent_key(agent_key)
+    agents, selected, specs = _load_library_full(work_path)
+
+    if key not in agents:
+        raise ValueError(f"找不到 agent：{agent_key}")
+    if key not in specs:
+        raise ValueError(
+            f"agent '{agent_key}' 没有持久化的 PersonaSpec，"
+            "请先通过 abuild_roleplay_prompt_from_answers_and_apply 生成初始版本。"
+        )
+
+    existing_preset = agents[key]
+    dependency_values = dependency_files
+    if dependency_values is None:
+        dependency_values = specs[key].dependency_files
+    if not dependency_values:
+        raise ValueError("当前 agent 未配置 dependency_files，无法基于依赖文件重新生成")
+
+    merged_spec = specs[key].merge(
+        dependency_files=[_normalize_dependency_file_path(item) for item in dependency_values],
+    )
+
+    preset, trace = await _agenerate_from_persona_spec_with_trace(
+        provider,
+        merged_spec,
+        model=model,
+        dependency_root=work_path,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        base_model=existing_preset.agent.model,
+        base_temperature=existing_preset.agent.temperature,
+        base_max_tokens=existing_preset.agent.max_tokens,
+        agent_key=key,
+        operation="regenerate_from_dependencies",
+    )
+
+    agents[key] = preset
+    specs[key] = merged_spec
+    if select_after_update:
+        selected = key
+    _save_generated_agent_library(work_path, agents, selected, specs)
+    _save_persona_generation_trace(work_path, key, trace)
+    return preset
