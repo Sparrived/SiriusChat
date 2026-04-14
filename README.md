@@ -58,7 +58,7 @@
 - **多模态处理**：支持图片/视频输入与结构化解析
 - **CLI 与 API 双模式**：库调用 + 命令行交互，灵活接入
 - **Provider 管理**：多平台 API Key 持久化，自动可用性检测
-- **WorkspaceRuntime 持久化接管**：外部只需提供 `work_path` 与业务输入，框架自动恢复会话、参与者元数据与持久化布局
+- **WorkspaceRuntime 持久化接管**：外部至少提供运行态 `work_path`，必要时可额外提供独立 `config_root`；框架自动恢复会话、参与者元数据与持久化布局，并在下一轮处理前应用外部配置文件变更
 
 ---
 
@@ -80,14 +80,19 @@ python -m pip install -e .[test]
 
 ```bash
 sirius-chat --config examples/session.json --work-path data/session_runtime \
+  --config-root data/session_config \
   --message "你好，请告诉我关于 LLM 的事" --output transcript.json
 ```
 
 **项目入口（交互模式 + 持久化）：**
 
 ```bash
-python main.py --config examples/session.json --work-path data/session_runtime --store json
+python main.py --config examples/session.json --work-path data/session_runtime \
+  --config-root data/session_config --store json
 ```
+
+- `--work-path`：运行态数据根目录，保存 `sessions/`、`memory/`、`token/`、`skill_data/`、`primary_user.json`
+- `--config-root`：配置根目录，保存 `workspace.json`、`config/`、`providers/`、`roleplay/`、`skills/`；不传时默认回退到 `--work-path`
 
 **人格问卷模板辅助命令：**
 
@@ -102,7 +107,8 @@ sirius-chat --print-roleplay-questions-template companion
 **禁用自动恢复:**
 
 ```bash
-python main.py --config examples/session.json --work-path data/session_runtime --no-resume
+python main.py --config examples/session.json --work-path data/session_runtime \
+  --config-root data/session_config --no-resume
 ```
 
 ### 3️⃣ **CLI 命令说明**
@@ -142,6 +148,7 @@ from sirius_chat.providers.mock import MockProvider
 async def main() -> None:
   runtime = open_workspace_runtime(
     Path("./data/chat_session"),
+    config_path=Path("./config/chat_session"),
     provider=MockProvider(responses=["我理解您的想法"]),
   )
 
@@ -157,7 +164,7 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
-> 该模式要求 `work_path` 中已存在已选中的 agent 资产与 workspace 配置；`sirius-chat` CLI、`main.py` 和迁移接口会自动完成 bootstrap。
+> `work_path` 保存运行态数据；`config_path` 保存 workspace 配置、provider 与角色资产。不传 `config_path` 时，runtime 会回退到单根模式。外部修改 `config_path` 下的 workspace/config/provider/roleplay 文件后，会在下一次 `run_live_message(...)` 前自动刷新。
 
 **底层模式：AsyncRolePlayEngine + SessionConfig（高级控制）**
 
@@ -172,7 +179,8 @@ async def main():
     engine = create_async_engine(provider)
     
     config = SessionConfig(
-        work_path=Path("./data/chat_session"),
+      work_path=Path("./config/chat_session"),
+      data_path=Path("./data/chat_session"),
         preset=AgentPreset(
             agent=Agent(name="助手", persona="耐心和善", model="gpt-4o-mini"),
             global_system_prompt="你是一个友善的助手。",

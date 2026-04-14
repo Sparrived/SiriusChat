@@ -40,6 +40,7 @@ from sirius_chat.cli_diagnostics import (
 )
 from sirius_chat.config.helpers import build_orchestration_policy_from_dict
 from sirius_chat.logging_config import configure_logging, setup_log_archival, get_logger
+from sirius_chat.workspace.layout import WorkspaceLayout
 from sirius_chat.workspace.runtime import WorkspaceRuntime
 
 InputFunc = Callable[[str], str]
@@ -58,6 +59,7 @@ PROVIDER_COMMAND_PREFIX = "/provider"
 def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Sirius Chat 测试入口（库外业务编排）")
     parser.add_argument("--config", default="", help="会话 JSON 配置文件路径")
+    parser.add_argument("--config-root", default="", help="配置持久化目录（默认与 work-path 相同）")
     parser.add_argument("--work-path", default="", help="持久化工作路径（缺失时默认 data 目录）")
     parser.add_argument("--output", default="", help="可选：输出 transcript JSON 文件路径")
     parser.add_argument(
@@ -91,7 +93,13 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _load_session_config(config_path: Path, work_path: Path) -> tuple[SessionConfig, list[dict[str, object]]]:
+def _load_session_config(
+    config_path: Path,
+    work_path: Path,
+    *,
+    config_root: Path | None = None,
+) -> tuple[SessionConfig, list[dict[str, object]]]:
+    resolved_config_root = config_root or work_path
     raw = json.loads(config_path.read_text(encoding="utf-8-sig"))
 
     if "agent" in raw or "global_system_prompt" in raw:
@@ -101,7 +109,8 @@ def _load_session_config(config_path: Path, work_path: Path) -> tuple[SessionCon
         raise ValueError("必需提供 generated_agent_key")
 
     session = create_session_config_from_selected_agent(
-        work_path=work_path,
+        work_path=resolved_config_root,
+        data_path=work_path,
         agent_key=generated_agent_key,
         history_max_messages=int(raw.get("history_max_messages", 24)),
         history_max_chars=int(raw.get("history_max_chars", 6000)),
@@ -220,10 +229,12 @@ def _bootstrap_first_generated_agent(
     *,
     config_path: Path,
     work_path: Path,
+    config_root: Path | None = None,
     provider_factory: ProviderFactory | None,
     input_func: InputFunc,
     print_func: PrintFunc,
 ) -> bool:
+    resolved_config_root = config_root or work_path
     print_func("检测到当前配置缺少可用的 generated agent，进入首次初始化向导。")
     agent_name = _prompt_non_empty(prompt="请输入首个 Agent 名称：", input_func=input_func, print_func=print_func)
     agent_alias = input_func("请输入 Agent 别名（可留空）：").strip()
@@ -235,7 +246,7 @@ def _bootstrap_first_generated_agent(
     agent_key_raw = input_func("请输入 generated_agent_key（留空默认同 Agent 名称）：").strip() or agent_name
 
     providers_config = _load_providers_config_from_config_file(config_path)
-    provider = _build_provider(providers_config, work_path, provider_factory)
+    provider = _build_provider(providers_config, resolved_config_root, provider_factory)
 
     questions = generate_humanized_roleplay_questions()
     answers: list[RolePlayAnswer] = []
@@ -256,7 +267,8 @@ def _bootstrap_first_generated_agent(
         )
 
     temp_config = SessionConfig(
-        work_path=work_path,
+        work_path=resolved_config_root,
+        data_path=work_path,
         preset=AgentPreset(
             agent=Agent(name=agent_name, persona="待生成", model=prompt_model),
             global_system_prompt="待生成",
@@ -355,7 +367,11 @@ def _prompt_for_path(
         return path
 
 
-def _resolve_runtime_paths(args: argparse.Namespace, input_func: InputFunc, print_func: PrintFunc) -> tuple[Path, Path]:
+def _resolve_runtime_paths(
+    args: argparse.Namespace,
+    input_func: InputFunc,
+    print_func: PrintFunc,
+) -> tuple[Path, Path, Path]:
     if args.config:
         config_path = Path(args.config)
     elif LAST_CONFIG_PATH_FILE.exists():
@@ -381,7 +397,8 @@ def _resolve_runtime_paths(args: argparse.Namespace, input_func: InputFunc, prin
         )
 
     work_path = Path(args.work_path) if args.work_path else DEFAULT_WORK_PATH
-    return config_path, work_path
+    config_root = Path(args.config_root) if args.config_root else work_path
+    return config_path, config_root, work_path
 
 
 def _parse_user_turn(raw_text: str) -> Message:
@@ -408,11 +425,13 @@ def _build_provider(
 def _build_runtime(
     *,
     work_path: Path,
-    provider: LLMProvider,
+    provider: LLMProvider | None,
+    config_root: Path | None = None,
     store_kind: str,
 ) -> WorkspaceRuntime:
     return WorkspaceRuntime.open(
         work_path,
+        config_path=config_root,
         provider=provider,
         store_factory=SessionStoreFactory(backend=store_kind),
     )
@@ -553,15 +572,25 @@ def _load_or_persist_session_bundle(
     *,
     config_path: Path,
     work_path: Path,
+    config_root: Path | None = None,
     print_func: PrintFunc,
 ) -> tuple[SessionConfig, list[dict[str, object]]]:
-    persisted_path = work_path / PERSISTED_SESSION_CONFIG_FILE_NAME
+    resolved_config_root = config_root or work_path
+    persisted_path = WorkspaceLayout(work_path, config_path=resolved_config_root).persisted_session_bundle_path()
     if persisted_path.exists():
-        session_config, providers_config = _load_session_config(persisted_path, work_path)
+        session_config, providers_config = _load_session_config(
+            persisted_path,
+            work_path,
+            config_root=resolved_config_root,
+        )
         print_func(f"已加载持久化 SessionConfig：{persisted_path}")
         return session_config, providers_config
 
-    session_config, providers_config = _load_session_config(config_path, work_path)
+    session_config, providers_config = _load_session_config(
+        config_path,
+        work_path,
+        config_root=resolved_config_root,
+    )
     generated_agent_key = _load_generated_agent_key_from_config_file(config_path)
     try:
         _atomic_write_json(
@@ -668,7 +697,7 @@ def run_interactive_session(
     runtime: WorkspaceRuntime,
     work_path: Path,
     provider_registry: ProviderRegistry,
-    refresh_provider: Callable[[], LLMProvider],
+    refresh_provider: Callable[[], LLMProvider | None],
     transcript: Transcript | None,
     *,
     input_func: InputFunc = input,
@@ -786,13 +815,19 @@ def main(
             return 1
 
     try:
-        config_path, work_path = _resolve_runtime_paths(args, input_func, print_func)
+        resolved_paths = tuple(_resolve_runtime_paths(args, input_func, print_func))
+        if len(resolved_paths) == 3:
+            config_path, config_root, work_path = resolved_paths
+        else:
+            config_path, work_path = resolved_paths
+            config_root = work_path
     except Exception as e:
         logger.error(f"路径解析失败：{e}", exc_info=True)
         print_func(f"路径解析失败: {e}")
         return 1
     
     work_path.mkdir(parents=True, exist_ok=True)
+    config_root.mkdir(parents=True, exist_ok=True)
 
     _persist_last_config_path(config_path, print_func)
 
@@ -800,6 +835,7 @@ def main(
         session_config, providers_config = _load_or_persist_session_bundle(
             config_path=config_path,
             work_path=work_path,
+            config_root=config_root,
             print_func=print_func,
         )
     except ValueError as exc:
@@ -812,7 +848,7 @@ def main(
         try:
             _run_framework_provider_detection(
                 config_path=config_path,
-                work_path=work_path,
+                work_path=config_root,
                 print_func=print_func,
             )
         except Exception as provider_exc:
@@ -823,13 +859,13 @@ def main(
                 return 1
             try:
                 _register_provider_interactively_for_bootstrap(
-                    work_path=work_path,
+                    work_path=config_root,
                     input_func=input_func,
                     print_func=print_func,
                 )
                 _run_framework_provider_detection(
                     config_path=config_path,
-                    work_path=work_path,
+                    work_path=config_root,
                     print_func=print_func,
                 )
             except Exception as register_exc:
@@ -841,6 +877,7 @@ def main(
             _bootstrap_first_generated_agent(
                 config_path=config_path,
                 work_path=work_path,
+                config_root=config_root,
                 provider_factory=provider_factory,
                 input_func=input_func,
                 print_func=print_func,
@@ -848,6 +885,7 @@ def main(
             session_config, providers_config = _load_or_persist_session_bundle(
                 config_path=config_path,
                 work_path=work_path,
+                config_root=config_root,
                 print_func=print_func,
             )
         except Exception as bootstrap_exc:
@@ -865,9 +903,14 @@ def main(
             input_func=input_func,
             print_func=print_func,
         )
-        provider_registry = ProviderRegistry(work_path)
-        provider = _build_provider(providers_config, work_path, provider_factory)
-        runtime = _build_runtime(work_path=work_path, provider=provider, store_kind=args.store)
+        provider_registry = ProviderRegistry(config_root)
+        provider = _build_provider(providers_config, config_root, provider_factory) if provider_factory is not None else None
+        runtime = _build_runtime(
+            work_path=work_path,
+            config_root=config_root,
+            provider=provider,
+            store_kind=args.store,
+        )
         if args.no_resume:
             asyncio.run(runtime.clear_session(session_config.session_id))
             transcript = None
@@ -881,7 +924,7 @@ def main(
             runtime,
             work_path,
             provider_registry,
-            lambda: _build_provider(providers_config, work_path, provider_factory),
+            lambda: _build_provider(providers_config, config_root, provider_factory) if provider_factory is not None else None,
             transcript,
             input_func=input_func,
             print_func=print_func,

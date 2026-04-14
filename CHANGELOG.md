@@ -4,6 +4,16 @@
 
 ## [Unreleased]
 
+### Added
+- **双根 workspace 持久化**：`WorkspaceLayout`、`WorkspaceRuntime`、`SessionConfig` 与 CLI/API 现在支持分离 `config_path` 与 `work_path`，允许把配置资产和运行态数据写入不同目录。
+
+### Changed
+- **配置热刷新**：`WorkspaceRuntime` 会在处理新消息前检测 workspace/config/provider/roleplay 配置变更，并在不丢失既有 transcript 的前提下重建 engine 上下文。
+- **配置快照与 provider 归位**：`workspace.json`、`config/session_config.json`、`providers/provider_keys.json`、`roleplay/`、`skills/` 统一归到 config root；`sessions/`、`memory/`、`token/`、`skill_data/` 与 `primary_user.json` 统一归到 data root。
+
+### Fixed
+- **外部接入路径歧义**：修复 `main.py`、`sirius-chat` CLI、`JsonPersistentSessionRunner` 和 roleplay 持久化在双路径模式下仍把部分配置错误写回 data root 的问题。
+
 ## [0.23.0] - 2026-04-14
 
 ### Added

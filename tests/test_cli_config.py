@@ -53,6 +53,7 @@ def test_load_session_config_parses_required_fields(tmp_path) -> None:
     session, providers = _load_session_config(config_path, work_path)
 
     assert session.work_path == work_path
+    assert session.data_path == work_path
     assert session.agent.name == "主助手"
     assert len(providers) == 1
     assert providers[0]["type"] == "openai-compatible"
@@ -82,6 +83,7 @@ def test_load_session_config_supports_siliconflow_defaults(tmp_path) -> None:
     session, providers = _load_session_config(config_path, work_path)
 
     assert session.work_path == work_path
+    assert session.data_path == work_path
     assert len(providers) == 1
     assert providers[0]["type"] == "siliconflow"
     assert providers[0]["api_key"] == "sf-test-key"
@@ -110,6 +112,7 @@ def test_load_session_config_supports_aliyun_bailian_defaults(tmp_path) -> None:
     session, providers = _load_session_config(config_path, work_path)
 
     assert session.work_path == work_path
+    assert session.data_path == work_path
     assert len(providers) == 1
     assert providers[0]["type"] == "aliyun-bailian"
     assert providers[0]["api_key"] == "dashscope-test-key"
@@ -195,3 +198,37 @@ def test_load_session_config_parses_orchestration_policy(tmp_path) -> None:
     assert session.orchestration.task_budgets["memory_extract"] == 1200
     assert session.orchestration.session_reply_mode == "auto"
     assert session.orchestration.message_debounce_seconds == 0.0
+
+
+def test_load_session_config_supports_separate_config_root_and_work_path(tmp_path) -> None:
+    config_path = tmp_path / "session.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "providers": [
+                    {
+                        "type": "openai-compatible",
+                        "api_key": "test-key",
+                    }
+                ],
+                "generated_agent_key": "main_agent",
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    config_root = tmp_path / "config"
+    work_path = tmp_path / "runtime"
+    _write_generated_agents(config_root)
+
+    session, providers = _load_session_config(
+        config_path,
+        work_path,
+        config_root=config_root,
+    )
+
+    assert session.work_path == config_root
+    assert session.data_path == work_path
+    assert session.agent.name == "主助手"
+    assert providers[0]["type"] == "openai-compatible"

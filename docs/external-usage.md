@@ -18,7 +18,8 @@ python -m pip install -e /path/to/sirius_chat
 
 从 `v0.23.0` 开始，推荐外部系统优先使用 `WorkspaceRuntime`。外部只需要提供：
 
-- `work_path`
+- `work_path`（运行态数据根目录）
+- 可选 `config_path`（配置根目录；不传时回退到单根模式）
 - `session_id`
 - `turn`
 - 可选的 `environment_context`、`user_profile`、`on_reply`、`timeout`
@@ -27,8 +28,9 @@ workspace runtime 会负责：
 
 - 自动恢复 `sessions/<session_id>/session_state.db`
 - 自动维护 `sessions/<session_id>/participants.json`
-- 自动把 provider、memory、token、roleplay、skills 路径路由到统一 layout
+- 自动把 provider、roleplay、skills 路由到 config root，把 session、memory、token、skill_data 路由到 data root
 - 首次打开时自动迁移旧根目录布局
+- config root 文件被外部修改后，会在下一次 `run_live_message(...)` 前自动刷新并生效
 
 ```python
 import asyncio
@@ -41,6 +43,7 @@ from sirius_chat.providers.mock import MockProvider
 async def main() -> None:
     runtime = open_workspace_runtime(
         Path("data/external_usage"),
+        config_path=Path("config/external_usage"),
         provider=MockProvider(responses=["先做小范围试点，再按反馈逐步放量。"]),
     )
 
@@ -59,7 +62,7 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
-> 该模式要求 `work_path` 中已存在被选中的 agent 资产与 workspace 配置。CLI、`main.py`、`ConfigManager.bootstrap_workspace_from_legacy_session_json(...)` 和迁移器可用于完成 bootstrap。
+> `work_path` 保存会话、记忆、token 与 skill_data；`config_path` 保存 workspace/provider/roleplay/skills 配置。不传 `config_path` 时，系统自动回退到单根布局。CLI、`main.py`、`ConfigManager.bootstrap_workspace_from_legacy_session_json(...)` 和迁移器可用于完成 bootstrap。
 
 ### 低层入口：AsyncRolePlayEngine + SessionConfig
 
@@ -84,7 +87,8 @@ provider = OpenAICompatibleProvider(
 engine = AsyncRolePlayEngine(provider=provider)
 
 config = create_session_config_from_selected_agent(
-    work_path=Path("data/external_usage"),
+    work_path=Path("config/external_usage"),
+    data_path=Path("data/external_usage"),
     agent_key="main_agent",
     orchestration=OrchestrationPolicy(
         unified_model="",  # 使用按任务配置模式
@@ -680,7 +684,7 @@ print(updated.agent.persona)
 - 如果外部系统暂时不想嵌入 Python API，也可以直接使用 CLI 辅助命令：`sirius-chat --list-roleplay-question-templates` 和 `sirius-chat --print-roleplay-questions-template <template>`。
 - `agenerate_agent_prompts_from_answers(...)` 会从回答中生成完整 `GeneratedSessionPreset`（`agent + global_system_prompt`）。
 - 生成时会显式输入 `agent_name`，确保主 AI 命名与提示词一致。
-- `abuild_roleplay_prompt_from_answers_and_apply(...)` 会把生成结果写入 `config.preset`，并把完整生成过程本地化到 `<work_path>/roleplay/generated_agent_traces/<agent_key>.json`。
+- `abuild_roleplay_prompt_from_answers_and_apply(...)` 会把生成结果写入 `config.preset`，并把完整生成过程本地化到配置根下的 `roleplay/generated_agent_traces/<agent_key>.json`。
 - 结构化人格生成默认使用 `max_tokens=5120` 和 `timeout_seconds=120.0`；如果上游模型更慢或 JSON 更长，可继续显式传入更大的 `timeout_seconds`。
 - 生成器会把这些抽象输入主动展开为具体的人物小传、语言习惯、回复节奏和互动边界；除非你提供的是风格样本，否则不必自己先写完整台词或整段系统提示词。
 - `dependency_files=[...]` 适合挂接角色卡、设定稿、语气样本、对白模板等本地素材；框架会读取文件内容参与生成，并记录快照与 sha256。
@@ -733,7 +737,7 @@ persona_input = {
 
 补充说明：
 
-- 对 `abuild_roleplay_prompt_from_answers_and_apply(...)`、`aupdate_agent_prompt(...)`、`aregenerate_agent_prompt_from_dependencies(...)` 这三条会写入 `work_path` 的链路，框架会先把最新 `PersonaSpec` 和待生成快照落盘，再调用模型。
+- 对 `abuild_roleplay_prompt_from_answers_and_apply(...)`、`aupdate_agent_prompt(...)`、`aregenerate_agent_prompt_from_dependencies(...)` 这三条会写入配置根的链路，框架会先把最新 `PersonaSpec` 和待生成快照落盘，再调用模型。
 - 这三条链路底层会把 `timeout_seconds` 透传到 `GenerationRequest`，各同步 provider 会优先使用该请求级 timeout，而不是固定停留在 provider 构造时的默认 30 秒。
 - 如果模型生成阶段报错，可直接通过 `load_persona_spec(work_path, agent_key)` 取回最近一次高层输入，避免问卷回答、背景设定或 `dependency_files` 丢失。
 
@@ -824,7 +828,11 @@ sirius-chat --config examples/session.json --work-path data/session_runtime
 当参与者是动态加入（例如群聊环境）时，推荐直接使用 `WorkspaceRuntime.run_live_message(...)`，不再要求外部显式维护 transcript：
 
 ```python
-runtime = open_workspace_runtime(Path("data/dynamic_group_chat"), provider=provider)
+runtime = open_workspace_runtime(
+    Path("data/dynamic_group_chat"),
+    config_path=Path("config/dynamic_group_chat"),
+    provider=provider,
+)
 
 for turn in human_turns:
     transcript = await runtime.run_live_message(
@@ -845,7 +853,8 @@ from sirius_chat.api import AsyncRolePlayEngine, Message, User, create_session_c
 engine = AsyncRolePlayEngine(provider=provider)
 
 config = create_session_config_from_selected_agent(
-    work_path=Path("data/dynamic_group_chat"),
+    work_path=Path("config/dynamic_group_chat"),
+    data_path=Path("data/dynamic_group_chat"),
     agent_key="main_agent",
 )
 

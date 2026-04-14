@@ -11,35 +11,46 @@ _DEFAULT_SESSION_FILENAME_JSON = "session_state.json"
 
 @dataclass(slots=True)
 class WorkspaceLayout:
-    """Single authority for all workspace persistence paths."""
+    """Single authority for config-root and data-root persistence paths."""
 
     work_path: Path
-    layout_version: int = 1
+    config_path: Path | None = None
+    layout_version: int = 2
 
     def __post_init__(self) -> None:
         self.work_path = Path(self.work_path)
+        self.config_path = self.work_path if self.config_path is None else Path(self.config_path)
+
+    @property
+    def data_root(self) -> Path:
+        return self.work_path
+
+    @property
+    def config_root(self) -> Path:
+        assert self.config_path is not None
+        return self.config_path
 
     @property
     def root(self) -> Path:
-        return self.work_path
+        return self.data_root
 
     def workspace_manifest_path(self) -> Path:
-        return self.root / "workspace.json"
+        return self.config_root / "workspace.json"
 
     def config_dir(self) -> Path:
-        return self.root / "config"
+        return self.config_root / "config"
 
     def session_config_path(self) -> Path:
         return self.config_dir() / "session_config.json"
 
     def providers_dir(self) -> Path:
-        return self.root / "providers"
+        return self.config_root / "providers"
 
     def provider_registry_path(self) -> Path:
         return self.providers_dir() / "provider_keys.json"
 
     def sessions_dir(self) -> Path:
-        return self.root / "sessions"
+        return self.data_root / "sessions"
 
     def session_slug(self, session_id: str) -> str:
         text = str(session_id).strip() or "default"
@@ -62,8 +73,14 @@ class WorkspaceLayout:
     def session_participants_path(self, session_id: str) -> Path:
         return self.session_dir(session_id) / "participants.json"
 
+    def primary_user_path(self) -> Path:
+        return self.data_root / "primary_user.json"
+
+    def persisted_session_bundle_path(self) -> Path:
+        return self.config_root / "session_config.persisted.json"
+
     def memory_dir(self) -> Path:
-        return self.root / "memory"
+        return self.data_root / "memory"
 
     def user_memory_dir(self) -> Path:
         return self.memory_dir() / "users"
@@ -78,13 +95,13 @@ class WorkspaceLayout:
         return self.memory_dir() / "self_memory.json"
 
     def token_dir(self) -> Path:
-        return self.root / "token"
+        return self.data_root / "token"
 
     def token_usage_db_path(self) -> Path:
         return self.token_dir() / "token_usage.db"
 
     def roleplay_dir(self) -> Path:
-        return self.root / "roleplay"
+        return self.config_root / "roleplay"
 
     def generated_agents_path(self) -> Path:
         return self.roleplay_dir() / "generated_agents.json"
@@ -93,47 +110,56 @@ class WorkspaceLayout:
         return self.roleplay_dir() / "generated_agent_traces"
 
     def skills_dir(self) -> Path:
-        return self.root / "skills"
+        return self.config_root / "skills"
 
     def skill_data_dir(self) -> Path:
-        return self.root / "skill_data"
+        return self.data_root / "skill_data"
 
     def legacy_session_store_path(self, *, backend: str = "sqlite") -> Path:
         normalized = backend.strip().lower()
         if normalized == "json":
-            return self.root / _DEFAULT_SESSION_FILENAME_JSON
-        return self.root / _DEFAULT_SESSION_FILENAME_SQLITE
+            return self.data_root / _DEFAULT_SESSION_FILENAME_JSON
+        return self.data_root / _DEFAULT_SESSION_FILENAME_SQLITE
 
     def legacy_primary_user_path(self) -> Path:
-        return self.root / "primary_user.json"
+        return self.data_root / "primary_user.json"
 
     def legacy_provider_registry_path(self) -> Path:
-        return self.root / "provider_keys.json"
+        return self.config_root / "provider_keys.json"
 
     def legacy_user_memory_dir(self) -> Path:
-        return self.root / "users"
+        return self.data_root / "users"
 
     def legacy_event_memory_dir(self) -> Path:
-        return self.root / "events"
+        return self.data_root / "events"
 
     def legacy_event_memory_path(self) -> Path:
         return self.legacy_event_memory_dir() / "events.json"
 
     def legacy_self_memory_path(self) -> Path:
-        return self.root / "self_memory.json"
+        return self.data_root / "self_memory.json"
 
     def legacy_token_usage_db_path(self) -> Path:
-        return self.root / "token_usage.db"
+        return self.data_root / "token_usage.db"
 
     def legacy_generated_agents_path(self) -> Path:
-        return self.root / "generated_agents.json"
+        return self.config_root / "generated_agents.json"
 
     def legacy_generated_agent_trace_dir(self) -> Path:
-        return self.root / "generated_agent_traces"
+        return self.config_root / "generated_agent_traces"
+
+    def config_watch_paths(self) -> list[Path]:
+        return [
+            self.workspace_manifest_path(),
+            self.session_config_path(),
+            self.provider_registry_path(),
+            self.generated_agents_path(),
+        ]
 
     def ensure_directories(self, *, session_id: str | None = None) -> None:
         directories = [
-            self.root,
+            self.config_root,
+            self.data_root,
             self.config_dir(),
             self.providers_dir(),
             self.sessions_dir(),

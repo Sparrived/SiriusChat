@@ -816,9 +816,9 @@ def persist_generated_agent_profile(
         from sirius_chat.config import ConfigManager
 
         manager = ConfigManager(base_path=config.work_path)
-        workspace_config = manager.load_workspace_config(config.work_path)
+        workspace_config = manager.load_workspace_config(config.work_path, data_path=config.data_path)
         workspace_config.active_agent_key = key
-        manager.save_workspace_config(config.work_path, workspace_config)
+        manager.save_workspace_config(config.work_path, workspace_config, data_path=config.data_path)
     return key
 
 
@@ -840,6 +840,7 @@ def select_generated_agent_profile(work_path: Path, agent_key: str) -> Generated
 def create_session_config_from_selected_agent(
     *,
     work_path: Path,
+    data_path: Path | None = None,
     agent_key: str = "",
     history_max_messages: int = 24,
     history_max_chars: int = 6000,
@@ -859,6 +860,7 @@ def create_session_config_from_selected_agent(
     manager = ConfigManager(base_path=work_path)
     config = manager.build_session_config(
         work_path=work_path,
+        data_path=data_path,
         session_id="default",
         overrides=overrides,
     )

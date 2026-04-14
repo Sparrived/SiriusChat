@@ -12,11 +12,11 @@ from sirius_chat.api import (
     create_session_config_from_selected_agent,
     generate_humanized_roleplay_questions,
     list_roleplay_question_templates,
-    WorkspaceRuntime,
 )
 from sirius_chat.config import ConfigManager
 from sirius_chat.config.helpers import build_orchestration_policy_from_dict
 from sirius_chat.logging_config import configure_logging, setup_log_archival, get_logger
+from sirius_chat.workspace.runtime import WorkspaceRuntime
 
 InputFunc = Callable[[str], str]
 PrintFunc = Callable[[str], None]
@@ -26,6 +26,7 @@ DEFAULT_CLI_CHANNEL = "cli"
 def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Sirius Chat CLI（库内薄封装）")
     parser.add_argument("--config", default="examples/session.json", help="会话 JSON 配置文件路径")
+    parser.add_argument("--config-root", default="", help="配置持久化目录（默认与 work-path 相同）")
     parser.add_argument("--work-path", default="", help="运行工作目录（默认当前目录下 data）")
     parser.add_argument("--output", default="", help="输出 transcript JSON 文件路径（默认 <work_path>/transcript.json）")
     parser.add_argument("--message", default="", help="用户输入消息；不提供则交互输入一条")
@@ -60,11 +61,18 @@ def _serialize_roleplay_questions(template: str) -> dict[str, object]:
     }
 
 
-def _load_session_config(config_path: Path, work_path: Path) -> tuple[SessionConfig, list[dict[str, object]]]:
-    manager = ConfigManager(base_path=work_path)
+def _load_session_config(
+    config_path: Path,
+    work_path: Path,
+    *,
+    config_root: Path | None = None,
+) -> tuple[SessionConfig, list[dict[str, object]]]:
+    resolved_config_root = config_root or work_path
+    manager = ConfigManager(base_path=resolved_config_root)
     workspace_config, providers_config = manager.bootstrap_workspace_from_legacy_session_json(
         config_path,
-        work_path=work_path,
+        work_path=resolved_config_root,
+        data_path=work_path,
     )
     if not workspace_config.active_agent_key:
         raise ValueError("必需提供 generated_agent_key")
@@ -72,15 +80,16 @@ def _load_session_config(config_path: Path, work_path: Path) -> tuple[SessionCon
         raise ValueError("SessionConfig 必需包含 providers 字段（list format）")
 
     session = manager.build_session_config(
-        work_path=work_path,
+        work_path=resolved_config_root,
+        data_path=work_path,
         session_id="cli",
         overrides={"agent_key": workspace_config.active_agent_key},
     )
     return session, providers_config
 
 
-def _build_runtime(work_path: Path) -> WorkspaceRuntime:
-    return WorkspaceRuntime.open(work_path)
+def _build_runtime(work_path: Path, config_root: Path | None = None) -> WorkspaceRuntime:
+    return WorkspaceRuntime.open(work_path, config_path=config_root)
 
 
 def _write_transcript_output(messages: list[Message], output_path: Path) -> None:
@@ -120,7 +129,9 @@ def main(
     # 配置日志系统 - 同时输出到控制台和日志文件
     config_path = Path(args.config)
     work_path = Path(args.work_path) if args.work_path else (Path.cwd() / "data")
+    config_root = Path(args.config_root) if args.config_root else work_path
     work_path.mkdir(parents=True, exist_ok=True)
+    config_root.mkdir(parents=True, exist_ok=True)
     
     log_dir = work_path / "logs"
     
@@ -138,13 +149,17 @@ def main(
     logger = get_logger(__name__)
 
     try:
-        session_config, providers_config = _load_session_config(config_path, work_path)
+        session_config, providers_config = _load_session_config(
+            config_path,
+            work_path,
+            config_root=config_root,
+        )
     except ValueError as exc:
         print_func(f"加载 SessionConfig 失败：{exc}")
         print_func("请先通过提示词生成器生成并保存 agent 资产（generated_agents.json），再启动会话。")
         return 1
     _ = providers_config
-    runtime = _build_runtime(work_path)
+    runtime = _build_runtime(work_path, config_root)
 
     user_text = args.message.strip() if args.message else input_func("你> ").strip()
     if not user_text:

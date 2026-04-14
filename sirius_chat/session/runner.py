@@ -47,6 +47,7 @@ def _payload_to_participant(payload: dict[str, object]) -> Participant:
 def _clone_session_config(config: SessionConfig, *, session_id: str) -> SessionConfig:
     return SessionConfig(
         work_path=config.work_path,
+        data_path=config.data_path,
         preset=AgentPreset(
             agent=Agent(
                 name=config.agent.name,
@@ -89,14 +90,15 @@ class JsonPersistentSessionRunner:
     session_id: str = field(default="default", init=False)
 
     def __post_init__(self) -> None:
-        base = Path(self.work_path) if self.work_path else self.config.work_path
+        base = Path(self.work_path) if self.work_path else self.config.data_path
         self.work_path = base
         self.work_path.mkdir(parents=True, exist_ok=True)
-        self.config.work_path = self.work_path
-        self.engine = AsyncRolePlayEngine(provider=self.provider)
+        self.config.data_path = self.work_path
+        self.engine = AsyncRolePlayEngine(self.provider)
         store_factory = SessionStoreFactory(fixed_store=self.session_store) if self.session_store is not None else SessionStoreFactory()
         self.runtime = WorkspaceRuntime.open(
             self.work_path,
+            config_path=self.config.work_path,
             provider=self.provider,
             store_factory=store_factory,
             session_config_factory=lambda session_id: _clone_session_config(self.config, session_id=session_id),

@@ -175,9 +175,10 @@ def test_load_or_persist_session_bundle_uses_load_session_config_for_persisted(m
     config_path = tmp_path / "config.json"
     config_path.write_text("{}", encoding="utf-8")
 
-    def _fake_load_session(path, work_path):  # noqa: ANN001
+    def _fake_load_session(path, work_path, *, config_root=None):  # noqa: ANN001
         assert path == persisted
         assert work_path == tmp_path
+        assert config_root == tmp_path
         return (
             main_module.SessionConfig(
                 work_path=tmp_path,
@@ -198,6 +199,48 @@ def test_load_or_persist_session_bundle_uses_load_session_config_for_persisted(m
     )
 
     assert session.agent.name == "主助手"
+    assert len(providers) == 1
+
+
+def test_load_or_persist_session_bundle_reads_persisted_copy_from_config_root(monkeypatch, tmp_path) -> None:
+    config_root = tmp_path / "config"
+    work_path = tmp_path / "runtime"
+    config_root.mkdir()
+    work_path.mkdir()
+
+    persisted = config_root / "session_config.persisted.json"
+    persisted.write_text("{}", encoding="utf-8")
+    config_path = tmp_path / "config.json"
+    config_path.write_text("{}", encoding="utf-8")
+
+    def _fake_load_session(path, runtime_path, *, config_root=None):  # noqa: ANN001
+        assert path == persisted
+        assert runtime_path == work_path
+        assert config_root == config_root_path
+        return (
+            main_module.SessionConfig(
+                work_path=config_root_path,
+                data_path=work_path,
+                preset=main_module.AgentPreset(
+                    agent=main_module.Agent(name="主助手", persona="测试", model="mock-model"),
+                    global_system_prompt="测试系统提示词",
+                ),
+            ),
+            [{"type": "openai-compatible", "base_url": "https://api.openai.com", "api_key": "k"}],
+        )
+
+    config_root_path = config_root
+    monkeypatch.setattr(main_module, "_load_session_config", _fake_load_session)
+
+    session, providers = main_module._load_or_persist_session_bundle(
+        config_path=config_path,
+        work_path=work_path,
+        config_root=config_root_path,
+        print_func=lambda _msg: None,
+    )
+
+    assert session.work_path == config_root_path
+    assert session.data_path == work_path
     assert len(providers) == 1
 
 

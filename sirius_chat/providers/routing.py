@@ -94,7 +94,7 @@ class ProviderRegistry:
 
     @property
     def work_path(self) -> Path:
-        return self._layout.root
+        return self._layout.config_root
 
     def load(self) -> dict[str, ProviderConfig]:
         if not self.path.exists():

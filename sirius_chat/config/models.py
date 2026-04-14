@@ -265,15 +265,25 @@ class WorkspaceConfig:
     """Persisted workspace-level configuration source."""
 
     work_path: Path
-    layout_version: int = 1
+    data_path: Path | None = None
+    layout_version: int = 2
     active_agent_key: str = ""
     session_defaults: SessionDefaults = field(default_factory=SessionDefaults)
     orchestration_defaults: dict[str, Any] = field(default_factory=dict)
     provider_policy: ProviderPolicy = field(default_factory=ProviderPolicy)
 
+    def __post_init__(self) -> None:
+        self.work_path = Path(self.work_path)
+        self.data_path = self.work_path if self.data_path is None else Path(self.data_path)
+
+    @property
+    def config_path(self) -> Path:
+        return self.work_path
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "work_path": str(self.work_path),
+            "data_path": str(self.data_path),
             "layout_version": self.layout_version,
             "active_agent_key": self.active_agent_key,
             "session_defaults": {
@@ -295,7 +305,8 @@ class WorkspaceConfig:
         provider_policy_payload = payload.get("provider_policy", {})
         return cls(
             work_path=Path(payload.get("work_path", ".")),
-            layout_version=int(payload.get("layout_version", 1)),
+            data_path=Path(payload.get("data_path", payload.get("work_path", "."))),
+            layout_version=int(payload.get("layout_version", 2)),
             active_agent_key=str(payload.get("active_agent_key", "")).strip(),
             session_defaults=SessionDefaults(
                 history_max_messages=int(session_defaults_payload.get("history_max_messages", 24)),
@@ -328,6 +339,7 @@ class SessionConfig:
     
     preset: AgentPreset
     work_path: Path
+    data_path: Path
     history_max_messages: int = 24
     history_max_chars: int = 6000
     max_recent_participant_messages: int = 5
@@ -339,6 +351,7 @@ class SessionConfig:
         self,
         *,
         work_path: Path,
+        data_path: Path | None = None,
         preset: AgentPreset,
         history_max_messages: int = 24,
         history_max_chars: int = 6000,
@@ -349,6 +362,7 @@ class SessionConfig:
     ) -> None:
         self.preset = preset
         self.work_path = Path(work_path)
+        self.data_path = self.work_path if data_path is None else Path(data_path)
         self.history_max_messages = history_max_messages
         self.history_max_chars = history_max_chars
         self.max_recent_participant_messages = max_recent_participant_messages
@@ -378,3 +392,7 @@ class SessionConfig:
     @global_system_prompt.setter
     def global_system_prompt(self, value: str) -> None:
         self.preset = AgentPreset(agent=self.preset.agent, global_system_prompt=value)
+
+    @property
+    def config_path(self) -> Path:
+        return self.work_path

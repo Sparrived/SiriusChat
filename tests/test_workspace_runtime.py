@@ -12,25 +12,37 @@ from sirius_chat.providers.mock import MockProvider
 
 
 def _write_generated_agents(work_path: Path, *, key: str = "main_agent") -> None:
-    layout = WorkspaceLayout(work_path)
+    _write_workspace_agents(work_path, selected_key=key)
+
+
+def _write_workspace_agents(
+    config_root: Path,
+    *,
+    data_root: Path | None = None,
+    selected_key: str = "main_agent",
+    agents_payload: dict[str, object] | None = None,
+) -> None:
+    runtime_root = data_root or config_root
+    layout = WorkspaceLayout(runtime_root, config_path=config_root)
     layout.ensure_directories()
+    payload = agents_payload or {
+        selected_key: {
+            "agent": {
+                "name": "主助手",
+                "persona": "测试人格",
+                "model": "mock-model",
+                "temperature": 0.7,
+                "max_tokens": 512,
+                "metadata": {},
+            },
+            "global_system_prompt": "测试系统提示词",
+        }
+    }
     layout.generated_agents_path().write_text(
         json.dumps(
             {
-                "selected_generated_agent": key,
-                "generated_agents": {
-                    key: {
-                        "agent": {
-                            "name": "主助手",
-                            "persona": "测试人格",
-                            "model": "mock-model",
-                            "temperature": 0.7,
-                            "max_tokens": 512,
-                            "metadata": {},
-                        },
-                        "global_system_prompt": "测试系统提示词",
-                    }
-                },
+                "selected_generated_agent": selected_key,
+                "generated_agents": payload,
             },
             ensure_ascii=False,
             indent=2,
@@ -38,9 +50,9 @@ def _write_generated_agents(work_path: Path, *, key: str = "main_agent") -> None
         encoding="utf-8",
     )
 
-    manager = ConfigManager(base_path=work_path)
-    workspace_config = manager.load_workspace_config(work_path)
-    workspace_config.active_agent_key = key
+    manager = ConfigManager(base_path=config_root)
+    workspace_config = manager.load_workspace_config(config_root, data_path=runtime_root)
+    workspace_config.active_agent_key = selected_key
     workspace_config.orchestration_defaults = {
         "message_debounce_seconds": 0.0,
         "task_enabled": {
@@ -48,7 +60,7 @@ def _write_generated_agents(work_path: Path, *, key: str = "main_agent") -> None
             "event_extract": False,
         },
     }
-    manager.save_workspace_config(work_path, workspace_config)
+    manager.save_workspace_config(config_root, workspace_config, data_path=runtime_root)
 
 
 def test_workspace_runtime_auto_persists_transcript_and_participants(tmp_path: Path) -> None:
@@ -68,6 +80,98 @@ def test_workspace_runtime_auto_persists_transcript_and_participants(tmp_path: P
         payload = json.loads(layout.session_participants_path("group:123").read_text(encoding="utf-8"))
         assert payload["primary_user_id"] == "alice_1"
         assert payload["participants"][0]["name"] == "Alice"
+
+    asyncio.run(_run())
+
+
+def test_workspace_runtime_separates_config_root_and_data_root(tmp_path: Path) -> None:
+    async def _run() -> None:
+        config_root = tmp_path / "config"
+        data_root = tmp_path / "runtime"
+        _write_workspace_agents(config_root, data_root=data_root)
+
+        runtime = WorkspaceRuntime.open(
+            data_root,
+            config_path=config_root,
+            provider=MockProvider(responses=["分离路径回复"]),
+        )
+
+        transcript = await runtime.run_live_message(
+            session_id="split-paths",
+            turn=Message(role="user", speaker="Alice", content="你好"),
+            user_profile=UserProfile(user_id="alice", name="Alice"),
+        )
+
+        layout = WorkspaceLayout(data_root, config_path=config_root)
+        assert transcript.messages[-1].content == "分离路径回复"
+        assert layout.workspace_manifest_path().exists()
+        assert layout.generated_agents_path().exists()
+        assert layout.session_store_path("split-paths").exists()
+        assert not (data_root / "roleplay").exists()
+        assert not (config_root / "sessions").exists()
+
+    asyncio.run(_run())
+
+
+def test_workspace_runtime_applies_external_config_changes_on_next_turn(tmp_path: Path) -> None:
+    async def _run() -> None:
+        config_root = tmp_path / "config"
+        data_root = tmp_path / "runtime"
+        _write_workspace_agents(
+            config_root,
+            data_root=data_root,
+            agents_payload={
+                "main_agent": {
+                    "agent": {
+                        "name": "主助手",
+                        "persona": "测试人格",
+                        "model": "mock-model",
+                        "temperature": 0.7,
+                        "max_tokens": 512,
+                        "metadata": {},
+                    },
+                    "global_system_prompt": "测试系统提示词",
+                },
+                "alt_agent": {
+                    "agent": {
+                        "name": "副助手",
+                        "persona": "切换后人格",
+                        "model": "mock-model",
+                        "temperature": 0.7,
+                        "max_tokens": 512,
+                        "metadata": {},
+                    },
+                    "global_system_prompt": "切换后系统提示词",
+                },
+            },
+        )
+
+        runtime = WorkspaceRuntime.open(
+            data_root,
+            config_path=config_root,
+            provider=MockProvider(responses=["第一轮回复", "第二轮回复"]),
+        )
+
+        first = await runtime.run_live_message(
+            session_id="reload-config",
+            turn=Message(role="user", speaker="Alice", content="第一句"),
+        )
+        assert first.messages[-1].speaker == "主助手"
+
+        manager = ConfigManager(base_path=config_root)
+        workspace_config = manager.load_workspace_config(config_root, data_path=data_root)
+        workspace_config.active_agent_key = "alt_agent"
+        manager.save_workspace_config(config_root, workspace_config, data_path=data_root)
+
+        second = await runtime.run_live_message(
+            session_id="reload-config",
+            turn=Message(role="user", speaker="Alice", content="第二句"),
+        )
+
+        assistant_messages = [item for item in second.messages if item.role == "assistant"]
+        assert len(assistant_messages) == 2
+        assert assistant_messages[-1].speaker == "副助手"
+        assert assistant_messages[-1].content == "第二轮回复"
 
     asyncio.run(_run())
 

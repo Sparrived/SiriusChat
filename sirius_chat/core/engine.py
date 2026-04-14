@@ -277,8 +277,8 @@ class AsyncRolePlayEngine:
         if existing is not None:
             return existing
 
-        layout = WorkspaceLayout(config.work_path)
-        work_key = str(layout.root)
+        layout = WorkspaceLayout(config.data_path, config_path=config.work_path)
+        work_key = str(layout.data_root)
         file_store = UserMemoryFileStore(layout)
         event_file_store = EventMemoryFileStore(layout)
 
@@ -455,7 +455,7 @@ class AsyncRolePlayEngine:
         if not config.orchestration.enable_skills:
             return
 
-        layout = WorkspaceLayout(config.work_path)
+        layout = WorkspaceLayout(config.data_path, config_path=config.work_path)
         skills_dir = layout.skills_dir()
         SkillRegistry.ensure_skills_directory(skills_dir)
 
@@ -598,7 +598,7 @@ class AsyncRolePlayEngine:
             context.subsystems.skill_executor.save_all_stores()
 
         # ── Sync back to engine-level shared stores ──
-        work_key = str(WorkspaceLayout(config.work_path).root)
+        work_key = str(WorkspaceLayout(config.data_path, config_path=config.work_path).data_root)
         self._shared_user_memory[work_key] = transcript.user_memory
         if config.orchestration.enable_self_memory:
             self._shared_self_memory[work_key] = context.subsystems.self_memory
@@ -1017,7 +1017,7 @@ class AsyncRolePlayEngine:
                     # Skill registry can be stale — try reloading once.
                     try:
                         reloaded = skill_registry.load_from_directory(
-                            WorkspaceLayout(config.work_path).skills_dir(),
+                            WorkspaceLayout(config.data_path, config_path=config.work_path).skills_dir(),
                             auto_install_deps=config.orchestration.auto_install_skill_deps,
                         )
                         if reloaded > 0:

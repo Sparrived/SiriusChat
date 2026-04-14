@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import shutil
 from dataclasses import dataclass, field
@@ -8,7 +9,7 @@ from pathlib import Path
 from typing import Awaitable, Callable
 
 from sirius_chat.async_engine import AsyncRolePlayEngine
-from sirius_chat.config import SessionConfig
+from sirius_chat.config import SessionConfig, WorkspaceConfig
 from sirius_chat.config.manager import ConfigManager
 from sirius_chat.memory import UserProfile
 from sirius_chat.models import Message, Participant, Transcript
@@ -22,6 +23,7 @@ from sirius_chat.workspace.migration import MigrationReport, WorkspaceMigrationM
 @dataclass(slots=True)
 class WorkspaceRuntime:
     work_path: Path
+    config_path: Path | None = None
     provider: LLMProvider | AsyncLLMProvider | None = None
     store_factory: SessionStoreFactory = field(default_factory=SessionStoreFactory)
     session_config_factory: Callable[[str], SessionConfig] | None = None
@@ -30,7 +32,9 @@ class WorkspaceRuntime:
     _provider_manager: WorkspaceProviderManager = field(init=False, repr=False)
     _migration_manager: WorkspaceMigrationManager = field(init=False, repr=False)
     _engine: AsyncRolePlayEngine | None = field(default=None, init=False, repr=False)
-    _workspace_config: object | None = field(default=None, init=False, repr=False)
+    _workspace_config: WorkspaceConfig | None = field(default=None, init=False, repr=False)
+    _config_signature: str | None = field(default=None, init=False, repr=False)
+    _refresh_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
     _session_locks: dict[str, asyncio.Lock] = field(default_factory=dict, init=False, repr=False)
     _transcripts: dict[str, Transcript] = field(default_factory=dict, init=False, repr=False)
     _stores: dict[str, SessionStore] = field(default_factory=dict, init=False, repr=False)
@@ -39,8 +43,9 @@ class WorkspaceRuntime:
 
     def __post_init__(self) -> None:
         self.work_path = Path(self.work_path)
-        self.layout = WorkspaceLayout(self.work_path)
-        self._config_manager = ConfigManager(base_path=self.work_path)
+        self.config_path = self.work_path if self.config_path is None else Path(self.config_path)
+        self.layout = WorkspaceLayout(self.work_path, config_path=self.config_path)
+        self._config_manager = ConfigManager(base_path=self.layout.config_root)
         self._provider_manager = WorkspaceProviderManager(self.layout)
         self._migration_manager = WorkspaceMigrationManager(self.layout)
 
@@ -49,12 +54,14 @@ class WorkspaceRuntime:
         cls,
         work_path: Path,
         *,
+        config_path: Path | None = None,
         provider: LLMProvider | AsyncLLMProvider | None = None,
         store_factory: SessionStoreFactory | None = None,
         session_config_factory: Callable[[str], SessionConfig] | None = None,
     ) -> "WorkspaceRuntime":
         return cls(
             work_path=work_path,
+            config_path=config_path,
             provider=provider,
             store_factory=store_factory or SessionStoreFactory(),
             session_config_factory=session_config_factory,
@@ -76,8 +83,7 @@ class WorkspaceRuntime:
         if legacy_report.has_legacy_layout:
             self._last_migration_report = self._migration_manager.migrate(self.work_path)
         self.layout.ensure_directories(session_id="default")
-        self._workspace_config = self._config_manager.load_workspace_config(self.work_path)
-        self._config_manager.save_workspace_config(self.work_path, self._workspace_config)
+        await self._refresh_workspace_config(force=True, persist_defaults=True)
         self._initialized = True
 
     async def run_live_message(
@@ -91,6 +97,7 @@ class WorkspaceRuntime:
         timeout: float = 0,
     ) -> Transcript:
         await self.initialize()
+        await self._refresh_workspace_config()
         lock = self._session_locks.setdefault(session_id, asyncio.Lock())
         async with lock:
             session_config = self._build_session_config(session_id)
@@ -134,9 +141,12 @@ class WorkspaceRuntime:
         lock = self._session_locks.setdefault(session_id, asyncio.Lock())
         async with lock:
             payload = self._load_participants_payload(session_id)
+            participants_raw = payload.get("participants", [])
+            if not isinstance(participants_raw, list):
+                participants_raw = []
             participants = {
                 str(item.get("user_id", "")).strip(): item
-                for item in payload.get("participants", [])
+                for item in participants_raw
                 if isinstance(item, dict) and str(item.get("user_id", "")).strip()
             }
             participants[participant.user_id] = participant.to_dict()
@@ -149,7 +159,10 @@ class WorkspaceRuntime:
         await self.initialize()
         payload = self._load_participants_payload(session_id)
         primary_user_id = str(payload.get("primary_user_id", "")).strip()
-        for item in payload.get("participants", []):
+        participants_raw = payload.get("participants", [])
+        if not isinstance(participants_raw, list):
+            participants_raw = []
+        for item in participants_raw:
             if not isinstance(item, dict):
                 continue
             user_id = str(item.get("user_id", "")).strip()
@@ -217,14 +230,15 @@ class WorkspaceRuntime:
             if not providers:
                 raise RuntimeError("当前 workspace 尚未配置可用 provider。")
             provider = AutoRoutingProvider(providers)
-        self._engine = AsyncRolePlayEngine(provider=provider)
+        self._engine = AsyncRolePlayEngine(provider)
         return self._engine
 
     def _build_session_config(self, session_id: str) -> SessionConfig:
         if self.session_config_factory is not None:
             return self.session_config_factory(session_id)
         return self._config_manager.build_session_config(
-            work_path=self.work_path,
+            work_path=self.layout.config_root,
+            data_path=self.layout.data_root,
             session_id=session_id,
         )
 
@@ -250,6 +264,59 @@ class WorkspaceRuntime:
         transcript = self._transcripts.pop(session_id, None)
         if transcript is not None and self._engine is not None:
             self._engine._live_session_contexts.pop(id(transcript), None)
+
+    def _calculate_config_signature(self) -> str:
+        digest = hashlib.sha256()
+        digest.update(str(self.layout.config_root).encode("utf-8"))
+        digest.update(str(self.layout.data_root).encode("utf-8"))
+        for path in self.layout.config_watch_paths():
+            digest.update(str(path).encode("utf-8"))
+            if not path.exists():
+                digest.update(b"missing")
+                continue
+            stat = path.stat()
+            digest.update(str(stat.st_mtime_ns).encode("utf-8"))
+            digest.update(str(stat.st_size).encode("utf-8"))
+        return digest.hexdigest()
+
+    async def _reset_engine_state(self) -> None:
+        if self._engine is None:
+            return
+        for context in list(self._engine._live_session_contexts.values()):
+            manager = context.subsystems.bg_task_manager
+            if manager is not None:
+                await manager.stop()
+        self._engine._live_session_contexts.clear()
+        self._engine = None
+
+    async def _refresh_workspace_config(
+        self,
+        *,
+        force: bool = False,
+        persist_defaults: bool = False,
+    ) -> None:
+        async with self._refresh_lock:
+            signature = self._calculate_config_signature()
+            if not force and self._config_signature == signature:
+                return
+
+            workspace_config = self._config_manager.load_workspace_config(
+                self.layout.config_root,
+                data_path=self.layout.data_root,
+            )
+            if persist_defaults:
+                self._config_manager.save_workspace_config(
+                    self.layout.config_root,
+                    workspace_config,
+                    data_path=self.layout.data_root,
+                )
+                signature = self._calculate_config_signature()
+
+            if self._config_signature is not None and self._config_signature != signature:
+                await self._reset_engine_state()
+
+            self._workspace_config = workspace_config
+            self._config_signature = signature
 
     def _load_participants_payload(self, session_id: str) -> dict[str, object]:
         path = self.layout.session_participants_path(session_id)
@@ -277,9 +344,12 @@ class WorkspaceRuntime:
     ) -> None:
         existing = self._load_participants_payload(session_id)
         resolved_primary_user_id = primary_user_id or str(existing.get("primary_user_id", "")).strip()
+        participants_raw = existing.get("participants", [])
+        if not isinstance(participants_raw, list):
+            participants_raw = []
         participants_by_id = {
             str(item.get("user_id", "")).strip(): item
-            for item in existing.get("participants", [])
+            for item in participants_raw
             if isinstance(item, dict) and str(item.get("user_id", "")).strip()
         }
         for entry in transcript.user_memory.entries.values():

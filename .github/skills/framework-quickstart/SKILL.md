@@ -75,7 +75,8 @@ description: "当你需要在不通读全部代码的情况下快速理解 Siriu
   - 检测到多媒体数据时自动升级至 `agent.metadata["multimodal_model"]`
   - 提供便捷配置：`create_agent_with_multimodal(...)` 一次性创建，或 `auto_configure_multimodal_agent(...)` 灵活配置
 - `run_live_session` 负责会话初始化；动态参与者与逐条消息处理通过 `run_live_message` 完成。
-- 从 `v0.23.0` 起，推荐外部接入优先使用 `WorkspaceRuntime` / `open_workspace_runtime(...)`；它会自动恢复 `sessions/<session_id>/session_state.db`、维护 `participants.json` 并统一持久化布局。低层 `run_live_session + run_live_message` 保留给高级自定义场景。
+- 从 `v0.23.0` 起，推荐外部接入优先使用 `WorkspaceRuntime` / `open_workspace_runtime(...)`；它会自动恢复 `sessions/<session_id>/session_state.db`、维护 `participants.json` 并统一持久化布局。现在 runtime 支持 `work_path`（data root）与可选 `config_path`（config root）分离；低层 `run_live_session + run_live_message` 保留给高级自定义场景。
+- `SessionConfig.work_path` 在双根模式下表示配置根，`SessionConfig.data_path` 表示运行根。配置资产（workspace/provider/roleplay/skills）落在 config root，运行态数据（sessions/memory/token/skill_data）落在 data root；未显式传 `config_path` 时自动回退到单根模式。
 - `run_live_message` 新增 `environment_context: str = ""` 参数（v0.8.0），允许外部注入环境信息（群名、在线人数等），自动写入系统提示词 `<environment_context>` 段。
 - `Message.reply_mode` 可按消息控制回复策略：`always`（默认）/`never`（仅写入记忆与 transcript）/`auto`（自动推断是否回复）。
 - 推荐在实时流式接入时使用 `run_live_message` 逐条处理消息；`run_live_session(...)` 用于一次性会话初始化。

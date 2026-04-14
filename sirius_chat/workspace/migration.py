@@ -53,16 +53,16 @@ class WorkspaceMigrationManager:
         ]
         for path in legacy_paths:
             if path.exists():
-                detected.append(str(path.relative_to(layout.root)).replace("\\", "/"))
-        return LegacyLayoutReport(work_path=layout.root, detected_paths=detected)
+                detected.append(self._display_path(layout, path))
+        return LegacyLayoutReport(work_path=layout.data_root, detected_paths=detected)
 
     def migrate(self, work_path: Path, *, dry_run: bool = False) -> MigrationReport:
         layout = self._layout or WorkspaceLayout(work_path)
         layout.ensure_directories(session_id="default")
         report = MigrationReport(
-            work_path=layout.root,
+            work_path=layout.data_root,
             dry_run=dry_run,
-            detected_paths=self.detect_legacy_layout(layout.root).detected_paths,
+            detected_paths=self.detect_legacy_layout(layout.data_root).detected_paths,
         )
 
         self._copy_file(
@@ -115,9 +115,9 @@ class WorkspaceMigrationManager:
         if not source.exists():
             return
         if target.exists():
-            report.skipped_paths.append(str(target.relative_to(report.work_path)).replace("\\", "/"))
+            report.skipped_paths.append(self._display_path(self._layout or WorkspaceLayout(report.work_path), target))
             return
-        report.copied_paths.append(str(target.relative_to(report.work_path)).replace("\\", "/"))
+        report.copied_paths.append(self._display_path(self._layout or WorkspaceLayout(report.work_path), target))
         if report.dry_run:
             return
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -135,7 +135,7 @@ class WorkspaceMigrationManager:
         target.mkdir(parents=True, exist_ok=True)
         for child in source.iterdir():
             child_target = target / child.name
-            relative = str(child_target.relative_to(report.work_path)).replace("\\", "/")
+            relative = self._display_path(self._layout or WorkspaceLayout(report.work_path), child_target)
             if child.is_dir():
                 self._copy_dir(source=child, target=child_target, report=report)
                 continue
@@ -158,12 +158,12 @@ class WorkspaceMigrationManager:
         new_json = layout.session_store_path("default", backend="json")
 
         if legacy_db.exists() and not new_db.exists():
-            report.copied_paths.append(str(new_db.relative_to(layout.root)).replace("\\", "/"))
+            report.copied_paths.append(self._display_path(layout, new_db))
             if not report.dry_run:
                 shutil.copy2(legacy_db, new_db)
 
         if legacy_json.exists() and not new_db.exists() and not new_json.exists():
-            report.copied_paths.append(str(new_json.relative_to(layout.root)).replace("\\", "/"))
+            report.copied_paths.append(self._display_path(layout, new_json))
             if not report.dry_run:
                 shutil.copy2(legacy_json, new_json)
 
@@ -181,7 +181,7 @@ class WorkspaceMigrationManager:
         if not source.exists() or target.exists():
             return
 
-        report.created_paths.append(str(target.relative_to(layout.root)).replace("\\", "/"))
+        report.created_paths.append(self._display_path(layout, target))
         if report.dry_run:
             return
 
@@ -200,10 +200,22 @@ class WorkspaceMigrationManager:
             "session_id": "default",
             "primary_user_id": participant.user_id,
             "participants": [participant.to_dict()],
-            "legacy_source": str(source.relative_to(layout.root)).replace("\\", "/"),
+            "legacy_source": self._display_path(layout, source),
         }
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(
             json.dumps(participants_payload, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
+
+    @staticmethod
+    def _display_path(layout: WorkspaceLayout, path: Path) -> str:
+        if layout.config_root == layout.data_root:
+            return str(path.relative_to(layout.data_root)).replace("\\", "/")
+        if path.is_relative_to(layout.config_root):
+            relative = path.relative_to(layout.config_root)
+            return f"config/{str(relative).replace('\\', '/')}"
+        if path.is_relative_to(layout.data_root):
+            relative = path.relative_to(layout.data_root)
+            return f"data/{str(relative).replace('\\', '/')}"
+        return str(path).replace("\\", "/")
