@@ -11,6 +11,7 @@ from sirius_chat.cli_diagnostics import (
     run_preflight_check,
     generate_default_config,
 )
+from sirius_chat.config.jsonc import load_json_document
 
 
 class TestEnvironmentDiagnostics:
@@ -60,6 +61,15 @@ class TestEnvironmentDiagnostics:
         assert is_valid is True
         assert msg == ""
 
+    def test_check_config_file_accepts_jsonc_comments(self, temp_work_dir: Path):
+        """测试 JSONC 注释格式配置文件检查"""
+        config_path = temp_work_dir / "config.json"
+        config_path.write_text('// 注释\n{\n  "key": "value"\n}\n', encoding="utf-8")
+
+        is_valid, msg = EnvironmentDiagnostics.check_config_file(config_path)
+        assert is_valid is True
+        assert msg == ""
+
     def test_check_provider_config_missing(self, temp_work_dir: Path):
         """测试缺失 Provider 配置检查"""
         import json
@@ -84,6 +94,18 @@ class TestEnvironmentDiagnostics:
         is_valid, msg = EnvironmentDiagnostics.check_provider_config(config_path)
         assert is_valid is False
         assert "API Key" in msg
+
+    def test_check_provider_config_accepts_jsonc_comments(self, temp_work_dir: Path):
+        """测试带注释的 Provider 配置检查"""
+        config_path = temp_work_dir / "config.json"
+        config_path.write_text(
+            '{\n  // 推荐使用 providers 列表\n  "providers": [\n    {\n      "type": "openai-compatible",\n      "api_key": "test-key"\n    }\n  ]\n}\n',
+            encoding="utf-8",
+        )
+
+        is_valid, msg = EnvironmentDiagnostics.check_provider_config(config_path)
+        assert is_valid is True
+        assert msg == ""
 
 
 class TestPreflightCheck:
@@ -116,18 +138,20 @@ class TestGenerateDefaultConfig:
 
     def test_generate_default_config(self, temp_work_dir: Path):
         """测试生成默认配置文件"""
-        import json
-        
         config_path = temp_work_dir / "default_config.json"
         generate_default_config(config_path)
         
         assert config_path.exists()
-        
-        # 验证生成的配置有效
-        content = json.loads(config_path.read_text())
+
+        raw_text = config_path.read_text(encoding="utf-8")
+        assert "//" in raw_text
+
+        content = load_json_document(config_path)
         assert "provider" in content
+        assert "providers" in content
         assert "generated_agent_key" in content
         assert content["provider"]["type"] == "openai-compatible"
+        assert content["providers"][0]["type"] == "openai-compatible"
 
 
 @pytest.fixture

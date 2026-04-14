@@ -9,6 +9,8 @@ import sys
 from pathlib import Path
 from typing import Callable
 
+from sirius_chat.config.jsonc import load_json_document, write_session_config_jsonc
+
 PrintFunc = Callable[[str], None]
 
 
@@ -26,13 +28,14 @@ class EnvironmentDiagnostics:
             return False, f"配置文件不存在: {config_path}\n修复建议: 使用 --config 明确指定路径或运行 --init-config 创建初始配置"
 
         try:
-            import json
-            content = config_path.read_text(encoding="utf-8-sig")
-            json.loads(content)
+            load_json_document(config_path)
             return True, ""
-        except json.JSONDecodeError as e:
-            return False, f"配置文件 JSON 格式错误 ({config_path}): {e}"
+        except ValueError as e:
+            return False, f"配置文件 JSON/JSONC 格式错误 ({config_path}): {e}"
         except Exception as e:
+            message = str(e)
+            if "Expecting" in message or "JSON" in message:
+                return False, f"配置文件 JSON/JSONC 格式错误 ({config_path}): {e}"
             return False, f"读取配置文件失败: {e}"
 
     @staticmethod
@@ -82,8 +85,9 @@ class EnvironmentDiagnostics:
             (is_valid, error_message)
         """
         try:
-            import json
-            raw = json.loads(config_path.read_text(encoding="utf-8-sig"))
+            raw = load_json_document(config_path)
+            if not isinstance(raw, dict):
+                return False, "配置文件顶层必须是对象"
             
             # 统一使用 providers 字段（list format）
             providers_config = list(raw.get("providers", []))
@@ -162,29 +166,24 @@ def generate_default_config(output_path: Path) -> None:
     Args:
         output_path: 输出文件路径
     """
-    import json
-    
+    sample_provider = {
+        "type": "openai-compatible",
+        "base_url": "https://api.openai.com",
+        "api_key": "your-api-key-here",
+    }
     default_config = {
         "generated_agent_key": "",
         "history_max_messages": 24,
         "history_max_chars": 6000,
         "max_recent_participant_messages": 5,
         "enable_auto_compression": True,
-        "provider": {
-            "type": "openai-compatible",
-            "base_url": "https://api.openai.com",
-            "api_key": "your-api-key-here",
-        },
-        "providers": [],
+        "provider": dict(sample_provider),
+        "providers": [dict(sample_provider)],
         "orchestration": {
             "enabled": False,
             "task_models": {},
             "task_budgets": {},
         },
     }
-    
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(
-        json.dumps(default_config, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+
+    write_session_config_jsonc(output_path, default_config)

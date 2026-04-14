@@ -17,8 +17,12 @@ async def _run() -> None:
     )
     engine = AsyncRolePlayEngine(provider=provider)
 
+    config_root = Path("data/dynamic_group_chat_usage_config")
+    data_root = Path("data/dynamic_group_chat_usage_runtime")
+
     config = create_session_config_from_selected_agent(
-        work_path=Path("data/dynamic_group_chat_usage"),
+        work_path=config_root,
+        data_path=data_root,
         agent_key="main_agent",
     )
 

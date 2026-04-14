@@ -90,8 +90,12 @@ async def main() -> None:
         global_system_prompt="You are a helpful assistant. When presented with images, analyze them carefully and provide insightful responses.",
     )
 
+    config_root = Path("data/dynamic_routing_config")
+    data_root = Path("data/dynamic_routing_runtime")
+
     config = SessionConfig(
-        work_path=Path("data/dynamic_routing_demo"),
+        work_path=config_root,
+        data_path=data_root,
         preset=preset,
     )
 

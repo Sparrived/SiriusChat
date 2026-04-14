@@ -2,7 +2,7 @@
 
 ## 背景
 
-`v0.23.0` 把持久化、目录布局、session 恢复和 provider 注册的推荐入口统一收口到 workspace 层。
+`v0.23.0` 把持久化、目录布局、session 恢复和 provider 注册的推荐入口统一收口到 workspace 层。若你继续升级到 `v0.24.0`，还需要进一步关注 JSONC 注释配置和基于文件监听的热刷新，详见 `docs/migration-v0.24.md`。
 
 升级后的目标语义是：
 
@@ -88,7 +88,7 @@ transcript = await runtime.run_live_message(
 补充说明：
 
 - `session_id` 会被 percent-encode 后再落到磁盘，所以像 `group:123456` 这种 ID 在 Windows 上也能安全建目录。
-- `workspace.json` 是 workspace 级清单；`config/session_config.json` 是可读的默认配置快照，不再要求外部自己生成。
+- `workspace.json` 是 workspace 级清单；`config/session_config.json` 是可读的默认配置快照，并从 `v0.24.0` 起改为支持 JSONC 注释的编辑模板。
 
 ## 自动迁移规则
 

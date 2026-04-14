@@ -27,10 +27,10 @@ from sirius_chat.api import (
     load_persona_spec,
     persist_generated_agent_profile,
     select_generated_agent_profile,
-    WorkspaceLayout,
 )
 from sirius_chat.config import OrchestrationPolicy
 from sirius_chat.providers.mock import MockProvider
+from sirius_chat.workspace.layout import WorkspaceLayout
 
 
 class RaisingMockProvider(MockProvider):
@@ -45,6 +45,40 @@ def _generated_agents_path(work_path: Path) -> Path:
 
 def _trace_path(work_path: Path, agent_key: str) -> Path:
     return WorkspaceLayout(work_path).generated_agent_trace_dir() / f"{agent_key}.json"
+
+
+def test_load_generated_agent_library_accepts_utf8_bom_files(tmp_path: Path) -> None:
+    work_path = tmp_path / "roleplay_bom"
+    generated_agents_path = _generated_agents_path(work_path)
+    generated_agents_path.parent.mkdir(parents=True, exist_ok=True)
+    generated_agents_path.write_text(
+        json.dumps(
+            {
+                "selected_generated_agent": "bom_agent",
+                "generated_agents": {
+                    "bom_agent": {
+                        "agent": {
+                            "name": "BomAgent",
+                            "persona": "bom persona",
+                            "model": "mock-model",
+                            "temperature": 0.7,
+                            "max_tokens": 256,
+                            "metadata": {},
+                        },
+                        "global_system_prompt": "bom prompt",
+                    }
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8-sig",
+    )
+
+    agents, selected = load_generated_agent_library(work_path)
+
+    assert selected == "bom_agent"
+    assert agents["bom_agent"].agent.name == "BomAgent"
 
 
 def test_generated_prompt_is_used_by_engine() -> None:

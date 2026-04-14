@@ -25,7 +25,7 @@ DEFAULT_CLI_CHANNEL = "cli"
 
 def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Sirius Chat CLI（库内薄封装）")
-    parser.add_argument("--config", default="examples/session.json", help="会话 JSON 配置文件路径")
+    parser.add_argument("--config", default="examples/session.json", help="会话 JSON/JSONC 配置文件路径")
     parser.add_argument("--config-root", default="", help="配置持久化目录（默认与 work-path 相同）")
     parser.add_argument("--work-path", default="", help="运行工作目录（默认当前目录下 data）")
     parser.add_argument("--output", default="", help="输出 transcript JSON 文件路径（默认 <work_path>/transcript.json）")

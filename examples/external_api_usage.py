@@ -6,6 +6,7 @@ manual AsyncRolePlayEngine + SessionConfig flow for advanced control scenarios.
 """
 
 import asyncio
+from pathlib import Path
 
 from sirius_chat.api import (
     AsyncRolePlayEngine,
@@ -14,7 +15,6 @@ from sirius_chat.api import (
     create_session_config_from_selected_agent,
     extract_assistant_messages,
 )
-from pathlib import Path
 
 
 async def main() -> None:
@@ -24,8 +24,12 @@ async def main() -> None:
     )
     engine = AsyncRolePlayEngine(provider=provider)
 
+    config_root = Path("data/external_api_usage_config")
+    data_root = Path("data/external_api_usage_runtime")
+
     config = create_session_config_from_selected_agent(
-        work_path=Path("data/external_api_usage"),
+        work_path=config_root,
+        data_path=data_root,
         agent_key="main_agent",
     )
 

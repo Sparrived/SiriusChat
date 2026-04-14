@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Awaitable, Callable, cast
 
 from sirius_chat.config import Agent, AgentPreset, OrchestrationPolicy, SessionConfig
+from sirius_chat.config.jsonc import load_json_document
 from sirius_chat.providers.base import AsyncLLMProvider, GenerationRequest, LLMProvider
 from sirius_chat.workspace.layout import WorkspaceLayout
 
@@ -568,7 +569,7 @@ def _load_generation_trace_payload(work_path: Path, agent_key: str) -> dict[str,
             "agent_key": _normalize_agent_key(agent_key),
             "history": [],
         }
-    payload = json.loads(file_path.read_text(encoding="utf-8"))
+    payload = load_json_document(file_path)
     if not isinstance(payload, dict):
         return {
             "agent_key": _normalize_agent_key(agent_key),
@@ -708,7 +709,9 @@ def _load_library_full(
     file_path = _generated_agents_read_path(work_path)
     if not file_path.exists():
         return {}, "", {}, {}
-    payload = json.loads(file_path.read_text(encoding="utf-8"))
+    payload = load_json_document(file_path)
+    if not isinstance(payload, dict):
+        return {}, "", {}, {}
     selected = str(payload.get("selected_generated_agent", "")).strip()
     raw_agents = dict(payload.get("generated_agents", {}))
     agents: dict[str, GeneratedSessionPreset] = {}

@@ -16,28 +16,28 @@
     "unified_model": "deepseek-chat",
     "task_enabled": {
       "memory_extract": true,
-      "multimodal_parse": true,
-      "event_extract": true
+      "event_extract": true,
+      "intent_analysis": true
     },
     "task_budgets": {
       "memory_extract": 1200,
       "event_extract": 1000,
-      "multimodal_parse": 1000
+      "intent_analysis": 600
     },
     "task_temperatures": {
       "memory_extract": 0.1,
       "event_extract": 0.1,
-      "multimodal_parse": 0.1
+      "intent_analysis": 0.1
     },
     "task_max_tokens": {
       "memory_extract": 128,
       "event_extract": 192,
-      "multimodal_parse": 256
+      "intent_analysis": 192
     },
     "task_retries": {
       "memory_extract": 1,
       "event_extract": 1,
-      "multimodal_parse": 1,
+      "intent_analysis": 1,
       "chat_main": 1
     },
     "memory_extract_batch_size": 2,

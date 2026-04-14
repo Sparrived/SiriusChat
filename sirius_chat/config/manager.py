@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from sirius_chat.config.helpers import build_orchestration_policy_from_dict
+from sirius_chat.config.jsonc import load_json_document, write_session_config_jsonc
 from sirius_chat.config.models import (
     Agent,
     AgentPreset,
@@ -60,8 +61,7 @@ class ConfigManager:
         if not config_path.exists():
             raise FileNotFoundError(f"配置文件不存在：{config_path}")
 
-        with open(config_path, "r", encoding="utf-8") as f:
-            raw_dict = json.load(f)
+        raw_dict = load_json_document(config_path)
 
         # Resolve environment variables and secrets
         resolved = self._resolve_values(raw_dict)
@@ -138,7 +138,7 @@ class ConfigManager:
 
         manifest_payload: dict[str, Any] = {}
         if manifest_path.exists():
-            payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+            payload = load_json_document(manifest_path)
             if isinstance(payload, dict):
                 manifest_payload = payload
 
@@ -225,10 +225,7 @@ class ConfigManager:
             "enable_auto_compression": config.session_defaults.enable_auto_compression,
             "orchestration": dict(config.orchestration_defaults),
         }
-        layout.session_config_path().write_text(
-            json.dumps(session_snapshot, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        write_session_config_jsonc(layout.session_config_path(), session_snapshot)
 
     def build_session_config(
         self,
@@ -310,7 +307,7 @@ class ConfigManager:
         from sirius_chat.providers.routing import WorkspaceProviderManager
 
         config_path = Path(path)
-        raw_dict = json.loads(config_path.read_text(encoding="utf-8-sig"))
+        raw_dict = load_json_document(config_path)
         resolved = self._resolve_values(raw_dict)
         config_root = Path(work_path)
         runtime_root = Path(data_path) if data_path is not None else config_root
@@ -365,7 +362,7 @@ class ConfigManager:
     def _load_workspace_session_snapshot(self, layout: WorkspaceLayout) -> dict[str, Any]:
         session_config_path = layout.session_config_path()
         if session_config_path.exists():
-            payload = json.loads(session_config_path.read_text(encoding="utf-8"))
+            payload = load_json_document(session_config_path)
             if isinstance(payload, dict):
                 return payload
         return {}
@@ -378,7 +375,7 @@ class ConfigManager:
         for path in candidate_paths:
             if not path.exists():
                 continue
-            payload = json.loads(path.read_text(encoding="utf-8"))
+            payload = load_json_document(path)
             if not isinstance(payload, dict):
                 continue
             selected = str(payload.get("selected_generated_agent", "")).strip()

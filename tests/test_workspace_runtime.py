@@ -11,6 +11,15 @@ from sirius_chat.models import Transcript
 from sirius_chat.providers.mock import MockProvider
 
 
+async def _wait_for_active_agent(runtime: WorkspaceRuntime, expected_agent_key: str) -> None:
+    for _ in range(50):
+        workspace_config = runtime.workspace_config
+        if workspace_config is not None and workspace_config.active_agent_key == expected_agent_key:
+            return
+        await asyncio.sleep(0.02)
+    raise AssertionError(f"workspace config did not refresh to agent {expected_agent_key}")
+
+
 def _write_generated_agents(work_path: Path, *, key: str = "main_agent") -> None:
     _write_workspace_agents(work_path, selected_key=key)
 
@@ -67,19 +76,21 @@ def test_workspace_runtime_auto_persists_transcript_and_participants(tmp_path: P
     async def _run() -> None:
         _write_generated_agents(tmp_path)
         runtime = WorkspaceRuntime.open(tmp_path, provider=MockProvider(responses=["第一轮回复"]))
+        try:
+            transcript = await runtime.run_live_message(
+                session_id="group:123",
+                turn=Message(role="user", speaker="Alice", content="你好"),
+                user_profile=UserProfile(user_id="alice_1", name="Alice"),
+            )
 
-        transcript = await runtime.run_live_message(
-            session_id="group:123",
-            turn=Message(role="user", speaker="Alice", content="你好"),
-            user_profile=UserProfile(user_id="alice_1", name="Alice"),
-        )
-
-        layout = WorkspaceLayout(tmp_path)
-        assert transcript.messages[-1].content == "第一轮回复"
-        assert layout.session_store_path("group:123").exists()
-        payload = json.loads(layout.session_participants_path("group:123").read_text(encoding="utf-8"))
-        assert payload["primary_user_id"] == "alice_1"
-        assert payload["participants"][0]["name"] == "Alice"
+            layout = WorkspaceLayout(tmp_path)
+            assert transcript.messages[-1].content == "第一轮回复"
+            assert layout.session_store_path("group:123").exists()
+            payload = json.loads(layout.session_participants_path("group:123").read_text(encoding="utf-8"))
+            assert payload["primary_user_id"] == "alice_1"
+            assert payload["participants"][0]["name"] == "Alice"
+        finally:
+            await runtime.close()
 
     asyncio.run(_run())
 
@@ -95,25 +106,27 @@ def test_workspace_runtime_separates_config_root_and_data_root(tmp_path: Path) -
             config_path=config_root,
             provider=MockProvider(responses=["分离路径回复"]),
         )
+        try:
+            transcript = await runtime.run_live_message(
+                session_id="split-paths",
+                turn=Message(role="user", speaker="Alice", content="你好"),
+                user_profile=UserProfile(user_id="alice", name="Alice"),
+            )
 
-        transcript = await runtime.run_live_message(
-            session_id="split-paths",
-            turn=Message(role="user", speaker="Alice", content="你好"),
-            user_profile=UserProfile(user_id="alice", name="Alice"),
-        )
-
-        layout = WorkspaceLayout(data_root, config_path=config_root)
-        assert transcript.messages[-1].content == "分离路径回复"
-        assert layout.workspace_manifest_path().exists()
-        assert layout.generated_agents_path().exists()
-        assert layout.session_store_path("split-paths").exists()
-        assert not (data_root / "roleplay").exists()
-        assert not (config_root / "sessions").exists()
+            layout = WorkspaceLayout(data_root, config_path=config_root)
+            assert transcript.messages[-1].content == "分离路径回复"
+            assert layout.workspace_manifest_path().exists()
+            assert layout.generated_agents_path().exists()
+            assert layout.session_store_path("split-paths").exists()
+            assert not (data_root / "roleplay").exists()
+            assert not (config_root / "sessions").exists()
+        finally:
+            await runtime.close()
 
     asyncio.run(_run())
 
 
-def test_workspace_runtime_applies_external_config_changes_on_next_turn(tmp_path: Path) -> None:
+def test_workspace_runtime_applies_external_config_changes_via_file_watch(tmp_path: Path) -> None:
     async def _run() -> None:
         config_root = tmp_path / "config"
         data_root = tmp_path / "runtime"
@@ -151,27 +164,31 @@ def test_workspace_runtime_applies_external_config_changes_on_next_turn(tmp_path
             config_path=config_root,
             provider=MockProvider(responses=["第一轮回复", "第二轮回复"]),
         )
+        try:
+            first = await runtime.run_live_message(
+                session_id="reload-config",
+                turn=Message(role="user", speaker="Alice", content="第一句"),
+            )
+            assert first.messages[-1].speaker == "主助手"
 
-        first = await runtime.run_live_message(
-            session_id="reload-config",
-            turn=Message(role="user", speaker="Alice", content="第一句"),
-        )
-        assert first.messages[-1].speaker == "主助手"
+            manager = ConfigManager(base_path=config_root)
+            workspace_config = manager.load_workspace_config(config_root, data_path=data_root)
+            workspace_config.active_agent_key = "alt_agent"
+            manager.save_workspace_config(config_root, workspace_config, data_path=data_root)
 
-        manager = ConfigManager(base_path=config_root)
-        workspace_config = manager.load_workspace_config(config_root, data_path=data_root)
-        workspace_config.active_agent_key = "alt_agent"
-        manager.save_workspace_config(config_root, workspace_config, data_path=data_root)
+            await _wait_for_active_agent(runtime, "alt_agent")
 
-        second = await runtime.run_live_message(
-            session_id="reload-config",
-            turn=Message(role="user", speaker="Alice", content="第二句"),
-        )
+            second = await runtime.run_live_message(
+                session_id="reload-config",
+                turn=Message(role="user", speaker="Alice", content="第二句"),
+            )
 
-        assistant_messages = [item for item in second.messages if item.role == "assistant"]
-        assert len(assistant_messages) == 2
-        assert assistant_messages[-1].speaker == "副助手"
-        assert assistant_messages[-1].content == "第二轮回复"
+            assistant_messages = [item for item in second.messages if item.role == "assistant"]
+            assert len(assistant_messages) == 2
+            assert assistant_messages[-1].speaker == "副助手"
+            assert assistant_messages[-1].content == "第二轮回复"
+        finally:
+            await runtime.close()
 
     asyncio.run(_run())
 
@@ -180,20 +197,26 @@ def test_workspace_runtime_restores_saved_session_on_next_open(tmp_path: Path) -
     async def _run() -> None:
         _write_generated_agents(tmp_path)
         runtime1 = WorkspaceRuntime.open(tmp_path, provider=MockProvider(responses=["第一轮回复"]))
-        await runtime1.run_live_message(
-            session_id="restore-case",
-            turn=Message(role="user", speaker="Alice", content="第一句"),
-        )
+        runtime2: WorkspaceRuntime | None = None
+        try:
+            await runtime1.run_live_message(
+                session_id="restore-case",
+                turn=Message(role="user", speaker="Alice", content="第一句"),
+            )
 
-        runtime2 = WorkspaceRuntime.open(tmp_path, provider=MockProvider(responses=["第二轮回复"]))
-        transcript = await runtime2.run_live_message(
-            session_id="restore-case",
-            turn=Message(role="user", speaker="Alice", content="第二句"),
-        )
+            runtime2 = WorkspaceRuntime.open(tmp_path, provider=MockProvider(responses=["第二轮回复"]))
+            transcript = await runtime2.run_live_message(
+                session_id="restore-case",
+                turn=Message(role="user", speaker="Alice", content="第二句"),
+            )
 
-        assistant_messages = [item for item in transcript.messages if item.role == "assistant"]
-        assert len(assistant_messages) == 2
-        assert assistant_messages[-1].content == "第二轮回复"
+            assistant_messages = [item for item in transcript.messages if item.role == "assistant"]
+            assert len(assistant_messages) == 2
+            assert assistant_messages[-1].content == "第二轮回复"
+        finally:
+            await runtime1.close()
+            if runtime2 is not None:
+                await runtime2.close()
 
     asyncio.run(_run())
 
@@ -202,21 +225,23 @@ def test_workspace_runtime_lists_and_clears_multiple_sessions(tmp_path: Path) ->
     async def _run() -> None:
         _write_generated_agents(tmp_path)
         runtime = WorkspaceRuntime.open(tmp_path, provider=MockProvider(responses=["r1", "r2"]))
+        try:
+            await runtime.run_live_message(
+                session_id="group:1",
+                turn=Message(role="user", speaker="Alice", content="hello-1"),
+            )
+            await runtime.run_live_message(
+                session_id="dm:2",
+                turn=Message(role="user", speaker="Bob", content="hello-2"),
+            )
 
-        await runtime.run_live_message(
-            session_id="group:1",
-            turn=Message(role="user", speaker="Alice", content="hello-1"),
-        )
-        await runtime.run_live_message(
-            session_id="dm:2",
-            turn=Message(role="user", speaker="Bob", content="hello-2"),
-        )
+            sessions = await runtime.list_sessions()
+            assert sessions == ["dm:2", "group:1"]
 
-        sessions = await runtime.list_sessions()
-        assert sessions == ["dm:2", "group:1"]
-
-        await runtime.clear_session("group:1")
-        assert await runtime.get_transcript("group:1") is None
+            await runtime.clear_session("group:1")
+            assert await runtime.get_transcript("group:1") is None
+        finally:
+            await runtime.close()
 
     asyncio.run(_run())
 
@@ -225,15 +250,18 @@ def test_workspace_runtime_delete_session_removes_session_directory(tmp_path: Pa
     async def _run() -> None:
         _write_generated_agents(tmp_path)
         runtime = WorkspaceRuntime.open(tmp_path, provider=MockProvider(responses=["bye"]))
-        await runtime.run_live_message(
-            session_id="group:delete",
-            turn=Message(role="user", speaker="Alice", content="delete me"),
-        )
+        try:
+            await runtime.run_live_message(
+                session_id="group:delete",
+                turn=Message(role="user", speaker="Alice", content="delete me"),
+            )
 
-        layout = WorkspaceLayout(tmp_path)
-        assert layout.session_dir("group:delete").exists()
-        await runtime.delete_session("group:delete")
-        assert not layout.session_dir("group:delete").exists()
+            layout = WorkspaceLayout(tmp_path)
+            assert layout.session_dir("group:delete").exists()
+            await runtime.delete_session("group:delete")
+            assert not layout.session_dir("group:delete").exists()
+        finally:
+            await runtime.close()
 
     asyncio.run(_run())
 
@@ -293,16 +321,19 @@ def test_workspace_runtime_initialization_migrates_legacy_layout(tmp_path: Path)
         )
 
         runtime = WorkspaceRuntime.open(tmp_path, provider=MockProvider(responses=["ignored"]))
-        await runtime.initialize()
+        try:
+            await runtime.initialize()
 
-        layout = WorkspaceLayout(tmp_path)
-        assert layout.generated_agents_path().exists()
-        assert layout.provider_registry_path().exists()
-        assert layout.session_participants_path("default").exists()
+            layout = WorkspaceLayout(tmp_path)
+            assert layout.generated_agents_path().exists()
+            assert layout.provider_registry_path().exists()
+            assert layout.session_participants_path("default").exists()
 
-        restored = await runtime.get_transcript("default")
-        assert restored is not None
-        assert restored.messages[0].content == "legacy"
+            restored = await runtime.get_transcript("default")
+            assert restored is not None
+            assert restored.messages[0].content == "legacy"
+        finally:
+            await runtime.close()
 
     asyncio.run(_run())
 

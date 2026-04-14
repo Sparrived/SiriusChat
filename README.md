@@ -25,7 +25,7 @@
 - [配置指南](#-配置示例)
 - [文档](#-文档)
 - [测试](#-测试)
-- [最新变更](#-最新变更-v0230)
+- [最新变更](#-最新变更)
 - [贡献](#-贡献)
 
 ---
@@ -58,7 +58,7 @@
 - **多模态处理**：支持图片/视频输入与结构化解析
 - **CLI 与 API 双模式**：库调用 + 命令行交互，灵活接入
 - **Provider 管理**：多平台 API Key 持久化，自动可用性检测
-- **WorkspaceRuntime 持久化接管**：外部至少提供运行态 `work_path`，必要时可额外提供独立 `config_root`；框架自动恢复会话、参与者元数据与持久化布局，并在下一轮处理前应用外部配置文件变更
+- **WorkspaceRuntime 持久化接管**：外部至少提供运行态 `work_path`，必要时可额外提供独立 `config_root`；框架自动恢复会话、参与者元数据与持久化布局，并通过文件监听即时刷新外部修改的 workspace/config/provider/roleplay 配置
 
 ---
 
@@ -93,6 +93,7 @@ python main.py --config examples/session.json --work-path data/session_runtime \
 
 - `--work-path`：运行态数据根目录，保存 `sessions/`、`memory/`、`token/`、`skill_data/`、`primary_user.json`
 - `--config-root`：配置根目录，保存 `workspace.json`、`config/`、`providers/`、`roleplay/`、`skills/`；不传时默认回退到 `--work-path`
+- `--config`：支持 JSON/JSONC；`--init-config <path>` 生成的模板会带内联注释，便于直接修改
 
 **人格问卷模板辅助命令：**
 
@@ -164,7 +165,7 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
-> `work_path` 保存运行态数据；`config_path` 保存 workspace 配置、provider 与角色资产。不传 `config_path` 时，runtime 会回退到单根模式。外部修改 `config_path` 下的 workspace/config/provider/roleplay 文件后，会在下一次 `run_live_message(...)` 前自动刷新。
+> `work_path` 保存运行态数据；`config_path` 保存 workspace 配置、provider 与角色资产。不传 `config_path` 时，runtime 会回退到单根模式。外部修改 `config_path` 下的 workspace/config/provider/roleplay 文件后，runtime 会通过文件监听自动刷新；单轮调用前仍保留一次签名校验作为兜底。
 
 **底层模式：AsyncRolePlayEngine + SessionConfig（高级控制）**
 
@@ -357,6 +358,7 @@ msg = Message(
 
 ```json
 {
+  "generated_agent_key": "main_agent",
   "providers": [
     {
       "type": "openai-compatible",
@@ -364,11 +366,6 @@ msg = Message(
       "api_key": "sk-..."
     }
   ],
-  "agent": {
-    "name": "Claude",
-    "persona": "helpful",
-    "model": "gpt-4o"
-  },
   "history_max_messages": 24,
   "history_max_chars": 6000
 }
@@ -378,16 +375,13 @@ msg = Message(
 
 ```json
 {
+  "generated_agent_key": "main_agent",
   "providers": [
     {
       "type": "deepseek",
       "api_key": "sk-..."
     }
-  ],
-  "agent": {
-    "name": "DeepSeek",
-    "model": "deepseek-chat"
-  }
+  ]
 }
 ```
 
@@ -395,16 +389,13 @@ msg = Message(
 
 ```json
 {
+  "generated_agent_key": "main_agent",
   "providers": [
     {
       "type": "aliyun-bailian",
       "api_key": "sk-..."
     }
-  ],
-  "agent": {
-    "name": "通义千问",
-    "model": "qwen-plus"
-  }
+  ]
 }
 ```
 
@@ -414,16 +405,13 @@ msg = Message(
 
 ```json
 {
+  "generated_agent_key": "main_agent",
   "providers": [
     {
       "type": "siliconflow",
       "api_key": "sk-..."
     }
-  ],
-  "agent": {
-    "name": "GLM",
-    "model": "Pro/glm-4.5"
-  }
+  ]
 }
 ```
 
@@ -433,16 +421,13 @@ msg = Message(
 
 ```json
 {
+  "generated_agent_key": "main_agent",
   "providers": [
     {
       "type": "volcengine-ark",
       "api_key": "sk-..."
     }
-  ],
-  "agent": {
-    "name": "豆包",
-    "model": "doubao-seed-2-0-lite-260215"
-  }
+  ]
 }
 ```
 
@@ -452,6 +437,7 @@ msg = Message(
 
 ```json
 {
+  "generated_agent_key": "main_agent",
   "providers": [
     {
       "type": "siliconflow",
@@ -464,11 +450,7 @@ msg = Message(
       "api_key": "sk-open-...",
       "healthcheck_model": "gpt-4o-mini"
     }
-  ],
-  "agent": {
-    "name": "主助手",
-    "model": "Pro/glm-4.5"
-  }
+  ]
 }
 ```
 
@@ -481,30 +463,45 @@ msg = Message(
 
 ```json
 {
+  "generated_agent_key": "main_agent",
+  "providers": [
+    {
+      "type": "openai-compatible",
+      "base_url": "https://api.openai.com/v1",
+      "api_key": "sk-open-...",
+      "healthcheck_model": "gpt-4o-mini"
+    }
+  ],
   "orchestration": {
     "task_enabled": {
       "memory_extract": true,
-      "event_extract": true
+      "event_extract": true,
+      "intent_analysis": true
     },
     "task_models": {
       "memory_extract": "gpt-3.5-turbo",
-      "event_extract": "gpt-3.5-turbo"
+      "event_extract": "gpt-3.5-turbo",
+      "intent_analysis": "gpt-4o-mini"
     },
     "task_budgets": {
       "memory_extract": 1200,
-      "event_extract": 1000
+      "event_extract": 1000,
+      "intent_analysis": 600
     },
     "task_temperatures": {
       "memory_extract": 0.1,
-      "event_extract": 0.1
+      "event_extract": 0.1,
+      "intent_analysis": 0.1
     },
     "task_max_tokens": {
       "memory_extract": 128,
-      "event_extract": 192
+      "event_extract": 192,
+      "intent_analysis": 192
     },
     "task_retries": {
       "memory_extract": 1,
-      "event_extract": 1
+      "event_extract": 1,
+      "intent_analysis": 1
     },
     "memory_extract_batch_size": 3,
     "memory_extract_min_content_length": 50,
@@ -513,6 +510,8 @@ msg = Message(
   }
 }
 ```
+
+说明：`main.py` 和 `sirius-chat` 读取的是轻量会话配置文件，要求提供 `generated_agent_key` 与 `providers`。完整的 `agent` / `global_system_prompt` 由 `roleplay/generated_agents.json` 中已保存的人格资产提供；如果你要手写完整 `SessionConfig`，请改用 Python API 的低层入口。
 
 **说明：**
 
@@ -532,12 +531,12 @@ msg = Message(
 
 ### 状态持久化路径
 
-从 `v0.23.0` 开始，推荐 workspace 布局如下：
+从 `v0.24.0` 起，推荐把 workspace 视为“配置根 + 运行根”的组合：配置资产可单独放在 config root，运行态数据放在 data root；未显式拆分时仍兼容单根模式。推荐布局如下：
 
 | 文件 | 说明 |
 |------|------|
 | `workspace.json` | workspace 级配置清单与布局版本 |
-| `config/session_config.json` | 可读的 session 默认配置快照 |
+| `config/session_config.json` | 可读的 session 默认配置快照（JSONC 注释模板，可直接人工编辑） |
 | `providers/provider_keys.json` | Provider 注册表与路由元数据 |
 | `sessions/<session_id>/session_state.db` | 默认会话状态（结构化 SQLite，可恢复；自动迁移旧 `session_state.json` / payload SQLite） |
 | `sessions/<session_id>/participants.json` | 会话参与者与主用户元数据 |
@@ -677,6 +676,7 @@ SKILL 系统支持可扩展任务编排：
 | [📋 full-architecture-flow.md](docs/full-architecture-flow.md) | 详细数据流图解 |
 | [🎬 external-usage.md](docs/external-usage.md) | 库调用指南与集成文档 |
 | [🗂️ migration-v0.23.md](docs/migration-v0.23.md) | workspace 持久化接管迁移档案 |
+| [🗂️ migration-v0.24.md](docs/migration-v0.24.md) | JSONC 配置与 watcher 热刷新迁移档案 |
 | [🔄 migration-roleplay-v0.20.md](docs/migration-roleplay-v0.20.md) | 外部人格生成能力迁移指南 |
 | [📘 skill-authoring.md](docs/skill-authoring.md) | SKILL 系统编写规范 |
 | [🛠️ best-practices.md](docs/best-practices.md) | 最佳实践与模式 |
@@ -711,18 +711,18 @@ python -m pytest tests/test_engine.py::test_roleplay_engine_multi_human_single_a
 
 ---
 
-## 🆕 最新变更 (v0.23.0)
+## 🆕 最新变更
 
 ### ✨ **新增**
-- **WorkspaceRuntime**：新增 `open_workspace_runtime(...)` / `WorkspaceRuntime.open(...)`，对外只暴露 `work_path`、`session_id` 与业务输入，内部自动完成恢复、落盘和多 session 管理。
-- **WorkspaceLayout / WorkspaceMigrationManager**：统一路径解析、布局版本与旧工作目录迁移，根目录旧文件会在首次打开时复制迁移到新 workspace 结构。
+- **JSONC 配置模板**：`--init-config` 和 workspace 自动写出的 `config/session_config.json` 现在都使用带注释的 JSONC 模板，便于外部直接维护。
+- **即时配置热刷新**：`WorkspaceRuntime` 改为通过 watcher 监听 `workspace.json`、`config/session_config.json`、`providers/provider_keys.json` 与 `roleplay/generated_agents.json`，配置变更会尽快生效。
 
 ### 🚀 **改进**
-- **统一持久化布局**：provider、session、memory、token、roleplay、skills 全部改走 workspace 布局；事件文件迁移到 `memory/events/events.json`，自我记忆迁移到 `memory/self_memory.json`。
-- **兼容入口收敛**：`JsonPersistentSessionRunner`、`sirius-chat` CLI 和 `main.py` 现在都尽量复用 workspace runtime，而不是要求调用方显式 `store.load()` / `store.save()`。
+- **双根目录彻底打通**：`--config-root` / `config_path` 负责 workspace、provider、roleplay、skills；`--work-path` / `data_path` 负责 session、memory、token、skill_data 与主用户运行态数据。
+- **示例和入口统一到新配置系统**：`main.py`、`sirius-chat`、仓库示例配置与相关文档全部收敛到 `generated_agent_key + providers + orchestration` 形态。
 
 **迁移提示：**
-> 旧工作目录会在首次打开时自动检测并迁移；完整迁移说明与目录对照见 `docs/migration-v0.23.md`。
+> 若你已经在使用 v0.23 的 workspace 持久化，请继续阅读 `docs/migration-v0.24.md`，重点关注 JSONC 配置和 watcher 热刷新语义。
 
 更多信息见 [CHANGELOG.md](CHANGELOG.md)。
 

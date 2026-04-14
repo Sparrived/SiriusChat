@@ -244,6 +244,21 @@ def test_load_or_persist_session_bundle_reads_persisted_copy_from_config_root(mo
     assert len(providers) == 1
 
 
+def test_save_generated_agent_key_to_config_preserves_jsonc_comments(tmp_path) -> None:
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        '{\n  // 首次初始化前为空\n  "generated_agent_key": "",\n  "providers": [\n    {\n      "type": "openai-compatible",\n      "api_key": "k"\n    }\n  ]\n}\n',
+        encoding="utf-8",
+    )
+
+    main_module._save_generated_agent_key_to_config(config_path, "main_agent")
+
+    content = config_path.read_text(encoding="utf-8")
+    assert "//" in content
+    assert '"generated_agent_key": "main_agent"' in content
+    assert main_module._load_generated_agent_key_from_config_file(config_path) == "main_agent"
+
+
 # ---------------------------------------------------------------------------
 # 会话恢复基准（原 test_main_resume.py）
 # ---------------------------------------------------------------------------

@@ -32,7 +32,7 @@ sirius_chat/
 │   ├── siliconflow.py        - SiliconFlow 集成
 │   ├── volcengine_ark.py     - 火山方舟集成
 │   └── routing.py            - Provider 路由
-├── config_manager.py          (P1-006) - 配置管理
+├── config/                    (P1-006) - 配置管理
 ├── cache/                     (P2-001) - 缓存框架
 │   ├── base.py               - CacheBackend 抽象
 │   ├── memory.py             - MemoryCache 内存实现
@@ -175,7 +175,7 @@ git diff HEAD~1 --stat
 
 **触发条件**：
 - `pyproject.toml` 的版本/依赖变化
-- `config_manager.py` 的配置选项变化
+- `config/manager.py` 的配置选项变化
 - `.pre-commit-config.yaml` 的工具版本变化
 
 **必须更新**：

@@ -22,8 +22,10 @@ from sirius_chat.models import Message
 async def demo_frequency_control() -> None:
     """演示频率控制如何减少 LLM 调用。"""
     
-    work_path = Path("data/frequency_demo")
-    work_path.mkdir(parents=True, exist_ok=True)
+    config_root = Path("data/frequency_demo_config")
+    data_root = Path("data/frequency_demo_runtime")
+    config_root.mkdir(parents=True, exist_ok=True)
+    data_root.mkdir(parents=True, exist_ok=True)
     
     provider = OpenAICompatibleProvider(
         base_url="https://api.openai.com",
@@ -64,7 +66,8 @@ async def demo_frequency_control() -> None:
     print("=== 配置使用示例 ===")
     print("""
 config = create_session_config_from_selected_agent(
-    work_path=Path("data/session"),
+    work_path=Path("data/session_config"),
+    data_path=Path("data/session_runtime"),
     agent_key="main_agent",
     orchestration=OrchestrationPolicy(
         task_models={"memory_extract": "doubao-lite"},

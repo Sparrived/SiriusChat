@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import json
+import logging
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -16,8 +18,12 @@ from sirius_chat.models import Message, Participant, Transcript
 from sirius_chat.providers.base import AsyncLLMProvider, LLMProvider
 from sirius_chat.providers.routing import AutoRoutingProvider, WorkspaceProviderManager
 from sirius_chat.session.store import SessionStore, SessionStoreFactory
+from sirius_chat.workspace.config_watcher import WorkspaceConfigWatcher
 from sirius_chat.workspace.layout import WorkspaceLayout
 from sirius_chat.workspace.migration import MigrationReport, WorkspaceMigrationManager
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -35,6 +41,9 @@ class WorkspaceRuntime:
     _workspace_config: WorkspaceConfig | None = field(default=None, init=False, repr=False)
     _config_signature: str | None = field(default=None, init=False, repr=False)
     _refresh_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
+    _watch_loop: asyncio.AbstractEventLoop | None = field(default=None, init=False, repr=False)
+    _config_watcher: WorkspaceConfigWatcher | None = field(default=None, init=False, repr=False)
+    _watcher_refresh_task: asyncio.Task[None] | None = field(default=None, init=False, repr=False)
     _session_locks: dict[str, asyncio.Lock] = field(default_factory=dict, init=False, repr=False)
     _transcripts: dict[str, Transcript] = field(default_factory=dict, init=False, repr=False)
     _stores: dict[str, SessionStore] = field(default_factory=dict, init=False, repr=False)
@@ -85,6 +94,24 @@ class WorkspaceRuntime:
         self.layout.ensure_directories(session_id="default")
         await self._refresh_workspace_config(force=True, persist_defaults=True)
         self._initialized = True
+        self._start_config_watcher()
+
+    async def close(self) -> None:
+        self._stop_config_watcher()
+        task = self._watcher_refresh_task
+        if task is not None:
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        await self._reset_engine_state()
+        for store in self._stores.values():
+            close = getattr(store, "close", None)
+            if callable(close):
+                close()
+        self._stores.clear()
+        self._transcripts.clear()
+
+    def __del__(self) -> None:
+        self._stop_config_watcher()
 
     async def run_live_message(
         self,
@@ -294,29 +321,91 @@ class WorkspaceRuntime:
         *,
         force: bool = False,
         persist_defaults: bool = False,
+        suppress_errors: bool = False,
     ) -> None:
         async with self._refresh_lock:
             signature = self._calculate_config_signature()
             if not force and self._config_signature == signature:
                 return
 
-            workspace_config = self._config_manager.load_workspace_config(
-                self.layout.config_root,
-                data_path=self.layout.data_root,
-            )
-            if persist_defaults:
-                self._config_manager.save_workspace_config(
+            try:
+                workspace_config = self._config_manager.load_workspace_config(
                     self.layout.config_root,
-                    workspace_config,
                     data_path=self.layout.data_root,
                 )
-                signature = self._calculate_config_signature()
+                if persist_defaults:
+                    self._config_manager.save_workspace_config(
+                        self.layout.config_root,
+                        workspace_config,
+                        data_path=self.layout.data_root,
+                    )
+                    signature = self._calculate_config_signature()
+            except Exception:
+                if suppress_errors:
+                    logger.warning("检测到配置文件变更，但刷新 workspace 配置失败。", exc_info=True)
+                    return
+                raise
 
             if self._config_signature is not None and self._config_signature != signature:
                 await self._reset_engine_state()
 
             self._workspace_config = workspace_config
             self._config_signature = signature
+
+    def _start_config_watcher(self) -> None:
+        if self._config_watcher is not None:
+            return
+        try:
+            self._watch_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+
+        watcher = WorkspaceConfigWatcher(
+            watched_paths=self.layout.config_watch_paths(),
+            on_change=self._handle_config_change,
+        )
+        if not watcher.start():
+            return
+        self._config_watcher = watcher
+
+    def _stop_config_watcher(self) -> None:
+        watcher = self._config_watcher
+        self._config_watcher = None
+        self._watch_loop = None
+        if watcher is not None:
+            watcher.stop()
+
+        task = self._watcher_refresh_task
+        self._watcher_refresh_task = None
+        if task is not None and not task.done():
+            task.cancel()
+
+    def _handle_config_change(self, changed_path: Path) -> None:
+        loop = self._watch_loop
+        if loop is None or loop.is_closed():
+            return
+        loop.call_soon_threadsafe(self._schedule_watcher_refresh, changed_path)
+
+    def _schedule_watcher_refresh(self, changed_path: Path) -> None:
+        task = self._watcher_refresh_task
+        if task is not None and not task.done():
+            return
+        logger.info("检测到配置文件变更，准备刷新 workspace 配置：%s", changed_path)
+        self._watcher_refresh_task = asyncio.create_task(self._refresh_workspace_config_from_watch())
+        self._watcher_refresh_task.add_done_callback(self._clear_watcher_refresh_task)
+
+    async def _refresh_workspace_config_from_watch(self) -> None:
+        await asyncio.sleep(0.05)
+        await self._refresh_workspace_config(suppress_errors=True)
+
+    def _clear_watcher_refresh_task(self, task: asyncio.Task[None]) -> None:
+        if self._watcher_refresh_task is task:
+            self._watcher_refresh_task = None
+        if task.cancelled():
+            return
+        exception = task.exception()
+        if exception is not None:
+            logger.warning("监听配置文件后的刷新任务失败。", exc_info=exception)
 
     def _load_participants_payload(self, session_id: str) -> dict[str, object]:
         path = self.layout.session_participants_path(session_id)

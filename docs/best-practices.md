@@ -9,7 +9,7 @@ import asyncio
 from sirius_chat.config import ConfigManager
 from sirius_chat.async_engine import AsyncRolePlayEngine
 from sirius_chat.models import Message, Participant
-from sirius_chat.providers.openai import OpenAIProvider
+from sirius_chat.providers.openai_compatible import OpenAICompatibleProvider
 
 async def run_user_session(engine, config, user_id: str, messages: list[str]):
     """为单个用户运行会话。"""
@@ -36,10 +36,10 @@ async def run_user_session(engine, config, user_id: str, messages: list[str]):
 
 async def main():
     # 初始化（共享 provider 和 engine）
-    provider = OpenAIProvider(api_key="key")
+    provider = OpenAICompatibleProvider(base_url="https://api.openai.com", api_key="key")
     engine = AsyncRolePlayEngine(provider=provider)
     config_manager = ConfigManager()
-    config = config_manager.load_from_json("config.json")
+    config = config_manager.load_from_json("full-session.jsonc")
     
     # 并发运行多个用户会话
     tasks = [
@@ -61,7 +61,7 @@ from pathlib import Path
 async def run_isolated_session(session_id: str, user_input: str):
     """为每个会话使用独立的 work_path。"""
     config_manager = ConfigManager()
-    baseconfig = config_manager.load_from_json("config.json")
+    baseconfig = config_manager.load_from_json("full-session.jsonc")
     
     # 为这个会话创建独立目录
     session_work_path = Path(baseconfig.work_path) / session_id
@@ -77,7 +77,7 @@ async def run_isolated_session(session_id: str, user_input: str):
     )
     
     # 运行会话
-    provider = OpenAIProvider(api_key="key")
+    provider = OpenAICompatibleProvider(base_url="https://api.openai.com", api_key="key")
     engine = AsyncRolePlayEngine(provider=provider)
     
     transcript = await engine.run_session(session_config)

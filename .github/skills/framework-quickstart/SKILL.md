@@ -28,7 +28,7 @@ description: "当你需要在不通读全部代码的情况下快速理解 Siriu
 7. `sirius_chat/async_engine/prompts.py` ✨
 8. `sirius_chat/async_engine/utils.py` ✨
 9. `sirius_chat/async_engine/orchestration.py` ✨
-10. `sirius_chat/config_manager.py` ✨ (P1-006 配置管理)
+10. `sirius_chat/config/manager.py` ✨ (P1-006 配置管理)
 11. `sirius_chat/providers/base.py`
 12. `sirius_chat/providers/middleware/base.py` ✨
 13. `sirius_chat/providers/middleware/rate_limiter.py` ✨
@@ -77,6 +77,7 @@ description: "当你需要在不通读全部代码的情况下快速理解 Siriu
 - `run_live_session` 负责会话初始化；动态参与者与逐条消息处理通过 `run_live_message` 完成。
 - 从 `v0.23.0` 起，推荐外部接入优先使用 `WorkspaceRuntime` / `open_workspace_runtime(...)`；它会自动恢复 `sessions/<session_id>/session_state.db`、维护 `participants.json` 并统一持久化布局。现在 runtime 支持 `work_path`（data root）与可选 `config_path`（config root）分离；低层 `run_live_session + run_live_message` 保留给高级自定义场景。
 - `SessionConfig.work_path` 在双根模式下表示配置根，`SessionConfig.data_path` 表示运行根。配置资产（workspace/provider/roleplay/skills）落在 config root，运行态数据（sessions/memory/token/skill_data）落在 data root；未显式传 `config_path` 时自动回退到单根模式。
+- `WorkspaceRuntime` 会使用文件监听热刷新 `workspace.json`、`config/session_config.json`、`providers/provider_keys.json` 与 `roleplay/generated_agents.json`；每次 `run_live_message(...)` 前保留签名校验兜底。`config/session_config.json` 使用 JSONC 风格注释写出，便于人工修改。
 - `run_live_message` 新增 `environment_context: str = ""` 参数（v0.8.0），允许外部注入环境信息（群名、在线人数等），自动写入系统提示词 `<environment_context>` 段。
 - `Message.reply_mode` 可按消息控制回复策略：`always`（默认）/`never`（仅写入记忆与 transcript）/`auto`（自动推断是否回复）。
 - 推荐在实时流式接入时使用 `run_live_message` 逐条处理消息；`run_live_session(...)` 用于一次性会话初始化。
@@ -117,7 +118,7 @@ description: "当你需要在不通读全部代码的情况下快速理解 Siriu
 - ✨ `token/analytics.py` **(v0.11.0)** 基于 SQLite 的多维度分析：`compute_baseline`、`group_by_session/actor/task/model`、`time_series`、`full_report`。
 - `token/utils.py` ✨ **（包重构）** 提供 Token 估算工具（启发式估算、Tiktoken 精确计算、统计辅助函数）。
 - 引擎支持自动记忆压缩（`session_summary` + 历史预算）。
-- ✨ **配置管理** (P1-006)：`config_manager.py` 提供多环境配置管理能力
+- ✨ **配置管理** (P1-006)：`config/manager.py` 提供多环境配置管理能力
   - 支持 JSON 配置文件加载（base/dev/test/prod）
   - 支持环境变量替换（${VAR_NAME} 语法）
   - ConfigManager 类提供加载、合并、验证等核心功能
@@ -182,7 +183,7 @@ description: "当你需要在不通读全部代码的情况下快速理解 Siriu
 - 修改主 AI 或多人轮次策略：更新 `sirius_chat/async_engine.py`，并检查 transcript 兼容性。
 - 修改动态参与者或识人记忆逻辑：同步更新 `models/models.py`、`async_engine.py` 与 `docs/external-usage.md`。
 - 修改会话恢复或压缩策略：同步更新 `workspace/`、`session/store.py`、`session/runner.py`、`docs/architecture.md`、相关迁移文档；若外部可见行为变化，再同步 `README.md`。
-- 修改配置结构或环境变量处理：同步更新 `sirius_chat/config_manager.py`、`sirius_chat/cli.py`、`README.md` 与 `examples/session.json`。
+- 修改配置结构或环境变量处理：同步更新 `sirius_chat/config/manager.py`、`sirius_chat/cli.py`、`README.md` 与 `examples/session.json`。
 - 修改缓存策略或后端：在 `sirius_chat/cache/` 实现新后端或修改现有接口，并更新 `docs/best-practices.md`。
 - 修改性能监控或基准：更新 `sirius_chat/performance/` 中的指标收集或分析逻辑，添加相应测试。
 - 修改 engine/provider 行为：在 `tests/` 下新增或更新测试。

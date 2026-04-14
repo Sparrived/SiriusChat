@@ -11,6 +11,7 @@ from unittest import mock
 import pytest
 
 from sirius_chat.config import ConfigManager, SessionConfig
+from sirius_chat.workspace.layout import WorkspaceLayout
 
 
 class TestConfigManager:
@@ -55,6 +56,18 @@ class TestConfigManager:
         assert session_config.agent.name == "TestAgent"
         # Check that work_path ends with the expected path (platform-independent)
         assert session_config.work_path.parts[-2:] == ("tmp", "test_data")
+
+    def test_load_from_json_accepts_jsonc_comments(self, config_manager: ConfigManager, tmp_path: Path) -> None:
+        """Test loading config from a JSONC file with comments."""
+        config_path = tmp_path / "commented.json"
+        config_path.write_text(
+            '{\n  // config root\n  "work_path": "./data",\n  "global_system_prompt": "Test prompt",\n  "agent": {\n    "name": "CommentedAgent",\n    "persona": "Test persona",\n    "model": "test-model"\n  },\n  "orchestration": {}\n}\n',
+            encoding="utf-8",
+        )
+
+        session_config = config_manager.load_from_json(config_path)
+        assert session_config.agent.name == "CommentedAgent"
+        assert session_config.work_path == tmp_path / "data"
 
     def test_load_from_json_file_not_found(self, config_manager: ConfigManager) -> None:
         """Test handling of missing config file."""
@@ -224,6 +237,18 @@ class TestConfigManager:
         session_config = manager.load_from_json("relative_config.json")
         assert session_config.agent.name == "TestAgent"
         assert session_config.work_path == temp_dir / "data"
+
+    def test_save_workspace_config_writes_commented_session_snapshot(self, tmp_path: Path) -> None:
+        """Test workspace session snapshot is persisted as commented JSONC."""
+        manager = ConfigManager(base_path=tmp_path)
+        workspace_config = manager.load_workspace_config(tmp_path)
+
+        manager.save_workspace_config(tmp_path, workspace_config)
+
+        snapshot_path = WorkspaceLayout(tmp_path).session_config_path()
+        content = snapshot_path.read_text(encoding="utf-8")
+        assert "//" in content
+        assert '"history_max_messages"' in content
 
 
 class TestEnvVarSubstitution:

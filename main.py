@@ -38,6 +38,7 @@ from sirius_chat.cli_diagnostics import (
     generate_default_config,
     run_preflight_check,
 )
+from sirius_chat.config.jsonc import load_json_document, write_session_config_jsonc
 from sirius_chat.config.helpers import build_orchestration_policy_from_dict
 from sirius_chat.logging_config import configure_logging, setup_log_archival, get_logger
 from sirius_chat.workspace.layout import WorkspaceLayout
@@ -58,7 +59,7 @@ PROVIDER_COMMAND_PREFIX = "/provider"
 
 def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Sirius Chat 测试入口（库外业务编排）")
-    parser.add_argument("--config", default="", help="会话 JSON 配置文件路径")
+    parser.add_argument("--config", default="", help="会话 JSON/JSONC 配置文件路径")
     parser.add_argument("--config-root", default="", help="配置持久化目录（默认与 work-path 相同）")
     parser.add_argument("--work-path", default="", help="持久化工作路径（缺失时默认 data 目录）")
     parser.add_argument("--output", default="", help="可选：输出 transcript JSON 文件路径")
@@ -100,7 +101,9 @@ def _load_session_config(
     config_root: Path | None = None,
 ) -> tuple[SessionConfig, list[dict[str, object]]]:
     resolved_config_root = config_root or work_path
-    raw = json.loads(config_path.read_text(encoding="utf-8-sig"))
+    raw = load_json_document(config_path)
+    if not isinstance(raw, dict):
+        raise ValueError("配置文件顶层必须是对象")
 
     if "agent" in raw or "global_system_prompt" in raw:
         raise ValueError("不允许手动指定 agent/global_system_prompt；请使用 generated_agent_key")
@@ -201,7 +204,9 @@ def _load_providers_config_from_config_file(config_path: Path) -> list[dict[str,
     
     providers 字段为必需的 list format。
     """
-    raw = json.loads(config_path.read_text(encoding="utf-8-sig"))
+    raw = load_json_document(config_path)
+    if not isinstance(raw, dict):
+        raise ValueError("配置文件顶层必须是对象")
     
     # 加载 providers 字段（必需）
     providers_config = list(raw.get("providers", []))
@@ -212,13 +217,17 @@ def _load_providers_config_from_config_file(config_path: Path) -> list[dict[str,
 
 
 def _save_generated_agent_key_to_config(config_path: Path, generated_agent_key: str) -> None:
-    raw = json.loads(config_path.read_text(encoding="utf-8-sig"))
+    raw = load_json_document(config_path)
+    if not isinstance(raw, dict):
+        raise ValueError("配置文件顶层必须是对象")
     raw["generated_agent_key"] = generated_agent_key
-    config_path.write_text(json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
+    write_session_config_jsonc(config_path, raw)
 
 
 def _load_generated_agent_key_from_config_file(config_path: Path) -> str:
-    raw = json.loads(config_path.read_text(encoding="utf-8-sig"))
+    raw = load_json_document(config_path)
+    if not isinstance(raw, dict):
+        raise ValueError("配置文件顶层必须是对象")
     key = str(raw.get("generated_agent_key", "")).strip()
     if not key:
         raise ValueError("必需提供 generated_agent_key")

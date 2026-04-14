@@ -2,19 +2,109 @@
 
 ## 概述
 
-Sirius Chat 提供灵活的配置管理系统，支持：
-- 多环境配置（dev、test、prod）
-- 环境变量替换
-- 配置继承和合并
-- 秘钥管理
+从 v0.24.0 开始，Sirius Chat 建议把配置分成两层理解：
 
-## 配置文件格式
+1. 轻量会话配置
+   - 供 main.py --config、sirius-chat --config、ConfigManager.bootstrap_workspace_from_legacy_session_json(...) 使用
+   - 支持 JSON 和 JSONC 注释
+   - 只描述 generated_agent_key、providers、历史预算和 orchestration
+2. 完整 SessionConfig
+   - 供 Python API 高级接入使用
+   - 包含 agent、global_system_prompt、work_path、data_path 等完整字段
 
-### 基础配置结构
+推荐做法是：
+
+- 用户可编辑配置文件使用轻量会话配置
+- agent 和 global_system_prompt 由 roleplay/generated_agents.json 中已经保存的人格资产提供
+- 若确实需要手写完整 SessionConfig，使用 Python API 直接加载或构造
+
+## 1. 推荐的会话 JSON/JSONC 配置
+
+适用入口：
+
+- python main.py --config ...
+- sirius-chat --config ...
+- ConfigManager.bootstrap_workspace_from_legacy_session_json(...)
+
+示例：
 
 ```json
 {
-  "work_path": "./sirius_data",
+  "generated_agent_key": "main_agent",
+  "providers": [
+    {
+      "type": "openai-compatible",
+      "base_url": "https://api.openai.com",
+      "api_key": "${OPENAI_API_KEY}",
+      "healthcheck_model": "gpt-4o-mini"
+    }
+  ],
+  "history_max_messages": 24,
+  "history_max_chars": 6000,
+  "max_recent_participant_messages": 5,
+  "enable_auto_compression": true,
+  "orchestration": {
+    "task_enabled": {
+      "memory_extract": true,
+      "event_extract": true,
+      "intent_analysis": true
+    },
+    "task_models": {
+      "memory_extract": "gpt-4o-mini",
+      "event_extract": "gpt-4o-mini",
+      "intent_analysis": "gpt-4o-mini"
+    },
+    "task_budgets": {
+      "memory_extract": 1200,
+      "event_extract": 1000,
+      "intent_analysis": 600
+    },
+    "task_temperatures": {
+      "memory_extract": 0.1,
+      "event_extract": 0.1,
+      "intent_analysis": 0.1
+    },
+    "task_max_tokens": {
+      "memory_extract": 128,
+      "event_extract": 192,
+      "intent_analysis": 192
+    },
+    "task_retries": {
+      "memory_extract": 1,
+      "event_extract": 1,
+      "intent_analysis": 1
+    },
+    "memory_extract_batch_size": 3,
+    "memory_extract_min_content_length": 50,
+    "enable_prompt_driven_splitting": true,
+    "split_marker": "<MSG_SPLIT>",
+    "session_reply_mode": "auto"
+  }
+}
+```
+
+说明：
+
+- 文件可以直接写成 JSONC，允许 // 注释
+- generated_agent_key 必须指向配置根 roleplay/generated_agents.json 中的已存在资产
+- providers 是推荐字段；旧版单个 provider 仅保留兼容
+- --init-config <path> 会生成带注释模板
+- workspace 自动写出的 config/session_config.json 也会使用 JSONC 注释模板
+
+## 2. 完整 SessionConfig 文件
+
+适用入口：
+
+- ConfigManager.load_from_json(...)
+- AsyncRolePlayEngine + SessionConfig
+- 需要手写完整 agent / global_system_prompt 的高级场景
+
+示例：
+
+```json
+{
+  "work_path": "./config/chat_session",
+  "data_path": "./data/chat_session",
   "global_system_prompt": "你是一个有帮助的 AI 助手。",
   "agent": {
     "name": "MyAI",
@@ -22,7 +112,9 @@ Sirius Chat 提供灵活的配置管理系统，支持：
     "model": "gpt-4-turbo",
     "temperature": 0.7,
     "max_tokens": 512,
-    "metadata": {}
+    "metadata": {
+      "multimodal_model": "gpt-4o"
+    }
   },
   "history_max_messages": 24,
   "history_max_chars": 6000,
@@ -34,415 +126,222 @@ Sirius Chat 提供灵活的配置管理系统，支持：
       "event_extract": true,
       "intent_analysis": true
     },
-    "task_models": {},
-    "task_budgets": {},
-    "task_temperatures": {},
-    "task_max_tokens": {},
-    "task_retries": {},
-    "max_multimodal_inputs_per_turn": 4,
-    "max_multimodal_value_length": 4096,
-    "enable_prompt_driven_splitting": true,
-    "split_marker": "<MSG_SPLIT>",
-    "memory_manager_model": "",
-    "memory_manager_temperature": 0.3,
-    "memory_manager_max_tokens": 512,
-    "enable_self_memory": true,
-    "self_memory_extract_batch_size": 3,
-    "reply_frequency_window_seconds": 60.0,
-    "reply_frequency_max_replies": 8,
-    "reply_frequency_exempt_on_mention": true
-  }
-}
-```
-
-## 配置选项详解
-
-### work_path
-- **类型**: 字符串
-- **含义**: 数据存储目录，用于保存用户记忆、事件记忆等
-- **示例**: `"./sirius_data"` 或 `"/var/sirius/data"`
-
-### global_system_prompt
-- **类型**: 字符串
-- **含义**: 全局系统提示词，作为所有对话的基础指令
-- **示例**: `"你是一个专业的技术顾问..."`
-
-### agent
-Agent 配置定义 AI 助手的身份和行为。
-
-#### agent.name
-- **类型**: 字符串
-- **含义**: AI 助手的名称
-- **示例**: `"Claude"`, `"SiriusAI"`
-
-#### agent.persona
-- **类型**: 字符串
-- **含义**: AI 助手的角色设定和背景
-- **示例**: `"我是一个 10 年经验的软件架构师..."`
-
-#### agent.model
-- **类型**: 字符串
-- **含义**: 使用的 LLM 模型
-- **示例**: `"gpt-4-turbo"`, `"doubao-seed-2-0-pro"`
-
-#### agent.temperature
-- **类型**: 浮点数 (0.0 - 2.0)
-- **含义**: 模型的创意度
-- **推荐值**:
-  - `0.0 - 0.3`: 确定性回答（用于内存提取等）
-  - `0.5 - 0.7`: 均衡（通常对话）
-  - `0.8 - 1.0`: 创意回答
-
-#### agent.max_tokens
-- **类型**: 整数
-- **含义**: 单次回答的最大 token 数
-- **推荐值**: `256 - 2048`
-
-#### agent.metadata
-- **类型**: 对象
-- **含义**: 额外的助手元数据
-- **示例**: `{"alias": "小助手", "version": "1.0"}`
-
-### history_max_messages
-- **类型**: 整数
-- **含义**: 保留的最大历史消息数
-- **推荐值**: `20 - 50`
-
-### history_max_chars
-- **类型**: 整数
-- **含义**: 历史消息的最大字符数
-- **推荐值**: `4000 - 8000`
-
-### enable_auto_compression
-- **类型**: 布尔值
-- **含义**: 是否自动压缩超长会话
-- **推荐值**: `true（生产）`, `false（开发）`
-
-### orchestration
-多任务编排配置，这是一个高级功能。
-
-#### orchestration.task_enabled
-- **类型**: 对象（布尔值键值对）
-- **含义**: 各个任务的启用状态，所有任务默认启用
-- **示例**:
-```json
-{
-  "memory_extract": true,
-  "event_extract": true,
-  "intent_analysis": true
-}
-```
-
-#### orchestration.task_models
-- **类型**: 对象
-- **含义**: 各个任务使用的模型
-- **示例**:
-```json
-{
-  "memory_extract": "gpt-4-mini",
-  "event_extract": "gpt-4-mini",
-  "intent_analysis": "gpt-4o-mini"
-}
-```
-
-#### orchestration.task_budgets
-- **类型**: 对象
-- **含义**: 各个任务的 token 预算（防止成本过高）
-- **示例**:
-```json
-{
-  "memory_extract": 2000,
-  "event_extract": 2000,
-  "intent_analysis": 800
-}
-```
-
-#### orchestration.task_temperatures
-- **类型**: 对象
-- **含义**: 各个任务的温度设置
-- **示例**:
-```json
-{
-  "memory_extract": 0.1,
-  "event_extract": 0.1,
-  "intent_analysis": 0.1
-}
-```
-
-#### orchestration.intent_analysis 兼容字段
-- `enable_intent_analysis`: 兼容开关字段；推荐改为 `task_enabled["intent_analysis"]`
-- `intent_analysis_model`: 兼容模型字段；推荐改为 `task_models["intent_analysis"]`
-- 若未给 `intent_analysis` 单独配置模型，引擎会回退到 `unified_model`，再回退到 `agent.model`
-
-#### orchestration.memory_manager_model
-- **类型**: 字符串
-- **含义**: 用于内存管理的模型（空字符串表示禁用）
-- **示例**: `"gpt-4-mini"`
-
-#### orchestration.memory
-- **类型**: `MemoryPolicy` 对象
-- **含义**: 记忆系统集中配置（V2 新增）
-
-| 参数 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `max_facts_per_user` | int | 50 | 每用户最大记忆条目数 |
-| `transient_confidence_threshold` | float | 0.85 | RESIDENT/TRANSIENT 分界阈值 |
-| `event_dedup_window_minutes` | int | 5 | 事件去重时间窗口（分钟） |
-| `max_observed_set_size` | int | 100 | observed_* 集合最大元素数 |
-| `max_summary_facts_per_type` | int | 5 | 摘要中每类型最多事实数 |
-| `max_summary_total_chars` | int | 2000 | 摘要总字符上限 |
-| `decay_schedule` | dict | `{7:0.95, 30:0.80, ...}` | 衰退时间表 |
-
-**JSON 示例**:
-```json
-{
-  "orchestration": {
-    "memory": {
-      "max_facts_per_user": 100,
-      "transient_confidence_threshold": 0.7,
-      "max_observed_set_size": 200
+    "task_models": {
+      "memory_extract": "gpt-4o-mini",
+      "event_extract": "gpt-4o-mini",
+      "intent_analysis": "gpt-4o-mini"
     }
   }
 }
 ```
 
-## 环境变量替换
+说明：
 
-支持在配置文件中使用环境变量，使用 `${VAR_NAME}` 语法：
+- 双根模式下，work_path 表示配置根，data_path 表示运行根
+- 若不需要分离路径，可把两者写成同一路径
+- 这类文件不建议直接给 main.py --config 使用；CLI/main 推荐轻量会话配置
+
+## 3. 核心字段说明
+
+### generated_agent_key
+
+- 类型：字符串
+- 含义：当前选择的人格资产 key
+- 来源：roleplay/generated_agents.json
+
+### providers
+
+- 类型：列表
+- 含义：provider 引导配置
+- 推荐字段：type、api_key、base_url、healthcheck_model、models
+
+示例：
+
+```json
+[
+  {
+    "type": "openai-compatible",
+    "base_url": "https://api.openai.com",
+    "api_key": "${OPENAI_API_KEY}",
+    "healthcheck_model": "gpt-4o-mini"
+  },
+  {
+    "type": "siliconflow",
+    "api_key": "${SILICONFLOW_API_KEY}",
+    "healthcheck_model": "Pro/glm-4.5",
+    "models": ["Pro/glm-4.5"]
+  }
+]
+```
+
+### work_path / data_path
+
+- 仅在完整 SessionConfig 中使用
+- work_path：配置根，放 workspace.json、config/、providers/、roleplay/、skills/
+- data_path：运行根，放 sessions/、memory/、token/、skill_data/、primary_user.json
+
+### orchestration
+
+orchestration 负责控制辅助任务、回复节奏、记忆频率和提示词驱动分割。
+
+常用字段：
+
+| 字段 | 含义 |
+| --- | --- |
+| task_enabled | 各辅助任务是否启用 |
+| task_models | 任务模型映射 |
+| task_budgets | 各任务 token 预算 |
+| task_temperatures | 各任务温度 |
+| task_max_tokens | 各任务最大输出 |
+| task_retries | 各任务重试次数 |
+| memory_extract_batch_size | 每 N 条消息做一次记忆提取 |
+| memory_extract_min_content_length | 只处理达到最小长度的消息 |
+| enable_prompt_driven_splitting | 是否启用提示词驱动分割 |
+| split_marker | 分割标记 |
+| session_reply_mode | always / never / auto |
+
+注意：
+
+- intent_analysis 已是正式一等任务，建议显式配置
+- multimodal_parse 已在 v0.15.0 移除，不应再出现在配置中
+- 图片能力应通过 agent 资产中的 metadata.multimodal_model 配置，而不是辅助任务
+
+## 4. 环境变量替换
+
+ConfigManager.load_from_json(...) 支持 ${VAR_NAME} 形式的环境变量替换。
+
+示例：
 
 ```json
 {
-  "work_path": "${SIRIUS_DATA_PATH:/home/user/sirius}",
+  "work_path": "${SIRIUS_CONFIG_ROOT}",
+  "data_path": "${SIRIUS_DATA_ROOT}",
   "agent": {
-    "model": "${SIRIUS_MODEL:gpt-4-turbo}",
+    "name": "SiriusAI",
+    "persona": "专业、友善、稳定",
+    "model": "${SIRIUS_MODEL}",
     "metadata": {
       "api_key": "${OPENAI_API_KEY}"
     }
-  }
-}
-```
-
-加载时会自动替换：
-- `${SIRIUS_DATA_PATH}` → 系统环境变量值
-- `${SIRIUS_DATA_PATH:/default}` → 环境变量或默认值
-
-## 多环境配置
-
-### 开发环境 (dev.json)
-
-```json
-{
-  "work_path": "./sirius_data_dev",
-  "global_system_prompt": "你是一个有帮助的 AI 助手。（开发环境）",
-  "agent": {
-    "name": "SiriusAI-Dev",
-    "model": "gpt-4-turbo",
-    "temperature": 0.9,
-    "max_tokens": 1024
   },
-  "enable_auto_compression": false,
   "orchestration": {
-    "task_enabled": {
-      "memory_extract": true,
-      "event_extract": true
-    },
     "task_models": {
-      "memory_extract": "gpt-4-mini",
-      "event_extract": "gpt-4-mini"
+      "memory_extract": "${MEMORY_EXTRACT_MODEL}",
+      "event_extract": "${EVENT_EXTRACT_MODEL}"
     }
   }
 }
 ```
 
-### 测试环境 (test.json)
+说明：
 
-```json
-{
-  "work_path": "./sirius_data_test",
-  "agent": {
-    "name": "SiriusAI-Test",
-    "model": "mock-model",
-    "temperature": 0.5,
-    "max_tokens": 256
-  },
-  "orchestration": {
-    "task_enabled": {
-      "memory_extract": false,
-      "event_extract": false
-    }
-  }
-}
-```
+- 未定义的环境变量会保留原占位符
+- 轻量会话配置在 bootstrap 时同样支持这套替换逻辑
 
-### 生产环境 (prod.json)
+## 5. 多环境配置
 
-```json
-{
-  "work_path": "${SIRIUS_DATA_PATH:/opt/sirius_data}",
-  "agent": {
-    "name": "SiriusAI",
-    "model": "${SIRIUS_MODEL:gpt-4-turbo}",
-    "metadata": {
-      "api_key": "${SIRIUS_API_KEY}"
-    }
-  },
-  "enable_auto_compression": true,
-  "orchestration": {
-    "task_enabled": {
-      "memory_extract": true,
-      "event_extract": true
-    },
-    "memory_manager_model": "${MEMORY_MANAGER_MODEL:gpt-4-mini}"
-  }
-}
-```
+如果你在 Python 服务内直接使用完整 SessionConfig 文件，可以继续用 ConfigManager.load_from_env(...) 读取 dev/test/prod 预设。
 
-## 加载配置
-
-### 通过环境名加载
+示例：
 
 ```python
 from sirius_chat.config import ConfigManager
 
 manager = ConfigManager()
-
-# 加载开发环境配置
-config = manager.load_from_env("dev")
-
-# 加载生产环境配置
-config = manager.load_from_env("prod")
+dev_config = manager.load_from_env("dev")
+test_config = manager.load_from_env("test")
+prod_config = manager.load_from_env("prod")
 ```
 
-### 通过文件路径加载
+适用建议：
+
+- dev：偏向高可观察性，通常关闭压缩
+- test：推荐配合 mock provider 和最小预算
+- prod：优先使用环境变量注入密钥和路径
+
+## 6. 常见加载方式
+
+### 加载完整 SessionConfig 文件
+
+```python
+from sirius_chat.config import ConfigManager
+
+manager = ConfigManager()
+config = manager.load_from_json("full-session.jsonc")
+```
+
+### 把轻量配置 bootstrap 到 workspace
 
 ```python
 from pathlib import Path
 from sirius_chat.config import ConfigManager
 
-manager = ConfigManager()
-
-# 加载自定义配置文件
-config = manager.load_from_json("path/to/config.json")
-
-# 相对路径也支持
-config = manager.load_from_json("./configs/custom.json")
-```
-
-## 配置验证
-
-配置加载时会自动验证：
-- 必需字段的存在性
-- 数据类型正确性
-- 路径的可访问性
-
-验证失败会抛出 `ValueError`：
-
-```python
-try:
-    config = manager.load_from_json("incomplete_config.json")
-except ValueError as e:
-    print(f"配置验证失败: {e}")
-```
-
-## 最佳实践
-
-### 1. 使用环境变量存储敏感信息
-
-```json
-{
-  "agent": {
-    "metadata": {
-      "api_key": "${OPENAI_API_KEY}"
-    }
-  }
-}
-```
-
-### 2. 使用多环境配置
-
-```bash
-# 开发
-ENVIRONMENT=dev python main.py
-
-# 测试
-ENVIRONMENT=test python -m pytest
-
-# 生产
-ENVIRONMENT=prod python app.py
-```
-
-### 3. 使用配置合并
-
-```python
-# 加载基础配置
-base_config = manager.load_from_json("base.json")
-
-# 加载环境特定配置
-env_config = manager.load_from_json(f"{env}.json")
-
-# 合并配置
-merged = manager.merge_configs(
-    base_config.__dict__,
-    env_config.__dict__
+manager = ConfigManager(base_path=Path("./config_root"))
+workspace_config, providers = manager.bootstrap_workspace_from_legacy_session_json(
+    "session.jsonc",
+    work_path=Path("./config_root"),
+    data_path=Path("./data_root"),
 )
 ```
 
-### 4. 验证关键配置
+### 生成带注释的默认模板
 
-```python
-config = manager.load_from_json("config.json")
-
-# 验证必需的任务模型
-assert config.orchestration.task_models.get("memory_extract"), \
-    "must configure memory_extract model"
-
-# 验证路径
-from pathlib import Path
-Path(config.work_path).mkdir(parents=True, exist_ok=True)
+```bash
+python main.py --init-config session.jsonc
 ```
 
-## Token 使用持久化
+## 7. workspace 产物位置
 
-v0.11.0 起，引擎在初始化会话时自动创建 `{work_path}/token_usage.db`（SQLite），每次模型调用后同步写入。无需额外配置。
+双根模式下的默认产物：
 
-```python
-from sirius_chat.api import TokenUsageStore, compute_baseline, full_report
+| 路径 | 说明 |
+| --- | --- |
+| config_root/workspace.json | workspace 级清单 |
+| config_root/config/session_config.json | JSONC 默认配置快照 |
+| config_root/providers/provider_keys.json | provider 注册表 |
+| config_root/roleplay/generated_agents.json | 已生成人格资产 |
+| data_root/sessions/<session_id>/session_state.db | 会话状态 |
+| data_root/sessions/<session_id>/participants.json | 参与者元数据 |
+| data_root/memory/ | 用户/事件/自我记忆 |
+| data_root/token/token_usage.db | token 计量 |
+| data_root/skill_data/ | SKILL 数据存储 |
 
-store = TokenUsageStore("./data/token_usage.db")
-report = full_report(store)
-```
+## 8. 最佳实践
 
-产物文件：
+1. 对外暴露给运营或脚本编辑的配置文件，统一用轻量 JSON/JSONC 结构。
+2. 需要注释时直接使用 JSONC，不必更换扩展名。
+3. 不要把 agent 和 global_system_prompt 写回用户入口配置；它们应由人格资产维护。
+4. 不要再使用 multimodal_parse 任务配置。
+5. 使用独立的 config_root 和 data_root 时，修改热刷新的文件必须落在 config_root。
 
-| 文件 | 说明 |
-|------|------|
-| `{work_path}/token_usage.db` | SQLite 数据库，包含全量历史 token 记录 |
+## 9. 故障排查
 
-## 故障排查
+### 轻量配置加载时报“必需提供 generated_agent_key”
 
-### 环境变量未被替换
+说明当前配置文件不符合 workspace 推荐入口格式。请改为：
 
-**症状**: 配置中出现 `${VAR_NAME}` 字符串
+- 提供 generated_agent_key
+- 去掉顶层 agent / global_system_prompt
+- 确认 roleplay/generated_agents.json 中存在对应资产
 
-**解决**:
-1. 确保环境变量已设置: `echo $VAR_NAME`
-2. 重新加载配置文件
-3. 检查变量名拼写
+### 修改配置文件后没有立即生效
 
-### 文件路径错误
+请检查：
 
-**症状**: FileNotFoundError
+1. 修改的是 config_root 下的文件，而不是 data_root
+2. 文件内容仍是合法 JSON/JSONC
+3. 监听的路径是否属于以下之一：
+   - workspace.json
+   - config/session_config.json
+   - providers/provider_keys.json
+   - roleplay/generated_agents.json
 
-**解决**:
-1. 使用绝对路径或相对于脚本的路径
-2. 确保目录存在: `mkdir -p sirius_data`
-3. 检查文件权限
+### 示例配置里还有旧字段怎么办
 
-### 配置验证失败
+请优先对照：
 
-**症状**: ValueError: "Missing required config keys"
-
-**解决**:
-1. 确保配置文件包含所有必需字段
-2. 查看错误消息中缺失的字段
-3. 参考基础配置模板
+- examples/session.json
+- examples/session_multimodel.json
+- examples/session_prompt_splitting.json
+- docs/migration-v0.15.md
+- docs/migration-v0.24.md

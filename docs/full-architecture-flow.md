@@ -12,7 +12,7 @@
 ```mermaid
 flowchart TD
   A["外部入口<br/>CLI / Python API / main.py"] --> B["Workspace 打开<br/>work_path<br/>session_id"]
-  B --> C["WorkspaceRuntime.initialize<br/>legacy 检测/迁移<br/>workspace.json"]
+  B --> C["WorkspaceRuntime.initialize<br/>legacy 检测/迁移<br/>workspace.json + config watcher"]
   C --> D["ConfigManager.build_session_config<br/>WorkspaceProviderManager.load<br/>AutoRoutingProvider"]
   D --> E["会话执行<br/>AsyncRolePlayEngine<br/>.run_live_session"]
 
@@ -142,10 +142,10 @@ flowchart LR
 
 | 模块 | 主要输入 | 主要输出/产物 |
 | --- | --- | --- |
-| `main.py` | 命令行参数、用户输入、`work_path`、`config.json` | `Transcript`、`transcript.json`、兼容 `primary_user.json`、`sessions/default/*` |
-| `sirius_chat/cli.py` | `config.json`（含 `providers` 列表）、单轮用户输入 | 单轮 `Transcript`、`transcript.json`、workspace bootstrap 产物 |
+| `main.py` | 命令行参数、用户输入、`work_path`、JSON/JSONC 配置文件 | `Transcript`、`transcript.json`、兼容 `primary_user.json`、`sessions/default/*` |
+| `sirius_chat/cli.py` | JSON/JSONC 配置文件（含 `providers` 列表）、单轮用户输入 | 单轮 `Transcript`、`transcript.json`、workspace bootstrap 产物 |
 | `sirius_chat/api/` | 外部程序调用参数、`work_path` | 稳定对外函数与类型、`Transcript` |
-| `sirius_chat/workspace/` | `work_path`、`session_id`、provider/session factory | `workspace.json`、新 layout 路径、迁移报告、`WorkspaceRuntime` |
+| `sirius_chat/workspace/` | `work_path`、`config_path`、`session_id`、provider/session factory | `workspace.json`、`config/session_config.json`（JSONC 注释模板）、新 layout 路径、迁移报告、`WorkspaceRuntime` |
 | `sirius_chat/models/models.py` | 配置与消息数据 | 统一数据契约（`Message`、`Participant`、`Transcript` 等） |
 | `sirius_chat/core/engine.py` | 初始化：`SessionConfig` + 可选已有 `Transcript`；逐条处理：`Message` + `Transcript` | 更新后的 `Transcript`、assistant 回复、编排统计与 token 记录 |
 | `sirius_chat/core/heat.py` | 最近 N 条消息、时间窗口 | `HeatAnalysis`（heat_level / heat_score / active_participants / ai_participation_ratio） |
