@@ -9,7 +9,11 @@ import sys
 from pathlib import Path
 from typing import Callable
 
-from sirius_chat.config.jsonc import load_json_document, write_session_config_jsonc
+from sirius_chat.config.jsonc import (
+    build_default_session_config_payload,
+    load_json_document,
+    write_session_config_jsonc,
+)
 
 PrintFunc = Callable[[str], None]
 
@@ -166,24 +170,6 @@ def generate_default_config(output_path: Path) -> None:
     Args:
         output_path: 输出文件路径
     """
-    sample_provider = {
-        "type": "openai-compatible",
-        "base_url": "https://api.openai.com",
-        "api_key": "your-api-key-here",
-    }
-    default_config = {
-        "generated_agent_key": "",
-        "history_max_messages": 24,
-        "history_max_chars": 6000,
-        "max_recent_participant_messages": 5,
-        "enable_auto_compression": True,
-        "provider": dict(sample_provider),
-        "providers": [dict(sample_provider)],
-        "orchestration": {
-            "enabled": False,
-            "task_models": {},
-            "task_budgets": {},
-        },
-    }
+    default_config = build_default_session_config_payload()
 
     write_session_config_jsonc(output_path, default_config)

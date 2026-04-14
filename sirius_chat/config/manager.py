@@ -13,7 +13,11 @@ from pathlib import Path
 from typing import Any
 
 from sirius_chat.config.helpers import build_orchestration_policy_from_dict
-from sirius_chat.config.jsonc import load_json_document, write_session_config_jsonc
+from sirius_chat.config.jsonc import (
+    build_default_orchestration_payload,
+    load_json_document,
+    write_session_config_jsonc,
+)
 from sirius_chat.config.models import (
     Agent,
     AgentPreset,
@@ -234,7 +238,10 @@ class ConfigManager:
             "history_max_chars": config.session_defaults.history_max_chars,
             "max_recent_participant_messages": config.session_defaults.max_recent_participant_messages,
             "enable_auto_compression": config.session_defaults.enable_auto_compression,
-            "orchestration": dict(config.orchestration_defaults),
+            "orchestration": self.merge_configs(
+                build_default_orchestration_payload(),
+                dict(config.orchestration_defaults),
+            ),
         }
         write_session_config_jsonc(layout.session_config_path(), session_snapshot)
 

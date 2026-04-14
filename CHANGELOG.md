@@ -4,6 +4,16 @@
 
 ## [Unreleased]
 
+## [0.26.2] - 2026-04-15
+
+### Changed
+- **配置模板可发现性增强**：`--init-config` 生成的默认配置现在会展开完整的 `orchestration` 配置骨架，并为嵌套字段补充注释，包含 `intent_analysis` 相关设置。
+- **session_config.json 注释增强**：`config/session_config.json` 的 JSONC 渲染改为支持嵌套字段注释，provider 与 orchestration 子字段现在也会带说明。
+- **workspace 快照更完整**：持久化 workspace 配置时，`config/session_config.json` 会写出完整的 orchestration 默认项并与用户设置合并，避免“能设置但文件里看不到”的情况。
+
+### Fixed
+- 移除默认配置模板里无效的 `orchestration.enabled` 旧字段，改为当前框架真实支持的配置项。
+
 ## [0.26.1] - 2026-04-15
 
 ### Fixed

@@ -11,6 +11,7 @@ from unittest import mock
 import pytest
 
 from sirius_chat.config import ConfigManager, SessionConfig
+from sirius_chat.config.jsonc import load_json_document
 from sirius_chat.workspace.layout import WorkspaceLayout
 
 
@@ -249,6 +250,14 @@ class TestConfigManager:
         content = snapshot_path.read_text(encoding="utf-8")
         assert "//" in content
         assert '"history_max_messages"' in content
+        assert '"intent_analysis_model"' in content
+        assert '"task_enabled"' in content
+        assert '"message_debounce_seconds"' in content
+        assert '"max_concurrent_llm_calls"' in content
+
+        payload = load_json_document(snapshot_path)
+        assert payload["orchestration"]["task_enabled"]["intent_analysis"] is True
+        assert payload["orchestration"]["message_debounce_seconds"] == 5.0
 
 
 class TestEnvVarSubstitution:
