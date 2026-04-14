@@ -11,6 +11,7 @@ from typing import Awaitable, Callable, cast
 
 from sirius_chat.config import Agent, AgentPreset, OrchestrationPolicy, SessionConfig
 from sirius_chat.providers.base import AsyncLLMProvider, GenerationRequest, LLMProvider
+from sirius_chat.workspace.layout import WorkspaceLayout
 
 GENERATED_AGENTS_FILE_NAME = "generated_agents.json"
 GENERATED_AGENT_TRACE_DIR_NAME = "generated_agent_traces"
@@ -377,8 +378,23 @@ def _format_answers(answers: list[RolePlayAnswer]) -> str:
     return "\n".join(lines)
 
 
+def _workspace_layout(work_path: Path) -> WorkspaceLayout:
+    return WorkspaceLayout(work_path)
+
+
 def _generated_agents_file_path(work_path: Path) -> Path:
-    return work_path / GENERATED_AGENTS_FILE_NAME
+    return _workspace_layout(work_path).generated_agents_path()
+
+
+def _generated_agents_read_path(work_path: Path) -> Path:
+    layout = _workspace_layout(work_path)
+    new_path = layout.generated_agents_path()
+    if new_path.exists():
+        return new_path
+    legacy_path = layout.legacy_generated_agents_path()
+    if legacy_path.exists():
+        return legacy_path
+    return new_path
 
 
 def _normalize_agent_key(value: str) -> str:
@@ -523,15 +539,30 @@ def _dict_to_trace(data: dict[str, object]) -> PersonaGenerationTrace:
 
 
 def _generated_agent_trace_dir_path(work_path: Path) -> Path:
-    return work_path / GENERATED_AGENT_TRACE_DIR_NAME
+    return _workspace_layout(work_path).generated_agent_trace_dir()
+
+
+def _generated_agent_trace_read_dir_path(work_path: Path) -> Path:
+    layout = _workspace_layout(work_path)
+    new_dir = layout.generated_agent_trace_dir()
+    if new_dir.exists():
+        return new_dir
+    legacy_dir = layout.legacy_generated_agent_trace_dir()
+    if legacy_dir.exists():
+        return legacy_dir
+    return new_dir
 
 
 def _generation_trace_file_path(work_path: Path, agent_key: str) -> Path:
     return _generated_agent_trace_dir_path(work_path) / f"{_normalize_agent_key(agent_key)}.json"
 
 
+def _generation_trace_read_file_path(work_path: Path, agent_key: str) -> Path:
+    return _generated_agent_trace_read_dir_path(work_path) / f"{_normalize_agent_key(agent_key)}.json"
+
+
 def _load_generation_trace_payload(work_path: Path, agent_key: str) -> dict[str, object]:
-    file_path = _generation_trace_file_path(work_path, agent_key)
+    file_path = _generation_trace_read_file_path(work_path, agent_key)
     if not file_path.exists():
         return {
             "agent_key": _normalize_agent_key(agent_key),
@@ -674,7 +705,7 @@ def _load_library_full(
     work_path: Path,
 ) -> tuple[dict[str, GeneratedSessionPreset], str, dict[str, PersonaSpec], dict[str, PersonaSpec]]:
     """Load library returning presets, selected key, saved specs, and pending specs."""
-    file_path = _generated_agents_file_path(work_path)
+    file_path = _generated_agents_read_path(work_path)
     if not file_path.exists():
         return {}, "", {}, {}
     payload = json.loads(file_path.read_text(encoding="utf-8"))
@@ -781,6 +812,13 @@ def persist_generated_agent_profile(
     if select_after_save:
         selected = key
     _save_generated_agent_library(config.work_path, agents, selected, existing_specs, existing_pending_specs)
+    if select_after_save:
+        from sirius_chat.config import ConfigManager
+
+        manager = ConfigManager(base_path=config.work_path)
+        workspace_config = manager.load_workspace_config(config.work_path)
+        workspace_config.active_agent_key = key
+        manager.save_workspace_config(config.work_path, workspace_config)
     return key
 
 
@@ -790,6 +828,12 @@ def select_generated_agent_profile(work_path: Path, agent_key: str) -> Generated
     if key not in agents:
         raise ValueError(f"找不到生成的主教：{agent_key}")
     _save_generated_agent_library(work_path, agents, key, specs, pending_specs)
+    from sirius_chat.config import ConfigManager
+
+    manager = ConfigManager(base_path=work_path)
+    workspace_config = manager.load_workspace_config(work_path)
+    workspace_config.active_agent_key = key
+    manager.save_workspace_config(work_path, workspace_config)
     return agents[key]
 
 
@@ -803,33 +847,24 @@ def create_session_config_from_selected_agent(
     enable_auto_compression: bool = True,
     orchestration: OrchestrationPolicy | None = None,
 ) -> SessionConfig:
-    agents, selected = load_generated_agent_library(work_path)
-    resolved_key = _normalize_agent_key(agent_key) if agent_key.strip() else selected
-    if not resolved_key:
-        raise ValueError("未选择任何生成的主教；请提供 agent_key 或与库中易")
-    if resolved_key not in agents:
-        raise ValueError(f"找不到生成的主教：{resolved_key}")
+    from sirius_chat.config import ConfigManager
 
-    preset = agents[resolved_key]
-    config = SessionConfig(
-        preset=GeneratedSessionPreset(
-            agent=Agent(
-                name=preset.agent.name,
-                persona=preset.agent.persona,
-                model=preset.agent.model,
-                temperature=preset.agent.temperature,
-                max_tokens=preset.agent.max_tokens,
-                metadata=dict(preset.agent.metadata),
-            ),
-            global_system_prompt=preset.global_system_prompt,
-        ),
+    overrides: dict[str, object] = {
+        "agent_key": _normalize_agent_key(agent_key) if agent_key.strip() else "",
+        "history_max_messages": history_max_messages,
+        "history_max_chars": history_max_chars,
+        "max_recent_participant_messages": max_recent_participant_messages,
+        "enable_auto_compression": enable_auto_compression,
+    }
+    manager = ConfigManager(base_path=work_path)
+    config = manager.build_session_config(
         work_path=work_path,
-        history_max_messages=history_max_messages,
-        history_max_chars=history_max_chars,
-        max_recent_participant_messages=max_recent_participant_messages,
-        enable_auto_compression=enable_auto_compression,
-        orchestration=orchestration,
+        session_id="default",
+        overrides=overrides,
     )
+    if orchestration is not None:
+        config.orchestration = orchestration
+        config.orchestration.validate()
     return config
 
 

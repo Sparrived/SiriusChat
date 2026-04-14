@@ -206,22 +206,24 @@ def test_load_or_persist_session_bundle_uses_load_session_config_for_persisted(m
 # ---------------------------------------------------------------------------
 
 
-class _FakeStore:
-    def __init__(self, exists: bool, payload):  # noqa: ANN001
-        self._exists = exists
-        self._payload = payload
+class _FakeRuntime:
+    def __init__(self, transcript):  # noqa: ANN001
+        self.transcript = transcript
+        self.cleared_sessions: list[str] = []
+        self.primary_users: list[tuple[str, object]] = []
 
-    def exists(self) -> bool:
-        return self._exists
+    async def get_transcript(self, session_id: str):  # noqa: ANN201
+        _ = session_id
+        return self.transcript
 
-    def load(self):  # noqa: ANN201
-        return self._payload
+    async def clear_session(self, session_id: str) -> None:
+        self.cleared_sessions.append(session_id)
 
-    def save(self, _transcript) -> None:  # noqa: ANN001
-        return None
+    async def set_primary_user(self, session_id: str, participant) -> None:  # noqa: ANN001
+        self.primary_users.append((session_id, participant))
 
 
-def _setup_resume_monkeypatch(monkeypatch, tmp_path, store):
+def _setup_resume_monkeypatch(monkeypatch, tmp_path, runtime):
     config_path = tmp_path / "config.json"
     config_path.write_text("{}", encoding="utf-8")
     monkeypatch.setattr(main_module, "_resolve_runtime_paths", lambda *_a, **_k: (config_path, tmp_path))
@@ -245,38 +247,41 @@ def _setup_resume_monkeypatch(monkeypatch, tmp_path, store):
         lambda **_k: main_module.Participant(name="用户", user_id="u1"),
     )
     monkeypatch.setattr(main_module, "_build_provider", lambda *_a, **_k: object())
-    monkeypatch.setattr(main_module, "_create_session_store", lambda **_k: store)
+    monkeypatch.setattr(main_module, "_build_runtime", lambda **_k: runtime)
     monkeypatch.setattr(main_module, "_write_transcript_output", lambda *_a, **_k: None)
 
 
 def test_main_auto_resumes_by_default(monkeypatch, tmp_path) -> None:
     loaded_transcript = object()
     captured = {"transcript": None}
-    _setup_resume_monkeypatch(monkeypatch, tmp_path, _FakeStore(True, loaded_transcript))
+    runtime = _FakeRuntime(loaded_transcript)
+    _setup_resume_monkeypatch(monkeypatch, tmp_path, runtime)
 
     def _fake_run(*_args, **kwargs):  # noqa: ANN001
-        captured["transcript"] = _args[7] if len(_args) > 7 else kwargs.get("transcript")
+        captured["transcript"] = _args[6] if len(_args) > 6 else kwargs.get("transcript")
         return main_module.Transcript()
 
     monkeypatch.setattr(main_module, "run_interactive_session", _fake_run)
     exit_code = main_module.main([], input_func=lambda _p: "", print_func=lambda _m: None)
     assert exit_code == 0
     assert captured["transcript"] is loaded_transcript
+    assert runtime.cleared_sessions == []
 
 
 def test_main_no_resume_disables_auto_resume(monkeypatch, tmp_path) -> None:
-    loaded_transcript = object()
-    captured = {"transcript": "sentinel"}
-    _setup_resume_monkeypatch(monkeypatch, tmp_path, _FakeStore(True, loaded_transcript))
+    captured: dict[str, object | None] = {"transcript": "sentinel"}
+    runtime = _FakeRuntime(object())
+    _setup_resume_monkeypatch(monkeypatch, tmp_path, runtime)
 
     def _fake_run(*_args, **kwargs):  # noqa: ANN001
-        captured["transcript"] = _args[7] if len(_args) > 7 else kwargs.get("transcript")
+        captured["transcript"] = _args[6] if len(_args) > 6 else kwargs.get("transcript")
         return main_module.Transcript()
 
     monkeypatch.setattr(main_module, "run_interactive_session", _fake_run)
     exit_code = main_module.main(["--no-resume"], input_func=lambda _p: "", print_func=lambda _m: None)
     assert exit_code == 0
     assert captured["transcript"] is None
+    assert runtime.cleared_sessions == ["default"]
 
 
 def test_main_writes_default_output_under_relative_work_path(monkeypatch, tmp_path) -> None:
@@ -308,7 +313,7 @@ def test_main_writes_default_output_under_relative_work_path(monkeypatch, tmp_pa
         lambda **_k: main_module.Participant(name="用户", user_id="u1"),
     )
     monkeypatch.setattr(main_module, "_build_provider", lambda *_a, **_k: object())
-    monkeypatch.setattr(main_module, "_create_session_store", lambda **_k: _FakeStore(False, None))
+    monkeypatch.setattr(main_module, "_build_runtime", lambda **_k: _FakeRuntime(None))
     monkeypatch.setattr(main_module, "run_interactive_session", lambda *_a, **_k: main_module.Transcript())
     monkeypatch.setattr(
         main_module,
@@ -320,6 +325,27 @@ def test_main_writes_default_output_under_relative_work_path(monkeypatch, tmp_pa
 
     assert exit_code == 0
     assert captured["output_path"] == relative_work_path / "transcript.json"
+
+
+def test_handle_provider_command_registers_under_workspace_root(monkeypatch, tmp_path) -> None:
+    registry = main_module.ProviderRegistry(tmp_path)
+    captured: dict[str, object] = {}
+
+    def _fake_register(**kwargs):  # noqa: ANN003
+        captured.update(kwargs)
+        return "openai-compatible"
+
+    monkeypatch.setattr(main_module, "register_provider_with_validation", _fake_register)
+
+    handled, changed = main_module._handle_provider_command(
+        "/provider add openai-compatible test-key gpt-4o-mini https://api.openai.com",
+        provider_registry=registry,
+        print_func=lambda _msg: None,
+    )
+
+    assert handled is True
+    assert changed is True
+    assert captured["work_path"] == tmp_path
 
 
 

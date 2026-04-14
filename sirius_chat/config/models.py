@@ -30,6 +30,24 @@ class AgentPreset:
 
 
 @dataclass(slots=True)
+class SessionDefaults:
+    """Workspace-level defaults used to build SessionConfig instances."""
+
+    history_max_messages: int = 24
+    history_max_chars: int = 6000
+    max_recent_participant_messages: int = 5
+    enable_auto_compression: bool = True
+
+
+@dataclass(slots=True)
+class ProviderPolicy:
+    """Workspace-level provider bootstrap policy."""
+
+    prefer_workspace_registry: bool = True
+    allow_legacy_session_json_bootstrap: bool = True
+
+
+@dataclass(slots=True)
 class MemoryPolicy:
     """Centralized memory system configuration.
     
@@ -242,6 +260,68 @@ class TokenUsageRecord(JsonSerializable):
     retries_used: int = 0
 
 
+@dataclass(slots=True)
+class WorkspaceConfig:
+    """Persisted workspace-level configuration source."""
+
+    work_path: Path
+    layout_version: int = 1
+    active_agent_key: str = ""
+    session_defaults: SessionDefaults = field(default_factory=SessionDefaults)
+    orchestration_defaults: dict[str, Any] = field(default_factory=dict)
+    provider_policy: ProviderPolicy = field(default_factory=ProviderPolicy)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "work_path": str(self.work_path),
+            "layout_version": self.layout_version,
+            "active_agent_key": self.active_agent_key,
+            "session_defaults": {
+                "history_max_messages": self.session_defaults.history_max_messages,
+                "history_max_chars": self.session_defaults.history_max_chars,
+                "max_recent_participant_messages": self.session_defaults.max_recent_participant_messages,
+                "enable_auto_compression": self.session_defaults.enable_auto_compression,
+            },
+            "orchestration_defaults": dict(self.orchestration_defaults),
+            "provider_policy": {
+                "prefer_workspace_registry": self.provider_policy.prefer_workspace_registry,
+                "allow_legacy_session_json_bootstrap": self.provider_policy.allow_legacy_session_json_bootstrap,
+            },
+        }
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "WorkspaceConfig":
+        session_defaults_payload = payload.get("session_defaults", {})
+        provider_policy_payload = payload.get("provider_policy", {})
+        return cls(
+            work_path=Path(payload.get("work_path", ".")),
+            layout_version=int(payload.get("layout_version", 1)),
+            active_agent_key=str(payload.get("active_agent_key", "")).strip(),
+            session_defaults=SessionDefaults(
+                history_max_messages=int(session_defaults_payload.get("history_max_messages", 24)),
+                history_max_chars=int(session_defaults_payload.get("history_max_chars", 6000)),
+                max_recent_participant_messages=int(
+                    session_defaults_payload.get("max_recent_participant_messages", 5)
+                ),
+                enable_auto_compression=bool(
+                    session_defaults_payload.get("enable_auto_compression", True)
+                ),
+            ),
+            orchestration_defaults=dict(payload.get("orchestration_defaults", {})),
+            provider_policy=ProviderPolicy(
+                prefer_workspace_registry=bool(
+                    provider_policy_payload.get("prefer_workspace_registry", True)
+                ),
+                allow_legacy_session_json_bootstrap=bool(
+                    provider_policy_payload.get(
+                        "allow_legacy_session_json_bootstrap",
+                        True,
+                    )
+                ),
+            ),
+        )
+
+
 @dataclass(slots=True, init=False)
 class SessionConfig:
     """Session configuration including agent, paths, and orchestration policy."""
@@ -253,6 +333,7 @@ class SessionConfig:
     max_recent_participant_messages: int = 5
     enable_auto_compression: bool = True
     orchestration: OrchestrationPolicy = field(default_factory=OrchestrationPolicy)
+    session_id: str = "default"
 
     def __init__(
         self,
@@ -264,6 +345,7 @@ class SessionConfig:
         max_recent_participant_messages: int = 5,
         enable_auto_compression: bool = True,
         orchestration: OrchestrationPolicy | None = None,
+        session_id: str = "default",
     ) -> None:
         self.preset = preset
         self.work_path = Path(work_path)
@@ -271,6 +353,7 @@ class SessionConfig:
         self.history_max_chars = history_max_chars
         self.max_recent_participant_messages = max_recent_participant_messages
         self.enable_auto_compression = enable_auto_compression
+        self.session_id = str(session_id).strip() or "default"
         
         # If no orchestration provided, create default: use main AI model as unified model
         if orchestration is None:

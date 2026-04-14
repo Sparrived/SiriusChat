@@ -4,6 +4,23 @@
 
 ## [Unreleased]
 
+## [0.23.0] - 2026-04-14
+
+### Added
+- **WorkspaceRuntime / WorkspaceLayout / WorkspaceMigrationManager**：新增 workspace 级运行时、统一路径解析与旧布局迁移能力。对外推荐入口改为 `open_workspace_runtime(...)` / `WorkspaceRuntime.open(...)`，外部只需提供 `work_path`、`session_id` 与业务输入。
+- **Workspace 配置模型**：新增 `WorkspaceConfig`、`SessionDefaults`、`ProviderPolicy` 与 `SessionStoreFactory`，由 workspace 层统一派生运行时 `SessionConfig`。
+- **迁移档案与回归覆盖**：新增 `docs/migration-v0.23.md` 和 `tests/test_workspace_runtime.py`，覆盖自动恢复、多 session、删除会话、旧布局迁移与 legacy session JSON bootstrap。
+
+### Changed
+- **持久化布局统一收口**：provider、session、memory、token、roleplay、skills 全部改走 workspace 布局。默认路径现在是：`providers/provider_keys.json`、`sessions/<session_id>/session_state.db`、`sessions/<session_id>/participants.json`、`memory/events/events.json`、`memory/self_memory.json`、`token/token_usage.db`、`roleplay/generated_agents.json` 与 `roleplay/generated_agent_traces/`。
+- **兼容入口复用 runtime**：`JsonPersistentSessionRunner`、`sirius-chat` CLI 和 `main.py` 现在尽量复用 `WorkspaceRuntime`，不再要求调用方显式 `store.load()` / `store.save()`。
+- **Roleplay 与 provider 管理收敛到 workspace**：active agent 会同步写回 `WorkspaceConfig`，provider registry 统一托管在 `WorkspaceProviderManager` 下。
+
+### Fixed
+- **Windows SQLite 删除锁**：`SqliteSessionStore` 现在显式关闭连接，修复删除 session 目录时的 `WinError 32`。
+- **兼容入口路径回归**：修复 `main.py` 在新布局下使用 `/provider add` 时错误地把 workspace 根路径解析为 `providers/` 子目录的问题。
+- **包初始化循环依赖**：`sirius_chat.workspace` 与 `sirius_chat.session` 改为 lazy exports，避免 runtime 引入后的导入环路。
+
 ## [0.22.4] - 2026-04-14
 
 ### Added

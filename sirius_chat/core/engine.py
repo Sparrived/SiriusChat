@@ -17,6 +17,7 @@ from sirius_chat.memory import (
     EventMemoryFileStore,
     EventMemoryManager,
     UserMemoryFileStore,
+    UserMemoryManager,
     UserProfile,
     SelfMemoryFileStore,
     SelfMemoryManager,
@@ -67,6 +68,7 @@ from sirius_chat.core.chat_builder import (
     build_chat_main_request_context,
 )
 from sirius_chat.token.store import TokenUsageStore
+from sirius_chat.workspace.layout import WorkspaceLayout
 logger = logging.getLogger(__name__)
 
 
@@ -275,9 +277,10 @@ class AsyncRolePlayEngine:
         if existing is not None:
             return existing
 
-        work_key = str(config.work_path)
-        file_store = UserMemoryFileStore(config.work_path)
-        event_file_store = EventMemoryFileStore(config.work_path)
+        layout = WorkspaceLayout(config.work_path)
+        work_key = str(layout.root)
+        file_store = UserMemoryFileStore(layout)
+        event_file_store = EventMemoryFileStore(layout)
 
         # ── Engine-level shared memory: load once, reuse across sessions ──
         if work_key in self._shared_user_memory:
@@ -319,10 +322,7 @@ class AsyncRolePlayEngine:
             stores=SessionStores(
                 file_store=file_store,
                 event_file_store=event_file_store,
-                token_store=TokenUsageStore(
-                    config.work_path / "token_usage.db",
-                    session_id=str(config.work_path),
-                ),
+                token_store=TokenUsageStore.for_workspace(layout, session_id=config.session_id),
             ),
             subsystems=SessionSubsystems(
                 event_store=event_store,
@@ -336,16 +336,16 @@ class AsyncRolePlayEngine:
             if work_key in self._shared_self_memory:
                 created.subsystems.self_memory = self._shared_self_memory[work_key]
             else:
-                self_store = SelfMemoryFileStore(config.work_path)
+                self_store = SelfMemoryFileStore(layout)
                 created.subsystems.self_memory = self_store.load()
                 self._shared_self_memory[work_key] = created.subsystems.self_memory
                 # Apply diary decay on first load
                 removed = created.subsystems.self_memory.apply_diary_decay()
                 if removed > 0:
                     logger.info("%s 翻了翻旧日记，淡忘了 %d 条已久远的记忆碎片", config.agent.name, removed)
-            created.stores.self_memory_store = SelfMemoryFileStore(config.work_path)
+            created.stores.self_memory_store = SelfMemoryFileStore(layout)
 
-        skills_dir = config.work_path / "skills"
+        skills_dir = layout.skills_dir()
         SkillRegistry.ensure_skills_directory(skills_dir)
 
         # Initialize skill system if enabled
@@ -357,7 +357,7 @@ class AsyncRolePlayEngine:
             )
             if loaded_count > 0:
                 created.subsystems.skill_registry = registry
-                created.subsystems.skill_executor = SkillExecutor(config.work_path)
+                created.subsystems.skill_executor = SkillExecutor(layout)
                 logger.info("%s 学会了 %d 项新技能，随时可以施展", config.agent.name, loaded_count)
             else:
                 logger.debug("SKILL系统已启用但未找到任何SKILL文件: %s", skills_dir)
@@ -455,7 +455,8 @@ class AsyncRolePlayEngine:
         if not config.orchestration.enable_skills:
             return
 
-        skills_dir = config.work_path / "skills"
+        layout = WorkspaceLayout(config.work_path)
+        skills_dir = layout.skills_dir()
         SkillRegistry.ensure_skills_directory(skills_dir)
 
         registry = context.subsystems.skill_registry
@@ -466,7 +467,7 @@ class AsyncRolePlayEngine:
             registry = SkillRegistry()
             context.subsystems.skill_registry = registry
         if executor is None:
-            executor = SkillExecutor(config.work_path)
+            executor = SkillExecutor(layout)
             context.subsystems.skill_executor = executor
 
         if not registry.all_skills():
@@ -597,7 +598,7 @@ class AsyncRolePlayEngine:
             context.subsystems.skill_executor.save_all_stores()
 
         # ── Sync back to engine-level shared stores ──
-        work_key = str(config.work_path)
+        work_key = str(WorkspaceLayout(config.work_path).root)
         self._shared_user_memory[work_key] = transcript.user_memory
         if config.orchestration.enable_self_memory:
             self._shared_self_memory[work_key] = context.subsystems.self_memory
@@ -1016,7 +1017,7 @@ class AsyncRolePlayEngine:
                     # Skill registry can be stale — try reloading once.
                     try:
                         reloaded = skill_registry.load_from_directory(
-                            config.work_path / "skills",
+                            WorkspaceLayout(config.work_path).skills_dir(),
                             auto_install_deps=config.orchestration.auto_install_skill_deps,
                         )
                         if reloaded > 0:

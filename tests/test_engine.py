@@ -6,6 +6,7 @@ from sirius_chat.memory import UserProfile
 from sirius_chat.models import Message, Transcript
 from sirius_chat.providers.mock import MockProvider
 from sirius_chat.session.store import JsonSessionStore
+from sirius_chat.workspace.layout import WorkspaceLayout
 from pathlib import Path
 
 
@@ -293,7 +294,7 @@ def test_user_memory_is_persisted_per_user_file_across_new_sessions(tmp_path) ->
             transcript=None,
         )
 
-        users_dir = work_path / "users"
+        users_dir = WorkspaceLayout(work_path).user_memory_dir()
         user_files = list(users_dir.glob("*.json"))
         assert user_files
 

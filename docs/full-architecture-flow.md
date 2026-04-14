@@ -11,42 +11,42 @@
 
 ```mermaid
 flowchart TD
-    A["外部入口<br/>CLI / Python API / main.py"] --> B["配置加载<br/>SessionConfig<br/>providers 列表<br/>work_path"]
-    B --> C["Provider 构建<br/>merge_provider_sources<br/>AutoRoutingProvider"]
-    C --> D["会话执行<br/>AsyncRolePlayEngine<br/>.run_live_session"]
+  A["外部入口<br/>CLI / Python API / main.py"] --> B["Workspace 打开<br/>work_path<br/>session_id"]
+  B --> C["WorkspaceRuntime.initialize<br/>legacy 检测/迁移<br/>workspace.json"]
+  C --> D["ConfigManager.build_session_config<br/>WorkspaceProviderManager.load<br/>AutoRoutingProvider"]
+  D --> E["会话执行<br/>AsyncRolePlayEngine<br/>.run_live_session"]
 
-    D --> E["参与者解析<br/>channel identity<br/>-&gt; speaker"]
-    E --> F["当前轮消息写入<br/>Transcript.messages<br/>（自动去除尾部空白）"]
-    F --> G["用户识别与记忆更新<br/>UserMemoryManager"]
-    G --> G2["事件命中与落盘<br/>EventMemoryManager"]
+  E --> F["参与者解析<br/>channel identity<br/>-&gt; speaker"]
+  F --> G["当前轮消息写入<br/>Transcript.messages<br/>（自动去除尾部空白）"]
+  G --> H["用户识别与记忆更新<br/>UserMemoryManager"]
+  H --> H2["事件命中与落盘<br/>EventMemoryManager"]
     
-    G2 --> G3["事件→用户洞察映射<br/>apply_event_insights<br/>interpret_event_with_user_context"]
-    G3 --> G4["事件特征→用户事实<br/>emotional_pattern<br/>user_interest<br/>social_context"]
+  H2 --> H3["事件→用户洞察映射<br/>apply_event_insights<br/>interpret_event_with_user_context"]
+  H3 --> H4["事件特征→用户事实<br/>emotional_pattern<br/>user_interest<br/>social_context"]
 
-    G4 --> H{orchestration<br/>enabled?}
-    H -- "并行流水线 (asyncio.gather)" --> I["_add_human_turn 分支<br/>memory_extract + event_extract<br/>用户画像与事件提取"]
-    H -- "并行流水线 (asyncio.gather)" --> J3["intent_analysis 分支<br/>意图分类 + target 识别<br/>支持预算 / 重试 / 专用模型"]
-    I --> K
-    J3 --> K["参与决策<br/>HeatAnalyzer → IntentAnalyzer v2<br/>→ EngagementCoordinator"]
+  H4 --> I{orchestration<br/>enabled?}
+  I -- "并行流水线 (asyncio.gather)" --> J["_add_human_turn 分支<br/>memory_extract + event_extract<br/>用户画像与事件提取"]
+  I -- "并行流水线 (asyncio.gather)" --> K3["intent_analysis 分支<br/>意图分类 + target 识别<br/>支持预算 / 重试 / 专用模型"]
+  J --> L
+  K3 --> L["参与决策<br/>HeatAnalyzer → IntentAnalyzer v2<br/>→ EngagementCoordinator"]
 
-    K --> K2{skills<br/>enabled?}
-    K2 -- 是 --> K3["SKILL 加载<br/>dependency_resolver<br/>自动安装缺失依赖"]
-    K3 --> K4["SKILL 执行<br/>SkillExecutor<br/>timeout 限制"]
-    K2 -- 否 --> L
-    K4 --> L
+  L --> L2{skills<br/>enabled?}
+  L2 -- 是 --> L3["SKILL 加载<br/>dependency_resolver<br/>自动安装缺失依赖"]
+  L3 --> L4["SKILL 执行<br/>SkillExecutor<br/>timeout 限制"]
+  L2 -- 否 --> M
+  L4 --> M
 
-    L["构建系统提示词<br/>主 AI + 参与者记忆<br/>+ 会话摘要 + 环境上下文<br/>分割指令（可选）<br/>安全提醒注入"] --> M["调用 Provider<br/>自动路由或指定<br/>图片仅在当前批次含图时发送 vision 格式<br/>无图时历史图片折叠为文本描述符<br/>生成 assistant 回复"]
-    M --> N["Token 记录双写<br/>① Transcript.token_usage_records 内存<br/>② TokenUsageStore → token_usage.db SQLite"]
-    N --> O["自动压缩历史<br/>session_summary<br/>超过长度阈值时"]
-    O --> P["输出更新后<br/>Transcript"]
+  M["构建系统提示词<br/>主 AI + 参与者记忆<br/>+ 会话摘要 + 环境上下文<br/>分割指令（可选）<br/>安全提醒注入"] --> N["调用 Provider<br/>自动路由或指定<br/>图片仅在当前批次含图时发送 vision 格式<br/>无图时历史图片折叠为文本描述符<br/>生成 assistant 回复"]
+  N --> O["Token 记录双写<br/>① Transcript.token_usage_records 内存<br/>② TokenUsageStore → token/token_usage.db SQLite"]
+  O --> P["自动压缩历史<br/>session_summary<br/>超过长度阈值时"]
+  P --> Q["输出更新后<br/>Transcript"]
 
-    P --> Q["持久化选项<br/>JsonSessionStore<br/>SqliteSessionStore"]
-    P --> Q2["事件落盘<br/>work_path/events<br/>events.json"]
-    Q --> R["可选会话恢复<br/>resume flag"]
-    R --> D
+  Q --> R["WorkspaceRuntime 自动落盘<br/>sessions/<session_id>/session_state.db<br/>sessions/<session_id>/participants.json"]
+  Q --> R2["事件落盘<br/>work_path/memory/events<br/>events.json"]
+  R --> E
 
-    D -. 后台循环<br/>consolidation_enabled=True .-> BG["BackgroundTaskManager<br/>定时归纳事件/摘要/事实<br/>consolidate_entries<br/>consolidate_summary_notes<br/>consolidate_memory_facts"]
-    BG -. 写回 .-> Q
+  E -. 后台循环<br/>consolidation_enabled=True .-> BG["BackgroundTaskManager<br/>定时归纳事件/摘要/事实<br/>consolidate_entries<br/>consolidate_summary_notes<br/>consolidate_memory_facts"]
+  BG -. 写回 .-> R
 ```
 
 ## 2. 模块分层图
@@ -76,6 +76,7 @@ flowchart LR
     end
 
     subgraph Infra[基础设施层]
+      Workspace[workspace/]
       SessionStore[session/store.py]
       SessionRunner[session/runner.py]
       Routing[providers/routing.py]
@@ -90,7 +91,11 @@ flowchart LR
     Main --> PublicAPI
     CLI --> PublicAPI
     PublicAPI --> Engine
+    PublicAPI --> Workspace
     PublicAPI --> Prompting
+    Workspace --> ConfigMgr
+    Workspace --> SessionStore
+    Workspace --> Routing
     Engine --> Models
     Engine --> Memory
     Engine --> Heat
@@ -106,19 +111,18 @@ flowchart LR
     Routing --> ProviderImpl
     ProviderImpl --> ProviderBase
     Middleware --> ProviderBase
-    CLI --> Routing
-    SessionRunner --> Engine
-    SessionRunner --> SessionStore
+    CLI --> Workspace
+    SessionRunner --> Workspace
 ```
 
 ## 3. Provider 构建流程（v1.0 统一格式）
 
 ```mermaid
 flowchart LR
-    A["session.json<br/>providers: [{<br/>  'type': 'openai',<br/>  'label': 'gpt4',<br/>  'api_key': '<br/>  API_KEY_NAME'<br/>}]"] --> B["merge_provider_sources<br/>work_path<br/>providers_config"]
-    B --> B2["ProviderRegistry<br/>从 work_path/<br/>provider_keys.json<br/>加载持久化密钥"]
-    B2 --> C["AutoRoutingProvider<br/>或指定 Provider"]
-    C --> D["Engine.provider<br/>生成文本"]
+  A["legacy session.json<br/>providers 列表"] --> B["ConfigManager.bootstrap_workspace_from_legacy_session_json<br/>workspace defaults"]
+  B --> B2["WorkspaceProviderManager<br/>从 work_path/providers/<br/>provider_keys.json 加载/写回"]
+  B2 --> C["AutoRoutingProvider<br/>或指定 Provider"]
+  C --> D["WorkspaceRuntime / Engine.provider<br/>生成文本"]
 
     style A fill:#e1f5ff
     style B fill:#fff3e0
@@ -130,7 +134,7 @@ flowchart LR
 **关键点**：
 - v1.0 统一采用 `providers` 列表格式（删除向后兼容的 `provider` 单字段）
 - `merge_provider_sources()` 签名简化：仅接收 `(work_path, providers_config)`
-- 持久化密钥通过 `<work_path>/provider_keys.json` 管理，由 ProviderRegistry 自动加载
+- 持久化密钥通过 `<work_path>/providers/provider_keys.json` 管理，由 ProviderRegistry 自动加载
 - SessionConfig 内部转为单一 Provider 实例（AutoRoutingProvider 或指定 Provider）
 - 支持多 Provider 路由：AutoRoutingProvider 在运行时自动选择合适提供商
 
@@ -138,9 +142,10 @@ flowchart LR
 
 | 模块 | 主要输入 | 主要输出/产物 |
 | --- | --- | --- |
-| `main.py` | 命令行参数、用户输入、`work_path`、`config.json` | `Transcript`、`transcript.json`、`session_config.persisted.json`、`primary_user.json`、`events/events.json` |
-| `sirius_chat/cli.py` | `config.json`（含 `providers` 列表）、单轮用户输入 | 单轮 `Transcript`、`transcript.json` |
+| `main.py` | 命令行参数、用户输入、`work_path`、`config.json` | `Transcript`、`transcript.json`、兼容 `primary_user.json`、`sessions/default/*` |
+| `sirius_chat/cli.py` | `config.json`（含 `providers` 列表）、单轮用户输入 | 单轮 `Transcript`、`transcript.json`、workspace bootstrap 产物 |
 | `sirius_chat/api/` | 外部程序调用参数、`work_path` | 稳定对外函数与类型、`Transcript` |
+| `sirius_chat/workspace/` | `work_path`、`session_id`、provider/session factory | `workspace.json`、新 layout 路径、迁移报告、`WorkspaceRuntime` |
 | `sirius_chat/models/models.py` | 配置与消息数据 | 统一数据契约（`Message`、`Participant`、`Transcript` 等） |
 | `sirius_chat/core/engine.py` | 初始化：`SessionConfig` + 可选已有 `Transcript`；逐条处理：`Message` + `Transcript` | 更新后的 `Transcript`、assistant 回复、编排统计与 token 记录 |
 | `sirius_chat/core/heat.py` | 最近 N 条消息、时间窗口 | `HeatAnalysis`（heat_level / heat_score / active_participants / ai_participation_ratio） |
@@ -149,16 +154,16 @@ flowchart LR
 | `sirius_chat/core/events.py` | 对话上下文、事件特征原始数据 | 事件摘要、`SessionEvent` 数据结构 |
 | `sirius_chat/background_tasks.py` | `BackgroundTaskConfig`、归纳回调函数 | 定时触发事件/摘要/事实归纳任务，写回持久化 |
 | `sirius_chat/memory/` | 用户信息、对话历史、事件数据 | 记忆库、事件落盘、用户档案提取 |
-| `sirius_chat/roleplay_prompting.py` | 角色问答模板（default / companion / romance / group_chat）、高层人格回答、关键词、依赖文件、agent 名称、模型 | `GeneratedSessionPreset`、`generated_agents.json`（含失败前暂存的 `PersonaSpec`）、`generated_agent_traces/<agent_key>.json`（含待生成快照）、可直接创建的 `SessionConfig` |
+| `sirius_chat/roleplay_prompting.py` | 角色问答模板（default / companion / romance / group_chat）、高层人格回答、关键词、依赖文件、agent 名称、模型 | `GeneratedSessionPreset`、`roleplay/generated_agents.json`（含失败前暂存的 `PersonaSpec`）、`roleplay/generated_agent_traces/<agent_key>.json`（含待生成快照）、可直接创建的 `SessionConfig` |
 | `sirius_chat/token/usage.py` | `Transcript.token_usage_records` | baseline 与按 actor/task/model 聚合报表（内存级） |
 | `sirius_chat/token/store.py` | `TokenUsageRecord`、`session_id` | SQLite 持久化（`{work_path}/token_usage.db`）、跨会话查询 |
 | `sirius_chat/token/analytics.py` | `TokenUsageStore` | 全局/会话/用户/任务/模型/时间维度分析报告 |
-| `sirius_chat/session/store.py` | `Transcript` | 会话持久化状态文件：默认结构化 SQLite（`session_state.db`），可选 JSON；SQLite 会自动迁移 legacy JSON / payload SQLite |
+| `sirius_chat/session/store.py` | `Transcript` | 会话持久化状态文件：默认结构化 SQLite（`sessions/<session_id>/session_state.db`），可选 JSON；SQLite 会自动迁移 legacy JSON / payload SQLite |
 | `sirius_chat/session/runner.py` | `SessionConfig`、Provider、主用户输入、`work_path` | 自动持久化会话循环、主用户档案维护、恢复状态管理 |
 | `sirius_chat/config/manager.py` | JSON 配置文件、环境变量 | 合并配置、环境变量覆盖、配置验证 |
 | `sirius_chat/providers/base.py` | `GenerationRequest` | Provider 协议（同步/异步生成契约） |
 | `sirius_chat/providers/middleware/` | `GenerationRequest`、中间件链配置 | 透明的 Provider 功能扩展（流控、重试、成本计量） |
-| `sirius_chat/providers/routing.py` | `work_path`、`providers_config` 列表 | ProviderRegistry、`provider_keys.json`、最终路由选择 |
+| `sirius_chat/providers/routing.py` | `work_path`、`providers_config` 列表 | ProviderRegistry、`providers/provider_keys.json`、最终路由选择 |
 | `sirius_chat/providers/openai_compatible.py` | `GenerationRequest` | 模型文本回复、token 使用统计 |
 | `sirius_chat/providers/aliyun_bailian.py` | `GenerationRequest` | 阿里云百炼 DashScope 兼容接口回复 |
 | `sirius_chat/providers/siliconflow.py` | `GenerationRequest` | 模型文本回复、token 使用统计 |
@@ -175,12 +180,13 @@ flowchart LR
 - `Transcript.session_summary`: 自动压缩后的历史摘要。
 - `Transcript.orchestration_stats`: 任务级统计（attempted/succeeded/failed 等）。
 - `Transcript.token_usage_records`: 每次模型调用的 token 内存归档（与 SQLite 并行写入）。
-- `{work_path}/token_usage.db`: SQLite 持久化的全量 token 使用记录（跨会话累计，由 `TokenUsageStore` 写入）。
-- `generated_agents.json`: 由提示词生成器输出并持久化的 agent 资产库；生成前会先暂存最新 `PersonaSpec`，避免失败时丢失输入。
-- `generated_agent_traces/<agent_key>.json`: 角色生成器的完整本地轨迹（待生成快照、prompt、原始返回、依赖文件快照、最终输出）。
-- `session_state.db`: 默认会话持久化与恢复状态，内部为结构化 SQLite 表，并会自动导入 legacy `session_state.json` / payload-style SQLite。
-- `session_state.json`: 仅在显式使用 `JsonSessionStore` 时作为可选后端存在。
-- `events/events.json`: 事件记忆持久化文件（用于跨会话事件命中）。
+- `{work_path}/token/token_usage.db`: SQLite 持久化的全量 token 使用记录（跨会话累计，由 `TokenUsageStore` 写入）。
+- `{work_path}/roleplay/generated_agents.json`: 由提示词生成器输出并持久化的 agent 资产库；生成前会先暂存最新 `PersonaSpec`，避免失败时丢失输入。
+- `{work_path}/roleplay/generated_agent_traces/<agent_key>.json`: 角色生成器的完整本地轨迹（待生成快照、prompt、原始返回、依赖文件快照、最终输出）。
+- `{work_path}/sessions/<session_id>/session_state.db`: 默认会话持久化与恢复状态，内部为结构化 SQLite 表，并会自动导入 legacy `session_state.json` / payload-style SQLite。
+- `{work_path}/sessions/<session_id>/session_state.json`: 仅在显式使用 `JsonSessionStore` 时作为可选后端存在。
+- `{work_path}/sessions/<session_id>/participants.json`: 会话参与者与主用户元数据。
+- `{work_path}/memory/events/events.json`: 事件记忆持久化文件（用于跨会话事件命中）。
 - ✨ **(v0.17.0)** 引擎级共享记忆缓存：`AsyncRolePlayEngine` 按 `work_path` 键保存 `UserMemoryManager`、`SelfMemoryManager`、`EventObservationStore` 实例，跨 Session 复用，持久化时同步回写。
 
 ## 5. 代码更新后的强制同步规则
@@ -203,7 +209,7 @@ flowchart LR
 
 **v1.0 核心约束**：
 - SessionConfig 必须通过 `providers` 列表字段（JSON 数组）指定所有提供商配置。
-- `merge_provider_sources(work_path, providers_config)` 自动从 `<work_path>/provider_keys.json` 加载持久化密钥。
+- `merge_provider_sources(work_path, providers_config)` 自动从 `<work_path>/providers/provider_keys.json` 加载持久化密钥。
 - 不存在中间提取层或向后兼容转换逻辑。
 - 所有持久化文件使用统一的 `providers` 列表格式。
 

@@ -5,10 +5,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from sirius_chat.async_engine import AsyncRolePlayEngine
-from sirius_chat.config import SessionConfig
+from sirius_chat.config import Agent, AgentPreset, SessionConfig
 from sirius_chat.models import Message, Participant, Transcript
 from sirius_chat.providers.base import AsyncLLMProvider, LLMProvider
-from sirius_chat.session.store import JsonSessionStore, SessionStore, SqliteSessionStore
+from sirius_chat.session.store import SessionStore, SessionStoreFactory, SqliteSessionStore
+from sirius_chat.workspace.runtime import WorkspaceRuntime
 
 
 PRIMARY_USER_FILE_NAME = "primary_user.json"
@@ -32,12 +33,37 @@ def _participant_to_payload(participant: Participant) -> dict[str, object]:
 
 
 def _payload_to_participant(payload: dict[str, object]) -> Participant:
+    aliases_raw = payload.get("aliases", [])
+    traits_raw = payload.get("traits", [])
     return Participant(
         name=str(payload.get("name", "用户")),
         user_id=str(payload.get("user_id", payload.get("name", "用户"))),
         persona=str(payload.get("persona", "")),
-        aliases=list(payload.get("aliases", [])),
-        traits=list(payload.get("traits", [])),
+        aliases=list(aliases_raw) if isinstance(aliases_raw, list) else [],
+        traits=list(traits_raw) if isinstance(traits_raw, list) else [],
+    )
+
+
+def _clone_session_config(config: SessionConfig, *, session_id: str) -> SessionConfig:
+    return SessionConfig(
+        work_path=config.work_path,
+        preset=AgentPreset(
+            agent=Agent(
+                name=config.agent.name,
+                persona=config.agent.persona,
+                model=config.agent.model,
+                temperature=config.agent.temperature,
+                max_tokens=config.agent.max_tokens,
+                metadata=dict(config.agent.metadata),
+            ),
+            global_system_prompt=config.global_system_prompt,
+        ),
+        history_max_messages=config.history_max_messages,
+        history_max_chars=config.history_max_chars,
+        max_recent_participant_messages=config.max_recent_participant_messages,
+        enable_auto_compression=config.enable_auto_compression,
+        orchestration=config.orchestration,
+        session_id=session_id,
     )
 
 
@@ -59,6 +85,8 @@ class JsonPersistentSessionRunner:
     store: SessionStore = field(init=False)
     transcript: Transcript | None = field(default=None, init=False)
     primary_user: Participant | None = field(default=None, init=False)
+    runtime: WorkspaceRuntime = field(init=False)
+    session_id: str = field(default="default", init=False)
 
     def __post_init__(self) -> None:
         base = Path(self.work_path) if self.work_path else self.config.work_path
@@ -66,10 +94,18 @@ class JsonPersistentSessionRunner:
         self.work_path.mkdir(parents=True, exist_ok=True)
         self.config.work_path = self.work_path
         self.engine = AsyncRolePlayEngine(provider=self.provider)
-        self.store = self.session_store if self.session_store is not None else SqliteSessionStore(self.work_path)
+        store_factory = SessionStoreFactory(fixed_store=self.session_store) if self.session_store is not None else SessionStoreFactory()
+        self.runtime = WorkspaceRuntime.open(
+            self.work_path,
+            provider=self.provider,
+            store_factory=store_factory,
+            session_config_factory=lambda session_id: _clone_session_config(self.config, session_id=session_id),
+        )
+        self.store = self.runtime.get_session_store(self.session_id)
 
     @property
     def _primary_user_path(self) -> Path:
+        assert self.work_path is not None
         return self.work_path / PRIMARY_USER_FILE_NAME
 
     def _set_primary_user(self, participant: Participant) -> None:
@@ -107,33 +143,32 @@ class JsonPersistentSessionRunner:
         _atomic_write_json(self._primary_user_path, payload)
 
     async def initialize(self, *, primary_user: Participant | None = None, resume: bool = True) -> None:
-        if resume and self.store.exists():
-            self.transcript = self.store.load()
+        await self.runtime.initialize()
+        self.store = self.runtime.get_session_store(self.session_id)
+        if resume:
+            self.transcript = await self.runtime.get_transcript(self.session_id)
 
         existing = self._load_primary_user_from_disk()
+        if existing is None:
+            existing = await self.runtime.get_primary_user(self.session_id)
         chosen = existing or primary_user or self.primary_user
         if chosen is None:
             raise ValueError("primary_user is required for first initialization.")
 
         self._set_primary_user(chosen)
+        await self.runtime.set_primary_user(self.session_id, chosen)
         self._persist_primary_user()
 
     async def send_user_message(self, content: str) -> Message:
         if self.primary_user is None:
             raise RuntimeError("Runner not initialized. Call initialize() first.")
 
-        if self.transcript is None:
-            self.transcript = await self.engine.run_live_session(
-                config=self.config,
-                transcript=self.transcript,
-            )
-
-        self.transcript = await self.engine.run_live_message(
-            config=self.config,
-            transcript=self.transcript,
+        self.transcript = await self.runtime.run_live_message(
+            session_id=self.session_id,
             turn=Message(role="user", speaker=self.primary_user.name, content=content),
+            user_profile=self.primary_user.as_user_profile(),
         )
-        self.store.save(self.transcript)
+        self.store = self.runtime.get_session_store(self.session_id)
         self._persist_primary_user()
         return self.transcript.messages[-1]
 
@@ -141,6 +176,6 @@ class JsonPersistentSessionRunner:
         self._set_primary_user(participant)
         if clear_transcript:
             self.transcript = None
-            if self.store.exists():
-                self.store.clear()
+            await self.runtime.clear_session(self.session_id)
+        await self.runtime.set_primary_user(self.session_id, participant)
         self._persist_primary_user()

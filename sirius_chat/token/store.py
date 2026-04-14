@@ -11,6 +11,7 @@ import time
 from pathlib import Path
 
 from sirius_chat.config import TokenUsageRecord
+from sirius_chat.workspace.layout import WorkspaceLayout
 
 _SCHEMA_VERSION = 1
 
@@ -66,6 +67,15 @@ class TokenUsageStore:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self._conn: sqlite3.Connection | None = None
         self._ensure_schema()
+
+    @classmethod
+    def for_workspace(
+        cls,
+        layout: WorkspaceLayout,
+        *,
+        session_id: str = "default",
+    ) -> "TokenUsageStore":
+        return cls(layout.token_usage_db_path(), session_id=session_id)
 
     # ------------------------------------------------------------------
     # Connection helpers

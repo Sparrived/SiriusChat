@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from sirius_chat.memory.event.manager import EventMemoryManager
+from sirius_chat.workspace.layout import WorkspaceLayout
 
 logger = logging.getLogger(__name__)
 
@@ -15,8 +16,9 @@ logger = logging.getLogger(__name__)
 class EventMemoryFileStore:
     """File-based storage for event memory."""
     
-    def __init__(self, work_path: Path, filename: str = "events.json") -> None:
-        self._dir = Path(work_path) / "events"
+    def __init__(self, work_path: Path | WorkspaceLayout, filename: str = "events.json") -> None:
+        layout = work_path if isinstance(work_path, WorkspaceLayout) else WorkspaceLayout(work_path)
+        self._dir = layout.event_memory_dir()
         self._path = self._dir / filename
 
     @property

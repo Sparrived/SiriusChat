@@ -3,8 +3,11 @@ from sirius_chat.config import (
     AgentPreset,
     MemoryPolicy,
     OrchestrationPolicy,
+    ProviderPolicy,
     SessionConfig,
+    SessionDefaults,
     TokenUsageRecord,
+    WorkspaceConfig,
 )
 from sirius_chat.models import (
     Message,
@@ -20,8 +23,11 @@ __all__ = [
     "Message",
     "OrchestrationPolicy",
     "Participant",
+    "ProviderPolicy",
     "SessionConfig",
+    "SessionDefaults",
     "TokenUsageRecord",
     "Transcript",
     "User",
+    "WorkspaceConfig",
 ]

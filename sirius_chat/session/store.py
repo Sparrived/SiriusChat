@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Protocol
 
 from sirius_chat.models import Transcript
+from sirius_chat.workspace.layout import WorkspaceLayout
 
 
 _SESSION_STORE_SCHEMA_VERSION = 2
@@ -174,9 +176,24 @@ class SessionStore(Protocol):
 
 
 class JsonSessionStore:
-    def __init__(self, work_path: str | Path, filename: str = "session_state.json") -> None:
-        self._work_path = Path(work_path)
-        self._path = self._work_path / filename
+    def __init__(
+        self,
+        work_path: str | Path | None = None,
+        filename: str = "session_state.json",
+        *,
+        path: Path | None = None,
+    ) -> None:
+        self._work_path = Path(work_path) if work_path is not None else None
+        if path is not None:
+            self._path = Path(path)
+        elif work_path is not None:
+            self._path = Path(work_path) / filename
+        else:
+            raise ValueError("JsonSessionStore requires either work_path or path.")
+
+    @classmethod
+    def from_layout(cls, layout: WorkspaceLayout, *, session_id: str) -> "JsonSessionStore":
+        return cls(path=layout.session_store_path(session_id, backend="json"))
 
     @property
     def path(self) -> Path:
@@ -205,11 +222,26 @@ class JsonSessionStore:
 
 
 class SqliteSessionStore:
-    def __init__(self, work_path: str | Path, filename: str = "session_state.db") -> None:
-        self._work_path = Path(work_path)
-        self._path = self._work_path / filename
+    def __init__(
+        self,
+        work_path: str | Path | None = None,
+        filename: str = "session_state.db",
+        *,
+        path: Path | None = None,
+    ) -> None:
+        self._work_path = Path(work_path) if work_path is not None else None
+        if path is not None:
+            self._path = Path(path)
+        elif work_path is not None:
+            self._path = Path(work_path) / filename
+        else:
+            raise ValueError("SqliteSessionStore requires either work_path or path.")
         self._ensure_schema()
         self._migrate_legacy_storage_if_needed()
+
+    @classmethod
+    def from_layout(cls, layout: WorkspaceLayout, *, session_id: str) -> "SqliteSessionStore":
+        return cls(path=layout.session_store_path(session_id, backend="sqlite"))
 
     @property
     def path(self) -> Path:
@@ -222,6 +254,15 @@ class SqliteSessionStore:
         conn.execute("PRAGMA foreign_keys = ON")
         conn.execute("PRAGMA journal_mode = WAL")
         return conn
+
+    @contextmanager
+    def _managed_connection(self):
+        conn = self._connect()
+        try:
+            yield conn
+            conn.commit()
+        finally:
+            conn.close()
 
     def _legacy_json_path(self) -> Path:
         if self._path.suffix:
@@ -586,7 +627,7 @@ class SqliteSessionStore:
         }
 
     def _ensure_schema(self) -> None:
-        with self._connect() as conn:
+        with self._managed_connection() as conn:
             conn.execute(_CREATE_META_TABLE)
             conn.execute(_CREATE_SESSION_META_TABLE)
             conn.execute(_CREATE_MESSAGES_TABLE)
@@ -603,7 +644,7 @@ class SqliteSessionStore:
             self._set_meta(conn, "session_store_schema_version", str(_SESSION_STORE_SCHEMA_VERSION))
 
     def _migrate_legacy_storage_if_needed(self) -> None:
-        with self._connect() as conn:
+        with self._managed_connection() as conn:
             if self._legacy_payload_table_exists(conn):
                 if not self._has_session_data(conn):
                     row = conn.execute(
@@ -634,11 +675,11 @@ class SqliteSessionStore:
     def exists(self) -> bool:
         if not self._path.exists():
             return False
-        with self._connect() as conn:
+        with self._managed_connection() as conn:
             return self._has_session_data(conn)
 
     def load(self) -> Transcript:
-        with self._connect() as conn:
+        with self._managed_connection() as conn:
             payload = self._build_payload_from_connection(conn)
         transcript = Transcript.from_dict(payload)
         # Schema write-back: immediately persist any new default fields.
@@ -646,12 +687,36 @@ class SqliteSessionStore:
         return transcript
 
     def save(self, transcript: Transcript) -> None:
-        with self._connect() as conn:
+        with self._managed_connection() as conn:
             self._save_with_connection(conn, transcript)
 
     def clear(self) -> None:
         """Remove the saved session state (deletes rows; keeps schema intact)."""
         if not self._path.exists():
             return
-        with self._connect() as conn:
+        with self._managed_connection() as conn:
             self._delete_session_rows(conn)
+
+
+class SessionStoreFactory:
+    """Create session stores for a workspace/session namespace."""
+
+    def __init__(
+        self,
+        *,
+        backend: str = "sqlite",
+        fixed_store: SessionStore | None = None,
+    ) -> None:
+        self._backend = backend.strip().lower() or "sqlite"
+        self._fixed_store = fixed_store
+
+    @property
+    def fixed_store(self) -> SessionStore | None:
+        return self._fixed_store
+
+    def create(self, *, layout: WorkspaceLayout, session_id: str) -> SessionStore:
+        if self._fixed_store is not None:
+            return self._fixed_store
+        if self._backend == "json":
+            return JsonSessionStore.from_layout(layout, session_id=session_id)
+        return SqliteSessionStore.from_layout(layout, session_id=session_id)

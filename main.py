@@ -10,7 +10,6 @@ from typing import Callable
 from sirius_chat.api import (
     Agent,
     AgentPreset,
-    AsyncRolePlayEngine,
     AutoRoutingProvider,
     JsonSessionStore,
     LLMProvider,
@@ -32,6 +31,7 @@ from sirius_chat.api import (
     merge_provider_sources,
     register_provider_with_validation,
     run_provider_detection_flow,
+    SessionStoreFactory,
 )
 from sirius_chat.cli_diagnostics import (
     EnvironmentDiagnostics,
@@ -40,6 +40,7 @@ from sirius_chat.cli_diagnostics import (
 )
 from sirius_chat.config.helpers import build_orchestration_policy_from_dict
 from sirius_chat.logging_config import configure_logging, setup_log_archival, get_logger
+from sirius_chat.workspace.runtime import WorkspaceRuntime
 
 InputFunc = Callable[[str], str]
 PrintFunc = Callable[[str], None]
@@ -404,6 +405,19 @@ def _build_provider(
     return AutoRoutingProvider(merged_providers)
 
 
+def _build_runtime(
+    *,
+    work_path: Path,
+    provider: LLMProvider,
+    store_kind: str,
+) -> WorkspaceRuntime:
+    return WorkspaceRuntime.open(
+        work_path,
+        provider=provider,
+        store_factory=SessionStoreFactory(backend=store_kind),
+    )
+
+
 def _handle_provider_command(
     raw_text: str,
     *,
@@ -443,7 +457,7 @@ def _handle_provider_command(
         base_url = tokens[5] if len(tokens) >= 6 else ""
         try:
             registered_type = register_provider_with_validation(
-                work_path=provider_registry.path.parent,
+                work_path=provider_registry.work_path,
                 provider_type=provider_type,
                 api_key=api_key,
                 healthcheck_model=healthcheck_model,
@@ -651,8 +665,7 @@ def _bootstrap_primary_user(
 def run_interactive_session(
     config: SessionConfig,
     primary_user: Participant,
-    engine: AsyncRolePlayEngine,
-    state_store,
+    runtime: WorkspaceRuntime,
     work_path: Path,
     provider_registry: ProviderRegistry,
     refresh_provider: Callable[[], LLMProvider],
@@ -678,8 +691,8 @@ def run_interactive_session(
             current_primary_user = participant
             primary_speaker = participant.name
             _persist_primary_user(work_path=work_path, participant=participant, transcript=None, print_func=print_func)
-            if state_store.exists():
-                state_store.path.unlink(missing_ok=True)
+            asyncio.run(runtime.clear_session(config.session_id))
+            asyncio.run(runtime.set_primary_user(config.session_id, participant))
             active_transcript = None
             print_func(f"已重置主用户：{participant.name}(id={participant.user_id})，会话上下文已清空。")
             continue
@@ -693,24 +706,17 @@ def run_interactive_session(
         )
         if provider_handled:
             if provider_changed:
-                engine.provider = refresh_provider()
+                runtime.set_provider(refresh_provider())
             continue
 
         human_turn = _parse_user_turn(raw_text)
         human_turn.speaker = primary_speaker
         try:
-            if active_transcript is None:
-                active_transcript = asyncio.run(
-                    engine.run_live_session(
-                        config=config,
-                        transcript=active_transcript,
-                    )
-                )
             active_transcript = asyncio.run(
-                engine.run_live_message(
-                    config=config,
-                    transcript=active_transcript,
+                runtime.run_live_message(
+                    session_id=config.session_id,
                     turn=human_turn,
+                    user_profile=current_primary_user.as_user_profile(),
                 )
             )
         except RuntimeError as exc:
@@ -719,7 +725,6 @@ def run_interactive_session(
             continue
         latest_message = active_transcript.messages[-1]
         print_func(f"[{latest_message.speaker}] {latest_message.content}")
-        state_store.save(active_transcript)
         _persist_primary_user(
             work_path=work_path,
             participant=current_primary_user,
@@ -862,16 +867,18 @@ def main(
         )
         provider_registry = ProviderRegistry(work_path)
         provider = _build_provider(providers_config, work_path, provider_factory)
-        engine = AsyncRolePlayEngine(provider=provider)
-        state_store = _create_session_store(work_path=work_path, store_kind=args.store)
-        should_resume = (not args.no_resume) and state_store.exists()
-        transcript = state_store.load() if should_resume else None
+        runtime = _build_runtime(work_path=work_path, provider=provider, store_kind=args.store)
+        if args.no_resume:
+            asyncio.run(runtime.clear_session(session_config.session_id))
+            transcript = None
+        else:
+            transcript = asyncio.run(runtime.get_transcript(session_config.session_id))
+        asyncio.run(runtime.set_primary_user(session_config.session_id, primary_user))
 
         transcript = run_interactive_session(
             session_config,
             primary_user,
-            engine,
-            state_store,
+            runtime,
             work_path,
             provider_registry,
             lambda: _build_provider(providers_config, work_path, provider_factory),

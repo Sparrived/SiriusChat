@@ -7,16 +7,14 @@ from pathlib import Path
 from typing import Callable
 
 from sirius_chat.api import (
-    AsyncRolePlayEngine,
-    AutoRoutingProvider,
     Message,
     SessionConfig,
     create_session_config_from_selected_agent,
-    create_async_engine,
     generate_humanized_roleplay_questions,
     list_roleplay_question_templates,
-    merge_provider_sources,
+    WorkspaceRuntime,
 )
+from sirius_chat.config import ConfigManager
 from sirius_chat.config.helpers import build_orchestration_policy_from_dict
 from sirius_chat.logging_config import configure_logging, setup_log_archival, get_logger
 
@@ -63,47 +61,26 @@ def _serialize_roleplay_questions(template: str) -> dict[str, object]:
 
 
 def _load_session_config(config_path: Path, work_path: Path) -> tuple[SessionConfig, list[dict[str, object]]]:
-    raw = json.loads(config_path.read_text(encoding="utf-8-sig"))
-
-    if "agent" in raw or "global_system_prompt" in raw:
-        raise ValueError("\u4e0d\u5141\u8bb8\u624b\u52a8\u6307\u5b9a agent/global_system_prompt\uff1b\u8bf7\u4f7f\u7528 generated_agent_key")
-    generated_agent_key = str(raw.get("generated_agent_key", "")).strip()
-    if not generated_agent_key:
-        raise ValueError("\u5fc5\u9700\u63d0\u4f9b generated_agent_key")
-
-    session = create_session_config_from_selected_agent(
+    manager = ConfigManager(base_path=work_path)
+    workspace_config, providers_config = manager.bootstrap_workspace_from_legacy_session_json(
+        config_path,
         work_path=work_path,
-        agent_key=generated_agent_key,
-        history_max_messages=int(raw.get("history_max_messages", 24)),
-        history_max_chars=int(raw.get("history_max_chars", 6000)),
-        max_recent_participant_messages=int(raw.get("max_recent_participant_messages", 5)),
-        enable_auto_compression=bool(raw.get("enable_auto_compression", True)),
     )
-
-    orchestration = build_orchestration_policy_from_dict(
-        raw.get("orchestration", {}),
-        agent_model=session.agent.model,
-        return_none_if_empty=True,
-    )
-    if orchestration is not None:
-        session.orchestration = orchestration
-        session.orchestration.validate()
-
-    # 加载 providers 列表（必需）
-    providers_config = list(raw.get("providers", []))
+    if not workspace_config.active_agent_key:
+        raise ValueError("必需提供 generated_agent_key")
     if not providers_config:
         raise ValueError("SessionConfig 必需包含 providers 字段（list format）")
 
+    session = manager.build_session_config(
+        work_path=work_path,
+        session_id="cli",
+        overrides={"agent_key": workspace_config.active_agent_key},
+    )
     return session, providers_config
 
 
-def _build_engine(work_path: Path, providers_config: list[dict[str, object]]) -> AsyncRolePlayEngine:
-    merged = merge_provider_sources(
-        work_path=work_path,
-        providers_config=providers_config,
-    )
-    provider = AutoRoutingProvider(merged)
-    return create_async_engine(provider)
+def _build_runtime(work_path: Path) -> WorkspaceRuntime:
+    return WorkspaceRuntime.open(work_path)
 
 
 def _write_transcript_output(messages: list[Message], output_path: Path) -> None:
@@ -166,18 +143,17 @@ def main(
         print_func(f"加载 SessionConfig 失败：{exc}")
         print_func("请先通过提示词生成器生成并保存 agent 资产（generated_agents.json），再启动会话。")
         return 1
-    engine = _build_engine(work_path, providers_config)
+    _ = providers_config
+    runtime = _build_runtime(work_path)
 
     user_text = args.message.strip() if args.message else input_func("你> ").strip()
     if not user_text:
         print_func("未输入消息，已退出。")
         return 0
 
-    transcript = asyncio.run(engine.run_live_session(config=session_config))
     transcript = asyncio.run(
-        engine.run_live_message(
-            config=session_config,
-            transcript=transcript,
+        runtime.run_live_message(
+            session_id=session_config.session_id,
             turn=Message(
                 role="user",
                 speaker=args.speaker,

@@ -425,7 +425,8 @@ class TestSelfMemoryFileStore:
 
     def test_load_corrupt_file_returns_empty(self, tmp_path: Path):
         store = SelfMemoryFileStore(tmp_path)
-        (tmp_path / "self_memory.json").write_text("NOT JSON", encoding="utf-8")
+        (tmp_path / "memory" / "self_memory.json").parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / "memory" / "self_memory.json").write_text("NOT JSON", encoding="utf-8")
         mgr = store.load()
         assert len(mgr.diary_entries) == 0
 

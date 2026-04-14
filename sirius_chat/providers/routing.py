@@ -11,6 +11,7 @@ from sirius_chat.providers.openai_compatible import OpenAICompatibleProvider
 from sirius_chat.providers.siliconflow import SiliconFlowProvider
 from sirius_chat.providers.volcengine_ark import VolcengineArkProvider
 from sirius_chat.providers.ytea import YTeaProvider
+from sirius_chat.workspace.layout import WorkspaceLayout
 
 PROVIDER_KEYS_FILE = "provider_keys.json"
 
@@ -87,8 +88,13 @@ def ensure_provider_platform_supported(provider_type: str) -> str:
 class ProviderRegistry:
     """Store provider credentials and routing hints under work_path."""
 
-    def __init__(self, work_path: Path) -> None:
-        self.path = work_path / PROVIDER_KEYS_FILE
+    def __init__(self, work_path: Path | WorkspaceLayout) -> None:
+        self._layout = work_path if isinstance(work_path, WorkspaceLayout) else WorkspaceLayout(work_path)
+        self.path = self._layout.provider_registry_path()
+
+    @property
+    def work_path(self) -> Path:
+        return self._layout.root
 
     def load(self) -> dict[str, ProviderConfig]:
         if not self.path.exists():
@@ -176,6 +182,68 @@ class ProviderRegistry:
         providers.pop(provider_key)
         self.save(providers)
         return True
+
+
+class WorkspaceProviderManager:
+    """Workspace-scoped provider registry facade."""
+
+    def __init__(self, work_path: Path | WorkspaceLayout) -> None:
+        self._layout = work_path if isinstance(work_path, WorkspaceLayout) else WorkspaceLayout(work_path)
+        self._registry = ProviderRegistry(self._layout)
+
+    @property
+    def path(self) -> Path:
+        return self._registry.path
+
+    def load(self) -> dict[str, ProviderConfig]:
+        return self._registry.load()
+
+    def save(self, providers: dict[str, ProviderConfig]) -> None:
+        self._registry.save(providers)
+
+    def save_from_entries(self, providers_config: list[dict[str, object]]) -> dict[str, ProviderConfig]:
+        providers: dict[str, ProviderConfig] = {}
+        for item in providers_config:
+            provider_type = normalize_provider_type(str(item.get("type", "")))
+            api_key = str(item.get("api_key", "")).strip()
+            if not provider_type or not api_key:
+                continue
+            base_url = str(item.get("base_url", "")).strip()
+            models_raw = item.get("models", [])
+            models = [str(model).strip() for model in models_raw if str(model).strip()] if isinstance(models_raw, list) else []
+            providers[provider_type] = ProviderConfig(
+                provider_type=provider_type,
+                api_key=api_key,
+                base_url=base_url,
+                healthcheck_model=str(item.get("healthcheck_model", "")).strip(),
+                enabled=bool(item.get("enabled", True)),
+                models=models,
+            )
+        self.save(providers)
+        return providers
+
+    def register(
+        self,
+        *,
+        provider_type: str,
+        api_key: str,
+        base_url: str = "",
+        healthcheck_model: str = "",
+        models: list[str] | None = None,
+    ) -> None:
+        self._registry.upsert(
+            provider_type=provider_type,
+            api_key=api_key,
+            base_url=base_url,
+            healthcheck_model=healthcheck_model,
+            models=models,
+        )
+
+    def remove(self, provider_type: str) -> bool:
+        return self._registry.remove(provider_type)
+
+    def probe(self) -> None:
+        run_provider_detection_flow(providers=self.load())
 
 
 def merge_provider_sources(

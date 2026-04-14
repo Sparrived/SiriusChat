@@ -8,11 +8,21 @@ from sirius_chat.core.events import SessionEvent, SessionEventBus, SessionEventT
 from sirius_chat.models import Message, Transcript
 from sirius_chat.providers.base import AsyncLLMProvider, LLMProvider
 from sirius_chat.memory import UserMemoryEntry, UserProfile
+from sirius_chat.workspace.runtime import WorkspaceRuntime
 
 
 def create_async_engine(provider: LLMProvider | AsyncLLMProvider) -> AsyncRolePlayEngine:
     """Create an async roleplay engine for non-blocking integration."""
     return AsyncRolePlayEngine(provider=provider)
+
+
+def open_workspace_runtime(
+    work_path,
+    *,
+    provider: LLMProvider | AsyncLLMProvider | None = None,
+) -> WorkspaceRuntime:
+    """Open a workspace runtime that owns persistence and session recovery."""
+    return WorkspaceRuntime.open(work_path, provider=provider)
 
 
 async def ainit_live_session(
@@ -119,6 +129,7 @@ __all__ = [
     "SessionEventBus",
     "SessionEventType",
     "create_async_engine",
+    "open_workspace_runtime",
     "ainit_live_session",
     "arun_live_message",
     "asubscribe",

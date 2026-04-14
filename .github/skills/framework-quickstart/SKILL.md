@@ -75,6 +75,7 @@ description: "当你需要在不通读全部代码的情况下快速理解 Siriu
   - 检测到多媒体数据时自动升级至 `agent.metadata["multimodal_model"]`
   - 提供便捷配置：`create_agent_with_multimodal(...)` 一次性创建，或 `auto_configure_multimodal_agent(...)` 灵活配置
 - `run_live_session` 负责会话初始化；动态参与者与逐条消息处理通过 `run_live_message` 完成。
+- 从 `v0.23.0` 起，推荐外部接入优先使用 `WorkspaceRuntime` / `open_workspace_runtime(...)`；它会自动恢复 `sessions/<session_id>/session_state.db`、维护 `participants.json` 并统一持久化布局。低层 `run_live_session + run_live_message` 保留给高级自定义场景。
 - `run_live_message` 新增 `environment_context: str = ""` 参数（v0.8.0），允许外部注入环境信息（群名、在线人数等），自动写入系统提示词 `<environment_context>` 段。
 - `Message.reply_mode` 可按消息控制回复策略：`always`（默认）/`never`（仅写入记忆与 transcript）/`auto`（自动推断是否回复）。
 - 推荐在实时流式接入时使用 `run_live_message` 逐条处理消息；`run_live_session(...)` 用于一次性会话初始化。
@@ -108,7 +109,8 @@ description: "当你需要在不通读全部代码的情况下快速理解 Siriu
   - 实现真正的**双向观测**：事件不再被单向消费，而是成为用户理解的重要信号源
 - `Transcript.find_user_by_channel_uid(channel, uid)` 支持按渠道+外部 UID 直接定位用户。
 - `session/store.py` ✨ **（包重构）** 提供会话持久化与重启恢复（`SessionStore`、`JsonSessionStore`、`SqliteSessionStore`）。默认 `SqliteSessionStore` 现使用结构化表保存消息、reply runtime、用户 profile/runtime/facts 与 token 记录，不再是单条 payload 快照；首次打开会自动迁移 sibling `session_state.json` 与旧 `session_state(payload)` SQLite。
-- `session/runner.py` ✨ **（包重构）** 提供上层封装的会话运行器（`JsonPersistentSessionRunner`），自动维护用户档案与持久化。
+- `workspace/` ✨ **（v0.23.0 新增）** 提供 `WorkspaceLayout`、`WorkspaceRuntime`、`WorkspaceMigrationManager`：统一 layout、迁移与高层自动持久化入口。
+- `session/runner.py` ✨ **（包重构）** 提供上层兼容运行器（`JsonPersistentSessionRunner`），内部尽量复用 `WorkspaceRuntime`，保留 `primary_user.json` 兼容行为。
 - `Transcript.token_usage_records` 全量归档每次模型调用的 token 消耗信息（通过 `token/usage.py` 提供的 `summarize_token_usage` 与 `build_token_usage_baseline` 汇总）。
 - ✨ `token/store.py` **(v0.11.0)** 提供 SQLite 持久化后端（`TokenUsageStore`），自动写入 `{work_path}/token_usage.db`，支持跨会话查询。
 - ✨ `token/analytics.py` **(v0.11.0)** 基于 SQLite 的多维度分析：`compute_baseline`、`group_by_session/actor/task/model`、`time_series`、`full_report`。
@@ -154,14 +156,14 @@ description: "当你需要在不通读全部代码的情况下快速理解 Siriu
   - 中间件通过 MiddlewareChain 串联，可透明地为任意 provider 添加流控、重试、监控等功能
 - `providers/mock.py` 提供可复现的本地测试能力。
 - `providers/*` 实现具体的 LLM 后端。
-- `roleplay_prompting.py` 提供自动问题清单、回答提取式提示词生成、关键词/依赖文件驱动的人格生成、人格持久化、完整本地生成轨迹与依赖文件重生能力；问卷支持 `default` / `companion` / `romance` / `group_chat` 四类模板，可通过 `list_roleplay_question_templates()` 获取模板名，再用 `generate_humanized_roleplay_questions(template=...)` 生成对应的高层人格问卷。对会写入 `work_path` 的人格生成链路，会先暂存 `PersonaSpec` 与待生成快照，再调用模型；结构化人格生成默认使用 `max_tokens=5120`、`timeout_seconds=120.0`，并通过 `GenerationRequest.timeout_seconds` 透传请求级超时。
+- `roleplay_prompting.py` 提供自动问题清单、回答提取式提示词生成、关键词/依赖文件驱动的人格生成、人格持久化、完整本地生成轨迹与依赖文件重生能力；问卷支持 `default` / `companion` / `romance` / `group_chat` 四类模板，可通过 `list_roleplay_question_templates()` 获取模板名，再用 `generate_humanized_roleplay_questions(template=...)` 生成对应的高层人格问卷。人格资产现统一存放于 `roleplay/generated_agents.json` 与 `roleplay/generated_agent_traces/`；对会写入 `work_path` 的人格生成链路，会先暂存 `PersonaSpec` 与待生成快照，再调用模型；结构化人格生成默认使用 `max_tokens=5120`、`timeout_seconds=120.0`，并通过 `GenerationRequest.timeout_seconds` 透传请求级超时。
 - 内置 provider 包含 `OpenAICompatibleProvider`、`AliyunBailianProvider`、`DeepSeekProvider`、`SiliconFlowProvider` 与 `VolcengineArkProvider`。
 - 若配置了多 provider，`AutoRoutingProvider` 会优先按 `ProviderConfig.models`，其次按 `healthcheck_model` 精确选择可用 provider。
 - `cli.py` 是库内薄封装，默认执行单轮会话；同时提供人格模板辅助命令 `--list-roleplay-question-templates` 与 `--print-roleplay-questions-template <template>`，方便外部快速导出问卷模板。
 - `api/` 是统一对外接口文件；外部调用优先使用该文件暴露的 API。
 - Provider 检测流程已下沉到 `providers/routing.py`：配置检查 -> 平台适配检查 -> 可用性检查（依赖 `healthcheck_model`）。
 - Provider 注册命令要求显式提供检测模型：`/provider add <type> <api_key> <healthcheck_model> [base_url]`。
-- 提示词流程：`list_roleplay_question_templates()` 暴露问卷模板枚举，`generate_humanized_roleplay_questions(template=...)` 产出高层人格问题；`agenerate_agent_prompts_from_answers` / `agenerate_from_persona_spec`（支持 `trait_keywords`、`answers`、`dependency_files`）生成完整 `GeneratedSessionPreset`。推荐先收集人物原型、核心矛盾、关系策略、情绪原则、表达节奏、边界和小缺点等上位约束，再让生成器展开为具体人物小传与语言习惯；推荐将生成结果作为 agent 资产持久化（`generated_agents.json`），并利用 `generated_agent_traces/<agent_key>.json` 保存完整生成轨迹。对于 `abuild_roleplay_prompt_from_answers_and_apply(...)`、`aupdate_agent_prompt(...)`、`aregenerate_agent_prompt_from_dependencies(...)` 三条持久化链路，框架会先落盘输入快照，再调用模型，失败时可通过 `load_persona_spec(...)` 恢复最近一次输入。依赖文件更新后可调用 `aregenerate_agent_prompt_from_dependencies(...)` 直接重生人格。
+- 提示词流程：`list_roleplay_question_templates()` 暴露问卷模板枚举，`generate_humanized_roleplay_questions(template=...)` 产出高层人格问题；`agenerate_agent_prompts_from_answers` / `agenerate_from_persona_spec`（支持 `trait_keywords`、`answers`、`dependency_files`）生成完整 `GeneratedSessionPreset`。推荐先收集人物原型、核心矛盾、关系策略、情绪原则、表达节奏、边界和小缺点等上位约束，再让生成器展开为具体人物小传与语言习惯；推荐将生成结果作为 agent 资产持久化（`roleplay/generated_agents.json`），并利用 `roleplay/generated_agent_traces/<agent_key>.json` 保存完整生成轨迹。对于 `abuild_roleplay_prompt_from_answers_and_apply(...)`、`aupdate_agent_prompt(...)`、`aregenerate_agent_prompt_from_dependencies(...)` 三条持久化链路，框架会先落盘输入快照，再调用模型，失败时可通过 `load_persona_spec(...)` 恢复最近一次输入。依赖文件更新后可调用 `aregenerate_agent_prompt_from_dependencies(...)` 直接重生人格。
 - 内部实现允许重构；当前未发布阶段若影响外部接口，可直接升级 `api/`，并同步文档与示例。
 - 内部新增能力需同步在 `api/` 提供对外入口。
 - ✨ **(v0.12.0)** `arun_live_message` 新增 `on_reply`（引擎管理事件订阅回调）、`user_profile`（消息处理前自动注册用户）、`timeout`（引擎管理超时与清理）参数，大幅减少外部集成样板代码。详见 `docs/migration-v0.12.md`。
@@ -178,7 +180,7 @@ description: "当你需要在不通读全部代码的情况下快速理解 Siriu
 - 新增 provider 支持：修改 `sirius_chat/providers/`，并保持 `async_engine.py` 不含 provider 细节。
 - 修改主 AI 或多人轮次策略：更新 `sirius_chat/async_engine.py`，并检查 transcript 兼容性。
 - 修改动态参与者或识人记忆逻辑：同步更新 `models/models.py`、`async_engine.py` 与 `docs/external-usage.md`。
-- 修改会话恢复或压缩策略：同步更新 `session/store.py`、`session/runner.py`、`docs/architecture.md`、`docs/migration-v0.19.md`；若外部可见行为变化，再同步 `README.md`。
+- 修改会话恢复或压缩策略：同步更新 `workspace/`、`session/store.py`、`session/runner.py`、`docs/architecture.md`、相关迁移文档；若外部可见行为变化，再同步 `README.md`。
 - 修改配置结构或环境变量处理：同步更新 `sirius_chat/config_manager.py`、`sirius_chat/cli.py`、`README.md` 与 `examples/session.json`。
 - 修改缓存策略或后端：在 `sirius_chat/cache/` 实现新后端或修改现有接口，并更新 `docs/best-practices.md`。
 - 修改性能监控或基准：更新 `sirius_chat/performance/` 中的指标收集或分析逻辑，添加相应测试。

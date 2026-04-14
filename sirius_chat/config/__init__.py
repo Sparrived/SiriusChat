@@ -12,8 +12,11 @@ from sirius_chat.config.models import (
     AgentPreset,
     MemoryPolicy,
     OrchestrationPolicy,
+    ProviderPolicy,
     SessionConfig,
+    SessionDefaults,
     TokenUsageRecord,
+    WorkspaceConfig,
 )
 
 # Configuration management
@@ -36,8 +39,11 @@ __all__ = [
     "AgentPreset",
     "MemoryPolicy",
     "OrchestrationPolicy",
+    "ProviderPolicy",
     "SessionConfig",
+    "SessionDefaults",
     "TokenUsageRecord",
+    "WorkspaceConfig",
     # Management
     "ConfigManager",
     # Helpers

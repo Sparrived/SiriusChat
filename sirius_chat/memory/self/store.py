@@ -8,6 +8,7 @@ from pathlib import Path
 
 from sirius_chat.memory.self.models import SelfMemoryState
 from sirius_chat.memory.self.manager import SelfMemoryManager
+from sirius_chat.workspace.layout import WorkspaceLayout
 
 logger = logging.getLogger(__name__)
 
@@ -17,10 +18,11 @@ class SelfMemoryFileStore:
 
     _FILENAME = "self_memory.json"
 
-    def __init__(self, work_path: str | Path) -> None:
-        self._dir = Path(work_path)
+    def __init__(self, work_path: str | Path | WorkspaceLayout) -> None:
+        layout = work_path if isinstance(work_path, WorkspaceLayout) else WorkspaceLayout(Path(work_path))
+        self._dir = layout.self_memory_path().parent
         self._dir.mkdir(parents=True, exist_ok=True)
-        self._path = self._dir / self._FILENAME
+        self._path = layout.self_memory_path()
 
     def load(self) -> SelfMemoryManager:
         """Load self-memory from disk, or return empty manager."""

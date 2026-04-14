@@ -39,9 +39,11 @@ def test_json_persistent_session_runner_auto_persistence_and_reset(tmp_path: Pat
 
         assert msg.content == "回复1"
         profile_path = tmp_path / "primary_user.json"
-        state_path = tmp_path / "session_state.db"
+        state_path = tmp_path / "sessions" / "default" / "session_state.db"
+        participants_path = tmp_path / "sessions" / "default" / "participants.json"
         assert profile_path.exists()
         assert state_path.exists()
+        assert participants_path.exists()
 
         payload = json.loads(profile_path.read_text(encoding="utf-8"))
         assert payload["user_id"] == "u_wang"

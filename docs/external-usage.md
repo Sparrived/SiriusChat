@@ -14,6 +14,55 @@ python -m pip install -e /path/to/sirius_chat
 
 ## 方式一：直接在 Python 程序中调用
 
+### 推荐入口：WorkspaceRuntime
+
+从 `v0.23.0` 开始，推荐外部系统优先使用 `WorkspaceRuntime`。外部只需要提供：
+
+- `work_path`
+- `session_id`
+- `turn`
+- 可选的 `environment_context`、`user_profile`、`on_reply`、`timeout`
+
+workspace runtime 会负责：
+
+- 自动恢复 `sessions/<session_id>/session_state.db`
+- 自动维护 `sessions/<session_id>/participants.json`
+- 自动把 provider、memory、token、roleplay、skills 路径路由到统一 layout
+- 首次打开时自动迁移旧根目录布局
+
+```python
+import asyncio
+from pathlib import Path
+
+from sirius_chat.api import Message, UserProfile, open_workspace_runtime
+from sirius_chat.providers.mock import MockProvider
+
+
+async def main() -> None:
+    runtime = open_workspace_runtime(
+        Path("data/external_usage"),
+        provider=MockProvider(responses=["先做小范围试点，再按反馈逐步放量。"]),
+    )
+
+    transcript = await runtime.run_live_message(
+        session_id="group:teaching",
+        turn=Message(role="user", speaker="校务主任", content="我关心预算和安全约束"),
+        environment_context="当前群名: 教务讨论群\n群成员数: 15",
+        user_profile=UserProfile(user_id="principal", name="校务主任"),
+    )
+
+    for message in transcript.messages:
+        if message.speaker:
+            print(f"[{message.speaker}] {message.content}")
+
+
+asyncio.run(main())
+```
+
+> 该模式要求 `work_path` 中已存在被选中的 agent 资产与 workspace 配置。CLI、`main.py`、`ConfigManager.bootstrap_workspace_from_legacy_session_json(...)` 和迁移器可用于完成 bootstrap。
+
+### 低层入口：AsyncRolePlayEngine + SessionConfig
+
 ```python
 import asyncio
 from pathlib import Path
@@ -367,11 +416,11 @@ Sirius Chat v1.0 统一采用单一 `providers` 列表格式：
 ```
 
 **持久化密钥管理**：
-- `merge_provider_sources(work_path, providers_config)` 自动从 `<work_path>/provider_keys.json` 加载持久化的 API 密钥
+- `merge_provider_sources(work_path, providers_config)` 自动从 `<work_path>/providers/provider_keys.json` 加载持久化的 API 密钥
 - 配置项中 `api_key` 字段支持值为环境变量名，自动从 `provider_keys.json` 中解析实际密钥
 - 不存在向后兼容转换逻辑；v1.0 强制使用 `providers` 列表格式
 
-### 异步程序嵌入（推荐）
+### 异步程序嵌入（高级控制）
 
 ```python
 from sirius_chat.api import Message, create_async_engine
@@ -508,7 +557,7 @@ tasks_in_session = group_by_task(store, session_id="sess_1")
 
 #### Transcript 对象 API 参考
 
-`run_session()`、`run_live_session()`（初始化）与 `run_live_message()` 返回的 `Transcript` 对象包含完整的会话记录。
+`WorkspaceRuntime.run_live_message()`、`run_session()`、`run_live_session()`（初始化）与 `run_live_message()` 返回的 `Transcript` 对象都包含完整的会话记录。
 
 **主要属性**：
 
@@ -631,7 +680,7 @@ print(updated.agent.persona)
 - 如果外部系统暂时不想嵌入 Python API，也可以直接使用 CLI 辅助命令：`sirius-chat --list-roleplay-question-templates` 和 `sirius-chat --print-roleplay-questions-template <template>`。
 - `agenerate_agent_prompts_from_answers(...)` 会从回答中生成完整 `GeneratedSessionPreset`（`agent + global_system_prompt`）。
 - 生成时会显式输入 `agent_name`，确保主 AI 命名与提示词一致。
-- `abuild_roleplay_prompt_from_answers_and_apply(...)` 会把生成结果写入 `config.preset`，并把完整生成过程本地化到 `<work_path>/generated_agent_traces/<agent_key>.json`。
+- `abuild_roleplay_prompt_from_answers_and_apply(...)` 会把生成结果写入 `config.preset`，并把完整生成过程本地化到 `<work_path>/roleplay/generated_agent_traces/<agent_key>.json`。
 - 结构化人格生成默认使用 `max_tokens=5120` 和 `timeout_seconds=120.0`；如果上游模型更慢或 JSON 更长，可继续显式传入更大的 `timeout_seconds`。
 - 生成器会把这些抽象输入主动展开为具体的人物小传、语言习惯、回复节奏和互动边界；除非你提供的是风格样本，否则不必自己先写完整台词或整段系统提示词。
 - `dependency_files=[...]` 适合挂接角色卡、设定稿、语气样本、对白模板等本地素材；框架会读取文件内容参与生成，并记录快照与 sha256。
@@ -715,8 +764,8 @@ session_config = create_session_config_from_selected_agent(
 说明：
 
 - 推荐流程为“先生成 agent 资产，再按 `agent_key` 选择后创建会话”，避免会话先创建后再反向覆盖主 AI 设定。
-- 生成资产保存在 `<work_path>/generated_agents.json`，可跨次会话复用；若生成中途失败，该文件也会保留最近一次暂存的 `PersonaSpec`。
-- 完整生成轨迹保存在 `<work_path>/generated_agent_traces/<agent_key>.json`；模型调用前的待生成快照也会先写入同一路径。
+- 生成资产保存在 `<work_path>/roleplay/generated_agents.json`，可跨次会话复用；若生成中途失败，该文件也会保留最近一次暂存的 `PersonaSpec`。
+- 完整生成轨迹保存在 `<work_path>/roleplay/generated_agent_traces/<agent_key>.json`；模型调用前的待生成快照也会先写入同一路径。
 - 外部迁移建议见 `docs/migration-roleplay-v0.20.md`。
 
 说明：
@@ -772,7 +821,20 @@ sirius-chat --config examples/session.json --work-path data/session_runtime
 
 ## 方式三：动态群聊（参与者预先未知）
 
-当参与者是动态加入（例如群聊环境）时，先初始化会话，再逐条调用 `run_live_message`：
+当参与者是动态加入（例如群聊环境）时，推荐直接使用 `WorkspaceRuntime.run_live_message(...)`，不再要求外部显式维护 transcript：
+
+```python
+runtime = open_workspace_runtime(Path("data/dynamic_group_chat"), provider=provider)
+
+for turn in human_turns:
+    transcript = await runtime.run_live_message(
+        session_id="group:ops",
+        turn=turn,
+        user_profile=UserProfile(user_id=turn.speaker, name=turn.speaker),
+    )
+```
+
+如果你需要完全手动管理 transcript 生命周期，仍可使用低层 engine 方式：
 
 ```python
 import asyncio
@@ -874,7 +936,7 @@ config = SessionConfig(
 )
 ```
 
-2. **动态群聊**（参与者运行时出现）→ 使用 User + run_live_session 初始化 + run_live_message 逐条输入
+2. **动态群聊**（参与者运行时出现）→ 优先使用 `WorkspaceRuntime.run_live_message(...)`；若需要手动控制 transcript，再使用 `run_live_session + run_live_message`
 
 ```python
 # 运行时动态添加参与者
@@ -1030,13 +1092,13 @@ print(f"平均执行时间: {result.mean}ms")
 - provider 可选 `OpenAICompatibleProvider`、`AliyunBailianProvider` 或 `SiliconFlowProvider`（按上游厂商选择）。
 - **多模型协同现已默认启用**。通过 `SessionConfig.orchestration` 配置 `task_models`、`task_budgets` 等实现记忆提取、事件提取、多模态解析的分任务路由。若需全部由一个模型处理，改为仅设置 `unified_model`（并清空 `task_models`）。
 - 若需更稳健的“提事不提人”识别，可为 `event_extract` 配置辅助模型，提取事件结构化字段后参与命中评分。
-- 需要自动选择时，使用 `AutoRoutingProvider`，并在 `work_path/provider_keys.json` 维护可用 key。
+- 需要自动选择时，使用 `AutoRoutingProvider`，并在 `work_path/providers/provider_keys.json` 维护可用 key。
 - 当前未发布阶段，内部实现变更若影响外部行为，可直接升级 `api/` 并同步文档。
 - 新增功能发布时，需同步在 `api/` 暴露入口供外部系统调用。
 - 把 API Key 放在环境变量或密钥系统，不建议硬编码到配置文件。
 - 一个 `AsyncRolePlayEngine` 会话只对应一个主 AI（由 `SessionConfig.preset` 描述）。
 - `work_path` 必须由调用方显式提供，所有持久化文件都写入该目录。
-- 动态群聊推荐使用 `run_live_session`，并通过 `transcript.user_memory` 进行识人记忆。
+- 动态群聊推荐使用 `WorkspaceRuntime.run_live_message(...)`，让上层自动处理恢复与持久化；低层模式再通过 `transcript.user_memory` 进行识人记忆。
 - 对长会话场景增加上下文裁剪或摘要策略。
 - 对生产调用增加 provider 重试与超时治理。
 

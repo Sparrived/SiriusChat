@@ -31,27 +31,15 @@ def _write_generated_agents(work_path, key: str = "main_agent") -> None:
     )
 
 
-class _FakeEngine:
+class _FakeRuntime:
     def __init__(self, response: str = "主助手回复") -> None:
         self.response = response
         self.last_turn = None
-        self._transcript = None
+        self.last_session_id = None
 
-    async def run_live_session(self, *, config, transcript=None):  # noqa: ANN001
-        _ = config
-        if transcript is not None:
-            self._transcript = transcript
-            return transcript
-
-        transcript_cls = type("Transcript", (), {})
-        instance = transcript_cls()
-        instance.messages = []
-        self._transcript = instance
-        return instance
-
-    async def run_live_message(self, *, config, transcript, turn, **kwargs):  # noqa: ANN001
-        _ = config
+    async def run_live_message(self, *, session_id, turn, **kwargs):  # noqa: ANN001
         _ = kwargs
+        self.last_session_id = session_id
         self.last_turn = turn
         msg = type("Msg", (), {})
         user_msg = msg()
@@ -61,11 +49,12 @@ class _FakeEngine:
 
         assistant = msg()
         assistant.role = "assistant"
-        assistant.speaker = config.agent.name
+        assistant.speaker = "主助手"
         assistant.content = self.response
 
-        transcript.messages = [*transcript.messages, user_msg, assistant]
-        self._transcript = transcript
+        transcript_cls = type("Transcript", (), {})
+        transcript = transcript_cls()
+        transcript.messages = [user_msg, assistant]
         return transcript
 
 
@@ -90,7 +79,7 @@ def test_cli_runs_single_turn_with_message_and_output(tmp_path, monkeypatch) -> 
 
     _write_generated_agents(tmp_path)
 
-    monkeypatch.setattr(cli_module, "_build_engine", lambda *args, **kwargs: _FakeEngine("回复OK"))
+    monkeypatch.setattr(cli_module, "_build_runtime", lambda *args, **kwargs: _FakeRuntime("回复OK"))
 
     outputs: list[str] = []
     exit_code = cli_module.main(
@@ -127,7 +116,7 @@ def test_cli_reads_one_message_from_input_when_missing_message_arg(tmp_path, mon
 
     _write_generated_agents(tmp_path)
 
-    monkeypatch.setattr(cli_module, "_build_engine", lambda *args, **kwargs: _FakeEngine("输入模式OK"))
+    monkeypatch.setattr(cli_module, "_build_runtime", lambda *args, **kwargs: _FakeRuntime("输入模式OK"))
 
     outputs: list[str] = []
     exit_code = cli_module.main(
@@ -161,8 +150,8 @@ def test_cli_attaches_default_channel_identity(tmp_path, monkeypatch) -> None:
 
     _write_generated_agents(tmp_path)
 
-    fake_engine = _FakeEngine("身份OK")
-    monkeypatch.setattr(cli_module, "_build_engine", lambda *args, **kwargs: fake_engine)
+    fake_runtime = _FakeRuntime("身份OK")
+    monkeypatch.setattr(cli_module, "_build_runtime", lambda *args, **kwargs: fake_runtime)
 
     exit_code = cli_module.main(
         ["--config", str(config_path), "--work-path", str(tmp_path), "--message", "你好", "--speaker", "测试用户"],
@@ -170,9 +159,10 @@ def test_cli_attaches_default_channel_identity(tmp_path, monkeypatch) -> None:
     )
 
     assert exit_code == 0
-    assert fake_engine.last_turn is not None
-    assert fake_engine.last_turn.channel == "cli"
-    assert fake_engine.last_turn.channel_user_id == "测试用户"
+    assert fake_runtime.last_turn is not None
+    assert fake_runtime.last_turn.channel == "cli"
+    assert fake_runtime.last_turn.channel_user_id == "测试用户"
+    assert fake_runtime.last_session_id == "cli"
 
 
 def test_cli_exits_when_message_is_empty(tmp_path) -> None:
@@ -229,7 +219,7 @@ def test_cli_writes_default_output_under_relative_work_path(tmp_path, monkeypatc
     work_path = tmp_path / "runtime"
     _write_generated_agents(work_path)
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(cli_module, "_build_engine", lambda *args, **kwargs: _FakeEngine("相对路径OK"))
+    monkeypatch.setattr(cli_module, "_build_runtime", lambda *args, **kwargs: _FakeRuntime("相对路径OK"))
 
     exit_code = cli_module.main(
         ["--config", str(config_path), "--work-path", "runtime", "--message", "你好", "--speaker", "测试用户"],

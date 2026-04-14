@@ -10,6 +10,7 @@ from typing import Any
 
 from sirius_chat.memory.user.manager import UserMemoryManager
 from sirius_chat.memory.user.models import MemoryFact, UserMemoryEntry
+from sirius_chat.workspace.layout import WorkspaceLayout
 
 logger = logging.getLogger(__name__)
 
@@ -17,8 +18,9 @@ logger = logging.getLogger(__name__)
 class UserMemoryFileStore:
     """File-based storage for user memory."""
     
-    def __init__(self, work_path: Path) -> None:
-        self._dir = Path(work_path) / "users"
+    def __init__(self, work_path: Path | WorkspaceLayout) -> None:
+        layout = work_path if isinstance(work_path, WorkspaceLayout) else WorkspaceLayout(work_path)
+        self._dir = layout.user_memory_dir()
 
     @property
     def directory(self) -> Path:

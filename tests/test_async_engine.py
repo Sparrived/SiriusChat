@@ -580,7 +580,7 @@ def test_async_engine_event_memory_add_and_hit_across_sessions() -> None:
             ],
         )
 
-        event_path = work_path / "events" / "events.json"
+        event_path = work_path / "memory" / "events" / "events.json"
         assert event_path.exists()
         payload = json.loads(event_path.read_text(encoding="utf-8"))
         assert payload.get("version") == 2
@@ -637,7 +637,7 @@ def test_async_engine_event_extract_task_enriches_event_features() -> None:
         )
 
         assert "event-model" in provider.models
-        event_path = work_path / "events" / "events.json"
+        event_path = work_path / "memory" / "events" / "events.json"
         payload = json.loads(event_path.read_text(encoding="utf-8"))
         assert payload.get("version") == 2
         assert payload["entries"]

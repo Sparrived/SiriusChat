@@ -27,6 +27,7 @@ from sirius_chat.api import (
     load_persona_spec,
     persist_generated_agent_profile,
     select_generated_agent_profile,
+    WorkspaceLayout,
 )
 from sirius_chat.config import OrchestrationPolicy
 from sirius_chat.providers.mock import MockProvider
@@ -36,6 +37,14 @@ class RaisingMockProvider(MockProvider):
     def generate(self, request):  # type: ignore[override]
         self.requests.append(request)
         raise RuntimeError("mock generation failed")
+
+
+def _generated_agents_path(work_path: Path) -> Path:
+    return WorkspaceLayout(work_path).generated_agents_path()
+
+
+def _trace_path(work_path: Path, agent_key: str) -> Path:
+    return WorkspaceLayout(work_path).generated_agent_trace_dir() / f"{agent_key}.json"
 
 
 def test_generated_prompt_is_used_by_engine() -> None:
@@ -158,7 +167,7 @@ def test_abuild_roleplay_prompt_from_answers_and_apply_one_step() -> None:
         assert config.global_system_prompt == "自动注入的角色提示词"
         assert config.agent.temperature == 0.6
         assert config.agent.max_tokens == 300
-        assert (config.work_path / GENERATED_AGENTS_FILE_NAME).exists()
+        assert _generated_agents_path(config.work_path).exists()
 
     asyncio.run(_run())
 
@@ -211,7 +220,7 @@ def test_generated_agent_profile_can_be_selected_and_used_to_create_session() ->
             persist_generated_agent=True,
         )
 
-        assert (base_config.work_path / GENERATED_AGENTS_FILE_NAME).exists()
+        assert _generated_agents_path(base_config.work_path).exists()
         key = persist_generated_agent_profile(base_config, agent_key="beichen_v1")
         assert key == "beichen_v1"
 
@@ -438,7 +447,7 @@ def test_abuild_accepts_trait_keywords_without_answers() -> None:
         )
         assert prompt == "你是效率助手"
         assert config.agent.persona == "高效/简洁/务实"
-        assert (config.work_path / GENERATED_AGENTS_FILE_NAME).exists()
+        assert _generated_agents_path(config.work_path).exists()
 
     asyncio.run(_run())
 
@@ -471,7 +480,7 @@ def test_persona_spec_persisted_along_with_output() -> None:
         assert saved_spec.answers[0].question == "风格"
         assert saved_spec.agent_name == "体贴助手"
 
-        payload = json.loads((config.work_path / GENERATED_AGENTS_FILE_NAME).read_text(encoding="utf-8"))
+        payload = json.loads(_generated_agents_path(config.work_path).read_text(encoding="utf-8"))
         assert "pending_persona_specs" not in payload
 
     asyncio.run(_run())
@@ -516,9 +525,7 @@ def test_abuild_persists_pending_persona_spec_before_generation_failure() -> Non
         assert agents == {}
         assert selected == ""
 
-        trace_payload = json.loads(
-            (work_path / "generated_agent_traces" / "failed_build_case.json").read_text(encoding="utf-8")
-        )
+        trace_payload = json.loads(_trace_path(work_path, "failed_build_case").read_text(encoding="utf-8"))
         assert trace_payload["history"] == []
         assert trace_payload["pending_trace"]["parsed_payload"]["stage"] == "generation_failed"
         assert "mock generation failed" in trace_payload["pending_trace"]["parsed_payload"]["error"]
@@ -562,9 +569,7 @@ def test_abuild_rejects_truncated_json_like_response_instead_of_persisting_raw_t
         assert saved_spec is not None
         assert saved_spec.answers[0].answer == "像一个会慢慢建立信任的陪伴者"
 
-        trace_payload = json.loads(
-            (work_path / "generated_agent_traces" / "truncated_case.json").read_text(encoding="utf-8")
-        )
+        trace_payload = json.loads(_trace_path(work_path, "truncated_case").read_text(encoding="utf-8"))
         assert trace_payload["pending_trace"]["raw_response"].startswith("```json")
         assert trace_payload["pending_trace"]["parsed_payload"]["truncated_fields"] == ["global_system_prompt"]
 
@@ -726,9 +731,7 @@ def test_abuild_persists_persona_generation_trace_locally() -> None:
         assert "name=北辰" in traces[0].user_prompt
         assert "agent_persona" in traces[0].raw_response
 
-        trace_payload = json.loads(
-            (config.work_path / "generated_agent_traces" / "trace_case.json").read_text(encoding="utf-8")
-        )
+        trace_payload = json.loads(_trace_path(config.work_path, "trace_case").read_text(encoding="utf-8"))
         assert "pending_trace" not in trace_payload
 
     asyncio.run(_run())
@@ -781,9 +784,7 @@ def test_aupdate_keeps_pending_spec_when_regeneration_fails() -> None:
         assert len(traces) == 1
         assert traces[0].operation == "build"
 
-        trace_payload = json.loads(
-            (work_path / "generated_agent_traces" / "update_failed_case.json").read_text(encoding="utf-8")
-        )
+        trace_payload = json.loads(_trace_path(work_path, "update_failed_case").read_text(encoding="utf-8"))
         assert trace_payload["pending_trace"]["operation"] == "update"
         assert trace_payload["pending_trace"]["parsed_payload"]["stage"] == "generation_failed"
 

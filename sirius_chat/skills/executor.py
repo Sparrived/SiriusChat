@@ -11,6 +11,7 @@ from typing import Any
 
 from sirius_chat.skills.data_store import SkillDataStore
 from sirius_chat.skills.models import SkillDefinition, SkillResult, SkillChainContext
+from sirius_chat.workspace.layout import WorkspaceLayout
 
 logger = logging.getLogger(__name__)
 
@@ -52,14 +53,14 @@ def strip_skill_calls(text: str) -> str:
 class SkillExecutor:
     """Execute skills with parameter validation and data store injection."""
 
-    def __init__(self, work_path: Path) -> None:
-        self._work_path = work_path
+    def __init__(self, work_path: Path | WorkspaceLayout) -> None:
+        self._layout = work_path if isinstance(work_path, WorkspaceLayout) else WorkspaceLayout(work_path)
         self._data_stores: dict[str, SkillDataStore] = {}
 
     def _get_data_store(self, skill_name: str) -> SkillDataStore:
         """Get or create the persistent data store for a skill."""
         if skill_name not in self._data_stores:
-            store_path = self._work_path / "skill_data" / f"{skill_name}.json"
+            store_path = self._layout.skill_data_dir() / f"{skill_name}.json"
             self._data_stores[skill_name] = SkillDataStore(store_path)
         return self._data_stores[skill_name]
 

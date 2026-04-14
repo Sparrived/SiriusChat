@@ -1,4 +1,11 @@
-﻿import asyncio
+﻿"""Low-level external API example.
+
+For production integrations that want automatic transcript recovery and persistence,
+prefer WorkspaceRuntime/open_workspace_runtime. This sample intentionally keeps the
+manual AsyncRolePlayEngine + SessionConfig flow for advanced control scenarios.
+"""
+
+import asyncio
 
 from sirius_chat.api import (
     AsyncRolePlayEngine,

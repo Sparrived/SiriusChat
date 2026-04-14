@@ -25,7 +25,7 @@
 - [配置指南](#-配置示例)
 - [文档](#-文档)
 - [测试](#-测试)
-- [最新变更](#-最新变更-v0147)
+- [最新变更](#-最新变更-v0230)
 - [贡献](#-贡献)
 
 ---
@@ -58,7 +58,7 @@
 - **多模态处理**：支持图片/视频输入与结构化解析
 - **CLI 与 API 双模式**：库调用 + 命令行交互，灵活接入
 - **Provider 管理**：多平台 API Key 持久化，自动可用性检测
-- **会话持久化**：JSON 与 SQLite 后端支持，无缝恢复
+- **WorkspaceRuntime 持久化接管**：外部只需提供 `work_path` 与业务输入，框架自动恢复会话、参与者元数据与持久化布局
 
 ---
 
@@ -129,6 +129,38 @@ python main.py --store sqlite --config examples/session.json
 
 ### 4️⃣ **Python API 调用**
 
+**推荐入口：WorkspaceRuntime（自动恢复与落盘）**
+
+```python
+import asyncio
+from pathlib import Path
+
+from sirius_chat.api import Message, UserProfile, open_workspace_runtime
+from sirius_chat.providers.mock import MockProvider
+
+
+async def main() -> None:
+  runtime = open_workspace_runtime(
+    Path("./data/chat_session"),
+    provider=MockProvider(responses=["我理解您的想法"]),
+  )
+
+  transcript = await runtime.run_live_message(
+    session_id="group:demo",
+    turn=Message(role="user", speaker="小王", content="Python 如何学习？"),
+    user_profile=UserProfile(user_id="u_xiaowang", name="小王"),
+  )
+
+  print(transcript.as_chat_history())
+
+
+asyncio.run(main())
+```
+
+> 该模式要求 `work_path` 中已存在已选中的 agent 资产与 workspace 配置；`sirius-chat` CLI、`main.py` 和迁移接口会自动完成 bootstrap。
+
+**底层模式：AsyncRolePlayEngine + SessionConfig（高级控制）**
+
 ```python
 import asyncio
 from pathlib import Path
@@ -178,6 +210,10 @@ sirius_chat/
 │   └── models.py                 # SessionConfig / OrchestrationPolicy
 ├── core/                         # 🔧 引擎核心逻辑
 │   └── engine.py                 # 消息处理、参与决策
+├── workspace/                    # 🗂️ workspace 布局、迁移与运行时
+│   ├── layout.py                 # WorkspaceLayout 路径解析
+│   ├── migration.py              # 旧布局迁移
+│   └── runtime.py                # WorkspaceRuntime 自动持久化入口
 ├── memory/                       # 📝 记忆系统
 │   ├── user_memory.py            # 用户记忆管理
 │   ├── self_memory.py            # AI 自身记忆（日记 + 名词表）
@@ -488,18 +524,25 @@ msg = Message(
 
 ### 状态持久化路径
 
-在每个 `work_path` 下自动生成以下文件：
+从 `v0.23.0` 开始，推荐 workspace 布局如下：
 
 | 文件 | 说明 |
 |------|------|
-| `primary_user.json` | 主用户档案（首次启动交互生成） |
-| `provider_keys.json` | Provider 配置（通过 CLI `/provider` 命令管理） |
-| `session_config.persisted.json` | 当前会话配置 |
-| `session_state.db` | 默认会话状态（结构化 SQLite，可恢复；会自动迁移旧 `session_state.json` / 旧 payload SQLite） |
-| `session_state.json` | 可选 JSON 会话状态（仅在显式使用 `JsonSessionStore` 时生成） |
-| `token_usage.db` | Token 消耗计量（SQLite） |
+| `workspace.json` | workspace 级配置清单与布局版本 |
+| `config/session_config.json` | 可读的 session 默认配置快照 |
+| `providers/provider_keys.json` | Provider 注册表与路由元数据 |
+| `sessions/<session_id>/session_state.db` | 默认会话状态（结构化 SQLite，可恢复；自动迁移旧 `session_state.json` / payload SQLite） |
+| `sessions/<session_id>/participants.json` | 会话参与者与主用户元数据 |
+| `memory/users/*.json` | 用户记忆持久化 |
+| `memory/events/events.json` | 事件记忆持久化 |
+| `memory/self_memory.json` | AI 自身记忆持久化 |
+| `token/token_usage.db` | Token 消耗计量（SQLite） |
+| `roleplay/generated_agents.json` | 已生成的人格资产库 |
+| `roleplay/generated_agent_traces/<agent_key>.json` | 人格生成轨迹与失败快照 |
+| `skills/` | SKILL 目录与 README 引导 |
+| `skill_data/*.json` | SKILL 独立数据存储 |
 
-默认 `JsonPersistentSessionRunner` 使用 `session_state.db`。如果你显式传入 `JsonSessionStore`，才会继续写入 `session_state.json`。
+旧的根目录 `session_state.json`、`session_state.db`、`provider_keys.json`、`generated_agents.json` 等文件会在首次打开 workspace 时自动迁移到新布局；`primary_user.json` 和 `session_config.persisted.json` 仅保留给兼容入口。
 
 如果需要显式执行一次迁移并查看结果，可运行 `python examples/migrate_session_store.py --work-path <你的工作目录>`。
 
@@ -599,7 +642,7 @@ selected = select_generated_agent_profile(config.work_path, "assistant_v2")
 - 生成器会自动识别“拟人”“情感”“陪伴”“共情”等关键词并加强 prompt，让角色更自然、更有人味。
 - 结构化人格生成默认使用 `max_tokens=5120` 和 `timeout_seconds=120.0`；如果上游模型更慢，仍可在这几个 API 上继续显式调高 `timeout_seconds`。
 - 如果模型返回的是被 ```json 包裹但实际被截断的 JSON-like 响应，框架会显式报错并保留失败 trace，不再把原始文本污染到 `agent.persona` 或 `global_system_prompt`。
-- 完整生成过程会本地化到 `<work_path>/generated_agent_traces/<agent_key>.json`，便于审计和回滚。
+- 完整生成过程会本地化到 `<work_path>/roleplay/generated_agent_traces/<agent_key>.json`，便于审计和回滚。
 - 外部调用方可直接按 `template + answers + dependency_files` 组织输入，示例输入规范见 [docs/external-usage.md](docs/external-usage.md)。
 - 可直接参考 `examples/roleplay_template_selection.py` 导出 `PersonaSpec` 骨架，再交给外部表单或配置后台填充。
 - 面向外部调用方的迁移说明见 [docs/migration-roleplay-v0.20.md](docs/migration-roleplay-v0.20.md)。
@@ -625,6 +668,7 @@ SKILL 系统支持可扩展任务编排：
 | [🔧 configuration.md](docs/configuration.md) | 所有配置字段说明和最佳实践 |
 | [📋 full-architecture-flow.md](docs/full-architecture-flow.md) | 详细数据流图解 |
 | [🎬 external-usage.md](docs/external-usage.md) | 库调用指南与集成文档 |
+| [🗂️ migration-v0.23.md](docs/migration-v0.23.md) | workspace 持久化接管迁移档案 |
 | [🔄 migration-roleplay-v0.20.md](docs/migration-roleplay-v0.20.md) | 外部人格生成能力迁移指南 |
 | [📘 skill-authoring.md](docs/skill-authoring.md) | SKILL 系统编写规范 |
 | [🛠️ best-practices.md](docs/best-practices.md) | 最佳实践与模式 |
@@ -659,20 +703,18 @@ python -m pytest tests/test_engine.py::test_roleplay_engine_multi_human_single_a
 
 ---
 
-## 🆕 最新变更 (v0.14.7)
+## 🆕 最新变更 (v0.23.0)
 
 ### ✨ **新增**
-- **`write-tests` SKILL**：测试编写完整规范与最佳实践指南
-- **SelfMemory 计数触发**：按 `self_memory_extract_batch_size` / `self_memory_min_chars` 在主流程中触发
+- **WorkspaceRuntime**：新增 `open_workspace_runtime(...)` / `WorkspaceRuntime.open(...)`，对外只暴露 `work_path`、`session_id` 与业务输入，内部自动完成恢复、落盘和多 session 管理。
+- **WorkspaceLayout / WorkspaceMigrationManager**：统一路径解析、布局版本与旧工作目录迁移，根目录旧文件会在首次打开时复制迁移到新 workspace 结构。
 
 ### 🚀 **改进**
-- **消息合并优化**：高并发场景自动合并（`message_debounce_seconds=5.0` 生产默认，测试须设 `0.0`）
-- **LLM 并发限流**：可配置并发数（`max_concurrent_llm_calls` 默认 1，使用 `asyncio.Semaphore`）
-- **脚本优化**：自动化修复工具 (`fix_debounce_*.py`) 简化批量更新
-- **性能提升**：测试执行时间 605s → 13s（通过消除不必要的 debounce 等待）
+- **统一持久化布局**：provider、session、memory、token、roleplay、skills 全部改走 workspace 布局；事件文件迁移到 `memory/events/events.json`，自我记忆迁移到 `memory/self_memory.json`。
+- **兼容入口收敛**：`JsonPersistentSessionRunner`、`sirius-chat` CLI 和 `main.py` 现在都尽量复用 workspace runtime，而不是要求调用方显式 `store.load()` / `store.save()`。
 
-**测试须知：**
-> 生产环境采用 `message_debounce_seconds=5.0` 进行消息合并，测试环境必须显式设为 `0.0` 跳过等待，保证测试速度 < 1s/test
+**迁移提示：**
+> 旧工作目录会在首次打开时自动检测并迁移；完整迁移说明与目录对照见 `docs/migration-v0.23.md`。
 
 更多信息见 [CHANGELOG.md](CHANGELOG.md)。
 

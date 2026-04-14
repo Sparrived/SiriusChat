@@ -13,7 +13,14 @@ from pathlib import Path
 from typing import Any
 
 from sirius_chat.config.helpers import build_orchestration_policy_from_dict
-from sirius_chat.config.models import Agent, AgentPreset, SessionConfig
+from sirius_chat.config.models import (
+    Agent,
+    AgentPreset,
+    SessionConfig,
+    SessionDefaults,
+    WorkspaceConfig,
+)
+from sirius_chat.workspace.layout import WorkspaceLayout
 
 
 class ConfigManager:
@@ -116,6 +123,165 @@ class ConfigManager:
                 merged[key] = value
         return merged
 
+    def load_workspace_config(self, work_path: Path | str) -> WorkspaceConfig:
+        """Load workspace-level config, creating defaults when missing."""
+        layout = WorkspaceLayout(Path(work_path))
+        layout.ensure_directories()
+        manifest_path = layout.workspace_manifest_path()
+
+        if manifest_path.exists():
+            payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+            if isinstance(payload, dict):
+                config = WorkspaceConfig.from_dict(payload)
+                config.work_path = layout.root
+                if not config.active_agent_key:
+                    config.active_agent_key = self._resolve_active_agent_key(layout)
+                return config
+
+        session_snapshot = self._load_workspace_session_snapshot(layout)
+        config = WorkspaceConfig(
+            work_path=layout.root,
+            layout_version=layout.layout_version,
+            active_agent_key=self._resolve_active_agent_key(layout),
+            session_defaults=SessionDefaults(
+                history_max_messages=int(session_snapshot.get("history_max_messages", 24)),
+                history_max_chars=int(session_snapshot.get("history_max_chars", 6000)),
+                max_recent_participant_messages=int(
+                    session_snapshot.get("max_recent_participant_messages", 5)
+                ),
+                enable_auto_compression=bool(
+                    session_snapshot.get("enable_auto_compression", True)
+                ),
+            ),
+            orchestration_defaults=dict(session_snapshot.get("orchestration", {})),
+        )
+        return config
+
+    def save_workspace_config(self, work_path: Path | str, config: WorkspaceConfig) -> None:
+        """Persist workspace-level config and a human-readable session snapshot."""
+        layout = WorkspaceLayout(Path(work_path))
+        layout.ensure_directories()
+        config.work_path = layout.root
+        payload = config.to_dict()
+        manifest_path = layout.workspace_manifest_path()
+        manifest_path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+        session_snapshot = {
+            "generated_agent_key": config.active_agent_key,
+            "history_max_messages": config.session_defaults.history_max_messages,
+            "history_max_chars": config.session_defaults.history_max_chars,
+            "max_recent_participant_messages": config.session_defaults.max_recent_participant_messages,
+            "enable_auto_compression": config.session_defaults.enable_auto_compression,
+            "orchestration": dict(config.orchestration_defaults),
+        }
+        layout.session_config_path().write_text(
+            json.dumps(session_snapshot, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+    def build_session_config(
+        self,
+        *,
+        work_path: Path | str,
+        session_id: str,
+        overrides: dict[str, Any] | None = None,
+    ) -> SessionConfig:
+        """Build a runtime SessionConfig from workspace config + roleplay assets."""
+        from sirius_chat.roleplay_prompting import load_generated_agent_library
+
+        layout = WorkspaceLayout(Path(work_path))
+        workspace_config = self.load_workspace_config(layout.root)
+        agents, selected = load_generated_agent_library(layout.root)
+        agent_key = str((overrides or {}).get("agent_key", "")).strip()
+        resolved_agent_key = agent_key or workspace_config.active_agent_key or selected
+        if not resolved_agent_key:
+            raise ValueError("当前 workspace 尚未选择 generated agent。")
+        if resolved_agent_key not in agents:
+            raise ValueError(f"找不到生成的主教：{resolved_agent_key}")
+
+        preset = agents[resolved_agent_key]
+        session_defaults = workspace_config.session_defaults
+        override_payload = dict(overrides or {})
+        session_config = SessionConfig(
+            work_path=layout.root,
+            preset=AgentPreset(
+                agent=Agent(
+                    name=preset.agent.name,
+                    persona=preset.agent.persona,
+                    model=preset.agent.model,
+                    temperature=preset.agent.temperature,
+                    max_tokens=preset.agent.max_tokens,
+                    metadata=dict(preset.agent.metadata),
+                ),
+                global_system_prompt=preset.global_system_prompt,
+            ),
+            history_max_messages=int(
+                override_payload.get(
+                    "history_max_messages",
+                    session_defaults.history_max_messages,
+                )
+            ),
+            history_max_chars=int(
+                override_payload.get("history_max_chars", session_defaults.history_max_chars)
+            ),
+            max_recent_participant_messages=int(
+                override_payload.get(
+                    "max_recent_participant_messages",
+                    session_defaults.max_recent_participant_messages,
+                )
+            ),
+            enable_auto_compression=bool(
+                override_payload.get(
+                    "enable_auto_compression",
+                    session_defaults.enable_auto_compression,
+                )
+            ),
+            orchestration=build_orchestration_policy_from_dict(
+                dict(workspace_config.orchestration_defaults),
+                agent_model=preset.agent.model,
+            ),
+            session_id=session_id,
+        )
+        return session_config
+
+    def bootstrap_workspace_from_legacy_session_json(
+        self,
+        path: Path | str,
+        *,
+        work_path: Path | str,
+    ) -> tuple[WorkspaceConfig, list[dict[str, object]]]:
+        """Import legacy session.json defaults into workspace config and provider registry."""
+        from sirius_chat.providers.routing import WorkspaceProviderManager
+
+        config_path = Path(path)
+        raw_dict = json.loads(config_path.read_text(encoding="utf-8-sig"))
+        resolved = self._resolve_values(raw_dict)
+        layout = WorkspaceLayout(Path(work_path))
+        workspace_config = self.load_workspace_config(layout.root)
+
+        generated_agent_key = str(resolved.get("generated_agent_key", "")).strip()
+        if generated_agent_key:
+            workspace_config.active_agent_key = generated_agent_key
+
+        workspace_config.session_defaults = SessionDefaults(
+            history_max_messages=int(resolved.get("history_max_messages", 24)),
+            history_max_chars=int(resolved.get("history_max_chars", 6000)),
+            max_recent_participant_messages=int(
+                resolved.get("max_recent_participant_messages", 5)
+            ),
+            enable_auto_compression=bool(resolved.get("enable_auto_compression", True)),
+        )
+        workspace_config.orchestration_defaults = dict(resolved.get("orchestration", {}))
+        self.save_workspace_config(layout.root, workspace_config)
+
+        providers_config = list(resolved.get("providers", []))
+        if providers_config:
+            WorkspaceProviderManager(layout).save_from_entries(providers_config)
+        return workspace_config, providers_config
+
     def _resolve_values(self, obj: Any) -> Any:
         """Recursively resolve environment variables in configuration.
         
@@ -140,6 +306,30 @@ class ConfigManager:
             return os.environ.get(var_name, match.group(0))
 
         return self._ENV_VAR_PATTERN.sub(replacer, text)
+
+    def _load_workspace_session_snapshot(self, layout: WorkspaceLayout) -> dict[str, Any]:
+        session_config_path = layout.session_config_path()
+        if session_config_path.exists():
+            payload = json.loads(session_config_path.read_text(encoding="utf-8"))
+            if isinstance(payload, dict):
+                return payload
+        return {}
+
+    def _resolve_active_agent_key(self, layout: WorkspaceLayout) -> str:
+        candidate_paths = [
+            layout.generated_agents_path(),
+            layout.legacy_generated_agents_path(),
+        ]
+        for path in candidate_paths:
+            if not path.exists():
+                continue
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(payload, dict):
+                continue
+            selected = str(payload.get("selected_generated_agent", "")).strip()
+            if selected:
+                return selected
+        return ""
 
     def _validate_config(self, config: dict[str, Any]) -> None:
         """Validate configuration structure.
