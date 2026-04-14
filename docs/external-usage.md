@@ -921,80 +921,67 @@ asyncio.run(main())
 - `runtime`：运行时状态（近期发言、摘要、推断偏好标签、最近渠道身份）。
 - 主 AI 每轮会收到“参与者记忆”上下文，从而实现识人与连续记忆。
 
-## 识人架构（用户类驱动）
+## 识人与用户对象
 
-推荐由外部显式构造 `User`：
+当前公开的人类对象分三层：
 
-- `user_id`：稳定唯一标识（跨重启、跨昵称变化仍可识别）
-- `name`：展示名
-- `aliases`：可能出现的称呼（如群昵称）
-- `traits/persona`：用户特征
+| 类型 | 典型用途 | 说明 |
+|------|----------|------|
+| `Participant` | 代码里构造完整人类对象 | 核心 dataclass，包含 `user_id`、`name`、`persona`、`identities`、`aliases`、`traits`、`metadata` |
+| `User` | 外部调用时的语义化别名 | 实际上就是 `Participant` 的公开别名，没有第二套独立模型 |
+| `UserProfile` | `run_live_message(...)` 时的轻量注册对象 | 推荐给 `WorkspaceRuntime` / `arun_live_message` 传入，用于在当前 turn 前稳定注册用户 |
 
-主系统通过 `speaker -> user_id` 索引做解析，解析不到时再自动创建临时用户，因此已登记用户会优先被准确识别。
-
-对于多环境（CLI/QQ/微信）推荐同时提供 `identities` 映射，例如：
+推荐由外部显式提供稳定的 `user_id` 与 `identities`，让系统优先按渠道身份识别人，再回退到昵称/别名匹配。
 
 ```python
-User(
-    user_id="user_zhangsan",
-    name="张三",
-    aliases=["三哥"],
-    identities={"qq": "10086", "wechat": "wx_zhangsan"},
+from sirius_chat.api import Message, UserProfile, open_workspace_runtime
+
+runtime = open_workspace_runtime("./data/external_usage")
+
+transcript = await runtime.run_live_message(
+    session_id="group:demo",
+    turn=Message(
+        role="user",
+        speaker="张三",
+        content="我回来了",
+        channel="wechat",
+        channel_user_id="wx_zhangsan",
+    ),
+    user_profile=UserProfile(
+        user_id="user_zhangsan",
+        name="张三",
+        aliases=["三哥"],
+        identities={"wechat": "wx_zhangsan"},
+    ),
 )
-```
 
-在运行时，若 `Message` 带有 `channel` 和 `channel_user_id`，引擎会优先按该映射识别为同一用户，再回退到昵称/别名匹配。
-
-若外部系统需要在运行时直接按环境身份查询用户，可调用：
-
-```python
 entry = transcript.find_user_by_channel_uid(channel="wechat", uid="wx_zhangsan")
 if entry is not None:
     print(entry.profile.user_id)
 ```
 
-#### User 与 Participant 的区别
-
-Sirius Chat 中使用两个不同的模型来表示交互各方：
-
-| 维度 | Participant | User |
-|------|------------|------|
-| **定义** | 会话中的一个角色 | 人类参与者的识别与档案 |
-| **用途** | 会话配置中声明参与者 | 运行时识人与记忆管理 |
-| **生命周期** | 固定（配置时声明） | 动态（可运行时新增） |
-| **包含信息** | name, role, agent_id | user_id, name, traits, identities, profile, runtime |
-| **示例** | agent="Beichen", human="小王" | user_id="qq_12345", aliases=["小王"] |
-
-**使用场景**：
-
-1. **静态群聊**（参与者已知）→ 在 SessionConfig 中声明 Participant
+如果你更习惯先构造完整对象，也可以使用 `Participant` / `User`，再把它转成 `UserProfile`：
 
 ```python
-from sirius_chat.api import SessionConfig, Participant, Agent
+from sirius_chat.api import Participant
 
-config = SessionConfig(
-    agent=Agent(name="主助手"),
-    participants=[
-        Participant(name="小王", role="human"),
-        Participant(name="李四", role="human"),
-    ],
+participant = Participant(
+    user_id="user_zhangsan",
+    name="张三",
+    aliases=["三哥"],
+    identities={"wechat": "wx_zhangsan"},
 )
+
+profile = participant.as_user_profile()
 ```
 
-2. **动态群聊**（参与者运行时出现）→ 优先使用 `WorkspaceRuntime.run_live_message(...)`；若需要手动控制 transcript，再使用 `run_live_session + run_live_message`
+当前架构里并不存在旧文档中的 `SessionConfig.participants` 配置字段；人类参与者的运行态识别结果统一沉淀在 `transcript.user_memory`，而会话级元数据由 `WorkspaceRuntime` 自动写入 `sessions/<session_id>/participants.json`。
+
+若外部系统需要直接遍历当前已识别用户，应访问 `transcript.user_memory.entries`：
 
 ```python
-# 运行时动态添加参与者
-transcript = await engine.run_live_session(config=config)
-for turn in [
-    Message(role="user", speaker="小王", content="..."),
-    Message(role="user", speaker="新的人", content="..."),  # 自动创建
-]:
-    transcript = await engine.run_live_message(config=config, transcript=transcript, turn=turn)
-
-# 访问识别结果
-for user_id, user in transcript.users.items():
-    print(f"识别用户：{user.name}，别名：{user.aliases}")
+for user_id, entry in transcript.user_memory.entries.items():
+    print(user_id, entry.profile.name, entry.profile.aliases)
 ```
 
 ## 记忆压缩与上下文预算
@@ -1015,15 +1002,17 @@ for user_id, user in transcript.users.items():
 使用 `ConfigManager` 处理多环境配置：
 
 ```python
-from sirius_chat.config import ConfigManager
 from pathlib import Path
 
-# 加载基础配置并应用环境变量替换
-config_mgr = ConfigManager.load_from_json(Path("config/base.json"))
-# 支持 ${VAR_NAME} 占位符，会自动替换为环境变量值
+from sirius_chat.config import ConfigManager
 
-# 也可加载环境特定的配置
-dev_config = ConfigManager.load_from_json(Path("config/dev.json"))
+config_mgr = ConfigManager(base_path=Path.cwd())
+
+# 加载基础配置并应用 ${VAR_NAME} 环境变量替换
+base_session = config_mgr.load_from_json(Path("config/base.json"))
+
+# 也可直接按环境文件加载
+dev_session = config_mgr.load_from_json(Path("config/dev.json"))
 ```
 
 #### OrchestrationPolicy 配置辅助函数

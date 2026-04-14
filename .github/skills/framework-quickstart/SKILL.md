@@ -7,7 +7,12 @@ description: "当你需要在不通读全部代码的情况下快速理解 Siriu
 
 ## 目标
 
-在开始修改前，快速建立对 Sirius Chat 的准确整体认知。
+在开始修改前，快速建立对 Sirius Chat 当前代码结构的准确认知，优先搞清楚：
+
+- 推荐入口是什么
+- 真正的 engine 实现位于哪里
+- workspace / config / session / provider / memory 的边界如何划分
+- 哪些文件是当前架构的事实来源，哪些只是兼容层或历史迁移材料
 
 补充目标：本项目致力于构建具有真实情感表达、能提供帮助与情绪价值的核心引擎。
 
@@ -24,140 +29,53 @@ description: "当你需要在不通读全部代码的情况下快速理解 Siriu
 3. `README.md`
 4. `docs/orchestration-policy.md`
 5. `sirius_chat/models/models.py` ✨ (包重构)
-6. `sirius_chat/async_engine/core.py` ✨ (P0-003 重构)
-7. `sirius_chat/async_engine/prompts.py` ✨
-8. `sirius_chat/async_engine/utils.py` ✨
-9. `sirius_chat/async_engine/orchestration.py` ✨
-10. `sirius_chat/config/manager.py` ✨ (P1-006 配置管理)
-11. `sirius_chat/providers/base.py`
-12. `sirius_chat/providers/middleware/base.py` ✨
-13. `sirius_chat/providers/middleware/rate_limiter.py` ✨
-14. `sirius_chat/providers/middleware/retry.py` ✨
-15. `sirius_chat/providers/middleware/cost_metrics.py` ✨
-16. `sirius_chat/cache/` ✨ (P2-001 缓存框架)
-18. `sirius_chat/skills/` ✨ (SKILL系统)
-19. `sirius_chat/providers/mock.py`
-18. `sirius_chat/providers/openai_compatible.py`
-20. `sirius_chat/providers/bigmodel.py`
-21. `sirius_chat/providers/aliyun_bailian.py`
-22. `sirius_chat/providers/siliconflow.py`
-23. `sirius_chat/providers/volcengine_ark.py`
-24. `sirius_chat/providers/deepseek.py`
-25. `sirius_chat/providers/routing.py`
-26. `sirius_chat/user_memory.py`
-27. `sirius_chat/performance/` ✨ (P2-002 性能监控)
-28. `sirius_chat/cli.py`
-29. `sirius_chat/api/`
-30. `tests/test_engine.py`
-
-## 心智模型
-
+3. `docs/external-usage.md`
+4. `README.md`
+5. `docs/orchestration-policy.md`
+6. `sirius_chat/api/__init__.py`
+7. `sirius_chat/workspace/layout.py`
+8. `sirius_chat/workspace/runtime.py`
+9. `sirius_chat/workspace/roleplay_manager.py`
+10. `sirius_chat/config/models.py`
+11. `sirius_chat/config/manager.py`
+12. `sirius_chat/roleplay_prompting.py`
+13. `sirius_chat/models/models.py`
+14. `sirius_chat/core/engine.py`
+15. `sirius_chat/core/chat_builder.py`
+16. `sirius_chat/core/memory_runner.py`
+17. `sirius_chat/core/engagement_pipeline.py`
+18. `sirius_chat/core/heat.py`
+19. `sirius_chat/core/intent_v2.py`
+20. `sirius_chat/memory/__init__.py`
+21. `sirius_chat/session/store.py`
+22. `sirius_chat/providers/base.py`
+23. `sirius_chat/providers/routing.py`
+24. `sirius_chat/providers/middleware/base.py`
+25. `sirius_chat/cli.py`
+26. `tests/test_workspace_runtime.py`
+27. `tests/test_engine.py`
 - `models/models.py` ✨ **（包重构）** 定义数据契约（多人用户 + 单 AI 主助手）。
 - `OrchestrationPolicy` 用于任务路由与预算控制，支持 `memory_extract`、`event_extract`、`intent_analysis`、`memory_manager` 等任务的模型配置与预算限制。`reply_mode=auto` 下的 LLM 意图分析已纳入 `intent_analysis` 任务；若关闭该任务或调用失败，则回退关键词路径。同时支持提示词驱动的内容分割（`enable_prompt_driven_splitting=True`）。✨ `memory_manager` 是新增的可选 LLM 任务，用于汇聚、去重、标注、冲突检测记忆。
 - ✨ **(v0.13.0)** `OrchestrationPolicy` 新增 AI 自身记忆配置（`enable_self_memory`、`self_memory_extract_batch_size`、`self_memory_max_diary_prompt_entries`、`self_memory_max_glossary_prompt_terms`）。
-- ✨ **(v0.15.0)** AI 自身记忆触发机制回归为**主流程计数/字数触发**：`self_memory_extract_batch_size` 控制每 N 条 AI 回复触发一次，`self_memory_min_chars` 允许超长回复即时触发。旧的 `self_memory_extract_interval_seconds` 已移除。图片不再走 `multimodal_parse` 辅助任务，而是直接以 vision 格式发送给主模型。
-- ✨ **(v0.17.0)** 四项核心优化：
-  - **消息合并策略**：debounce 窗口内短消息（≤30 字符单行）用中文逗号 `，` 拼接，长/多行消息保留 `\n`
-  - **多模态智能降级**：仅当前批次含图时以 vision 格式发送历史图片，否则折叠为文本描述符 `[图片: url...]`
-  - **引擎级记忆共享**：`AsyncRolePlayEngine` 按 `work_path` 键缓存 `UserMemoryManager` / `SelfMemoryManager` / `EventObservationStore`，跨 Session 复用
-  - **预处理并行流水线**：`_add_human_turn`（含 memory_extract + event_extract）与 `intent_analysis` 通过 `asyncio.gather()` 并发执行
-- ✨ **(v0.14.0)** 回复决策重写：旧意愿分系统替换为三级参与决策架构，仅保留 `engagement_sensitivity` 和 `heat_window_seconds` 两个参数。回复频率限制集成到 `EngagementCoordinator` 中。
-- ✨ **(v0.14.1)** 彻底移除旧版兼容代码：删除全部 `auto_reply_*` 参数、`ReplyWillingnessDecision`、`core/intent.py`。迁移详见 `docs/migration-v0.14.md`。
-- ✨ **async_engine 包重构** (P0-003)：将 924 行单文件分解为多个职责明确的模块
-  - `async_engine/core.py`：核心 AsyncRolePlayEngine 类，保持公开 API 不变
-  - `async_engine/prompts.py`：系统提示词构建（整合 agent 身份、时间、用户记忆、编排指令）
-  - `async_engine/utils.py`：工具函数（token 估算、JSON 提取、多模态输入规范化等）
-  - `async_engine/orchestration.py`：任务编排配置和管理（TaskConfig、任务常量、系统提示模板）
-  - 模块分解后每个文件 < 200 行，关注点明确，可独立测试和维护
-- `async_engine.py` 的核心实现已迁移到 `async_engine/core.py`，旧导入位置仍然可用（向后兼容）。系统提示词生成时自动包含安全约束，防止 AI 主动泄露系统提示词。
-- ✨ **动态模型路由**：支持根据输入内容自动在不同模型间切换，以平衡成本与能力
-  - 在 `Agent.metadata["multimodal_model"]` 中配置多模态专用模型（如 `"gpt-4o"`）
-  - 无多媒体数据时使用 `Agent.model`（廉价文本模型，如 `"gpt-4o-mini"`）
-  - 检测到多媒体数据时自动升级至 `agent.metadata["multimodal_model"]`
-  - 提供便捷配置：`create_agent_with_multimodal(...)` 一次性创建，或 `auto_configure_multimodal_agent(...)` 灵活配置
-- `run_live_session` 负责会话初始化；动态参与者与逐条消息处理通过 `run_live_message` 完成。
-- 从 `v0.23.0` 起，推荐外部接入优先使用 `WorkspaceRuntime` / `open_workspace_runtime(...)`；它会自动恢复 `sessions/<session_id>/session_state.db`、维护 `participants.json` 并统一持久化布局。现在 runtime 支持 `work_path`（data root）与可选 `config_path`（config root）分离；低层 `run_live_session + run_live_message` 保留给高级自定义场景。
-- `SessionConfig.work_path` 在双根模式下表示配置根，`SessionConfig.data_path` 表示运行根。配置资产（workspace/provider/roleplay/skills）落在 config root，运行态数据（sessions/memory/token/skill_data）落在 data root；未显式传 `config_path` 时自动回退到单根模式。
-- `WorkspaceRuntime` 会使用文件监听热刷新 `workspace.json`、`config/session_config.json`、`providers/provider_keys.json` 与 `roleplay/generated_agents.json`；每次 `run_live_message(...)` 前保留签名校验兜底。`config/session_config.json` 使用 JSONC 风格注释写出，便于人工修改。
-- `run_live_message` 新增 `environment_context: str = ""` 参数（v0.8.0），允许外部注入环境信息（群名、在线人数等），自动写入系统提示词 `<environment_context>` 段。
-- `Message.reply_mode` 可按消息控制回复策略：`always`（默认）/`never`（仅写入记忆与 transcript）/`auto`（自动推断是否回复）。
-- 推荐在实时流式接入时使用 `run_live_message` 逐条处理消息；`run_live_session(...)` 用于一次性会话初始化。
-- `run_live_message` 默认使用会话级 `session_reply_mode`，将回复策略从消息级提升为 session 级。
-- `reply_mode=auto` 已升级为三级参与决策系统（热度 + 意图 + 参与度），参数由 `OrchestrationPolicy` 提供：`engagement_sensitivity`（0–1，默认 0.5）和 `heat_window_seconds`（默认 60）。
-- `run_live_session` 的节奏临时状态已挂载到 `Transcript.reply_runtime`，跨调用复用 transcript 时可保持节奏连续性。
-- `user_memory.py` 负责用户身份识别（user_id/aliases/identities）与结构化用户记忆。
-- 用户记忆分为 `profile`（初始化字段）与 `runtime`（运行时可变字段）。
-- `runtime.memory_facts` 是结构化分类记忆，每个记忆包含：
-  - `fact_type`、`value`、`source`（来源：memory_extract/event_extract/memory_manager 等）、`confidence`
-  - `memory_category`（分类：identity/preference/emotion/event/custom）、`validated`（验证标记）、`conflict_with`（冲突列表）
-  - V2 新增：`mention_count`（去重提频）、`source_event_id`（事件来源）、`context_channel`/`context_topic`（渠道/主题）
-  - V2 变更：`is_transient` 从字段改为方法 (`fact.is_transient(threshold)`)，`created_at` 已移除（使用 `observed_at`）
-- ✨ V2 新增 `MemoryPolicy`（在 `OrchestrationPolicy.memory` 中配置）：集中管理记忆阈值、衰退曲线、集合上限、摘要限长。
-- ✨ **(v0.13.0)** AI 自身记忆系统（`sirius_chat/memory/self/`）：独立于用户记忆，包含日记子系统（`DiaryEntry`，带遗忘曲线）和名词解释子系统（`GlossaryTerm`），由 `SelfMemoryManager` 管理。日记和名词解释以 `<self_diary>` / `<glossary>` XML 段注入系统提示词。持久化至 `{work_path}/self_memory.json`。
-- ✨ **新架构**：启发式正则提取已舍弃（高误率）；所有 AI 推断改由 LLM 任务（memory_extract）提供，质量 confidence 0.8。
-- ✨ **新增**：`memory_manager` LLM 任务可选启用，自动汇聚/去重/标注/验证所有候选记忆，置信度 0.9+。
-- 引擎在运行时会主动维护 `runtime` 记忆（通过 memory_extract 等任务），用于增强拟人化连续对话。
-- 系统提示中的记忆呈现改为结构化格式，按类别分组，透明展示置信度。
-- 引擎在每轮用户发言后执行事件命中分析（高置信命中/弱命中/新增），并把事件说明注入 system 消息。
-- 事件记忆会持久化到 `work_path/events/events.json`，用于跨会话事件连续性。
-- ✨ **事件系统与用户记忆系统的双向适配**（方案C）：
-  - 每条事件的特征（emotion_tags、keywords、role_slots、entities）自动转化为结构化用户记忆事实
-    * `emotion_tags` → `emotional_pattern` 事实（信度 base - 0.05）
-    * `keywords` → `user_interest` 事实（信度 base - 0.10）
-    * `role_slots` → `social_context` 事实 + 自动特征提升，如检测领导角色 → 推断 `leadership_tendency`
-  - 基于用户历史调整事件理解（`interpret_event_with_user_context()`）
-    * 计算四维对齐度：keyword_alignment, role_alignment, emotion_alignment, entity_alignment
-    * 动态信度调整：`adjusted_confidence = 0.65 + avg_alignment × 0.3`，范围 [0.5, 1.0]
-    * 推荐处理类别：high_confidence (avg>0.6) | normal | low_relevance (avg<0.2) | pending (新用户)
-  - 实现真正的**双向观测**：事件不再被单向消费，而是成为用户理解的重要信号源
-- `Transcript.find_user_by_channel_uid(channel, uid)` 支持按渠道+外部 UID 直接定位用户。
-- `session/store.py` ✨ **（包重构）** 提供会话持久化与重启恢复（`SessionStore`、`JsonSessionStore`、`SqliteSessionStore`）。默认 `SqliteSessionStore` 现使用结构化表保存消息、reply runtime、用户 profile/runtime/facts 与 token 记录，不再是单条 payload 快照；首次打开会自动迁移 sibling `session_state.json` 与旧 `session_state(payload)` SQLite。
-- `workspace/` ✨ **（v0.25.0 更新）** 提供 `WorkspaceLayout`、`WorkspaceRuntime`、`RoleplayWorkspaceManager`、`WorkspaceBootstrap`：统一 layout、高层自动持久化入口、workspace 读写 API。旧版 `WorkspaceMigrationManager` 已移除。
-- `session/runner.py` ✨ **（包重构）** 提供上层兼容运行器（`JsonPersistentSessionRunner`），内部尽量复用 `WorkspaceRuntime`，保留 `primary_user.json` 兼容行为。
-- `Transcript.token_usage_records` 全量归档每次模型调用的 token 消耗信息（通过 `token/usage.py` 提供的 `summarize_token_usage` 与 `build_token_usage_baseline` 汇总）。
-- ✨ `token/store.py` **(v0.11.0)** 提供 SQLite 持久化后端（`TokenUsageStore`），自动写入 `{work_path}/token_usage.db`，支持跨会话查询。
-- ✨ `token/analytics.py` **(v0.11.0)** 基于 SQLite 的多维度分析：`compute_baseline`、`group_by_session/actor/task/model`、`time_series`、`full_report`。
-- `token/utils.py` ✨ **（包重构）** 提供 Token 估算工具（启发式估算、Tiktoken 精确计算、统计辅助函数）。
-- 引擎支持自动记忆压缩（`session_summary` + 历史预算）。
-- ✨ **配置管理** (P1-006)：`config/manager.py` 提供多环境配置管理能力
-  - 支持 JSON 配置文件加载（base/dev/test/prod）
-  - 支持环境变量替换（${VAR_NAME} 语法）
-  - ConfigManager 类提供加载、合并、验证等核心功能
-- ✨ **缓存框架** (P2-001)：`cache/` 模块提供可扩展的缓存后端
-  - `base.py`：CacheBackend 抽象基类定义标准接口
-  - `memory.py`：MemoryCache 内存缓存实现，支持 LRU 和 TTL 过期
-  - `keygen.py`：有确定性的缓存 key 生成函数
-- ✨ **性能监控** (P2-002)：`performance/` 模块提供性能分析和优化工具
-  - `metrics.py`：ExecutionMetrics 和 MetricsCollector 用户执行指标收集
-  - `profiler.py`：PerformanceProfiler 上下文管理器和 @profile_sync/@profile_async 装饰器
-  - `benchmarks.py`：Benchmark 和 BenchmarkSuite 用于性能基准测试
-- ✨ **SKILL系统**：`skills/` 模块允许 AI 通过 `[SKILL_CALL: name | {params}]` 调用外部代码
-  - `models.py`：SkillDefinition、SkillParameter、SkillResult、**SkillChainContext** 数据模型
-  - `registry.py`：从 `{work_path}/skills/` 自动发现和加载 SKILL 文件，并自动补齐目录与 `README.md` 引导文件
-  - `executor.py`：参数校验、类型转换和安全执行，支持 `skill_execution_timeout`（默认 30 秒）
-  - `dependency_resolver.py`：加载前自动检测并安装缺失的第三方依赖（`uv pip install`，回退 `pip`）
-  - `data_store.py`：每个 SKILL 独立的 JSON 持久化存储（`{work_path}/skill_data/`）
-  - 默认：`OrchestrationPolicy.enable_skills=True`；即使显式关闭，`run_live_session` 仍会先创建 `{work_path}/skills/`
-  - SKILL 文件需导出 `SKILL_META` 字典和 `run(**kwargs)` 函数
-  - `SKILL_META["dependencies"]`：可选显式声明第三方包名列表，框架自动安装
-  - 持久化数据通过 `data_store` 参数自动注入到 `run()` 中
-  - ✨ **(v0.14.3/v0.14.4) SKILL 执行机制演进**：
-    - v0.14.3 引入 `SkillChainContext` 和 `${template}` 参数占位符（现保留为程序化 API，engine 内部不再使用）
-    - ✨ **(v0.14.4) 迭代反馈循环（当前默认）**：每一轮 AI 回复最多含一个 `[SKILL_CALL:]`，engine 立即执行并将结果注入 transcript，LLM 在看到实际结果后自主决定下一步（继续调用另一 SKILL 或生成最终回复）。参数由模型动态填写，无需预绑定占位符。
-    - N 次 SKILL 调用 = N 次 LLM 轮次；`max_skill_rounds` 控制上限。
-- ✨ **参与决策系统** (`core/heat.py` + `core/intent_v2.py` + `core/engagement.py`)：三级架构替代旧意愿分系统。
-  - `HeatAnalyzer`：零 LLM 开销的群聊热度分析（消息密度 / 活跃参与者数 / AI 参与比）
-  - `IntentAnalyzer` v2：意图分类 + 显式 `target` 识别（ai/others/everyone/unknown），LLM 路径由 `intent_analysis` 任务驱动，可独立配置模型/预算/重试
-  - `EngagementCoordinator`：融合热度、意图、`engagement_sensitivity` 输出最终回复决策（`EngagementDecision`）
-- ✨ **后台任务** (`background_tasks.py`)：轻量级 asyncio 定时循环管理器，支持记忆压缩、临时清理和记忆归纳三类后台任务。记忆归纳循环定时调用 LLM 合并冗余事件/摘要/事实。
-- `providers/base.py` 定义 provider 协议。
-- `providers/middleware/` 是 Provider 功能扩展层（✨ 新增 P1-003）：
-  - `base.py`：Middleware ABC，支持链式组合
-  - `rate_limiter.py`：固定窗口和令牌桶速率限制
-  - `retry.py`：指数退避重试和断路器保护
-  - `cost_metrics.py`：成本计量和追踪
-  - 中间件通过 MiddlewareChain 串联，可透明地为任意 provider 添加流控、重试、监控等功能
-- `providers/mock.py` 提供可复现的本地测试能力。
+## 心智模型
+
+- 当前推荐入口是 `WorkspaceRuntime`；它负责文件布局、session 恢复、participants 写回、watcher 热刷新和 provider 注册表联动。
+- `WorkspaceLayout` 是路径语义的单一事实来源：config root 放配置与资产，data root 放运行态数据。
+- `AsyncRolePlayEngine` 的真实实现位于 `sirius_chat/core/engine.py`；`sirius_chat/async_engine/` 只承担兼容导出与 prompts/orchestration/utils 辅助层。
+- 一个 `SessionConfig` 只对应一个主 AI，主 AI 由 `preset=AgentPreset(...)` 描述，不再推荐在外部配置里手写完整 agent prompt。
+- `User` 只是 `Participant` 的别名；运行时识人与记忆的事实来源是 `transcript.user_memory`，而不是旧版 `participants` 配置字段。
+- provider 注册表由 `WorkspaceProviderManager` 管理，路由顺序是 `models` 列表优先、`healthcheck_model` 次之、最后回退到第一个启用 provider。
+- roleplay 资产统一存放在 `roleplay/generated_agents.json` 与 `roleplay/generated_agent_traces/`，`active_agent_key` 决定 `SessionConfig` 使用哪份资产。
+- session store、token store、memory store、SKILL data store 都已经收敛到 workspace 语义下，修改这些层时必须同时检查路径文档。
+
+## 修改路由指南
+
+- 新增 provider：修改 `sirius_chat/providers/`、`sirius_chat/providers/routing.py`、`sirius_chat/api/providers.py`，并补测试与文档。
+- 修改对话主流程：优先检查 `sirius_chat/core/engine.py`、`core/chat_builder.py`、`core/memory_runner.py`、`core/engagement_pipeline.py`。
+- 修改 workspace / session 持久化：同步检查 `sirius_chat/workspace/`、`sirius_chat/config/manager.py`、`sirius_chat/session/store.py`。
+- 修改识人或记忆逻辑：同步检查 `sirius_chat/memory/user/`、`sirius_chat/memory/event/`、`sirius_chat/memory/self/`、`sirius_chat/models/models.py` 与 `docs/external-usage.md`。
+- 修改外部 API：同步更新 `sirius_chat/api/`、README、`docs/external-usage.md` 与示例代码。
+- 修改 roleplay 资产流：同步更新 `sirius_chat/roleplay_prompting.py`、`workspace/roleplay_manager.py` 和架构文档。
 - `providers/*` 实现具体的 LLM 后端。
 - `roleplay_prompting.py` 提供自动问题清单、回答提取式提示词生成、关键词/依赖文件驱动的人格生成、人格持久化、完整本地生成轨迹与依赖文件重生能力；问卷支持 `default` / `companion` / `romance` / `group_chat` 四类模板，可通过 `list_roleplay_question_templates()` 获取模板名，再用 `generate_humanized_roleplay_questions(template=...)` 生成对应的高层人格问卷。人格资产现统一存放于 `roleplay/generated_agents.json` 与 `roleplay/generated_agent_traces/`；对会写入 `work_path` 的人格生成链路，会先暂存 `PersonaSpec` 与待生成快照，再调用模型；结构化人格生成默认使用 `max_tokens=5120`、`timeout_seconds=120.0`，并通过 `GenerationRequest.timeout_seconds` 透传请求级超时。
 - 内置 provider 包含 `OpenAICompatibleProvider`、`AliyunBailianProvider`、`DeepSeekProvider`、`SiliconFlowProvider` 与 `VolcengineArkProvider`。
@@ -180,9 +98,9 @@ description: "当你需要在不通读全部代码的情况下快速理解 Siriu
 
 ## 修改路由指南
 
-- 新增 provider 支持：修改 `sirius_chat/providers/`，并保持 `async_engine.py` 不含 provider 细节。
-- 修改主 AI 或多人轮次策略：更新 `sirius_chat/async_engine.py`，并检查 transcript 兼容性。
-- 修改动态参与者或识人记忆逻辑：同步更新 `models/models.py`、`async_engine.py` 与 `docs/external-usage.md`。
+- 新增 provider 支持：修改 `sirius_chat/providers/`，并保持 `sirius_chat/core/engine.py` 不含 provider 细节。
+- 修改主 AI 或多人轮次策略：更新 `sirius_chat/core/engine.py`，并检查 transcript 兼容性。
+- 修改动态参与者或识人记忆逻辑：同步更新 `models/models.py`、`sirius_chat/core/engine.py` 与 `docs/external-usage.md`。
 - 修改会话恢复或压缩策略：同步更新 `workspace/`、`session/store.py`、`session/runner.py`、`docs/architecture.md`、相关迁移文档；若外部可见行为变化，再同步 `README.md`。
 - 修改配置结构或环境变量处理：同步更新 `sirius_chat/config/manager.py`、`sirius_chat/cli.py`、`README.md` 与 `examples/session.json`。
 - 修改缓存策略或后端：在 `sirius_chat/cache/` 实现新后端或修改现有接口，并更新 `docs/best-practices.md`。

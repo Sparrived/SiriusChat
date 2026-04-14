@@ -60,7 +60,7 @@ git diff --cached --stat
 
 **示例摘要**：
 ```
-- feat: 实现记忆质量评估模块（memory_quality.py、memory_quality_tools.py）
+- feat: 实现记忆质量评估模块（memory/quality/models.py、memory/quality/tools.py）
 - feat: 新增智能遗忘引擎与衰退调度
 - test: 添加8个记忆质量系统测试（79/79通过）
 - docs: 更新architecture.md中的Phase 2记忆系统说明
@@ -161,12 +161,12 @@ git diff --cached --stat
 # 新增功能类提交
 git commit -m "feat(memory): 实现记忆质量评估与智能遗忘引擎
 
-新增sirius_chat/memory_quality.py模块，包含：
+新增sirius_chat/memory/quality/models.py模块，包含：
 - MemoryQualityAssessor：多维度质量评分（置信度50% + 活跃度30% + 验证15%）
 - MemoryForgetEngine：自动衰退调度与清理规则
 - MemoryQualityReport：报告生成
 
-新增sirius_chat/memory_quality_tools.py，提供CLI工具：
+新增sirius_chat/memory/quality/tools.py，提供CLI工具：
 - analyze: 离线分析所有用户记忆质量
 - cleanup: 按阈值清理低质量记忆
 - decay: 应用衰退表更新置信度

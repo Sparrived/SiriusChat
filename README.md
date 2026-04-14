@@ -218,45 +218,39 @@ asyncio.run(main())
 ```
 sirius_chat/
 ├── __init__.py
-├── api/                          # 🔌 公开 API 入口
-│   └── __init__.py
-├── async_engine/                 # 🧠 异步编排引擎（核心）
-│   ├── core.py                   # AsyncRolePlayEngine 主类
-│   ├── prompts.py                # 系统提示词构建
-│   ├── utils.py                  # 工具函数
-│   └── orchestration.py          # 任务编排配置
-├── config/                       # ⚙️ 配置模型 (dataclass)
-│   └── models.py                 # SessionConfig / OrchestrationPolicy
-├── core/                         # 🔧 引擎核心逻辑
-│   └── engine.py                 # 消息处理、参与决策
-├── workspace/                    # 🗂️ workspace 布局、迁移与运行时
-│   ├── layout.py                 # WorkspaceLayout 路径解析
-│   ├── migration.py              # 旧布局迁移
-│   └── runtime.py                # WorkspaceRuntime 自动持久化入口
-├── memory/                       # 📝 记忆系统
-│   ├── user_memory.py            # 用户记忆管理
-│   ├── self_memory.py            # AI 自身记忆（日记 + 名词表）
-│   └── event_memory.py           # 事件记忆
-├── models/                       # 📦 数据模型（契约）
-│   └── models.py                 # Transcript / Message / UserProfile
-├── providers/                    # 🔗 LLM Provider 实现
-│   ├── openai_compatible.py      # OpenAI 兼容接口
-│   ├── aliyun_bailian.py         # 阿里云百炼适配
-│   ├── deepseek.py               # DeepSeek 适配
-│   ├── siliconflow.py            # SiliconFlow 适配
-│   └── volcengine_ark.py         # 火山方舟适配
-├── session/                      # 💾 会话持久化
-│   ├── store.py                  # JSON / SQLite 后端
-│   └── runner.py                 # JsonPersistentSessionRunner
-└── skills/                       # 🎯 SKILL 系统
-    ├── executor.py               # 任务执行器
-    └── models.py                 # SKILL 数据模型
+├── api/                          # 🔌 公开 API facade（engine/models/providers/session 等）
+├── core/                         # 🧠 编排核心真实实现
+│   ├── engine.py                 # AsyncRolePlayEngine
+│   ├── chat_builder.py           # 主模型请求构造
+│   ├── memory_runner.py          # 记忆相关辅助任务
+│   ├── engagement_pipeline.py    # 热度/意图/参与协调流水线
+│   ├── heat.py                   # 群聊热度分析
+│   ├── intent_v2.py              # 意图分析
+│   └── events.py                 # 会话事件流
+├── async_engine/                 # 🧩 兼容导出 + prompts/orchestration/utils 辅助层
+├── workspace/                    # 🗂️ layout/runtime/watcher/roleplay bootstrap
+├── config/                       # ⚙️ WorkspaceConfig / SessionConfig / JSONC 管理
+├── memory/                       # 📝 记忆子包
+│   ├── user/
+│   ├── event/
+│   ├── self/
+│   └── quality/
+├── session/                      # 💾 SessionStore 与高层兼容 runner
+├── providers/                    # 🔗 Provider 实现、路由与中间件
+│   ├── routing.py
+│   └── middleware/
+├── token/                        # 📊 Token 统计、SQLite 持久化与分析
+├── skills/                       # 🎯 SKILL 注册、执行与数据存储
+├── roleplay_prompting.py         # 🎭 人格资产生成、持久化与选择
+├── cache/                        # ⚡ 可扩展缓存框架
+├── performance/                  # 📈 性能分析与基准测试
+└── cli.py                        # 🖥️ 库内薄 CLI
 
 tests/                            # ✅ 单元测试 (600+ 个)
-├── test_engine.py                # 引擎层
-├── test_async_engine.py          # 异步编排
-├── test_memory_system_v2.py      # 记忆系统
-├── test_skill_system.py          # SKILL 系统
+├── test_engine.py                # 编排核心
+├── test_workspace_runtime.py     # workspace 持久化与热刷新
+├── test_provider_routing.py      # provider 注册表与自动路由
+├── test_providers.py             # 各 provider 一致性
 └── ...
 
 docs/                             # 📚 文档
@@ -279,74 +273,78 @@ scripts/                          # 🔨 开发脚本
 
 ## 使用示例
 
-### 示例 1：基础多人对话
+### 示例 1：推荐入口 WorkspaceRuntime
 
 ```python
 import asyncio
 from pathlib import Path
-from sirius_chat.api import create_async_engine, SessionConfig, Agent, Message, OrchestrationPolicy
 
-async def multi_user_chat():
-    from sirius_chat.providers.mock import MockProvider
-    provider = MockProvider(responses=["我理解您的想法", "这很有意思"])
-    engine = create_async_engine(provider)
-    
-    config = SessionConfig(
-        work_path=Path("./data/chat_session"),
-        agent=Agent(name="助手", persona="耐心和善", model="gpt-4o-mini"),
-        orchestration=OrchestrationPolicy(message_debounce_seconds=0.0),
-    )
-    
-    # 启动会话
-    transcript = await engine.run_live_session(config=config)
-    
-    # 用户 1 发言
-    msg1 = Message(role="user", speaker="小王", content="Python 如何学习？")
-    transcript = await engine.run_live_message(config=config, turn=msg1, transcript=transcript)
-    
-    # 用户 2 发言
-    msg2 = Message(role="user", speaker="小李", content="我也想学")
-    transcript = await engine.run_live_message(config=config, turn=msg2, transcript=transcript)
-    
-    print(transcript.as_chat_history())
+from sirius_chat.api import Message, UserProfile, open_workspace_runtime
+from sirius_chat.providers.mock import MockProvider
 
-asyncio.run(multi_user_chat())
+
+async def main() -> None:
+  runtime = open_workspace_runtime(
+    Path("./data/chat_session"),
+    config_path=Path("./config/chat_session"),
+    provider=MockProvider(responses=["我理解您的想法"]),
+  )
+
+  transcript = await runtime.run_live_message(
+    session_id="group:demo",
+    turn=Message(role="user", speaker="小王", content="Python 如何学习？"),
+    user_profile=UserProfile(user_id="u_xiaowang", name="小王"),
+  )
+
+  print(transcript.as_chat_history())
+
+
+asyncio.run(main())
 ```
 
-### 示例 2：启用高级功能
+### 示例 2：低层入口 AsyncRolePlayEngine
 
 ```python
-config = SessionConfig(
-    work_path=Path("./data/advanced_session"),
-    agent=Agent(name="高级助手", persona="详细专业", model="gpt-4"),
-    orchestration=OrchestrationPolicy(
-        unified_model="gpt-4",
-        # ✨ 记忆系统
-        enable_self_memory=True,                           # 启用 AI 自身记忆
-        self_memory_extract_batch_size=3,                 # 每 3 条 AI 回复提取一次
-        self_memory_min_chars=400,                        # 或单条回复超过 400 字时提取
-        # 🎯 任务编排
-        task_enabled={
-            "memory_extract": True,
-            "event_extract": True,
-        },
-        task_models={
-            "memory_extract": "gpt-3.5-turbo",  # 用廉价模型提取
-            "event_extract": "gpt-3.5-turbo",
-        },
-        # 💬 参与决策
-        engagement_sensitivity=0.7,                        # 更主动回复
-        heat_window_seconds=60,
-        # ⏱️ 消息合并
-        message_debounce_seconds=5.0,                     # 5s 内的消息合并
+import asyncio
+from pathlib import Path
+
+from sirius_chat.api import Agent, AgentPreset, Message, OrchestrationPolicy, SessionConfig, create_async_engine
+from sirius_chat.providers.mock import MockProvider
+
+
+async def main() -> None:
+  engine = create_async_engine(MockProvider(responses=["这很有意思"]))
+
+  config = SessionConfig(
+    work_path=Path("./config/chat_session"),
+    data_path=Path("./data/chat_session"),
+    preset=AgentPreset(
+      agent=Agent(name="助手", persona="耐心和善", model="gpt-4o-mini"),
+      global_system_prompt="你是一个友善、克制、连续性很强的助手。",
     ),
-)
+    orchestration=OrchestrationPolicy(
+      unified_model="gpt-4o-mini",
+      message_debounce_seconds=0.0,
+    ),
+  )
+
+  transcript = await engine.run_live_session(config=config)
+  transcript = await engine.run_live_message(
+    config=config,
+    transcript=transcript,
+    turn=Message(role="user", speaker="小王", content="我也想学"),
+  )
+
+  print(transcript.as_chat_history())
+
+
+asyncio.run(main())
 ```
 
 ### 示例 3：多模态输入
 
 ```python
-from sirius_chat.models import Message
+from sirius_chat.api import Message
 
 msg = Message(
     role="user",
@@ -465,9 +463,9 @@ msg = Message(
 ```
 
 **路由规则：**
-1. 按 `healthcheck_model` 与请求模型名做精确匹配
-2. 无匹配时回退到第一个可用 provider
-3. 无任何可用 provider 时抛出错误
+1. 优先按 `models` 显式模型列表匹配
+2. 若未命中，再按 `healthcheck_model` 与请求模型名做精确匹配
+3. 仍未命中时回退到第一个可用 provider；若没有可用 provider，则抛出错误
 
 ### 🔹 多模型任务编排
 
@@ -561,7 +559,7 @@ msg = Message(
 
 旧的根目录 `session_state.json`、`session_state.db`、`provider_keys.json`、`generated_agents.json` 等文件会在首次打开 workspace 时自动迁移到新布局；`primary_user.json` 和 `session_config.persisted.json` 仅保留给兼容入口。
 
-如果需要显式执行一次迁移并查看结果，可运行 `python examples/migrate_session_store.py --work-path <你的工作目录>`。
+当前不需要单独执行迁移脚本：`WorkspaceRuntime` 与 `SqliteSessionStore` 会在首次打开 workspace / session 时自动完成兼容迁移。
 
 ### 主用户档案管理
 

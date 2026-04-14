@@ -15,41 +15,21 @@ description: "遍历项目结构变化并同步更新文档。监控模块变化
 
 ```
 sirius_chat/
-├── async_engine/              (P0-003 重构) - 编排引擎核心
-│   ├── core.py               - AsyncRolePlayEngine 主类
-│   ├── prompts.py            - 系统提示词生成
-│   ├── utils.py              - 工具函数层
-│   └── orchestration.py       - 任务配置与管理
-├── providers/                 - LLM 供应商实现
-│   ├── base.py               - Provider 协议
-│   ├── middleware/           - (P1-003) 中间件框架
-│   │   ├── base.py           - Middleware ABC
-│   │   ├── rate_limiter.py   - 速率限制
-│   │   ├── retry.py          - 重试与断路器
-│   │   └── cost_metrics.py   - 成本计量
-│   ├── mock.py               - Mock 测试 Provider
-│   ├── openai_compatible.py  - OpenAI 兼容
-│   ├── siliconflow.py        - SiliconFlow 集成
-│   ├── volcengine_ark.py     - 火山方舟集成
-│   └── routing.py            - Provider 路由
-├── config/                    (P1-006) - 配置管理
-├── cache/                     (P2-001) - 缓存框架
-│   ├── base.py               - CacheBackend 抽象
-│   ├── memory.py             - MemoryCache 内存实现
-│   ├── keygen.py             - 缓存 Key 生成
-│   └── __init__.py           - 导入导出
-├── performance/              (P2-002) - 性能监控
-│   ├── metrics.py            - 指标收集
-│   ├── profiler.py           - 性能分析
-│   ├── benchmarks.py         - 基准测试
-│   └── __init__.py           - 导入导出
-├── models.py                 - 数据模型与契约
-├── user_memory.py            - 用户记忆管理
-├── session_store.py          - 会话持久化
-├── token_usage.py            - Token 消耗分析
-├── roleplay_prompting.py     - 拟人化提示词、依赖文件驱动人格生成、生成轨迹持久化
-├── cli.py                    - CLI 入口
-└── api/                      - 对外 API 统一层
+├── api/                      - 对外 API facade（engine/models/providers/session 等）
+├── core/                     - 编排核心真实实现（engine/chat_builder/memory_runner/...）
+├── async_engine/             - 兼容导出 + prompts/orchestration/utils 辅助层
+├── workspace/                - WorkspaceLayout / Runtime / Watcher / RoleplayManager
+├── config/                   - SessionConfig / WorkspaceConfig / JSONC / ConfigManager
+├── models/                   - Message / Participant / Transcript 等数据契约
+├── memory/                   - user/event/self/quality 子包
+├── session/                  - SessionStore / runner
+├── providers/                - Provider 实现、路由与 middleware
+├── token/                    - token 记录、SQLite 持久化与分析
+├── skills/                   - SKILL 注册、执行与 data store
+├── roleplay_prompting.py     - PersonaSpec、人格资产生成与持久化
+├── cache/                    - 缓存框架
+├── performance/              - 性能分析工具
+└── cli.py                    - 库内薄 CLI
 ```
 
 ### 关键配置文件
@@ -154,7 +134,8 @@ git diff HEAD~1 --stat
 #### C. 细节实现变更（中影响）
 
 **触发条件**：
-- `sirius_chat/models/models.py` 的数据结构变化
+- `sirius_chat/models/models.py` 的消息 / transcript 契约变化
+- `sirius_chat/config/models.py` 的 session / workspace / orchestration 契约变化
 - 系统提示词生成逻辑改动
 - 缓存策略、性能监控逻辑修改
 
@@ -165,10 +146,11 @@ git diff HEAD~1 --stat
 
 **示例提示**：
 ```
-检测到数据模型变化: SessionConfig 新增字段
+检测到数据契约变化: SessionConfig / WorkspaceConfig / Transcript 新增字段
 请更新：
 1. docs/architecture.md - 更新模型说明
-2. tests/test_models.py - 补充测试覆盖
+2. docs/external-usage.md - 若外部调用契约受影响则补充说明
+3. 对应 tests 文件 - 补充测试覆盖
 ```
 
 #### D. 配置/依赖变更（中-低影响）
@@ -247,7 +229,8 @@ git show HEAD --stat
 # 2. 列出本地未推送的提交
 git log origin/master..HEAD --oneline
 
-# 3. 查看特定文件的历史变更
+# 3. 查看特定契约文件的历史变更
+git log -p --follow sirius_chat/config/models.py | head -100
 git log -p --follow sirius_chat/models/models.py | head -100
 
 # 4. 对比文档和代码的一致性
@@ -276,18 +259,18 @@ grep -r "^description:" .github/skills/*/SKILL.md
 ✓ python main.py --help 可正常执行
 ```
 
-### 场景 2：修改 SessionConfig 数据结构
+### 场景 2：修改 SessionConfig / WorkspaceConfig 数据结构
 
 ```
-变更：在 sirius_chat/models/models.py 中新增 SessionConfig 字段
+变更：在 sirius_chat/config/models.py 中新增 SessionConfig 或 WorkspaceConfig 字段
 
 检查清单：
 ✓ 字段包含完整类型注解和文档字符串
-✓ 在 models.py 中补充字段说明
+✓ 在 config/models.py 中补充字段说明
 ✓ 在 docs/architecture.md 中更新对应数据模型描述
 ✓ 在 docs/external-usage.md 中补充使用示例
 ✓ 更新 examples/session.json 示例配置
-✓ tests/test_models.py 中有相应的单元测试
+✓ tests/test_config_manager.py 或相关测试中有相应覆盖
 ✓ 旧代码的兼容性已确认（提供默认值或迁移逻辑）
 ```
 

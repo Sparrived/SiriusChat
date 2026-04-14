@@ -1,653 +1,217 @@
 ﻿# Sirius Chat 架构说明
 
+本文档描述当前代码库的稳定架构边界。历史迁移文档只用于解释版本演进，不作为当前实现的事实来源；当前架构以本文档、[docs/full-architecture-flow.md](docs/full-architecture-flow.md) 与实际代码为准。
+
 ## 目标
 
-Sirius Chat 是一个面向“多人用户与单 AI 主助手”交互的核心框架，可用于：
+Sirius Chat 是一个面向“多人用户与单主 AI”交互场景的编排框架，目标包括：
 
-- CLI 脚本调用
-- Python 应用内嵌调用
-- 需要 transcript 输出的外部编排器
+- 为 CLI、脚本、服务端集成和外部编排器提供统一的会话运行模型
+- 让调用方只关心输入消息与业务上下文，而不是底层文件布局与恢复细节
+- 在多轮对话中保持用户画像、事件记忆、AI 自身记忆与会话节奏的连续性
+- 用 provider 抽象隔离上游模型差异，让编排逻辑稳定留在框架内部
 
-项目愿景：打造具备真实情感表达与用户陪伴能力的核心引擎，在提供问题解决能力的同时提供情绪价值。
+## 核心原则
 
-## 设计原则
+- Workspace 持久化由 runtime 统一管理，外部不直接拼接内部文件路径。
+- `sirius_chat/models/models.py` 与 `sirius_chat/config/models.py` 是核心数据契约的事实来源。
+- provider 细节只允许位于 `sirius_chat/providers/`，不混入编排核心。
+- 当前推荐入口是 `WorkspaceRuntime`，低层 `AsyncRolePlayEngine` 只保留给高级自定义场景。
+- 配置资产与运行态数据支持双根分离：config root 负责配置与角色资产，data root 负责 session、memory、token 与 skill_data。
 
-- Provider 抽象优先：engine 逻辑不依赖单一 LLM 厂商。
-- 编排可复现：人类参与者按轮次顺序发言，由同一个主 AI 统一回应。
-- 契约显式化：通过 dataclass 定义输入配置与输出 transcript。
-- 传输层可扩展：provider 实现可自由选择 HTTP 技术栈。
-- 用户状态连续性：引擎需在运行时主动维护用户偏好、情绪线索与最近语境。
+## 推荐入口
 
-## 持久化所有权
+| 入口 | 适用场景 | 负责内容 |
+| --- | --- | --- |
+| `open_workspace_runtime(...)` / `WorkspaceRuntime` | 默认外部接入、生产服务、插件宿主 | 初始化 workspace、热刷新、session 恢复、participants 元数据、session store 写回 |
+| `AsyncRolePlayEngine` | 需要完全自管 transcript、provider 生命周期或自定义上层调度 | 单轮消息编排、辅助任务、提示词构造、事件流 |
+| `main.py` | 仓库级交互入口、调试与人工演练 | provider 管理命令、持续会话、兼容 `primary_user.json` |
+| `sirius-chat` | 库内薄 CLI、单轮调用或模板导出 | legacy session JSON bootstrap、单轮会话执行、模板输出 |
 
-从 `v0.25.0` 开始，Engine 全权接管文件管理：
+### 需要明确的语义
 
-- 外部至少提供运行态 `work_path` 和业务输入；需要拆分配置与运行数据时，可额外提供独立 `config_path`
-- `WorkspaceLayout` 统一声明所有文件与目录路径
-- `WorkspaceRuntime` 统一管理 session 恢复、自动落盘、参与者元数据、多 session 锁，以及配置文件变更后的文件监听热刷新
-- `WorkspaceBootstrap` 允许外部在首次打开 workspace 时注入 agent key、session defaults、orchestration defaults、provider entries 与 provider policy，runtime 自动合并并（可选）持久化
-- `RoleplayWorkspaceManager` 封装 agent 选择 + workspace defaults 写入的一站式流程
-- `export_workspace_defaults()` / `apply_workspace_updates()` 提供读写 API，外部无需理解文件布局即可管理 workspace 配置
-- 旧版 `WorkspaceMigrationManager` 已移除；legacy `generated_agents.json`（根目录）仍支持读取回退
-
-低层 `AsyncRolePlayEngine` 仍然保留，但更适合高级自定义场景，而不是默认的外部接入入口。
-
-### 双根布局
-
-当前 workspace 支持“配置根”和“运行根”分离：
-
-- `config_path` / config root：`workspace.json`、`config/session_config.json`、`providers/provider_keys.json`、`roleplay/`、`skills/`
-- `work_path` / data root：`sessions/`、`memory/`、`token/`、`skill_data/`、`primary_user.json`
-- 若未显式提供 `config_path`，则自动退化为单根模式，`config_path == work_path`
-- `config/session_config.json` 使用 JSONC 风格注释写出，便于人工编辑；加载层统一兼容 JSON 与 JSONC
-- 下文历史上提到的 `{work_path}`，在双根模式下应按“配置资产落 config root，运行态数据落 data root”的规则理解
+- `SessionConfig` 现在要求 `preset=AgentPreset(...)`，而不是直接在配置文件里手写 `agent` 和 `global_system_prompt`。
+- `SessionConfig.work_path` 在当前架构中表示 config root；`SessionConfig.data_path` 表示 data root。
+- `User` 是 `Participant` 的公开别名，不存在第二套独立的人类参与者模型。
 
 ## 模块边界
 
-- `sirius_chat/providers/openai_compatible.py`
-  - 面向 `/v1/chat/completions` 风格 API 的具体实现。
-- `sirius_chat/providers/aliyun_bailian.py`
-  - 阿里云百炼专用适配（DashScope OpenAI 兼容接口），默认基地址 `https://dashscope.aliyuncs.com/compatible-mode`。
-- `sirius_chat/providers/bigmodel.py`
-  - 智谱 BigModel 专用适配，默认基地址 `https://open.bigmodel.cn/api/paas/v4`，接口 `POST /chat/completions`，适用于 `glm-4.6v` 等 GLM 模型。
-- `sirius_chat/providers/siliconflow.py`
-  - SiliconFlow 专用适配（仍走 OpenAI 兼容协议），默认基地址 `https://api.siliconflow.cn`。
-- `sirius_chat/providers/deepseek.py`
-  - DeepSeek 专用适配，默认基地址 `https://api.deepseek.com`，接口 `POST /chat/completions`（OpenAI 兼容消息格式）。
-- `sirius_chat/providers/volcengine_ark.py`
-  - 火山方舟专用适配，默认基地址 `https://ark.cn-beijing.volces.com/api/v3`。
-- `sirius_chat/providers/routing.py`
-  - provider key 注册表（`providers/provider_keys.json`）、支持平台清单、自动路由 provider（优先按 `ProviderConfig.models` 显式模型列表匹配，其次按 `healthcheck_model` 精确匹配）与框架级 Provider 检测流程。
-  - 新增 `WorkspaceProviderManager`，把 provider 注册表管理收敛到 workspace 级接口。
-- `sirius_chat/workspace/layout.py`
-  - `WorkspaceLayout` 是所有持久化路径的单一事实来源，统一维护 config root 与 data root，并生成 `workspace.json`、`config/`、`providers/`、`sessions/`、`memory/`、`token/`、`roleplay/`、`skills/`、`skill_data/` 等路径。
-- `sirius_chat/workspace/runtime.py`
-  - `WorkspaceRuntime` 是推荐的高层入口：自动初始化 workspace、恢复 transcript、调用 engine 并在成功后保存 session store 与 participants 元数据。
-  - 运行时会为 config root 下的 workspace/config/provider/roleplay 文件注册文件监听；检测到外部修改后会异步重建 engine 上下文并应用新配置，但保留既有 transcript 与 session store。每次 `run_live_message(...)` 前仍会做一次签名校验，作为 watcher 的兜底路径。
-  - 新增 `WorkspaceBootstrap` 数据类，可通过 `open_workspace_runtime(bootstrap=...)` 在首次打开 workspace 时注入配置。
-  - 新增 `set_provider_entries()` / `export_workspace_defaults()` / `apply_workspace_updates()` API，外部无需直接操作文件。
-- `sirius_chat/workspace/roleplay_manager.py` ✨ **(v0.25.0)**
-  - `RoleplayWorkspaceManager` 封装 agent 选择 + workspace defaults 写入的一站式流程。
-  - `bootstrap_active_agent()` 选择 agent 并更新 workspace defaults。
-  - `bootstrap_from_legacy_session_config()` 从旧版 session.json 引导 workspace 配置。
-- `sirius_chat/providers/mock.py`
-  - 测试与本地演练使用的确定性 provider。
-- `sirius_chat/providers/middleware/` ✨ **(P1-003)**
-  - Provider 功能扩展层：在 provider 调用前后插入可组合的中间件。
-  - `base.py`：Middleware ABC 与 MiddlewareChain 管理器，支持链式组合。
-  - `rate_limiter.py`：RateLimiterMiddleware（固定窗口）与 TokenBucketRateLimiter（令牌桶）。
-  - `retry.py`：RetryMiddleware（指数退避）与 CircuitBreakerMiddleware（断路器保护）。
-  - `cost_metrics.py`：CostMetricsMiddleware（成本计量与使用统计）。
-  - 透明地为任意 provider 添加流控、自动重试、故障转移、监控等功能。
-- `sirius_chat/session/runner.py` ✨ **(包重构)**
-  - 上层兼容封装：自动维护主用户档案，并尽量复用 `WorkspaceRuntime` 完成会话持久化，降低调用方心智负担。
-  - 在双根模式下，`SessionConfig.work_path` 视为配置根，`SessionConfig.data_path` 视为运行根。
-  - token 消耗分析：提供会话级 baseline 与按 actor/task/model 聚合函数。
-  - ✨ **(v0.19.0)** 默认 Session Store 由 `JsonSessionStore` 改为 `SqliteSessionStore`；`reset_primary_user` 改用 `store.clear()` 避免 Windows 文件锁问题。
-- `sirius_chat/session/store.py` ✨ **(包重构)**
-  - 会话持久化协议与实现（`SessionStore`、`JsonSessionStore`、`SqliteSessionStore`）。
-  - 新增 `SessionStoreFactory`，由 workspace runtime 按 `session_id` 创建具体 store。
-  - 默认 `SqliteSessionStore` 现使用结构化表保存会话：`session_meta`、`session_messages`、`session_reply_runtime*`、`session_user_profiles` / `session_user_runtime` / `session_user_memory_facts`、`session_token_usage_records`，不再把整份 `Transcript` 塞进单条 payload。
-  - 在 workspace 模式下，默认路径为 `sessions/<session_id>/session_state.db`；首次打开时会自动迁移 legacy `session_state.json`，也会把早期 `session_state(payload)` 风格的 SQLite 库原地升级为结构化表。
-  - ✨ **(v0.19.0)** 两种 Store 均新增 `clear()` 方法：JSON Store 删除文件，SQLite Store 清空行（保留文件）。
-  - `SqliteSessionStore.clear()` 仅清空结构化表中的会话行，并保留 schema 与迁移标记，避免 reset 后又把旧 JSON 快照重新导回。
-  - 默认 Store：`SqliteSessionStore`（workspace 模式下位于 `sessions/<session_id>/session_state.db`）；如需 JSON 格式可显式传入 `JsonSessionStore`。
-- `sirius_chat/mixins.py` ✨ **(v0.19.0 新增)**
-  - 公开的序列化 Mixin 模块，导出 `JsonSerializable`。
-  - 继承该 Mixin 的 `@dataclass(slots=True)` 类自动获得 `to_dict()` / `from_dict()` 反射序列化能力。
-  - 取代私有模块 `sirius_chat._mixin`（后者保留为向后兼容垫片）。
-- `sirius_chat/token/usage.py` ✨ **(包重构)**
-  - Token 消耗统计与汇总函数（`TokenUsageBucket`、`TokenUsageBaseline`、`summarize_token_usage`）。
-- `sirius_chat/token/store.py` ✨ **(v0.11.0 新增)**
-  - SQLite 持久化存储后端（`TokenUsageStore`），每次模型调用自动写入 `{work_path}/token_usage.db`。
-  - 支持跨会话查询与多维度筛选（session / actor / task / model）。
-- `sirius_chat/token/analytics.py` ✨ **(v0.11.0 新增)**
-  - 基于 SQLite 的多维度分析函数：`compute_baseline`、`group_by_session`、`group_by_actor`、`group_by_task`、`group_by_model`、`time_series`、`full_report`。
-- `sirius_chat/token/utils.py` ✨ **(包重构)**
-  - Token 估算工具模块（启发式估算、Tiktoken 精确计算、统计辅助函数）。
-- `sirius_chat/models/models.py` ✨ **(包重构)**
-  - 核心数据模型（`Message`、`Participant`、`User`、`Transcript`）。
-- `sirius_chat/async_engine/` ✨ **(P0-003 重构)**
-  - 核心异步编排引擎包，支持多人交互、记忆管理、辅助任务编排。
-  - `core.py` (500+ 行)：AsyncRolePlayEngine 类（主编排引擎，保持公开 API 不变）
-    * 公开方法：`run_session()` 会话准备、`run_live_session()` 实时会话初始化、`run_live_message()` 单条消息处理、`subscribe()` 会话事件订阅
-    * 私有协调方法：生命周期管理、token 追踪
-    * ✨ **(v0.17.0)** 引擎级共享记忆：`_shared_user_memory` / `_shared_self_memory` / `_shared_event_stores` 按 `work_path` 键索引，跨 Session 复用内存中的记忆数据
-    * ✨ **(v0.17.0)** 预处理并行流水线：`_add_human_turn` 与 `intent_analysis` 通过 `asyncio.gather()` 并发执行
-    * ✨ **(v0.17.0)** 消息合并策略：短消息用中文逗号拼接、长消息用换行拼接
-    * ✨ **(v0.17.0)** 多模态智能降级：仅当前批次含图时以 vision 格式发送历史图片，否则折叠为文本描述符
-  - `utils.py` (120+ 行)：工具函数模块，独立可测试
-    * `build_event_hit_system_note()`：事件记忆命中渲染
-    * `record_task_stat()`：任务统计记录
-    * `estimate_tokens()`：Token 计数（启发式 + tiktoken 可选）
-    * `extract_json_payload()`：JSON 有效载荷提取（容错处理）
-    * `normalize_multimodal_inputs()`：多模态输入校验和规范化
-  - `prompts.py`：系统提示构建
-    * `build_system_prompt()`：整合 agent 身份、时间、用户记忆、环境上下文、编排指令的完整提示词
-    * 支持 `environment_context` 外部注入（v0.8.0），渲染为 `<environment_context>` 段
-    * 支持按类别分组记忆、置信度标记（`?`=低/`~`=中）、冲突提示
-    * 输出约束与安全约束合并为 `<constraints>` 段
-    * 支持提示词驱动的消息分割（`OrchestrationPolicy.enable_prompt_driven_splitting`）
-  - `orchestration.py` (90+ 行)：任务编排配置
-    * 任务常量（TASK_MEMORY_EXTRACT 等）与系统提示模板
-    * TaskConfig dataclass：集中任务配置管理
-    * `get_task_config()`：从 SessionConfig 提取任务配置
-    * `get_system_prompt_for_task()`：获取任务系统提示
-  - `__init__.py`：包导出（向后兼容 + 新 API）
-- `sirius_chat/core/events.py` ✨ **(v0.9.0 会话事件流)**
-  - Session 级别事件总线（`SessionEventBus`），支持多订阅者 pub/sub 模式。
-  - `SessionEvent` dataclass：事件载体（类型、消息、元数据、时间戳）。
-  - `SessionEventType` 枚举：`MESSAGE_ADDED`、`PROCESSING_STARTED`、`PROCESSING_COMPLETED`、`SKILL_STARTED`、`SKILL_COMPLETED`、`REPLY_SKIPPED`、`ERROR`。
-  - 外部消费者通过 `engine.subscribe(transcript)` 或 `asubscribe()` facade 实时接收会话事件，替代已移除的 `on_message` 回调。
-  - ✨ **(v0.12.0)** `arun_live_message` 新增 `on_reply` 回调参数：引擎内部管理事件流订阅与清理，外部只需提供回调函数即可接收 assistant 回复，无需手动 `asubscribe` 样板代码。同时新增 `user_profile`（自动注册用户）和 `timeout`（引擎管理超时与清理）参数。
-  - 迁移指南：`docs/migration-event-stream.md`、`docs/migration-v0.12.md`。
-- `sirius_chat/user_memory.py`
-  - 用户识别与记忆管理（`UserProfile`、`UserRuntimeState`、`UserMemoryManager`、别名索引与跨环境 identity 索引）。
-  - 事件记忆管理（`EventMemoryManager`）：
-    * 两级事件验证：快速路径（关键词匹配、相似度算法）+ LLM 验证路径。
-    * 新事件默认为 pending（`verified=False`）且积累 mention_count。
-    * 当 mention_count >= 阈值（默认3）时，调用 `finalize_pending_events()` 用 LLM 判断是否值得记录、充实字段（summary、keywords、entities等）。
-    * 支持 `top_events(include_pending=False)` 查询：默认仅返回已验证事件，避免无意义的寒暄内容被记录。
-  - 统一对外接口层（外部程序调用入口与函数式 facade）。
-- `sirius_chat/memory/self/` ✨ **(v0.13.0 新增)**
-  - AI 自身记忆系统，与用户记忆独立。
-  - `models.py`：`DiaryEntry`（日记条目）、`GlossaryTerm`（名词解释）、`SelfMemoryState`（聚合状态）。
-  - `manager.py`：`SelfMemoryManager`，负责日记衰退、名词 CRUD、提示词段生成。
-  - `store.py`：`SelfMemoryFileStore`，JSON 文件持久化（`self_memory.json`）。
-- `sirius_chat/config/manager.py` ✨ **(P1-006)**
-  - 多环境配置管理：支持加载 JSON 配置文件（base/dev/test/prod）。
-  - 环境变量替换：支持 `${VAR_NAME}` 占位符语法进行环境变量注入。
-  - 配置验证：提供配置有效性检查能力。
-  - 使用示例：`ConfigManager.load_from_json('config/base.json')`。
-- `sirius_chat/cache/` ✨ **(P2-001)**
-  - 可扩展缓存框架，提供多种后端实现。
-  - `base.py`：`CacheBackend` 抽象基类，定义标准接口（get/set/delete/clear）。
-  - `memory.py`：`MemoryCache` 内存实现，支持 LRU 策略和 TTL 过期机制。
-  - `keygen.py`：确定性缓存 key 生成函数，支持温度感知的 key 变体。
-  - 用途：缓存 LLM 响应、中间结果、用户档案等，提升性能与降低成本。
-- `sirius_chat/performance/` ✨ **(P2-002)**
-  - 性能监控与分析工具集。
-  - `metrics.py`：`ExecutionMetrics` 与 `MetricsCollector`，用于收集和聚合执行指标。
-  - `profiler.py`：`PerformanceProfiler` 上下文管理器与 `@profile_sync/@profile_async` 装饰器。
-  - `benchmarks.py`：`Benchmark` 与 `BenchmarkSuite` 类，支持同步/异步/并发性能基准测试。
-  - 用途：追踪代码执行时间和内存消耗，进行性能基准测试与优化。
-- `sirius_chat/skills/` ✨ **(SKILL系统)**
-  - AI 可调用的外部代码扩展系统，通过提示词驱动的 `[SKILL_CALL: name | {params}]` 机制在运行时调用外部 Python 函数。
-  - `models.py`：`SkillDefinition`、`SkillParameter`、`SkillResult` 数据模型。
-  - `registry.py`：`SkillRegistry`，从 `{work_path}/skills/` 目录自动发现并加载 Python SKILL 文件（需导出 `SKILL_META` 字典和 `run()` 函数）。目录会在运行时自动创建 `skills/` 与 `README.md` 引导文档；即使 `enable_skills=False`，引擎也会先完成目录初始化；加载前自动调用依赖解析器安装缺失包（受 `auto_install_skill_deps` 控制）。
-  - `executor.py`：`SkillExecutor`，参数校验、类型转换和安全执行；`parse_skill_calls()` / `strip_skill_calls()` 解析与清理响应中的调用标记。支持 `timeout` 参数（由 `OrchestrationPolicy.skill_execution_timeout` 驱动，默认 30 秒），超时返回失败 `SkillResult`。
-  - `dependency_resolver.py`：`resolve_skill_dependencies()`，在 SKILL 加载前通过 AST 扫描 `SKILL_META["dependencies"]` 和顶层 import 语句，检测缺失的第三方包并使用 `uv pip install`（回退 `pip`）自动安装。
-  - `data_store.py`：`SkillDataStore`，每个 SKILL 独立的 JSON 持久化键值存储，路径为 `{work_path}/skill_data/{skill_name}.json`。
-  - 默认行为：`OrchestrationPolicy.enable_skills=True`；如需关闭，显式设置 `enable_skills=False`。
-  - 配置选项：`skill_execution_timeout`（秒）、`auto_install_skill_deps`（布尔，默认 True）。
-  - 引擎在 `_generate_assistant_message()` 中检测 AI 响应里的 `[SKILL_CALL: ...]` 标记，执行对应 SKILL 后将结果注入上下文并重新生成回复，最多循环 `max_skill_rounds`（默认3）次。
-  - 持久化数据通过 `data_store` 参数自动注入到 SKILL 的 `run()` 函数中。
-- `main.py`
-  - 仓库级测试/业务入口（用于验证与演练 sirius_chat 库能力）。
-  - 现在通过 `WorkspaceRuntime` 驱动持续会话流程，并保留 `primary_user.json` 作为兼容镜像。
-  - 支持 `--config-root` 与 `--work-path` 分离输入：前者管理 workspace/provider/roleplay 配置，后者承载会话与运行态数据。
-- `sirius_chat/cli.py`
-  - 库内薄封装 CLI，先把 legacy `session.json` bootstrap 到 workspace，再通过 `WorkspaceRuntime` 执行单轮会话。
-  - 支持 `--config-root` 与 `--work-path` 分离输入，默认仍兼容单根模式。
-- `sirius_chat/core/intent_v2.py` ✨ **(意图分析 v2)**
-  - `IntentAnalyzer`：LLM-based 或关键词回退的用户意图分析。
-  - `IntentAnalysis`：分析结果数据类，包含 `intent_type`、`target`（ai/others/everyone/unknown）、`importance`（0-1）、`skip_sections`。
-  - LLM 路径：增强上下文（参与者列表 + 近期消息），并以 `intent_analysis` 任务形式执行，支持专用模型、预算、重试与统计。
-  - 关键词回退路径：基于模式匹配 + 参与者名称匹配，零 LLM 开销。
-  - 推荐通过 `OrchestrationPolicy.task_enabled["intent_analysis"]` 与 `task_models["intent_analysis"]` 控制；`enable_intent_analysis` / `intent_analysis_model` 仅保留兼容。
-- `sirius_chat/background_tasks.py`
-  - 轻量级 asyncio 后台任务管理器，支持记忆压缩、临时数据清理、记忆归纳三类定时循环。
-  - `BackgroundTaskConfig`：配置数据类，控制各循环的启用状态、间隔、触发阈值。
-  - `BackgroundTaskManager`：通过 `asyncio.create_task` 启动后台循环，支持回调注入与即时触发。
-  - 记忆归纳循环：定时调用异步回调，执行事件归纳（`EventMemoryManager.consolidate_entries`）、摘要归纳（`UserMemoryManager.consolidate_summary_notes`）和事实归纳（`UserMemoryManager.consolidate_memory_facts`）。
-- 当前未发布阶段，若内部变更影响外部调用，可直接升级 `api/` 并同步文档与示例。
-- 任何新增可用能力，必须同步在 `api/` 暴露对外接口。
-- 异步场景优先使用 `AsyncRolePlayEngine` 或 `api/` 的异步 facade。
-## 执行流程
-
-1. 外部通过 `WorkspaceRuntime.open(work_path, config_path=...)` 或低层 `SessionConfig(work_path=..., data_path=...)` 入口启动会话。
-
-1. `WorkspaceRuntime` 读取 `workspace.json` / `config/session_config.json`，必要时自动执行 legacy 布局迁移。
-1. 通过 `WorkspaceProviderManager` 读取 `providers/provider_keys.json` 并初始化 provider。
-1. 从 `WorkspaceConfig` + roleplay 资产派生本轮 `SessionConfig`，读取唯一主 AI 的完整预设（`agent + global_system_prompt`）。
-
-1. `WorkspaceRuntime` 自动恢复 `sessions/<session_id>/session_state.db`，再调用 `AsyncRolePlayEngine.run_live_session` 初始化会话上下文。
-
-可选前置步骤：
-
-- 调用 `generate_humanized_roleplay_questions` 生成问题清单；
-- 可先调用 `list_roleplay_question_templates()` 获取模板名，再用 `generate_humanized_roleplay_questions(template="companion")` 等方式按场景生成问卷；
-- 问题模板默认偏向“上位人格 brief”，覆盖人物原型、核心矛盾、关系分层、情绪原则、表达稀疏度、边界与小缺点，推荐先收集这些高层约束，再交给 LLM 具体化；
-- 收集回答后调用 `agenerate_agent_prompts_from_answers`（Q&A 路径）或直接用 `agenerate_from_persona_spec`（支持 tag-only / 混合路径）构建 `GeneratedSessionPreset`；
-- 或直接用 `abuild_roleplay_prompt_from_answers_and_apply`（支持 `answers`、`trait_keywords`、`dependency_files`、`persona_spec` 四种输入模式）一步写入 `SessionConfig`。
-- 生成器会把抽象输入主动展开为具体的人物小传、语言习惯、互动边界和情绪反应，不要求调用方先手写完整系统提示词；
-- 若需增量微调，可调用 `aupdate_agent_prompt(work_path, agent_key, ...)` 加载已持久化的 `PersonaSpec`、合并补丁后仅重新生成变化部分。
-- 若人格还依赖本地素材文件（设定稿、角色卡、语气样本等），可通过 `dependency_files=[...]` 注入；框架会把文件内容摘要注入生成 prompt，并把完整快照本地持久化。
-- 上述会写入 `work_path` 的人格生成链路，会先把 `PersonaSpec` 与待发送 prompt/依赖快照落盘，再调用模型，避免生成失败时丢失前期问答与素材上下文。
-- 结构化人格生成默认使用 `max_tokens=5120` 与 `timeout_seconds=120.0`；底层通过 `GenerationRequest.timeout_seconds` 透传到 provider，请求级 timeout 会优先覆盖 provider 构造时的默认超时。
-- 若模型返回被 ```json 包裹但未完整闭合的 JSON-like 响应，框架会显式报错并保留失败原始响应到 trace，而不是把原始全文错误写入 `agent.persona` / `global_system_prompt`。
-- 若依赖文件发生变化，可调用 `aregenerate_agent_prompt_from_dependencies(work_path, agent_key, ...)` 重新读取文件并重生人格，无需手工重新拼接原始问答。
-- 每次 build / update / regenerate 的完整生成过程都会落盘到 `<work_path>/roleplay/generated_agent_traces/<agent_key>.json`，可通过 `load_persona_generation_traces()` 回看。
-- 若采用 agent-first 流程，可通过 `select_generated_agent_profile(work_path, agent_key)` 选择已生成资产，再调用 `create_session_config_from_selected_agent(...)` 创建会话配置。
-- 若只想从命令行快速查看模板，可使用 `sirius-chat --list-roleplay-question-templates` 与 `sirius-chat --print-roleplay-questions-template <template>` 直接导出模板信息。
-
-1. 对每条群聊 user 消息，推荐调用 `WorkspaceRuntime.run_live_message`：它会在内部追加 user 发言、调用同一主 AI、追加 assistant 回复，并在成功后自动保存 transcript 与 participants 元数据。
-
-**Agent 动态模型路由**：
-- 引擎支持自动根据输入内容在不同模型间切换，以平衡成本与能力。
-- 配置多模态模型：在 `Agent.metadata["multimodal_model"]` 中设置专用多模态模型（如 `"gpt-4o"`）
-- 自动路由逻辑：
-  * 检查用户输入中是否包含多媒体数据（图像、视频等）
-  * 无多媒体数据：使用 `Agent.model`（廉价文本模型，如 `"gpt-4o-mini"`）
-  * 有多媒体数据：自动升级至 `agent.metadata["multimodal_model"]`
-- 便捷配置方法：
-  * 使用 `create_agent_with_multimodal(...)`：直接创建带多模态模型的 Agent
-  * 使用 `auto_configure_multimodal_agent(agent, multimodal_model="...")` 灵活配置既有 Agent
-  * 或手动设置 `agent.metadata["multimodal_model"] = "gpt-4o"`
-- 此过程对调用方完全透明，无需手动模型切换
-
-当 `OrchestrationPolicy` 配置了统一模型（`unified_model`）或任务模型（`task_models`）时，引擎会按配置执行辅助 LLM 任务进行记忆汇聚，再调用主模型回复。图片等多模态输入直接交给主模型处理。
-
-**辅助任务** (all optional, enable via config):
-- `memory_extract`：LLM 提取用户身份、偏好、特征（confidence: 0.8）
-  - 支持**频率控制**避免零碎提取：`memory_extract_batch_size`（每N条消息执行，默认1）+ `memory_extract_min_content_length`（内容最小长度，默认0）
-- `event_extract`：LLM 提取事件结构化要素（confidence: 0.65）
-- `intent_analysis`：`reply_mode=auto/smart` 时执行意图分类、target 识别与摘要跳过决策；支持预算/重试/专用模型，失败时自动回退关键词路径
-- `memory_manager`：LLM 汇聚、去重、标注、冲突检测（confidence: 0.9+）✨ 新增
-
-**记忆改造** (Phase 1 完成 → Phase 2 V2 重构):
-- ✗ 删除：启发式正则提取（高误率，已舍弃）
-- ✓ 新增：`MemoryFact.memory_category` 分类（identity/preference/emotion/event/custom）
-- ✓ 新增：`MemoryFact.validated` 验证标记
-- ✓ 新增：`MemoryFact.conflict_with` 冲突记忆列表
-- ✓ 新增：结构化系统提示呈现（按类别分组，带置信度）
-- ✓ **V2 破坏性变更**：`is_transient` 从存储字段改为动态方法 (`fact.is_transient(threshold=0.85)`)
-- ✓ **V2 破坏性变更**：移除 `created_at` 字段，统一使用 `observed_at`
-- ✓ V2 新增：`MemoryFact.mention_count` 去重提频计数
-- ✓ V2 新增：`MemoryFact.source_event_id` 事件来源追踪
-- ✓ V2 新增：`MemoryFact.context_channel` / `context_topic` 富上下文
-- ✓ V2 新增：`MemoryPolicy` 集中配置（阈值、衰退曲线、集合上限、摘要限长）
-- ✓ V2 新增：`observed_*` 集合自动 cap（默认 100）
-- ✓ V2 新增：`confidence` 自动钳位 [0.0, 1.0]
-- ✓ V2 新增：摘要按类型限制数量（`max_facts_per_type`）
-- ✓ V2 新增：更陡峭的衰退曲线（180天仅保留5%，旧为20%）
-- 迁移指南：`docs/migration-memory-v2.md`
-每次模型调用后，写入 token 使用记录到 `Transcript.token_usage_records`（内存），并同步持久化至 `{work_path}/token_usage.db`（SQLite）。跨会话分析可通过 `TokenUsageStore` + `sirius_chat.token.analytics` 模块实现。
-
-1. 返回 transcript 供展示或存储。
-
-动态群聊模式（`run_live_session`）补充：
-
-- 允许参与者在运行时首次出现（不要求预先出现在 `participants`）。
-- 推荐调用方式：`run_live_session(...)` 用于一次性初始化；随后通过 `run_live_message(...)` 按条处理上游消息。
-- 每条 `Message` 可通过 `reply_mode` 控制是否触发主 AI 回复：
-  - `always`（默认）：始终回复；
-  - `never`：仅摄取记忆与上下文，不生成 assistant 消息；
-  - `auto`：根据文本特征自动判断（疑问、点名主 AI、请求语气更倾向回复）。
-- `reply_mode=auto` 使用三级参与决策系统：
-  1. **热度分析**（`HeatAnalyzer`）：统计群聊消息密度、活跃人数、AI 参与比，输出 cold/warm/hot/overheated 热度等级。零 LLM 开销。
-  2. **意图分析**（`IntentAnalyzer` v2）：判断消息的 `target`（ai/others/everyone/unknown）与 `intent_type`（question/request/chat/reaction 等）。支持 LLM 深度分析和关键词回退。核心改进：裸代词「你」不再默认指向 AI，提及其他参与者名字时 target 设为 `others`。
-  3. **参与协调器**（`EngagementCoordinator`）：综合热度 + 意图 + `engagement_sensitivity` 配置，计算最终参与度分数与是否回复。
-- 核心配置仅需 `engagement_sensitivity`（0.0=克制，1.0=积极，默认 0.5）和 `heat_window_seconds`（热度分析窗口，默认 60 秒）。
-- `run_live_session` 的节奏临时状态已挂载到 `Transcript.reply_runtime`，在复用同一个 `transcript` 多次调用时保持连续。
-- 外部可通过 `User`（`user_id/name/aliases/traits`）显式注册用户。
-- 外部可通过 `User` 中的 `identities`（如 `qq/wechat` 外部 ID）实现跨环境同人识别。
-- 对每位参与者维护结构化 `user_memory`：
-  - `profile`：初始化档案字段（如 `name/persona/traits/identities`）。
-  - `runtime.memory_facts`：结构化分类记忆，包含 fact_type、value、source、confidence、observed_at、observed_time_desc、memory_category、validated、conflict_with、context_channel、context_topic、mention_count、source_event_id。
-  - `runtime.recent_messages`、`runtime.inferred_persona`、`runtime.inferred_traits`、`runtime.preference_tags`。
-- `Transcript.find_user_by_channel_uid(channel, uid)` 提供按渠道+外部 UID 的直接定位能力。
-- 每次调用主 AI 时自动注入“参与者记忆”上下文，增强识人与连续性。
-- 引擎会在每次用户发言后主动更新 runtime 记忆（偏好标签、推断画像、摘要笔记），提升拟人化对话能力。
-- 摘要写入采用统一去重入口：语义相同的普通摘要/事件摘要/多模态摘要不会重复污染 `summary_notes`，并会同步形成可追溯事实记录。
-- 引擎会在每次用户发言后执行事件命中分析：
-  - 先提取关键词、角色槽位、时间线索、实体、情绪标签；
-  - 再按加权评分匹配历史事件；
-  - 根据阈值输出高置信命中、弱命中或新增事件，并注入一条系统事件说明到上下文。
-- 事件记忆持久化路径：`work_path/memory/events/events.json`。
-
-✨ **事件系统与用户记忆系统的双向适配（方案C）**：
-  - 每条事件的特征（emotion_tags、keywords、role_slots、entities）自动转化为用户记忆事实：
-    * `emotion_tags` → `emotional_pattern` 事实（confidence: -0.05）
-    * `keywords` → `user_interest` 事实（confidence: -0.10）
-    * `role_slots` → `social_context` 事实 + 自动推断用户特征（如检测领导角色 → 推断 `leadership_tendency`，confidence: -0.05）
-    * `entities` → `observed_entities` 集合（用于跨事件关联）
-  - 事件与用户历史的**双向观测**：
-    * 提取事件时：`apply_event_insights()` 转化事件特征为结构化用户事实
-    * 理解事件时：`interpret_event_with_user_context()` 基于用户历史计算四维对齐度
-      - keyword_alignment：事件关键词与用户历史的文本重叠度
-      - role_alignment：事件角色与用户已知角色的重叠度
-      - emotion_alignment：事件情感与用户历史情感的相似度
-      - entity_alignment：事件实体与用户已知实体的重叠度
-    * 对齐度计算：`avg_alignment = (keyword + role + emotion + entity) / 4`
-    * 信度动态调整：`adjusted_confidence = base_confidence(0.65) + avg_alignment × 0.3`，范围 [0.5, 1.0]
-    * 推荐处理类别：`high_confidence`(avg>0.6) | `normal` | `low_relevance`(avg<0.2) | `pending`(新用户)
-  - 优势：事件不再被单向消费，而是成为用户理解的重要信号源，真正构建**统一的用户心智模型**
-
-记忆压缩与预算控制补充：
-
-- 引擎根据 `history_max_messages` 与 `history_max_chars` 执行自动压缩。
-- 字符预算仅统计 `user` / `assistant` 消息；`system` 消息（含 SKILL 执行结果）不计入预算，避免大体积技能结果将 user 消息挤出 transcript 导致 API 报错。
-- 被压缩的历史会进入 `session_summary`，用于后续提示词补偿。
-- 通过 `SqliteSessionStore`（默认，结构化 SQLite）或 `JsonSessionStore` 可在重启后恢复 transcript、participant_memories 与摘要；默认 SQLite 后端会自动迁移 legacy JSON / payload SQLite。迁移说明见 `docs/migration-v0.19.md`。
-
-## 记忆质量评估与智能遗忘（Phase 2）
-
-### 记忆质量评估
-
-系统提供离线评估工具，对所有用户的记忆进行质量分析：
-
-**核心指标**：
-- **年龄评分 (recency_score)**：根据记忆年龄划分活跃度等级
-  - 0-7 天：0.9-1.0（高度活跃）
-  - 7-30 天：0.6-0.9（中等活跃）
-  - 30-90 天：0.2-0.6（低度活跃）
-  - >90 天：0.0-0.2（接近遗忘）
-- **综合质量评分 (quality_score)**：置信度(50%) + 活跃度(30%) + 验证状态(15%) 加权计算，冲突时额外减30%
-- **行为一致性评分**：按记忆分类（identity/preference/emotion/event）分别计算，整体评分为四类加权平均
-
-**评估命令示例**：
-```bash
-# 分析所有用户的记忆质量，输出报告
-python -m sirius_chat.memory_quality_tools work_path --action analyze --output-report report.json --verbose
-```
-
-### 智能遗忘
-
-**衰退机制**：基于时间表自动降低陈旧记忆的置信度
-- 7 天：保留 95% 置信度
-- 30 天：保留 85% 置信度
-- 60 天：保留 70% 置信度
-- 90 天：保留 50% 置信度
-- 180 天：保留 20% 置信度
-- 冲突记忆加速衰退：额外乘以 0.7
-
-**自动清理**：满足以下条件之一的记忆会被清理
-- 极低置信度(<0.2) 且陈旧(>30天)
-- 存在冲突 且 低置信度(<0.4) 且 极旧(>90天)
-- 质量评分(<0.2) 且陈旧(>60天)
-
-**管理命令示例**：
-```bash
-# 完整流程：分析 + 应用衰退 + 清理低质量记忆
-python -m sirius_chat.memory_quality_tools work_path --action all
-
-# 仅清理质量评分<0.3 的记忆
-python -m sirius_chat.memory_quality_tools work_path --action cleanup --min-quality 0.3
-
-# 应用衰退表，更新所有记忆
-python -m sirius_chat.memory_quality_tools work_path --action decay
-```
-
-**集成到主引擎**：
-- 通过 `UserMemoryManager.apply_scheduled_decay()` 在会话周期内执行衰退。
-- 通过 `UserMemoryManager.cleanup_expired_memories(min_quality)` 定期清理低质量记忆。
-
-## AI 自身记忆系统 ✨ **(v0.13.0 新增)**
-
-独立于用户记忆的 AI 自主记忆子系统，位于 `sirius_chat/memory/self/`。由两个子系统组成：
-
-### 日记子系统 (Diary)
-
-AI 自主决定需要记忆的内容（反思、观察、决策、情感、里程碑），每条日记携带重要性评分和关键词标签。
-
-**数据模型** (`DiaryEntry`)：
-- `content`：日记内容
-- `importance`：重要性 [0, 1]，影响遗忘速度
-- `keywords`：关键词标签，用于检索与相关性匹配
-- `category`：分类（reflection | observation | decision | emotion | milestone）
-- `confidence`：当前置信度（衰退后），初始 1.0
-- `mention_count`：话题再次被提及的次数，可减缓遗忘
-
-**遗忘曲线**（时间衰退表）：
-| 天数 | 基础保留率 |
-|------|-----------|
-| 3    | 95%       |
-| 7    | 85%       |
-| 14   | 70%       |
-| 30   | 50%       |
-| 60   | 30%       |
-| 90   | 15%       |
-| 180  | 5%        |
-
-- 高重要性条目衰退减缓（importance=1.0 时衰退速度降低 40%）
-- 每次被提及增加 5% 保留率（上限 25%）
-- 置信度低于 0.05 的条目自动移除
-- 容量上限：100 条日记，超出时淘汰最弱条目
-
-### 名词解释子系统 (Glossary)
-
-在对话中收集 AI 不理解的名词，逐步建立定义库。
-
-**数据模型** (`GlossaryTerm`)：
-- `term`：术语名称
-- `definition`：当前最佳定义
-- `source`：学习来源（conversation | user_explained | inferred）
-- `confidence`：定义置信度
-- `usage_count`：在对话中出现的次数
-- `domain`：领域（tech | daily | culture | game | custom）
-- `context_examples`：使用示例（上限 5 条）
-
-更新规则：
-- 相同术语再次出现时合并：保留更高置信度的定义，累加使用次数，合并示例
-- 容量上限：200 条术语，超出时淘汰使用频率最低的条目
-
-### 提示词集成
-
-日记和名词解释在系统提示词中分别生成紧凑的 XML 段：
-
-- `<self_diary>`：按相关性排序，格式 `[category]! content? #keywords`
-- `<glossary>`：格式 `term?: definition`（`?` 表示低置信度，`~` 表示中等）
-
-通过 `OrchestrationPolicy` 配置：
-- `enable_self_memory`：是否启用（默认 `True`）
-- `self_memory_extract_batch_size`：每 N 条回复后触发一次 LLM 提取（默认 3）
-- `self_memory_max_diary_prompt_entries`：提示词中包含的日记条数上限（默认 6）
-- `self_memory_max_glossary_prompt_terms`：提示词中包含的术语条数上限（默认 15）
-
-### 持久化
-
-`SelfMemoryFileStore` 将自身记忆序列化为 `{work_path}/self_memory.json`，在会话加载时读取、结束时保存。
-
-## 回复频率限制 ✨ **(v0.13.0 新增)**
-
-基于滑动窗口的回复频率控制，防止 AI 在短时间内过度回复。
-
-**机制**：
-- 在 `_process_live_turn()` 中，回复意愿判定通过后额外检查频率限制
-- 滑动窗口内（默认 60 秒）AI 回复次数超过上限（默认 8 次）时跳过回复
-- 对主动提及 AI 名字或别名的消息免除限制（可配置关闭）
-
-**配置** (`OrchestrationPolicy`)：
-- `reply_frequency_window_seconds`：滑动窗口长度（默认 60.0 秒）
-- `reply_frequency_max_replies`：窗口内最大回复数（默认 8）
-- `reply_frequency_exempt_on_mention`：提及 AI 时是否免除（默认 `True`）
-
-回复时间戳存储在 `Transcript.reply_runtime.assistant_reply_timestamps` 中，支持跨调用复用 transcript 时保持频率控制连续性。
-
-## 意图分析系统
-
-分析用户消息意图，优化回复意愿评分与系统提示词构建。
-
-### 工作原理
-
-每次用户发言后，引擎在 `_process_live_turn()` 中执行三级参与决策：
-
-1. **热度分析**（`HeatAnalyzer.analyze`，零 LLM 开销）：
-   - 统计窗口内消息密度（msgs/min）、活跃参与者数、AI 参与比
-   - 输出 `HeatAnalysis`：`heat_level`（cold/warm/hot/overheated）、`heat_score`（0-1）
-   - 评分权重：密度 45% + 人数 35% + AI 过度参与惩罚 20%
-
-2. **意图分析 v2**（`IntentAnalyzer`）：
-  - LLM 路径（`intent_analysis` 任务启用时）：发送含参与者列表和近 8 条消息上下文的结构化提示，解析 `target`、`intent_type`、`importance`
-  - 关键词回退路径（任务关闭、预算超限、调用失败或解析异常时）：基于问号、请求关键词、短反应语匹配，额外检查参与者名字判定 target
-   - 核心改进：`target` 字段替代简单的 `directed_at_ai` 布尔值
-     * `target=ai`：消息明确指向 AI（提及名字/别名）
-     * `target=others`：消息指向群内其他参与者
-     * `target=everyone`：面向全体（公告、感叹）
-     * `target=unknown`：无法确定（裸代词「你」归入此类）
-   - 生成 `skip_sections`：不需要 memory 时跳过 `participant_memory`，不需要 summary 时跳过 `session_summary`
-
-3. **参与决策**（`EngagementCoordinator.decide`）：
-   - `target=ai` → 高参与度（0.70+ 基线），几乎总是回复
-   - `target=others` → 极低参与度（0.05+），几乎不会插话
-   - `target=everyone/unknown` → 由热度和 sensitivity 主导：
-     * 基线 = 0.20 + sensitivity × 0.30
-     * 热度惩罚：hot → -0.15, overheated → -0.30
-     * 阈值 = 0.60 - sensitivity × 0.30
-   - 事件命中额外加分 +0.10
-
-### 配置
-
-- `OrchestrationPolicy.task_enabled["intent_analysis"]`：启用 LLM 意图分析任务（默认 `True`；设为 `False` 退回关键词回退路径）
-- `OrchestrationPolicy.task_models["intent_analysis"]`：指定意图分析模型；未设置时依次回退 `unified_model` → `agent.model`
-- `OrchestrationPolicy.task_budgets/task_temperatures/task_max_tokens/task_retries["intent_analysis"]`：配置预算、温度、输出上限与重试次数
-- 兼容字段 `enable_intent_analysis` / `intent_analysis_model` 仍可用，但建议迁移到任务配置
-
----
-
-## 已知技术债（Technical Debt Backlog）
-
-> 本节记录经过分析确认的代码质量问题，按优先级排序。标记 ✅ 表示已修复。
-
-*当前无待修复的技术债项目。*
-
----
-
-## 记忆归纳系统
-
-后台定时使用 LLM 对已有的事件、摘要和事实进行整理合并，控制记忆膨胀。
-
-### 归纳方法
-
-- **事件归纳** (`EventMemoryManager.consolidate_entries`)：按 category 分组，合并含义相似的观察记录，保留最高 confidence，累加 mention_count。
-- **摘要归纳** (`UserMemoryManager.consolidate_summary_notes`)：LLM 合并冗余摘要为更精炼的条目。
-- **事实归纳** (`UserMemoryManager.consolidate_memory_facts`)：LLM 按 fact_type 合并事实，保留最高 confidence，累加 mention_count。
-
-### 后台循环
-
-`BackgroundTaskManager` 在会话初始化时启动归纳循环（`_consolidation_loop`），按 `consolidation_interval_seconds`（默认 900 秒）定时触发。每次触发时遍历所有用户执行归纳并持久化。
-
-### 配置
-
-- `OrchestrationPolicy.consolidation_enabled`：启用后台归纳（默认 `True`）
-- `OrchestrationPolicy.consolidation_interval_seconds`：归纳间隔秒数（默认 `7200`，引擎层传递给 BackgroundTaskConfig）
-- `OrchestrationPolicy.consolidation_min_entries/notes/facts`：触发阈值
-
-## 扩展点
-
-- 在 `sirius_chat/providers/` 下新增实现 `LLMProvider` 的 provider。
-- 在 provider 调用前增加安全层（审核、token 预算、重试）。
-- 引入除 round-robin 外的人类发言调度策略（优先级、权重等）。
-- 增加 transcript 的持久化存储能力。
-
-## Roleplay 提示词生成系统
-
-### PersonaSpec（持久化生成输入）
-
-`PersonaSpec` 是角色提示词生成的统一输入规格，支持四类输入源：
-
-在收集 `answers` 前，框架还提供问卷模板层：
-
-| 模板 | 调用 | 适用场景 |
-|------|------|---------|
-| `default` | `generate_humanized_roleplay_questions()` | 通用人格生成 |
-| `companion` | `generate_humanized_roleplay_questions(template="companion")` | 陪伴型 / 情绪支持型角色 |
-| `romance` | `generate_humanized_roleplay_questions(template="romance")` | 恋爱向 / 亲密关系角色 |
-| `group_chat` | `generate_humanized_roleplay_questions(template="group_chat")` | 群聊型 / 多人互动角色 |
-
-可通过 `list_roleplay_question_templates()` 暴露给外部调用方或配置页面，作为问卷模板枚举来源。
-
-| 路径 | 输入 | 适用场景 |
-|------|------|---------|
-| **Tag-based** | `trait_keywords=["热情","直接"]` | 快速构建，无需问卷访谈 |
-| **Q&A-based** | `answers=[RolePlayAnswer(...)]` | 传统问答流程（向后兼容） |
-| **Dependency-based** | `dependency_files=["persona/notes.md"]` | 从角色卡、设定稿、语气样本等本地文件重建人格 |
-| **Hybrid** | 任意组合 keywords + answers + dependency_files | 关键词锚定特质，问答补充细节，文件提供稳定素材 |
-
-`abuild_roleplay_prompt_from_answers_and_apply()`、`aupdate_agent_prompt()`、`aregenerate_agent_prompt_from_dependencies()` 在调用模型前，会先把最新 `PersonaSpec` 暂存到 `roleplay/generated_agents.json`；若生成成功再转正为正式资产，若生成失败也能通过 `load_persona_spec()` 恢复最近一次输入。
-
-当输入中出现“拟人”“情感”“陪伴”“关系”“共情”等信号时，生成器会自动加强 prompt，显式要求 LLM 提升真实人感、情绪细节、关系连续性，避免机械助手腔。
-
-每次生成还会把完整过程本地化到 `<work_path>/roleplay/generated_agent_traces/<agent_key>.json`，并且会先写入一份待生成快照，再调用模型；内容包含：
-
-- 生成时间、操作类型（build / update / regenerate_from_dependencies）
-- 最终发送给模型的 `system_prompt` 与 `user_prompt`
-- 原始模型返回、解析后的 JSON payload、最终输出 preset
-- 依赖文件快照（完整内容 + sha256 + 是否缺失）
-- 触发的 prompt 强化条目
-
-### Persona 语义变化（v0.8.2+）
-
-- `Agent.persona` = **关键词标签**（3-5 个，`/` 分隔，≤30 字，如 `"热情/直接/逻辑清晰"`）
-  - 展示在 `<agent_identity>` 信息块中，供模型快速理解角色核心
-- `global_system_prompt` = **完整角色扮演指南**（400-700 字）
-  - 包含性格、沟通风格、价值观、行为边界及安全提醒
-  - 展示在 `<global_directive>` 信息块中
-
-### 核心 API
-
-```python
-# 查看模板列表并选择场景问卷
-templates = list_roleplay_question_templates()
-questions = generate_humanized_roleplay_questions(template="companion")
-
-# Tag-based（快速路径）
-spec = PersonaSpec(agent_name="北辰", trait_keywords=["热情", "直接"])
-preset = await agenerate_from_persona_spec(provider, spec, model="...")
-
-# Q&A（传统路径，向后兼容）
-preset = await agenerate_agent_prompts_from_answers(provider, model="...", agent_name="...", answers=[...])
-
-# 一步构建并写入 config
-await abuild_roleplay_prompt_from_answers_and_apply(
-    provider, config=config, model="...",
-    trait_keywords=[...],
-    dependency_files=["persona/notes.md"],
-    timeout_seconds=120.0,
-    persona_key="my_agent",
-)
-
-# 增量微调（只重写背景，其余不变）
-updated = await aupdate_agent_prompt(
-    provider, work_path=..., agent_key="my_agent", model="...",
-    background="最近经历了变化",
-)
-
-# 加载已持久化的 spec
-spec = load_persona_spec(work_path, "my_agent")
-
-# 读取完整生成轨迹
-traces = load_persona_generation_traces(work_path, "my_agent")
-
-# 依赖文件改动后直接重生人格
-updated = await aregenerate_agent_prompt_from_dependencies(
-  provider,
-  work_path=work_path,
-  agent_key="my_agent",
-  model="...",
-)
-```
-
-迁移指南：`docs/migration-roleplay-v0.20.md`
+| 模块 | 主要职责 | 不应承担的职责 |
+| --- | --- | --- |
+| `sirius_chat/api/` | 对外统一导出稳定函数、类型与 facade | 不直接实现底层编排或路径布局 |
+| `sirius_chat/workspace/` | layout、runtime、watcher、roleplay workspace bootstrap | 不写 provider 调用细节，不实现主对话生成 |
+| `sirius_chat/config/` | `WorkspaceConfig` / `SessionConfig` / `OrchestrationPolicy` 契约、JSONC 读写、workspace 默认值构建 | 不直接保存 session transcript |
+| `sirius_chat/core/` | 真正的编排实现：`AsyncRolePlayEngine`、意图分析、热度分析、参与协调、事件总线、聊天上下文构造 | 不负责 workspace 文件发现与目录组织 |
+| `sirius_chat/async_engine/` | 兼容导出、提示词/任务配置/工具函数辅助层 | 不是持久化所有者，也不是 engine 真正实现位置 |
+| `sirius_chat/memory/` | 用户记忆、事件记忆、自身记忆、质量评估 | 不直接决定 provider 路由 |
+| `sirius_chat/session/` | session store 协议、JSON/SQLite 实现、兼容运行器 | 不负责 provider 注册表 |
+| `sirius_chat/providers/` | provider 协议、具体上游实现、注册表、自动路由、中间件 | 不介入高层 session 生命周期 |
+| `sirius_chat/roleplay_prompting.py` | persona 问卷、`PersonaSpec`、agent 资产生成与选择 | 不负责普通对话 session 落盘 |
+| `sirius_chat/token/` | token 记录、SQLite 归档、多维分析 | 不参与对话决策 |
+| `sirius_chat/skills/` | SKILL 注册、依赖解析、执行与 data store | 不负责 provider 注册表和 workspace 默认值 |
+| `sirius_chat/cache/`、`sirius_chat/performance/` | 缓存与性能工具 | 不改变核心对话契约 |
+
+### 真实的 engine 位置
+
+- `AsyncRolePlayEngine` 的实现位于 `sirius_chat/core/engine.py`。
+- `sirius_chat/async_engine/__init__.py` 只是兼容导出入口，并补充 `prompts.py`、`orchestration.py`、`utils.py` 这类辅助模块。
+- 涉及主流程的修改，应优先查看 `sirius_chat/core/engine.py`、`sirius_chat/core/chat_builder.py`、`sirius_chat/core/memory_runner.py`、`sirius_chat/core/engagement_pipeline.py`。
+
+## Workspace 与持久化所有权
+
+### 双根布局
+
+当前 workspace 支持配置根与运行根分离：
+
+- config root：`workspace.json`、`config/session_config.json`、`providers/provider_keys.json`、`roleplay/`、`skills/`
+- data root：`sessions/`、`memory/`、`token/`、`skill_data/`、兼容 `primary_user.json`
+- 若未显式提供 `config_path`，则退化为单根模式，即 config root 与 data root 指向同一路径
+
+### 关键组件
+
+- `WorkspaceLayout`：所有路径的单一事实来源。
+- `WorkspaceRuntime`：初始化目录、配置热刷新、session 锁、engine 生命周期、participants 写回。
+- `ConfigManager`：读取 `workspace.json` 与 `config/session_config.json`，构建 `WorkspaceConfig` 与 `SessionConfig`。
+- `SessionStoreFactory`：按 `session_id` 创建 `JsonSessionStore` 或 `SqliteSessionStore`。
+
+### 配置合并规则
+
+- `workspace.json` 是 runtime 的机器可读 manifest。
+- `config/session_config.json` 是面向人工维护的 JSONC 快照。
+- 两者存在重叠字段时，当前实现按修改时间选择较新的文件作为事实来源，避免人工编辑在重启后被旧 manifest 覆盖。
+
+### Session store 语义
+
+- 默认 store 为 `SqliteSessionStore`，路径是 `sessions/<session_id>/session_state.db`。
+- `JsonSessionStore` 仍可选，但只作为显式指定的后端。
+- SQLite store 使用结构化表存储消息、reply runtime、用户档案、事实与 token 记录，不再依赖单条 payload 快照。
+- 打开 session 时会自动迁移 sibling `session_state.json` 与早期 payload 风格 SQLite。
+
+## 运行生命周期
+
+### 1. 构建 SessionConfig
+
+典型顺序如下：
+
+1. 调用方通过 `WorkspaceRuntime.open(...)` 提供 `work_path`、可选 `config_path`、可选 `bootstrap`。
+2. `WorkspaceRuntime.initialize()` 使用 `WorkspaceLayout.ensure_directories()` 建立目录结构。
+3. `ConfigManager.load_workspace_config()` 读取 `workspace.json` 与 `config/session_config.json`。
+4. `WorkspaceProviderManager.load()` 读取 `providers/provider_keys.json`。
+5. `roleplay_prompting.load_generated_agent_library()` 读取 `roleplay/generated_agents.json`，找到已选 agent。
+6. `ConfigManager.build_session_config()` 把 workspace 默认值与已选 `GeneratedSessionPreset` 组合成可运行的 `SessionConfig`。
+
+### 2. 执行单轮消息
+
+`WorkspaceRuntime.run_live_message(...)` 的高层职责：
+
+1. 初始化 workspace，并执行一次配置签名校验。
+2. 对 `session_id` 加锁，防止并发写坏同一 session。
+3. 读取 session store，恢复 `Transcript`，再调用 `AsyncRolePlayEngine.run_live_session(...)` 初始化上下文。
+4. 调用 `AsyncRolePlayEngine.run_live_message(...)` 处理真实用户消息。
+5. 在成功后写回 session store 与 `sessions/<session_id>/participants.json`。
+
+`AsyncRolePlayEngine.run_live_message(...)` 的核心阶段：
+
+1. 校验输入 turn，必要时自动注册 `user_profile`。
+2. 追加用户消息并更新 `Transcript.reply_runtime`。
+3. 并行执行记忆相关任务与 `intent_analysis` 任务。
+4. 用 `HeatAnalyzer`、`IntentAnalyzer` 与 `EngagementCoordinator` 决定是否回复。
+5. 构建系统提示词，注入用户记忆、事件命中、自身记忆、`session_summary`、`environment_context` 与安全约束。
+6. 选择模型并调用 provider；若需要，进入 SKILL 执行循环。
+7. 记录 token 使用，压缩历史摘要，发出事件流。
+
+### 3. 后台循环
+
+会话初始化后，`BackgroundTaskManager` 可按 `OrchestrationPolicy.consolidation_*` 配置启动归纳循环，整理事件、摘要与事实，控制记忆膨胀。
+
+## 记忆架构
+
+### 用户记忆
+
+- 代码位置：`sirius_chat/memory/user/`
+- 运行时事实来源：`Transcript.user_memory`
+- 主要职责：身份解析、别名与外部 identity 映射、近期消息、结构化 `memory_facts`、摘要笔记
+- 外部稳定查询入口：`Transcript.find_user_by_channel_uid(channel, uid)`
+
+### 事件记忆
+
+- 代码位置：`sirius_chat/memory/event/`
+- 持久化位置：`memory/events/events.json`
+- 特点：快速路径 + LLM 验证的两级验证；事件特征会反向沉淀为用户事实
+
+### AI 自身记忆
+
+- 代码位置：`sirius_chat/memory/self/`
+- 持久化位置：`memory/self_memory.json`
+- 组成：日记系统 + 名词解释系统
+- 触发方式：主流程内联触发，由 `self_memory_extract_batch_size` 和 `self_memory_min_chars` 控制
+
+### 质量评估工具
+
+- 代码位置：`sirius_chat/memory/quality/`
+- 用途：离线质量评估、衰退与清理辅助
+- 说明：它是辅助工具层，不是主运行时入口；当前架构文档不要求调用方依赖独立命令行工具
+
+## Provider 系统
+
+### 组成
+
+- `providers/base.py`：`LLMProvider` / `AsyncLLMProvider` 协议
+- `providers/routing.py`：`ProviderRegistry`、`WorkspaceProviderManager`、`AutoRoutingProvider`
+- `providers/middleware/`：速率限制、重试、断路器、成本统计
+- 具体 provider：OpenAI-compatible、Aliyun Bailian、BigModel、DeepSeek、SiliconFlow、Volcengine Ark、YTea、Mock
+
+### 路由规则
+
+- 优先按 `ProviderConfig.models` 显式模型列表匹配
+- 其次按 `healthcheck_model` 精确匹配
+- 若都未命中，则回退到第一个启用 provider
+- `WorkspaceRuntime` 在未显式注入 provider、或注入的是 `AutoRoutingProvider` 时，默认优先使用 workspace provider 注册表
+
+### 配置热刷新
+
+- `WorkspaceConfigWatcher` 监听 `workspace.json`、`config/session_config.json`、`providers/provider_keys.json`、`roleplay/generated_agents.json`
+- 检测到变化后，runtime 会重建 engine 状态，确保新 provider 配置或已选 agent 真正生效
+
+## Roleplay 资产系统
+
+### 资产流
+
+1. 外部通过问卷模板、`trait_keywords`、`answers`、`dependency_files` 等构造 `PersonaSpec`。
+2. `roleplay_prompting.py` 在调用生成模型前先保存 pending spec，防止失败丢失输入。
+3. 生成成功后写入 `roleplay/generated_agents.json` 与 `roleplay/generated_agent_traces/<agent_key>.json`。
+4. `select_generated_agent_profile()` 或 `RoleplayWorkspaceManager.bootstrap_active_agent()` 会同步更新 `workspace.active_agent_key`。
+5. 后续 `ConfigManager.build_session_config()` 直接从已选资产构建 `SessionConfig`。
+
+### 边界约束
+
+- roleplay 资产生成不负责普通 session transcript 的读写。
+- 普通对话运行也不会直接修改 persona 资产，除非显式调用 roleplay API。
+
+## Public API 与兼容性
+
+- `sirius_chat/api/` 按主题拆分为 `engine.py`、`models.py`、`providers.py`、`session.py`、`memory.py`、`token_usage.py`、`prompting.py` 等模块。
+- 根包 `sirius_chat/__init__.py` 再统一重导出外部常用符号。
+- `AsyncRolePlayEngine` 从 `sirius_chat.core` 导出，再由 `sirius_chat.async_engine` 与 `sirius_chat.api` 提供兼容访问路径。
+- `User` 是 `Participant` 的别名；外部如果只想在运行时注册用户，通常传 `UserProfile` 更合适。
+
+## 扩展与修改规则
+
+1. 新增 provider：修改 `sirius_chat/providers/`、`providers/routing.py`、`api/providers.py`，并同步 README、外部接入文档与测试。
+2. 修改 session / workspace 契约：同步 `config/models.py`、`config/manager.py`、`workspace/`、README、`docs/full-architecture-flow.md` 与相关 SKILL。
+3. 修改 engine 主流程：优先检查 `core/engine.py` 及其 helper，不要把 provider 细节塞进 core。
+4. 修改外部可见 API：必须同步 `sirius_chat/api/` 与示例代码。
 
 ## 已知限制
 
-- 当前 provider 实现默认假设 OpenAI 兼容 JSON 响应结构。
-- 阿里云百炼适配使用 DashScope 的 OpenAI 兼容接口，默认请求路径为 `/compatible-mode/v1/chat/completions`。
-- SiliconFlow 适配使用 OpenAI 兼容接口，默认请求路径为 `/v1/chat/completions`。
-- 自动路由优先基于 `ProviderConfig.models`，其次基于 `healthcheck_model` 精确匹配；复杂策略（负载均衡/健康检查）暂未内置。
-- 任务级编排当前包含 `memory_extract`、`event_extract`、`intent_analysis` 与 `memory_manager`，并使用 token 预算控制。
-- 任务级编排支持任务重试与多模态输入限流裁剪（按 `OrchestrationPolicy` 配置）。
-- API Key 目前直接来自配置；生产环境建议改为环境注入。
-- 当前每轮传入完整上下文；长会话需考虑裁剪或摘要压缩。
-
-编排策略详情见：`docs/orchestration-policy.md`。
+- 自动路由当前仍是轻量规则，不包含更复杂的健康检查、负载均衡或熔断编排策略。
+- 当前主流程仍以完整上下文 + 摘要压缩为主；极长会话需依赖合理的 `history_*` 预算与摘要策略。
+- API Key 目前主要来自配置与 provider 注册表；生产环境仍建议配合环境变量或外部 secret 管理。
 
 ## 相关技能
 
 - 框架速读：`.github/skills/framework-quickstart/SKILL.md`
 - 外部接入：`.github/skills/external-integration/SKILL.md`
-- 技能同步约束：`.github/skills/skill-sync-enforcer/SKILL.md`
+- 结构同步：`.github/skills/project-structure-sync/SKILL.md`
 
 
