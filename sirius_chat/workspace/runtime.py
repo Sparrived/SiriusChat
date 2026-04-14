@@ -301,16 +301,23 @@ class WorkspaceRuntime:
         cfg = self._workspace_config
         assert cfg is not None
 
-        if "active_agent_key" in patch:
+        if "active_agent_key" in patch and patch["active_agent_key"] is not None:
             cfg.active_agent_key = str(patch["active_agent_key"]).strip()
 
         sd_patch = patch.get("session_defaults")
         if isinstance(sd_patch, dict):
-            for key in ("history_max_messages", "history_max_chars",
-                        "max_recent_participant_messages", "enable_auto_compression"):
-                if key in sd_patch:
-                    setattr(cfg.session_defaults, key,
-                            type(getattr(cfg.session_defaults, key))(sd_patch[key]))
+            for key in (
+                "history_max_messages",
+                "history_max_chars",
+                "max_recent_participant_messages",
+                "enable_auto_compression",
+            ):
+                if key in sd_patch and sd_patch[key] is not None:
+                    setattr(
+                        cfg.session_defaults,
+                        key,
+                        type(getattr(cfg.session_defaults, key))(sd_patch[key]),
+                    )
 
         orch_patch = patch.get("orchestration_defaults")
         if isinstance(orch_patch, dict):
@@ -321,7 +328,7 @@ class WorkspaceRuntime:
 
         pp_patch = patch.get("provider_policy")
         if isinstance(pp_patch, dict):
-            if "prefer_workspace_registry" in pp_patch:
+            if "prefer_workspace_registry" in pp_patch and pp_patch["prefer_workspace_registry"] is not None:
                 cfg.provider_policy.prefer_workspace_registry = bool(pp_patch["prefer_workspace_registry"])
 
         self._config_manager.save_workspace_config(

@@ -296,6 +296,53 @@ def test_apply_workspace_updates_merges_nested_orchestration_defaults(tmp_path: 
     asyncio.run(_run())
 
 
+def test_apply_workspace_updates_ignores_none_values(tmp_path: Path) -> None:
+    async def _run() -> None:
+        _write_workspace_agents(tmp_path)
+        manager = ConfigManager(base_path=tmp_path)
+        workspace_config = manager.load_workspace_config(tmp_path)
+        workspace_config.active_agent_key = "main_agent"
+        workspace_config.session_defaults.history_max_messages = 77
+        workspace_config.orchestration_defaults = {
+            "task_models": {
+                "event_extract": "event-model",
+            },
+            "message_debounce_seconds": 0.0,
+        }
+        manager.save_workspace_config(tmp_path, workspace_config)
+
+        runtime = WorkspaceRuntime.open(tmp_path, provider=MockProvider(responses=["ok"]))
+        try:
+            await runtime.initialize()
+            await runtime.apply_workspace_updates(
+                {
+                    "active_agent_key": None,
+                    "session_defaults": {"history_max_messages": None},
+                    "orchestration_defaults": {
+                        "task_models": {"event_extract": None},
+                        "message_debounce_seconds": None,
+                    },
+                    "provider_policy": {"prefer_workspace_registry": None},
+                }
+            )
+
+            exported = runtime.export_workspace_defaults()
+            session_defaults = cast(dict[str, Any], exported["session_defaults"])
+            orchestration = cast(dict[str, Any], exported["orchestration_defaults"])
+            task_models = cast(dict[str, Any], orchestration["task_models"])
+            provider_policy = cast(dict[str, Any], exported["provider_policy"])
+
+            assert exported["active_agent_key"] == "main_agent"
+            assert session_defaults["history_max_messages"] == 77
+            assert orchestration["message_debounce_seconds"] == 0.0
+            assert task_models["event_extract"] == "event-model"
+            assert provider_policy["prefer_workspace_registry"] is True
+        finally:
+            await runtime.close()
+
+    asyncio.run(_run())
+
+
 # ── set_provider_entries ────────────────────────────────────
 
 

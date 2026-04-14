@@ -293,6 +293,119 @@ class TestConfigManager:
         assert loaded.orchestration_defaults["task_models"]["event_extract"] == "deepseek-chat"
         assert loaded.orchestration_defaults["task_models"]["intent_analysis"] == "deepseek-chat"
 
+    def test_save_workspace_config_preserves_existing_values_when_new_payload_contains_nulls(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        manager = ConfigManager(base_path=tmp_path)
+        workspace_config = manager.load_workspace_config(tmp_path)
+        workspace_config.active_agent_key = "main_agent"
+        workspace_config.session_defaults.history_max_messages = 111
+        workspace_config.session_defaults.history_max_chars = 7777
+        workspace_config.session_defaults.max_recent_participant_messages = 9
+        workspace_config.session_defaults.enable_auto_compression = False
+        workspace_config.orchestration_defaults = {
+            "task_models": {"event_extract": "deepseek-chat"},
+            "message_debounce_seconds": 0.0,
+        }
+        manager.save_workspace_config(tmp_path, workspace_config)
+
+        object.__setattr__(workspace_config, "active_agent_key", None)
+        object.__setattr__(workspace_config.session_defaults, "history_max_messages", None)
+        object.__setattr__(workspace_config.session_defaults, "history_max_chars", None)
+        object.__setattr__(workspace_config.session_defaults, "max_recent_participant_messages", None)
+        object.__setattr__(workspace_config.session_defaults, "enable_auto_compression", None)
+        workspace_config.orchestration_defaults = {
+            "task_models": {"event_extract": None},
+            "message_debounce_seconds": None,
+        }
+        object.__setattr__(workspace_config.provider_policy, "prefer_workspace_registry", None)
+        manager.save_workspace_config(tmp_path, workspace_config)
+
+        layout = WorkspaceLayout(tmp_path)
+        manifest_path = layout.workspace_manifest_path()
+        snapshot_path = layout.session_config_path()
+        manifest_payload = load_json_document(manifest_path)
+        snapshot_payload = load_json_document(snapshot_path)
+
+        assert "null" not in manifest_path.read_text(encoding="utf-8")
+        assert "null" not in snapshot_path.read_text(encoding="utf-8")
+        assert manifest_payload["active_agent_key"] == "main_agent"
+        assert manifest_payload["session_defaults"]["history_max_messages"] == 111
+        assert manifest_payload["session_defaults"]["history_max_chars"] == 7777
+        assert manifest_payload["session_defaults"]["max_recent_participant_messages"] == 9
+        assert manifest_payload["session_defaults"]["enable_auto_compression"] is False
+        assert manifest_payload["orchestration_defaults"]["task_models"]["event_extract"] == "deepseek-chat"
+        assert manifest_payload["orchestration_defaults"]["message_debounce_seconds"] == 0.0
+        assert manifest_payload["provider_policy"]["prefer_workspace_registry"] is True
+        assert snapshot_payload["generated_agent_key"] == "main_agent"
+        assert snapshot_payload["history_max_messages"] == 111
+        assert snapshot_payload["history_max_chars"] == 7777
+        assert snapshot_payload["max_recent_participant_messages"] == 9
+        assert snapshot_payload["enable_auto_compression"] is False
+        assert snapshot_payload["orchestration"]["task_models"]["event_extract"] == "deepseek-chat"
+        assert snapshot_payload["orchestration"]["message_debounce_seconds"] == 0.0
+
+    def test_load_workspace_config_tolerates_null_fields_from_disk(self, tmp_path: Path) -> None:
+        manager = ConfigManager(base_path=tmp_path)
+        layout = WorkspaceLayout(tmp_path)
+        layout.ensure_directories()
+
+        layout.workspace_manifest_path().write_text(
+            json.dumps(
+                {
+                    "work_path": None,
+                    "data_path": None,
+                    "layout_version": None,
+                    "active_agent_key": None,
+                    "session_defaults": {
+                        "history_max_messages": None,
+                        "history_max_chars": None,
+                        "max_recent_participant_messages": None,
+                        "enable_auto_compression": None,
+                    },
+                    "orchestration_defaults": {
+                        "task_models": {"event_extract": None},
+                        "message_debounce_seconds": 0.0,
+                    },
+                    "provider_policy": {
+                        "prefer_workspace_registry": None,
+                    },
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        write_session_config_jsonc(
+            layout.session_config_path(),
+            {
+                "generated_agent_key": None,
+                "history_max_messages": None,
+                "history_max_chars": None,
+                "max_recent_participant_messages": None,
+                "enable_auto_compression": None,
+                "orchestration": {
+                    "task_models": {"event_extract": None},
+                    "message_debounce_seconds": 1.5,
+                },
+            },
+        )
+
+        loaded = manager.load_workspace_config(tmp_path)
+
+        assert loaded.work_path == tmp_path
+        assert loaded.data_path == tmp_path
+        assert loaded.layout_version == 2
+        assert loaded.active_agent_key == ""
+        assert loaded.session_defaults.history_max_messages == 24
+        assert loaded.session_defaults.history_max_chars == 6000
+        assert loaded.session_defaults.max_recent_participant_messages == 5
+        assert loaded.session_defaults.enable_auto_compression is True
+        assert loaded.orchestration_defaults["message_debounce_seconds"] == 1.5
+        assert loaded.orchestration_defaults.get("task_models", {}) == {}
+        assert loaded.provider_policy.prefer_workspace_registry is True
+
 
 class TestEnvVarSubstitution:
     """Test environment variable substitution patterns."""

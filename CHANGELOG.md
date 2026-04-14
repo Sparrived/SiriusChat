@@ -4,6 +4,16 @@
 
 ## [Unreleased]
 
+## [0.26.5] - 2026-04-15
+
+### Fixed
+- **workspace.json / session_config.json 不再被 null 污染**：`ConfigManager` 现在会在加载和保存时统一忽略空值，并用现有配置或默认值回填；外部宿主即使传入包含 `None` 的 payload，也不会再把 `workspace.json` 和 `config/session_config.json` 写成大面积 `null`。
+- **已有 null 配置可自动恢复**：当历史 `workspace.json` 或 `config/session_config.json` 中已经混入 `null` 时，加载逻辑不再因 `int(None)` 等转换报错，而是自动回退到可用默认值或已有有效字段。
+- **runtime 局部设置更新忽略 null 字段**：`WorkspaceRuntime.apply_workspace_updates()` 现在把 `null` 视为“未修改”，避免外部设置面板把空字段错误写回成字符串 `"None"` 或空值。
+
+### Added
+- 新增 config/runtime 回归测试，覆盖“已有配置被带 `None` 的对象重新保存”与“磁盘上已有 null 字段仍可正常加载”两类场景。
+
 ## [0.26.4] - 2026-04-15
 
 ### Fixed

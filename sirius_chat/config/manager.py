@@ -21,6 +21,7 @@ from sirius_chat.config.jsonc import (
 from sirius_chat.config.models import (
     Agent,
     AgentPreset,
+    ProviderPolicy,
     SessionConfig,
     SessionDefaults,
     WorkspaceConfig,
@@ -127,6 +128,205 @@ class ConfigManager:
                 merged[key] = value
         return merged
 
+    def _coerce_int(self, value: object, default: int) -> int:
+        if value is None or value == "":
+            return default
+        if isinstance(value, bool):
+            return int(value)
+        if isinstance(value, (int, float, str)):
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return default
+        return default
+
+    def _coerce_bool(self, value: object, default: bool) -> bool:
+        if value is None:
+            return default
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"true", "1", "yes", "on"}:
+                return True
+            if normalized in {"false", "0", "no", "off"}:
+                return False
+        return bool(value)
+
+    def _coerce_string(self, value: object, default: str = "") -> str:
+        if value is None:
+            return default
+        text = str(value).strip()
+        return text if text else default
+
+    def _coerce_path(self, value: object, default: Path) -> Path:
+        if value is None:
+            return default
+        text = str(value).strip()
+        return Path(text) if text else default
+
+    def _sanitize_nullable_list(self, value: object) -> list[Any]:
+        if not isinstance(value, list):
+            return []
+
+        sanitized: list[Any] = []
+        for item in value:
+            if item is None:
+                continue
+            if isinstance(item, dict):
+                sanitized.append(self._sanitize_nullable_mapping(item))
+                continue
+            if isinstance(item, list):
+                sanitized.append(self._sanitize_nullable_list(item))
+                continue
+            sanitized.append(item)
+        return sanitized
+
+    def _sanitize_nullable_mapping(
+        self,
+        value: object,
+        *,
+        fallback: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        sanitized = dict(fallback or {})
+        if not isinstance(value, dict):
+            return sanitized
+
+        for key, item in value.items():
+            key_str = str(key)
+            if item is None:
+                continue
+            existing = sanitized.get(key_str)
+            if isinstance(item, dict):
+                sanitized[key_str] = self._sanitize_nullable_mapping(
+                    item,
+                    fallback=existing if isinstance(existing, dict) else None,
+                )
+                continue
+            if isinstance(item, list):
+                sanitized[key_str] = self._sanitize_nullable_list(item)
+                continue
+            sanitized[key_str] = item
+        return sanitized
+
+    def _build_session_defaults(self, payload: object, fallback: SessionDefaults) -> SessionDefaults:
+        if not isinstance(payload, dict):
+            return SessionDefaults(
+                history_max_messages=fallback.history_max_messages,
+                history_max_chars=fallback.history_max_chars,
+                max_recent_participant_messages=fallback.max_recent_participant_messages,
+                enable_auto_compression=fallback.enable_auto_compression,
+            )
+
+        return SessionDefaults(
+            history_max_messages=self._coerce_int(
+                payload.get("history_max_messages"),
+                fallback.history_max_messages,
+            ),
+            history_max_chars=self._coerce_int(
+                payload.get("history_max_chars"),
+                fallback.history_max_chars,
+            ),
+            max_recent_participant_messages=self._coerce_int(
+                payload.get("max_recent_participant_messages"),
+                fallback.max_recent_participant_messages,
+            ),
+            enable_auto_compression=self._coerce_bool(
+                payload.get("enable_auto_compression"),
+                fallback.enable_auto_compression,
+            ),
+        )
+
+    def _build_workspace_config_from_payload(
+        self,
+        payload: dict[str, Any],
+        *,
+        layout: WorkspaceLayout,
+        fallback: WorkspaceConfig,
+    ) -> WorkspaceConfig:
+        session_defaults = self._build_session_defaults(
+            payload.get("session_defaults"),
+            fallback.session_defaults,
+        )
+        provider_policy_payload = payload.get("provider_policy")
+        provider_policy_default = fallback.provider_policy.prefer_workspace_registry
+
+        return WorkspaceConfig(
+            work_path=self._coerce_path(payload.get("work_path"), layout.config_root),
+            data_path=self._coerce_path(payload.get("data_path"), layout.data_root),
+            layout_version=self._coerce_int(payload.get("layout_version"), layout.layout_version),
+            active_agent_key=self._coerce_string(
+                payload.get("active_agent_key"),
+                fallback.active_agent_key,
+            ),
+            session_defaults=session_defaults,
+            orchestration_defaults=self._sanitize_nullable_mapping(
+                payload.get("orchestration_defaults"),
+                fallback=dict(fallback.orchestration_defaults),
+            ),
+            provider_policy=ProviderPolicy(
+                prefer_workspace_registry=self._coerce_bool(
+                    provider_policy_payload.get("prefer_workspace_registry")
+                    if isinstance(provider_policy_payload, dict)
+                    else None,
+                    provider_policy_default,
+                )
+            ),
+        )
+
+    def _normalize_workspace_config(
+        self,
+        config: WorkspaceConfig,
+        *,
+        layout: WorkspaceLayout,
+        fallback: WorkspaceConfig,
+    ) -> WorkspaceConfig:
+        session_defaults_payload = {
+            "history_max_messages": getattr(config.session_defaults, "history_max_messages", None),
+            "history_max_chars": getattr(config.session_defaults, "history_max_chars", None),
+            "max_recent_participant_messages": getattr(
+                config.session_defaults,
+                "max_recent_participant_messages",
+                None,
+            ),
+            "enable_auto_compression": getattr(
+                config.session_defaults,
+                "enable_auto_compression",
+                None,
+            ),
+        }
+        provider_policy_payload = {
+            "prefer_workspace_registry": getattr(
+                config.provider_policy,
+                "prefer_workspace_registry",
+                None,
+            )
+        }
+
+        return WorkspaceConfig(
+            work_path=layout.config_root,
+            data_path=layout.data_root,
+            layout_version=layout.layout_version,
+            active_agent_key=self._coerce_string(
+                getattr(config, "active_agent_key", None),
+                fallback.active_agent_key,
+            ),
+            session_defaults=self._build_session_defaults(
+                session_defaults_payload,
+                fallback.session_defaults,
+            ),
+            orchestration_defaults=self._sanitize_nullable_mapping(
+                getattr(config, "orchestration_defaults", None),
+                fallback=dict(fallback.orchestration_defaults),
+            ),
+            provider_policy=ProviderPolicy(
+                prefer_workspace_registry=self._coerce_bool(
+                    provider_policy_payload.get("prefer_workspace_registry"),
+                    fallback.provider_policy.prefer_workspace_registry,
+                )
+            ),
+        )
+
     def load_workspace_config(
         self,
         work_path: Path | str,
@@ -153,14 +353,19 @@ class ConfigManager:
         session_snapshot_path = layout.session_config_path()
         if session_snapshot and session_snapshot_path.exists():
             session_snapshot_mtime_ns = session_snapshot_path.stat().st_mtime_ns
+        default_config = WorkspaceConfig(
+            work_path=layout.config_root,
+            data_path=layout.data_root,
+            layout_version=layout.layout_version,
+        )
         if manifest_payload:
-            config = WorkspaceConfig.from_dict(manifest_payload)
-        else:
-            config = WorkspaceConfig(
-                work_path=layout.config_root,
-                data_path=layout.data_root,
-                layout_version=layout.layout_version,
+            config = self._build_workspace_config_from_payload(
+                manifest_payload,
+                layout=layout,
+                fallback=default_config,
             )
+        else:
+            config = default_config
 
         config.work_path = layout.config_root
         config.data_path = layout.data_root
@@ -172,42 +377,24 @@ class ConfigManager:
         # orchestration so a newer manifest write cannot shadow task model
         # edits made through settings.
         if session_snapshot:
-            generated_agent_key = str(session_snapshot.get("generated_agent_key", "")).strip()
+            generated_agent_key = self._coerce_string(
+                session_snapshot.get("generated_agent_key"),
+                config.active_agent_key,
+            )
             if generated_agent_key and (
                 not manifest_payload
                 or session_snapshot_mtime_ns >= manifest_mtime_ns
                 or not config.active_agent_key
             ):
                 config.active_agent_key = generated_agent_key
-            config.session_defaults = SessionDefaults(
-                history_max_messages=int(
-                    session_snapshot.get(
-                        "history_max_messages",
-                        config.session_defaults.history_max_messages,
-                    )
-                ),
-                history_max_chars=int(
-                    session_snapshot.get(
-                        "history_max_chars",
-                        config.session_defaults.history_max_chars,
-                    )
-                ),
-                max_recent_participant_messages=int(
-                    session_snapshot.get(
-                        "max_recent_participant_messages",
-                        config.session_defaults.max_recent_participant_messages,
-                    )
-                ),
-                enable_auto_compression=bool(
-                    session_snapshot.get(
-                        "enable_auto_compression",
-                        config.session_defaults.enable_auto_compression,
-                    )
-                ),
+            config.session_defaults = self._build_session_defaults(
+                session_snapshot,
+                config.session_defaults,
             )
-            orchestration_payload = session_snapshot.get("orchestration")
-            if isinstance(orchestration_payload, dict):
-                config.orchestration_defaults = dict(orchestration_payload)
+            config.orchestration_defaults = self._sanitize_nullable_mapping(
+                session_snapshot.get("orchestration"),
+                fallback=dict(config.orchestration_defaults),
+            )
 
         if not config.active_agent_key:
             config.active_agent_key = self._resolve_active_agent_key(layout)
@@ -226,10 +413,13 @@ class ConfigManager:
         runtime_root = Path(runtime_root_source)
         layout = WorkspaceLayout(runtime_root, config_path=config_root)
         layout.ensure_directories()
-        config.work_path = layout.config_root
-        config.data_path = layout.data_root
-        config.layout_version = layout.layout_version
-        payload = config.to_dict()
+        existing_config = self.load_workspace_config(layout.config_root, data_path=layout.data_root)
+        normalized_config = self._normalize_workspace_config(
+            config,
+            layout=layout,
+            fallback=existing_config,
+        )
+        payload = normalized_config.to_dict()
         manifest_path = layout.workspace_manifest_path()
         manifest_path.write_text(
             json.dumps(payload, ensure_ascii=False, indent=2),
@@ -237,14 +427,14 @@ class ConfigManager:
         )
 
         session_snapshot = {
-            "generated_agent_key": config.active_agent_key,
-            "history_max_messages": config.session_defaults.history_max_messages,
-            "history_max_chars": config.session_defaults.history_max_chars,
-            "max_recent_participant_messages": config.session_defaults.max_recent_participant_messages,
-            "enable_auto_compression": config.session_defaults.enable_auto_compression,
+            "generated_agent_key": normalized_config.active_agent_key,
+            "history_max_messages": normalized_config.session_defaults.history_max_messages,
+            "history_max_chars": normalized_config.session_defaults.history_max_chars,
+            "max_recent_participant_messages": normalized_config.session_defaults.max_recent_participant_messages,
+            "enable_auto_compression": normalized_config.session_defaults.enable_auto_compression,
             "orchestration": self.merge_configs(
                 build_default_orchestration_payload(),
-                dict(config.orchestration_defaults),
+                dict(normalized_config.orchestration_defaults),
             ),
         }
         write_session_config_jsonc(layout.session_config_path(), session_snapshot)
