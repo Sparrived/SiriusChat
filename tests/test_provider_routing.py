@@ -109,10 +109,12 @@ def test_merge_provider_sources_uses_registry_and_config(tmp_path: Path) -> None
 def test_get_supported_provider_platforms_contains_core_platforms() -> None:
     platforms = get_supported_provider_platforms()
 
+    assert "aliyun-bailian" in platforms
     assert "siliconflow" in platforms
     assert "deepseek" in platforms
     assert "openai-compatible" in platforms
     assert "volcengine-ark" in platforms
+    assert platforms["aliyun-bailian"]["default_base_url"] == "https://dashscope.aliyuncs.com/compatible-mode"
     assert platforms["siliconflow"]["default_base_url"] == "https://api.siliconflow.cn"
     assert platforms["deepseek"]["default_base_url"] == "https://api.deepseek.com"
     assert platforms["volcengine-ark"]["default_base_url"] == "https://ark.cn-beijing.volces.com/api/v3"
@@ -168,6 +170,32 @@ def test_auto_routing_provider_routes_to_deepseek_when_models_list_contains_mode
 
     assert output == "deepseek-ok"
     assert ds_generate.call_count == 1
+
+
+def test_auto_routing_provider_routes_to_aliyun_bailian_when_models_list_contains_model() -> None:
+    routing = AutoRoutingProvider(
+        {
+            "aliyun-bailian": ProviderConfig(
+                provider_type="aliyun-bailian",
+                api_key="bailian-key",
+                base_url="",
+                healthcheck_model="",
+                models=["qwen-plus"],
+            ),
+            "openai-compatible": ProviderConfig(
+                provider_type="openai-compatible",
+                api_key="openai-key",
+                base_url="",
+                healthcheck_model="",
+            ),
+        }
+    )
+
+    with patch("sirius_chat.providers.routing.AliyunBailianProvider.generate", return_value="bailian-ok") as bailian_generate:
+        output = routing.generate(_request("qwen-plus"))
+
+    assert output == "bailian-ok"
+    assert bailian_generate.call_count == 1
 
 
 def test_probe_provider_availability_passes_on_non_empty_response() -> None:
@@ -246,6 +274,24 @@ def test_register_provider_with_validation_persists_healthcheck_model(tmp_path: 
 
 def test_ensure_provider_platform_supported_normalizes_alias() -> None:
     assert ensure_provider_platform_supported("ark") == "volcengine-ark"
+    assert ensure_provider_platform_supported("bailian") == "aliyun-bailian"
+
+
+def test_merge_provider_sources_normalizes_aliyun_bailian_alias(tmp_path: Path) -> None:
+    merged = merge_provider_sources(
+        work_path=tmp_path,
+        providers_config=[
+            {
+                "type": "dashscope",
+                "api_key": "dashscope-key",
+                "healthcheck_model": "qwen-plus",
+            }
+        ],
+    )
+
+    assert "aliyun-bailian" in merged
+    assert merged["aliyun-bailian"].provider_type == "aliyun-bailian"
+    assert merged["aliyun-bailian"].api_key == "dashscope-key"
 
 
 def test_auto_routing_provider_matches_model_from_models_list() -> None:

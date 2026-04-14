@@ -4,6 +4,16 @@
 
 ## [Unreleased]
 
+## [0.22.4] - 2026-04-14
+
+### Added
+- **阿里云百炼 Provider 支持**：新增 `AliyunBailianProvider`，默认接入 DashScope OpenAI 兼容端点 `https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions`，可直接调用 `qwen-plus` 等百炼模型。
+- **百炼配置示例**：新增 `examples/session.aliyun_bailian.json`，可作为 CLI 与工程接入百炼的最小配置模板。
+
+### Changed
+- **Provider 路由与注册表扩展**：统一支持 `aliyun-bailian` 平台，并接受 `bailian` / `dashscope` 别名；session JSON、`provider_keys.json` 和自动路由都会规范化到同一个平台标识。
+- **文档与外部接入说明更新**：README、架构文档、外部接入说明和相关 SKILL 已补充百炼默认地址、地域覆盖方式与 provider 选型说明。
+
 ## [0.22.3] - 2026-04-14
 
 ### Changed

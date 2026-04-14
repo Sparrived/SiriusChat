@@ -650,6 +650,19 @@ Select a generated agent profile from the library.
 
 ### Classes
 
+#### `AliyunBailianProvider`
+
+Aliyun Bailian provider backed by DashScope's OpenAI-compatible endpoint.
+
+The constructor accepts either:
+- https://dashscope.aliyuncs.com/compatible-mode
+- https://dashscope.aliyuncs.com/compatible-mode/v1
+and normalizes both to the same request endpoint.
+
+**方法：**
+
+- `generate(self, request: GenerationRequest) -> str` - Generate one assistant message from the upstream provider.
+
 #### `AutoRoutingProvider`
 
 Choose a configured provider automatically on each generation request.

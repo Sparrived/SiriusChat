@@ -160,6 +160,7 @@ flowchart LR
 | `sirius_chat/providers/middleware/` | `GenerationRequest`、中间件链配置 | 透明的 Provider 功能扩展（流控、重试、成本计量） |
 | `sirius_chat/providers/routing.py` | `work_path`、`providers_config` 列表 | ProviderRegistry、`provider_keys.json`、最终路由选择 |
 | `sirius_chat/providers/openai_compatible.py` | `GenerationRequest` | 模型文本回复、token 使用统计 |
+| `sirius_chat/providers/aliyun_bailian.py` | `GenerationRequest` | 阿里云百炼 DashScope 兼容接口回复 |
 | `sirius_chat/providers/siliconflow.py` | `GenerationRequest` | 模型文本回复、token 使用统计 |
 | `sirius_chat/providers/volcengine_ark.py` | `GenerationRequest` | 模型文本回复、token 使用统计 |
 | `sirius_chat/providers/mock.py` | `GenerationRequest` | 可预测测试回复 |

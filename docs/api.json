@@ -2582,6 +2582,30 @@
       ],
       "classes": [
         {
+          "name": "AliyunBailianProvider",
+          "docstring": "Aliyun Bailian provider backed by DashScope's OpenAI-compatible endpoint.\n\nThe constructor accepts either:\n- https://dashscope.aliyuncs.com/compatible-mode\n- https://dashscope.aliyuncs.com/compatible-mode/v1\nand normalizes both to the same request endpoint.",
+          "methods": [
+            {
+              "name": "generate",
+              "is_async": false,
+              "params": [
+                {
+                  "name": "self",
+                  "annotation": null,
+                  "kind": "positional"
+                },
+                {
+                  "name": "request",
+                  "annotation": "GenerationRequest",
+                  "kind": "positional"
+                }
+              ],
+              "return_type": "str",
+              "docstring": "Generate one assistant message from the upstream provider."
+            }
+          ]
+        },
+        {
           "name": "AutoRoutingProvider",
           "docstring": "Choose a configured provider automatically on each generation request.",
           "methods": [

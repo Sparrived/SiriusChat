@@ -4,6 +4,7 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from sirius_chat.providers.aliyun_bailian import AliyunBailianProvider
 from sirius_chat.providers.base import GenerationRequest, LLMProvider
 from sirius_chat.providers.deepseek import DeepSeekProvider
 from sirius_chat.providers.openai_compatible import OpenAICompatibleProvider
@@ -14,6 +15,7 @@ from sirius_chat.providers.ytea import YTeaProvider
 PROVIDER_KEYS_FILE = "provider_keys.json"
 
 _OPENAI_PROVIDER_TYPES = {"openai", "openai-compatible"}
+_ALIYUN_BAILIAN_PROVIDER_TYPES = {"aliyun-bailian", "bailian", "dashscope"}
 _DEEPSEEK_PROVIDER_TYPES = {"deepseek"}
 _SILICONFLOW_PROVIDER_TYPES = {"siliconflow"}
 _VOLCENGINE_ARK_PROVIDER_TYPES = {"volcengine-ark", "ark"}
@@ -23,6 +25,10 @@ _SUPPORTED_PROVIDER_PLATFORMS: dict[str, dict[str, str]] = {
     "openai-compatible": {
         "default_base_url": "https://api.openai.com",
         "notes": "OpenAI-compatible chat completions endpoint",
+    },
+    "aliyun-bailian": {
+        "default_base_url": "https://dashscope.aliyuncs.com/compatible-mode",
+        "notes": "Aliyun Bailian DashScope OpenAI-compatible endpoint",
     },
     "deepseek": {
         "default_base_url": "https://api.deepseek.com",
@@ -66,6 +72,8 @@ def normalize_provider_type(provider_type: str) -> str:
         return "openai-compatible"
     if normalized == "ark":
         return "volcengine-ark"
+    if normalized in {"bailian", "dashscope"}:
+        return "aliyun-bailian"
     return normalized
 
 
@@ -93,7 +101,7 @@ class ProviderRegistry:
         for provider_name, payload in providers.items():
             if not isinstance(payload, dict):
                 continue
-            provider_type = str(payload.get("type", provider_name)).strip().lower()
+            provider_type = normalize_provider_type(str(payload.get("type", provider_name)))
             api_key = str(payload.get("api_key", "")).strip()
             if not api_key:
                 continue
@@ -161,7 +169,7 @@ class ProviderRegistry:
         self.save(providers)
 
     def remove(self, provider_type: str) -> bool:
-        provider_key = provider_type.strip().lower()
+        provider_key = normalize_provider_type(provider_type)
         providers = self.load()
         if provider_key not in providers:
             return False
@@ -186,7 +194,7 @@ def merge_provider_sources(
 
     # 第二步：用Session JSON中的providers覆盖持久化配置
     for item in providers_config:
-        provider_type = str(item.get("type", "")).strip().lower()
+        provider_type = normalize_provider_type(str(item.get("type", "")))
         api_key = str(item.get("api_key", "")).strip()
         if not provider_type or not api_key:
             continue
@@ -225,6 +233,11 @@ class AutoRoutingProvider(LLMProvider):
         return bool(expected) and model_stripped == expected
 
     def _create_provider(self, config: ProviderConfig) -> LLMProvider:
+        if config.provider_type in _ALIYUN_BAILIAN_PROVIDER_TYPES:
+            return AliyunBailianProvider(
+                api_key=config.api_key,
+                base_url=config.base_url or "https://dashscope.aliyuncs.com/compatible-mode",
+            )
         if config.provider_type in _SILICONFLOW_PROVIDER_TYPES:
             return SiliconFlowProvider(api_key=config.api_key)
         if config.provider_type in _DEEPSEEK_PROVIDER_TYPES:
@@ -277,6 +290,11 @@ def probe_provider_availability(
 
 def _create_provider_from_config(config: ProviderConfig) -> LLMProvider:
     provider_type = ensure_provider_platform_supported(config.provider_type)
+    if provider_type in _ALIYUN_BAILIAN_PROVIDER_TYPES:
+        return AliyunBailianProvider(
+            api_key=config.api_key,
+            base_url=config.base_url or "https://dashscope.aliyuncs.com/compatible-mode",
+        )
     if provider_type in _SILICONFLOW_PROVIDER_TYPES:
         return SiliconFlowProvider(api_key=config.api_key)
     if provider_type in _DEEPSEEK_PROVIDER_TYPES:

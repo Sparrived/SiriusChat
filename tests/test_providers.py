@@ -12,6 +12,7 @@ from urllib import error
 
 import pytest
 
+from sirius_chat.providers.aliyun_bailian import AliyunBailianProvider
 from sirius_chat.providers.base import GenerationRequest
 from sirius_chat.providers.deepseek import DeepSeekProvider
 from sirius_chat.providers.mock import MockProvider
@@ -52,6 +53,15 @@ _PROVIDER_SPECS: list[dict] = [
         "patch_target": "sirius_chat.providers.openai_compatible.urllib_request.urlopen",
         "expected_url": "https://api.openai.com/v1/chat/completions",
         "has_reasoning": False,
+    },
+    {
+        "id": "aliyun_bailian",
+        "cls": AliyunBailianProvider,
+        "init": {"api_key": "test-key"},
+        "model": "qwen-plus",
+        "patch_target": "sirius_chat.providers.openai_compatible.urllib_request.urlopen",
+        "expected_url": "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+        "has_reasoning": True,
     },
     {
         "id": "deepseek",

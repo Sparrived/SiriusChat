@@ -1,4 +1,5 @@
 from sirius_chat.providers import (
+    AliyunBailianProvider,
     AutoRoutingProvider,
     DeepSeekProvider,
     MockProvider,
@@ -18,6 +19,7 @@ from sirius_chat.providers import (
 from sirius_chat.providers.base import AsyncLLMProvider, LLMProvider
 
 __all__ = [
+    "AliyunBailianProvider",
     "AutoRoutingProvider",
     "DeepSeekProvider",
     "MockProvider",

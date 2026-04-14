@@ -1,4 +1,5 @@
 from sirius_chat.providers.base import GenerationRequest, LLMProvider
+from sirius_chat.providers.aliyun_bailian import AliyunBailianProvider
 from sirius_chat.providers.deepseek import DeepSeekProvider
 from sirius_chat.providers.mock import MockProvider
 from sirius_chat.providers.openai_compatible import OpenAICompatibleProvider
@@ -20,6 +21,7 @@ from sirius_chat.providers.volcengine_ark import VolcengineArkProvider
 __all__ = [
 	"GenerationRequest",
 	"LLMProvider",
+	"AliyunBailianProvider",
 	"MockProvider",
 	"DeepSeekProvider",
 	"OpenAICompatibleProvider",

@@ -50,7 +50,7 @@
 - **高并发支持**：自动消息合并（debounce）、LLM 并发限流、后台任务隔离
 
 ### 🔌 **多模型协同**
-- **多 Provider 支持**：OpenAI / DeepSeek / SiliconFlow / Volcengine Ark 等
+- **多 Provider 支持**：OpenAI / 阿里云百炼 / DeepSeek / SiliconFlow / Volcengine Ark 等
 - **任务级模型选择**：记忆提取、事件分析、意图分析等任务可配置独立模型
 - **自动路由**：按 `healthcheck_model` 智能选择最合适的 Provider
 
@@ -186,6 +186,7 @@ sirius_chat/
 │   └── models.py                 # Transcript / Message / UserProfile
 ├── providers/                    # 🔗 LLM Provider 实现
 │   ├── openai_compatible.py      # OpenAI 兼容接口
+│   ├── aliyun_bailian.py         # 阿里云百炼适配
 │   ├── deepseek.py               # DeepSeek 适配
 │   ├── siliconflow.py            # SiliconFlow 适配
 │   └── volcengine_ark.py         # 火山方舟适配
@@ -345,6 +346,25 @@ msg = Message(
   }
 }
 ```
+
+### 🔹 阿里云百炼（Aliyun Bailian）配置
+
+```json
+{
+  "providers": [
+    {
+      "type": "aliyun-bailian",
+      "api_key": "sk-..."
+    }
+  ],
+  "agent": {
+    "name": "通义千问",
+    "model": "qwen-plus"
+  }
+}
+```
+
+**说明：** 默认使用 `https://dashscope.aliyuncs.com/compatible-mode`，也兼容传入 `https://dashscope.aliyuncs.com/compatible-mode/v1`；如需美国站或国际站，可通过 `base_url` 显式覆盖。
 
 ### 🔹 SiliconFlow 配置
 

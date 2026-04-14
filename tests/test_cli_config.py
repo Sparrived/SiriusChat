@@ -87,6 +87,34 @@ def test_load_session_config_supports_siliconflow_defaults(tmp_path) -> None:
     assert providers[0]["api_key"] == "sf-test-key"
 
 
+def test_load_session_config_supports_aliyun_bailian_defaults(tmp_path) -> None:
+    config_path = tmp_path / "aliyun_bailian.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "providers": [
+                    {
+                        "type": "aliyun-bailian",
+                        "api_key": "dashscope-test-key",
+                    }
+                ],
+                "generated_agent_key": "main_agent",
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    work_path = tmp_path / "work"
+    _write_generated_agents(work_path)
+    session, providers = _load_session_config(config_path, work_path)
+
+    assert session.work_path == work_path
+    assert len(providers) == 1
+    assert providers[0]["type"] == "aliyun-bailian"
+    assert providers[0]["api_key"] == "dashscope-test-key"
+
+
 def test_load_session_config_accepts_providers_list_without_single_provider(tmp_path) -> None:
     config_path = tmp_path / "providers.json"
     config_path.write_text(

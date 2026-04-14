@@ -55,6 +55,7 @@ from sirius_chat.api.prompting import (
     select_generated_agent_profile,
 )
 from sirius_chat.api.providers import (
+    AliyunBailianProvider,
     AsyncLLMProvider,
     AutoRoutingProvider,
     LLMProvider,
@@ -143,6 +144,7 @@ __all__ = [
     "JsonPersistentSessionRunner",
     "SessionConfig",
     "Transcript",
+    "AliyunBailianProvider",
     "OpenAICompatibleProvider",
     "SiliconFlowProvider",
     "VolcengineArkProvider",

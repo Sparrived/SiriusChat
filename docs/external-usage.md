@@ -271,6 +271,23 @@ provider = SiliconFlowProvider(
 - 若外部配置传入 `https://api.siliconflow.cn/v1` 也可兼容，内部会自动规范化。
 - 接口路径遵循 OpenAI 兼容的 `/v1/chat/completions`。
 
+若使用阿里云百炼，可使用：
+
+```python
+from sirius_chat.api import AliyunBailianProvider
+
+provider = AliyunBailianProvider(
+    api_key="YOUR_DASHSCOPE_API_KEY",
+)
+```
+
+说明：
+
+- `AliyunBailianProvider` 默认基地址为 `https://dashscope.aliyuncs.com/compatible-mode`。
+- 若外部配置传入 `https://dashscope.aliyuncs.com/compatible-mode/v1` 也可兼容，内部会自动规范化。
+- 若需美国站或国际站，可通过 `base_url` 传入对应地域的 DashScope 兼容地址。
+- 接口路径遵循 OpenAI 兼容的 `/v1/chat/completions`。
+
 若使用 DeepSeek，可使用：
 
 ```python
@@ -1010,7 +1027,7 @@ print(f"平均执行时间: {result.mean}ms")
 ## 集成建议
 
 - 对外 Python 调用统一从 `sirius_chat/api/` 导入接口。
-- provider 可选 `OpenAICompatibleProvider` 或 `SiliconFlowProvider`（按上游厂商选择）。
+- provider 可选 `OpenAICompatibleProvider`、`AliyunBailianProvider` 或 `SiliconFlowProvider`（按上游厂商选择）。
 - **多模型协同现已默认启用**。通过 `SessionConfig.orchestration` 配置 `task_models`、`task_budgets` 等实现记忆提取、事件提取、多模态解析的分任务路由。若需全部由一个模型处理，改为仅设置 `unified_model`（并清空 `task_models`）。
 - 若需更稳健的“提事不提人”识别，可为 `event_extract` 配置辅助模型，提取事件结构化字段后参与命中评分。
 - 需要自动选择时，使用 `AutoRoutingProvider`，并在 `work_path/provider_keys.json` 维护可用 key。
