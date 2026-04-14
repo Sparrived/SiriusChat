@@ -9,8 +9,10 @@ from unittest.mock import patch
 
 from sirius_chat.api import Message, UserProfile, WorkspaceLayout, WorkspaceRuntime
 from sirius_chat.config import ConfigManager
+from sirius_chat.config.jsonc import load_json_document, write_session_config_jsonc
 from sirius_chat.config.models import WorkspaceBootstrap
 from sirius_chat.models import Transcript
+from sirius_chat.providers.base import AsyncLLMProvider, GenerationRequest
 from sirius_chat.providers.mock import MockProvider
 from sirius_chat.providers.routing import AutoRoutingProvider, ProviderConfig, ProviderRegistry
 
@@ -501,6 +503,90 @@ def test_workspace_runtime_bootstrap_preserves_existing_task_models_and_provider
             assert providers["openai-compatible"].api_key == "test-key-updated"
             assert providers["openai-compatible"].base_url == "https://api.openai.com/v1"
             assert providers["openai-compatible"].models == ["mock-model", "intent-model"]
+        finally:
+            await runtime.close()
+
+    asyncio.run(_run())
+
+
+def test_workspace_runtime_uses_session_snapshot_task_models_when_manifest_is_newer(tmp_path: Path) -> None:
+    class CaptureProvider(AsyncLLMProvider):
+        def __init__(self) -> None:
+            self.requests: list[tuple[str, str]] = []
+
+        async def generate_async(self, request: GenerationRequest) -> str:
+            self.requests.append((request.purpose, request.model))
+            if request.purpose == "event_extract":
+                return '[{"category":"experience","content":"用户提到一件事","confidence":0.8}]'
+            return "主回复"
+
+    async def _run() -> None:
+        config_root = tmp_path / "config"
+        data_root = tmp_path / "runtime"
+        _write_workspace_agents(
+            config_root,
+            data_root=data_root,
+            agents_payload={
+                "main_agent": {
+                    "agent": {
+                        "name": "主助手",
+                        "persona": "测试人格",
+                        "model": "qwen3.5-plus",
+                        "temperature": 0.7,
+                        "max_tokens": 512,
+                        "metadata": {},
+                    },
+                    "global_system_prompt": "测试系统提示词",
+                }
+            },
+        )
+
+        manager = ConfigManager(base_path=config_root)
+        workspace_config = manager.load_workspace_config(config_root, data_path=data_root)
+        workspace_config.active_agent_key = "main_agent"
+        workspace_config.orchestration_defaults = {
+            "task_models": {"event_extract": "qwen3.5-plus"},
+            "task_enabled": {
+                "memory_extract": False,
+                "event_extract": True,
+                "intent_analysis": False,
+            },
+            "event_extract_batch_size": 1,
+            "message_debounce_seconds": 0.0,
+        }
+        manager.save_workspace_config(config_root, workspace_config, data_path=data_root)
+
+        layout = WorkspaceLayout(data_root, config_path=config_root)
+        snapshot_path = layout.session_config_path()
+        snapshot_payload = load_json_document(snapshot_path)
+        snapshot_payload["generated_agent_key"] = "main_agent"
+        snapshot_payload["orchestration"]["task_models"] = {
+            "memory_extract": "deepseek-chat",
+            "event_extract": "deepseek-chat",
+            "intent_analysis": "deepseek-chat",
+        }
+        snapshot_payload["orchestration"]["task_enabled"] = {
+            "memory_extract": False,
+            "event_extract": True,
+            "intent_analysis": False,
+        }
+        snapshot_payload["orchestration"]["event_extract_batch_size"] = 1
+        snapshot_payload["orchestration"]["message_debounce_seconds"] = 0.0
+        write_session_config_jsonc(snapshot_path, snapshot_payload)
+
+        newer_ns = snapshot_path.stat().st_mtime_ns + 2_000_000
+        os.utime(layout.workspace_manifest_path(), ns=(newer_ns, newer_ns))
+
+        provider = CaptureProvider()
+        runtime = WorkspaceRuntime.open(data_root, config_path=config_root, provider=provider)
+        try:
+            await runtime.run_live_message(
+                session_id="repro",
+                turn=Message(role="user", speaker="Alice", content="你好，我今天完成了项目复盘"),
+            )
+
+            assert provider.requests[0] == ("event_extract", "deepseek-chat")
+            assert provider.requests[1] == ("chat_main", "qwen3.5-plus")
         finally:
             await runtime.close()
 

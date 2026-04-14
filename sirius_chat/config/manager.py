@@ -166,14 +166,18 @@ class ConfigManager:
         config.data_path = layout.data_root
         config.layout_version = layout.layout_version
 
-        # workspace.json and config/session_config.json carry overlapping defaults.
-        # Use the newer one as the source of truth so manual edits survive restart.
-        use_session_snapshot = bool(session_snapshot) and (
-            not manifest_payload or session_snapshot_mtime_ns >= manifest_mtime_ns
-        )
-        if use_session_snapshot:
+        # workspace.json is the machine-readable workspace manifest, while
+        # config/session_config.json is the human-editable session snapshot.
+        # Keep the snapshot authoritative for session defaults and
+        # orchestration so a newer manifest write cannot shadow task model
+        # edits made through settings.
+        if session_snapshot:
             generated_agent_key = str(session_snapshot.get("generated_agent_key", "")).strip()
-            if generated_agent_key:
+            if generated_agent_key and (
+                not manifest_payload
+                or session_snapshot_mtime_ns >= manifest_mtime_ns
+                or not config.active_agent_key
+            ):
                 config.active_agent_key = generated_agent_key
             config.session_defaults = SessionDefaults(
                 history_max_messages=int(
@@ -201,7 +205,7 @@ class ConfigManager:
                     )
                 ),
             )
-            orchestration_payload = session_snapshot.get("orchestration", config.orchestration_defaults)
+            orchestration_payload = session_snapshot.get("orchestration")
             if isinstance(orchestration_payload, dict):
                 config.orchestration_defaults = dict(orchestration_payload)
 

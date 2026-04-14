@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+## [0.26.4] - 2026-04-15
+
+### Fixed
+- **session_config.json 的任务模型设置不再被较新的 workspace.json 覆盖**：`ConfigManager.load_workspace_config()` 现在始终以 `config/session_config.json` 中的 `session_defaults` 和 `orchestration` 作为运行时来源，避免外部程序场景下仅因 manifest 更新时间更晚，就把 `task_models`、`task_enabled` 等设置回退到旧值。
+
+### Added
+- 新增 config/runtime 回归测试，覆盖“manifest 更晚但 session snapshot 中的 `task_models` 仍应生效”场景，直接验证 `event_extract` 不会错误回退到主模型。
+
 ## [0.26.3] - 2026-04-15
 
 ### Fixed

@@ -5,13 +5,14 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import time
 from pathlib import Path
 from unittest import mock
 
 import pytest
 
 from sirius_chat.config import ConfigManager, SessionConfig
-from sirius_chat.config.jsonc import load_json_document
+from sirius_chat.config.jsonc import load_json_document, write_session_config_jsonc
 from sirius_chat.workspace.layout import WorkspaceLayout
 
 
@@ -258,6 +259,39 @@ class TestConfigManager:
         payload = load_json_document(snapshot_path)
         assert payload["orchestration"]["task_enabled"]["intent_analysis"] is True
         assert payload["orchestration"]["message_debounce_seconds"] == 5.0
+
+    def test_load_workspace_config_prefers_session_snapshot_orchestration_even_if_manifest_newer(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        manager = ConfigManager(base_path=tmp_path)
+        workspace_config = manager.load_workspace_config(tmp_path)
+        workspace_config.active_agent_key = "main_agent"
+        workspace_config.orchestration_defaults = {
+            "task_models": {"event_extract": "qwen3.5-plus"},
+            "task_enabled": {"event_extract": True},
+        }
+        manager.save_workspace_config(tmp_path, workspace_config)
+
+        layout = WorkspaceLayout(tmp_path)
+        snapshot_path = layout.session_config_path()
+        snapshot_payload = load_json_document(snapshot_path)
+        snapshot_payload["generated_agent_key"] = "main_agent"
+        snapshot_payload["orchestration"]["task_models"] = {
+            "memory_extract": "deepseek-chat",
+            "event_extract": "deepseek-chat",
+            "intent_analysis": "deepseek-chat",
+        }
+        write_session_config_jsonc(snapshot_path, snapshot_payload)
+
+        manifest_path = layout.workspace_manifest_path()
+        newer = time.time() + 5
+        os.utime(manifest_path, (newer, newer))
+
+        loaded = manager.load_workspace_config(tmp_path)
+
+        assert loaded.orchestration_defaults["task_models"]["event_extract"] == "deepseek-chat"
+        assert loaded.orchestration_defaults["task_models"]["intent_analysis"] == "deepseek-chat"
 
 
 class TestEnvVarSubstitution:
