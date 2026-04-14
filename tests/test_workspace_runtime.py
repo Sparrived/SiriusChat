@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 from sirius_chat.api import Message, UserProfile, WorkspaceLayout, WorkspaceRuntime
 from sirius_chat.config import ConfigManager
+from sirius_chat.config.models import WorkspaceBootstrap
 from sirius_chat.models import Transcript
 from sirius_chat.providers.mock import MockProvider
 from sirius_chat.providers.routing import AutoRoutingProvider, ProviderConfig, ProviderRegistry
@@ -432,6 +433,74 @@ def test_workspace_runtime_delete_session_removes_session_directory(tmp_path: Pa
             assert layout.session_dir("group:delete").exists()
             await runtime.delete_session("group:delete")
             assert not layout.session_dir("group:delete").exists()
+        finally:
+            await runtime.close()
+
+    asyncio.run(_run())
+
+
+def test_workspace_runtime_bootstrap_preserves_existing_task_models_and_provider_models(tmp_path: Path) -> None:
+    async def _run() -> None:
+        config_root = tmp_path / "config"
+        data_root = tmp_path / "runtime"
+        _write_workspace_agents(config_root, data_root=data_root)
+
+        manager = ConfigManager(base_path=config_root)
+        workspace_config = manager.load_workspace_config(config_root, data_path=data_root)
+        workspace_config.orchestration_defaults = {
+            "task_models": {
+                "memory_extract": "memory-model",
+                "intent_analysis": "intent-model",
+            },
+            "task_enabled": {
+                "memory_extract": True,
+                "event_extract": False,
+                "intent_analysis": True,
+            },
+            "session_reply_mode": "auto",
+        }
+        manager.save_workspace_config(config_root, workspace_config, data_path=data_root)
+
+        layout = WorkspaceLayout(data_root, config_path=config_root)
+        ProviderRegistry(layout).save(
+            {
+                "openai-compatible": ProviderConfig(
+                    provider_type="openai-compatible",
+                    api_key="test-key",
+                    base_url="https://api.openai.com",
+                    healthcheck_model="mock-model",
+                    models=["mock-model", "intent-model"],
+                )
+            }
+        )
+
+        runtime = WorkspaceRuntime.open(
+            data_root,
+            config_path=config_root,
+            bootstrap=WorkspaceBootstrap(
+                orchestration_defaults={"message_debounce_seconds": 0.0},
+                provider_entries=[
+                    {
+                        "type": "openai-compatible",
+                        "api_key": "test-key-updated",
+                        "base_url": "https://api.openai.com/v1",
+                    }
+                ],
+            ),
+        )
+        try:
+            await runtime.initialize()
+            exported = runtime.export_workspace_defaults()
+            orchestration = exported["orchestration_defaults"]
+            providers = ProviderRegistry(layout).load()
+
+            assert orchestration["task_models"]["memory_extract"] == "memory-model"
+            assert orchestration["task_models"]["intent_analysis"] == "intent-model"
+            assert orchestration["task_enabled"]["intent_analysis"] is True
+            assert orchestration["message_debounce_seconds"] == 0.0
+            assert providers["openai-compatible"].api_key == "test-key-updated"
+            assert providers["openai-compatible"].base_url == "https://api.openai.com/v1"
+            assert providers["openai-compatible"].models == ["mock-model", "intent-model"]
         finally:
             await runtime.close()
 

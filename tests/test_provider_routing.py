@@ -9,6 +9,7 @@ from sirius_chat.providers.routing import (
     AutoRoutingProvider,
     ProviderConfig,
     ProviderRegistry,
+    WorkspaceProviderManager,
     ensure_provider_platform_supported,
     get_supported_provider_platforms,
     merge_provider_sources,
@@ -398,6 +399,36 @@ def test_provider_registry_persists_models_list(tmp_path: Path) -> None:
 
     loaded = registry.load()
     assert loaded["siliconflow"].models == models
+
+
+def test_workspace_provider_manager_save_from_entries_preserves_existing_models_when_omitted(tmp_path: Path) -> None:
+    manager = WorkspaceProviderManager(tmp_path)
+    manager.save(
+        {
+            "openai-compatible": ProviderConfig(
+                provider_type="openai-compatible",
+                api_key="old-key",
+                base_url="https://api.openai.com",
+                healthcheck_model="gpt-4o-mini",
+                models=["gpt-4o-mini", "intent-model"],
+            )
+        }
+    )
+
+    merged = manager.save_from_entries(
+        [
+            {
+                "type": "openai-compatible",
+                "api_key": "new-key",
+                "base_url": "https://api.openai.com/v1",
+            }
+        ]
+    )
+
+    assert merged["openai-compatible"].api_key == "new-key"
+    assert merged["openai-compatible"].base_url == "https://api.openai.com/v1"
+    assert merged["openai-compatible"].healthcheck_model == "gpt-4o-mini"
+    assert merged["openai-compatible"].models == ["gpt-4o-mini", "intent-model"]
 
 
 def test_merge_provider_sources_carries_models_from_session_config(tmp_path: Path) -> None:

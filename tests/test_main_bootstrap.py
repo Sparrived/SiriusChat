@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 import pytest
 import json
+from typing import Any, cast
 
 import main as main_module
 
@@ -124,8 +125,8 @@ def test_run_framework_provider_detection_prefers_registry_over_stale_config(mon
 
 
 def test_load_or_persist_session_bundle_loads_generated_key_persisted(monkeypatch, tmp_path) -> None:
-    persisted = tmp_path / "session_config.persisted.json"
-    persisted.write_text(
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
         json.dumps(
             {
                 "generated_agent_key": "main_agent",
@@ -142,20 +143,31 @@ def test_load_or_persist_session_bundle_loads_generated_key_persisted(monkeypatc
         encoding="utf-8",
     )
 
-    monkeypatch.setattr(
-        main_module,
-        "create_session_config_from_selected_agent",
-        lambda **kwargs: main_module.SessionConfig(
-            work_path=kwargs["work_path"],
-            preset=main_module.AgentPreset(
-                agent=main_module.Agent(name="主助手", persona="测试人格", model="mock-model"),
-                global_system_prompt="测试系统提示词",
-            ),
+    roleplay_dir = tmp_path / "roleplay"
+    roleplay_dir.mkdir(parents=True)
+    (roleplay_dir / "generated_agents.json").write_text(
+        json.dumps(
+            {
+                "selected_generated_agent": "main_agent",
+                "generated_agents": {
+                    "main_agent": {
+                        "agent": {
+                            "name": "主助手",
+                            "persona": "测试人格",
+                            "model": "mock-model",
+                            "temperature": 0.7,
+                            "max_tokens": 512,
+                            "metadata": {},
+                        },
+                        "global_system_prompt": "测试系统提示词",
+                    }
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
         ),
+        encoding="utf-8",
     )
-
-    config_path = tmp_path / "config.json"
-    config_path.write_text("{}", encoding="utf-8")
 
     session, providers = main_module._load_or_persist_session_bundle(
         config_path=config_path,
@@ -167,16 +179,29 @@ def test_load_or_persist_session_bundle_loads_generated_key_persisted(monkeypatc
     assert session.global_system_prompt == "测试系统提示词"
     assert len(providers) == 1
     assert providers[0]["type"] == "openai-compatible"
+    assert (tmp_path / "session_config.persisted.json").exists()
 
 
-def test_load_or_persist_session_bundle_uses_load_session_config_for_persisted(monkeypatch, tmp_path) -> None:
+def test_load_or_persist_session_bundle_uses_source_config_instead_of_persisted(monkeypatch, tmp_path) -> None:
     persisted = tmp_path / "session_config.persisted.json"
-    persisted.write_text("{}", encoding="utf-8")
+    persisted.write_text(
+        json.dumps({"generated_agent_key": "stale_agent", "providers": []}, ensure_ascii=False),
+        encoding="utf-8",
+    )
     config_path = tmp_path / "config.json"
-    config_path.write_text("{}", encoding="utf-8")
+    config_path.write_text(
+        json.dumps(
+            {
+                "generated_agent_key": "main_agent",
+                "providers": [{"type": "openai-compatible", "api_key": "k"}],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
 
     def _fake_load_session(path, work_path, *, config_root=None):  # noqa: ANN001
-        assert path == persisted
+        assert path == config_path
         assert work_path == tmp_path
         assert config_root == tmp_path
         return (
@@ -202,7 +227,7 @@ def test_load_or_persist_session_bundle_uses_load_session_config_for_persisted(m
     assert len(providers) == 1
 
 
-def test_load_or_persist_session_bundle_reads_persisted_copy_from_config_root(monkeypatch, tmp_path) -> None:
+def test_load_or_persist_session_bundle_reads_source_config_from_config_root(monkeypatch, tmp_path) -> None:
     config_root = tmp_path / "config"
     work_path = tmp_path / "runtime"
     config_root.mkdir()
@@ -211,10 +236,19 @@ def test_load_or_persist_session_bundle_reads_persisted_copy_from_config_root(mo
     persisted = config_root / "session_config.persisted.json"
     persisted.write_text("{}", encoding="utf-8")
     config_path = tmp_path / "config.json"
-    config_path.write_text("{}", encoding="utf-8")
+    config_path.write_text(
+        json.dumps(
+            {
+                "generated_agent_key": "main_agent",
+                "providers": [{"type": "openai-compatible", "api_key": "k"}],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
 
     def _fake_load_session(path, runtime_path, *, config_root=None):  # noqa: ANN001
-        assert path == persisted
+        assert path == config_path
         assert runtime_path == work_path
         assert config_root == config_root_path
         return (
@@ -242,6 +276,160 @@ def test_load_or_persist_session_bundle_reads_persisted_copy_from_config_root(mo
     assert session.work_path == config_root_path
     assert session.data_path == work_path
     assert len(providers) == 1
+
+
+def test_serialize_session_bundle_preserves_full_orchestration_settings(tmp_path) -> None:
+    session = main_module.SessionConfig(
+        work_path=tmp_path,
+        preset=main_module.AgentPreset(
+            agent=main_module.Agent(name="主助手", persona="测试人格", model="main-model"),
+            global_system_prompt="测试系统提示词",
+        ),
+        orchestration=main_module.OrchestrationPolicy(
+            unified_model="",
+            task_models={
+                "memory_extract": "memory-model",
+                "intent_analysis": "intent-model",
+            },
+            task_enabled={
+                "memory_extract": True,
+                "event_extract": False,
+                "intent_analysis": True,
+            },
+            task_max_tokens={"intent_analysis": 256},
+            task_retries={"intent_analysis": 2},
+            enable_intent_analysis=True,
+            intent_analysis_model="legacy-intent-model",
+            session_reply_mode="auto",
+            message_debounce_seconds=0.0,
+        ),
+    )
+
+    payload = main_module._serialize_session_bundle(
+        generated_agent_key="main_agent",
+        session_config=session,
+        providers_config=[{"type": "openai-compatible", "api_key": "k"}],
+    )
+
+    orchestration = cast(dict[str, Any], payload["orchestration"])
+    assert orchestration["task_models"]["intent_analysis"] == "intent-model"
+    assert orchestration["task_enabled"]["event_extract"] is False
+    assert orchestration["task_max_tokens"]["intent_analysis"] == 256
+    assert orchestration["task_retries"]["intent_analysis"] == 2
+    assert orchestration["intent_analysis_model"] == "legacy-intent-model"
+    assert orchestration["session_reply_mode"] == "auto"
+    assert orchestration["message_debounce_seconds"] == 0.0
+
+
+def test_load_or_persist_session_bundle_prefers_workspace_settings_over_stale_persisted(tmp_path) -> None:
+    config_root = tmp_path / "config"
+    work_path = tmp_path / "runtime"
+    config_root.mkdir()
+    work_path.mkdir()
+
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "generated_agent_key": "main_agent",
+                "providers": [
+                    {
+                        "type": "openai-compatible",
+                        "base_url": "https://api.openai.com",
+                        "api_key": "k",
+                    }
+                ],
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    roleplay_dir = config_root / "roleplay"
+    roleplay_dir.mkdir(parents=True)
+    (roleplay_dir / "generated_agents.json").write_text(
+        json.dumps(
+            {
+                "selected_generated_agent": "main_agent",
+                "generated_agents": {
+                    "main_agent": {
+                        "agent": {
+                            "name": "主助手",
+                            "persona": "测试人格",
+                            "model": "main-model",
+                            "temperature": 0.7,
+                            "max_tokens": 512,
+                            "metadata": {},
+                        },
+                        "global_system_prompt": "测试系统提示词",
+                    }
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    manager = main_module.ConfigManager(base_path=config_root)
+    workspace_config = manager.load_workspace_config(config_root, data_path=work_path)
+    workspace_config.active_agent_key = "main_agent"
+    workspace_config.orchestration_defaults = {
+        "unified_model": "",
+        "task_models": {
+            "memory_extract": "memory-model",
+            "intent_analysis": "intent-model",
+        },
+        "task_enabled": {
+            "memory_extract": True,
+            "event_extract": False,
+            "intent_analysis": True,
+        },
+        "session_reply_mode": "auto",
+        "message_debounce_seconds": 0.0,
+        "intent_analysis_model": "legacy-intent-model",
+    }
+    manager.save_workspace_config(config_root, workspace_config, data_path=work_path)
+
+    persisted = config_root / "session_config.persisted.json"
+    persisted.write_text(
+        json.dumps(
+            {
+                "generated_agent_key": "main_agent",
+                "providers": [
+                    {
+                        "type": "openai-compatible",
+                        "base_url": "https://api.openai.com",
+                        "api_key": "k",
+                    }
+                ],
+                "orchestration": {
+                    "unified_model": "main-model",
+                    "task_models": {},
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    session, providers = main_module._load_or_persist_session_bundle(
+        config_path=config_path,
+        work_path=work_path,
+        config_root=config_root,
+        print_func=lambda _msg: None,
+    )
+
+    assert providers[0]["type"] == "openai-compatible"
+    assert session.orchestration.unified_model == ""
+    assert session.orchestration.task_models["memory_extract"] == "memory-model"
+    assert session.orchestration.task_models["intent_analysis"] == "intent-model"
+    assert session.orchestration.task_enabled["event_extract"] is False
+    assert session.orchestration.session_reply_mode == "auto"
+    refreshed = json.loads(persisted.read_text(encoding="utf-8"))
+    assert refreshed["orchestration"]["task_models"]["intent_analysis"] == "intent-model"
 
 
 def test_save_generated_agent_key_to_config_preserves_jsonc_comments(tmp_path) -> None:

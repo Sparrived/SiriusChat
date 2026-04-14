@@ -4,6 +4,17 @@
 
 ## [Unreleased]
 
+## [0.26.3] - 2026-04-15
+
+### Fixed
+- **外部 runtime 启动不再覆写已有任务模型**：`WorkspaceRuntime` 对 `WorkspaceBootstrap.orchestration_defaults` 和设置补丁改为递归合并，外部宿主只传局部字段时，不会再把已有 `task_models`、`task_enabled` 等配置整块抹掉。
+- **provider_keys.json 中的 `models` 不再被重启清空**：workspace provider registry 现在按已有条目合并更新；当外部宿主传入的 `provider_entries` 省略 `models`、`healthcheck_model` 或其他可选字段时，会保留已有值，而不是把整条 provider 配置重写为空列表。
+- **主入口兼容镜像更完整**：`main.py` 现在会优先按当前 workspace 配置重建 `SessionConfig`，`session_config.persisted.json` 只作为兼容镜像写回，并完整保留 orchestration 配置。
+
+### Added
+- 新增 runtime/provider 回归测试，覆盖 partial bootstrap 不再抹掉 task_models，以及 `provider_entries` 省略 `models` 时 registry 仍保留已有模型列表。
+- 新增主入口回归测试，覆盖 persisted bundle 不再覆盖 workspace 设置，以及 orchestration 配置完整写回两类场景。
+
 ## [0.26.2] - 2026-04-15
 
 ### Changed

@@ -209,24 +209,54 @@ class WorkspaceProviderManager:
     def save(self, providers: dict[str, ProviderConfig]) -> None:
         self._registry.save(providers)
 
-    def save_from_entries(self, providers_config: list[dict[str, object]]) -> dict[str, ProviderConfig]:
-        providers: dict[str, ProviderConfig] = {}
+    def merge_entries(self, providers_config: list[dict[str, object]]) -> dict[str, ProviderConfig]:
+        providers = self.load()
         for item in providers_config:
             provider_type = normalize_provider_type(str(item.get("type", "")))
+            existing = providers.get(provider_type)
             api_key = str(item.get("api_key", "")).strip()
+            if not api_key and existing is not None:
+                api_key = existing.api_key
             if not provider_type or not api_key:
                 continue
-            base_url = str(item.get("base_url", "")).strip()
-            models_raw = item.get("models", [])
-            models = [str(model).strip() for model in models_raw if str(model).strip()] if isinstance(models_raw, list) else []
+
+            if "base_url" in item:
+                base_url = str(item.get("base_url", "")).strip()
+            else:
+                base_url = existing.base_url if existing is not None else ""
+
+            if "healthcheck_model" in item:
+                healthcheck_model = str(item.get("healthcheck_model", "")).strip()
+            else:
+                healthcheck_model = existing.healthcheck_model if existing is not None else ""
+
+            if "enabled" in item:
+                enabled = bool(item.get("enabled", True))
+            else:
+                enabled = existing.enabled if existing is not None else True
+
+            if "models" in item:
+                models_raw = item.get("models", [])
+                models = [
+                    str(model).strip()
+                    for model in models_raw
+                    if str(model).strip()
+                ] if isinstance(models_raw, list) else []
+            else:
+                models = list(existing.models) if existing is not None else []
+
             providers[provider_type] = ProviderConfig(
                 provider_type=provider_type,
                 api_key=api_key,
                 base_url=base_url,
-                healthcheck_model=str(item.get("healthcheck_model", "")).strip(),
-                enabled=bool(item.get("enabled", True)),
+                healthcheck_model=healthcheck_model,
+                enabled=enabled,
                 models=models,
             )
+        return providers
+
+    def save_from_entries(self, providers_config: list[dict[str, object]]) -> dict[str, ProviderConfig]:
+        providers = self.merge_entries(providers_config)
         self.save(providers)
         return providers
 

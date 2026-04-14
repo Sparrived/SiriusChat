@@ -1,6 +1,6 @@
 [project]
 name = "sirius-chat"
-version = "0.26.2"
+version = "0.26.3"
 description = "A multi-user RPG dialogue LLM framework compatible with OpenAI providers"
 readme = "README.md"
 requires-python = ">=3.12"

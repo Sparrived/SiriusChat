@@ -255,24 +255,7 @@ class WorkspaceRuntime:
         provider so that subsequent ``run_live_message`` calls use the
         new configuration.
         """
-        saved = self._provider_manager.save_from_entries(entries) if persist else {}
-        if not persist:
-            from sirius_chat.providers.routing import ProviderConfig, normalize_provider_type
-            for item in entries:
-                pt = normalize_provider_type(str(item.get("type", "")))
-                api_key = str(item.get("api_key", "")).strip()
-                if not pt or not api_key:
-                    continue
-                models_raw = item.get("models", [])
-                models = [str(m).strip() for m in models_raw if str(m).strip()] if isinstance(models_raw, list) else []
-                saved[pt] = ProviderConfig(
-                    provider_type=pt,
-                    api_key=api_key,
-                    base_url=str(item.get("base_url", "")).strip(),
-                    healthcheck_model=str(item.get("healthcheck_model", "")).strip(),
-                    enabled=bool(item.get("enabled", True)),
-                    models=models,
-                )
+        saved = self._provider_manager.save_from_entries(entries) if persist else self._provider_manager.merge_entries(entries)
         if persist:
             self.provider = None
             self._prefer_workspace_registry_provider = True
@@ -331,7 +314,10 @@ class WorkspaceRuntime:
 
         orch_patch = patch.get("orchestration_defaults")
         if isinstance(orch_patch, dict):
-            cfg.orchestration_defaults.update(orch_patch)
+            cfg.orchestration_defaults = self._config_manager.merge_configs(
+                dict(cfg.orchestration_defaults),
+                dict(orch_patch),
+            )
 
         pp_patch = patch.get("provider_policy")
         if isinstance(pp_patch, dict):
@@ -357,7 +343,10 @@ class WorkspaceRuntime:
         if bs.session_defaults is not None:
             cfg.session_defaults = bs.session_defaults
         if bs.orchestration_defaults is not None:
-            cfg.orchestration_defaults = dict(bs.orchestration_defaults)
+            cfg.orchestration_defaults = self._config_manager.merge_configs(
+                dict(cfg.orchestration_defaults),
+                dict(bs.orchestration_defaults),
+            )
         if bs.provider_policy is not None:
             cfg.provider_policy = bs.provider_policy
         if self.persist_bootstrap:

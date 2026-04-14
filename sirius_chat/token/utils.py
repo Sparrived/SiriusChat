@@ -165,6 +165,10 @@ def estimate_tokens(
     if not text:
         return 0
 
+    text = text.strip()
+    if not text:
+        return 0
+
     # 尝试使用tiktoken
     if use_tiktoken:
         tiktoken_result = estimate_tokens_with_tiktoken(text, model=model)
@@ -175,7 +179,7 @@ def estimate_tokens(
     return estimate_tokens_heuristic(text, model=model)
 
 
-def get_token_estimation_stats(text: str) -> dict[str, int]:
+def get_token_estimation_stats(text: str) -> dict[str, int | None]:
     """
     获取文本的token估算统计信息
 

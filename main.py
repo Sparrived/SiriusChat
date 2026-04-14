@@ -38,6 +38,7 @@ from sirius_chat.cli_diagnostics import (
     generate_default_config,
     run_preflight_check,
 )
+from sirius_chat.config import ConfigManager
 from sirius_chat.config.jsonc import load_json_document, write_session_config_jsonc
 from sirius_chat.config.helpers import build_orchestration_policy_from_dict
 from sirius_chat.logging_config import configure_logging, setup_log_archival, get_logger
@@ -111,24 +112,33 @@ def _load_session_config(
     if not generated_agent_key:
         raise ValueError("必需提供 generated_agent_key")
 
-    session = create_session_config_from_selected_agent(
-        work_path=resolved_config_root,
-        data_path=work_path,
-        agent_key=generated_agent_key,
-        history_max_messages=int(raw.get("history_max_messages", 24)),
-        history_max_chars=int(raw.get("history_max_chars", 6000)),
-        max_recent_participant_messages=int(raw.get("max_recent_participant_messages", 5)),
-        enable_auto_compression=bool(raw.get("enable_auto_compression", True)),
+    manager = ConfigManager(base_path=resolved_config_root)
+    layout = WorkspaceLayout(work_path, config_path=resolved_config_root)
+    has_workspace_config = (
+        layout.workspace_manifest_path().exists()
+        or layout.session_config_path().exists()
     )
 
-    orchestration = build_orchestration_policy_from_dict(
-        raw.get("orchestration", {}),
-        agent_model=session.agent.model,
-        return_none_if_empty=True,
+    if not has_workspace_config:
+        workspace_config, providers_config = manager.bootstrap_workspace_from_legacy_session_json(
+            config_path,
+            work_path=resolved_config_root,
+            data_path=work_path,
+        )
+        session = manager.build_session_config(
+            work_path=resolved_config_root,
+            data_path=work_path,
+            session_id="default",
+            overrides={"agent_key": workspace_config.active_agent_key or generated_agent_key},
+        )
+        return session, providers_config
+
+    session = manager.build_session_config(
+        work_path=resolved_config_root,
+        data_path=work_path,
+        session_id="default",
+        overrides={"agent_key": generated_agent_key},
     )
-    if orchestration is not None:
-        session.orchestration = orchestration
-        session.orchestration.validate()
 
     # 加载 providers 列表（必需）
     providers_config = list(raw.get("providers", []))
@@ -549,6 +559,7 @@ def _serialize_session_bundle(
     session_config: SessionConfig,
     providers_config: list[dict[str, object]],
 ) -> dict[str, object]:
+    orchestration = session_config.orchestration
     payload: dict[str, object] = {
         "generated_agent_key": generated_agent_key,
         "providers": providers_config,
@@ -557,14 +568,57 @@ def _serialize_session_bundle(
         "max_recent_participant_messages": session_config.max_recent_participant_messages,
         "enable_auto_compression": session_config.enable_auto_compression,
         "orchestration": {
-            "unified_model": session_config.orchestration.unified_model,
-            "task_models": session_config.orchestration.task_models,
-            "task_budgets": session_config.orchestration.task_budgets,
-            "task_temperatures": session_config.orchestration.task_temperatures,
-            "task_max_tokens": session_config.orchestration.task_max_tokens,
-            "task_retries": session_config.orchestration.task_retries,
-            "max_multimodal_inputs_per_turn": session_config.orchestration.max_multimodal_inputs_per_turn,
-            "max_multimodal_value_length": session_config.orchestration.max_multimodal_value_length,
+            "unified_model": orchestration.unified_model,
+            "task_models": dict(orchestration.task_models),
+            "task_enabled": dict(orchestration.task_enabled),
+            "task_budgets": dict(orchestration.task_budgets),
+            "task_temperatures": dict(orchestration.task_temperatures),
+            "task_max_tokens": dict(orchestration.task_max_tokens),
+            "task_retries": dict(orchestration.task_retries),
+            "max_multimodal_inputs_per_turn": orchestration.max_multimodal_inputs_per_turn,
+            "max_multimodal_value_length": orchestration.max_multimodal_value_length,
+            "enable_prompt_driven_splitting": orchestration.enable_prompt_driven_splitting,
+            "split_marker": orchestration.split_marker,
+            "memory_manager_model": orchestration.memory_manager_model,
+            "memory_manager_temperature": orchestration.memory_manager_temperature,
+            "memory_manager_max_tokens": orchestration.memory_manager_max_tokens,
+            "memory_extract_batch_size": orchestration.memory_extract_batch_size,
+            "memory_extract_min_content_length": orchestration.memory_extract_min_content_length,
+            "event_extract_batch_size": orchestration.event_extract_batch_size,
+            "enable_intent_analysis": orchestration.enable_intent_analysis,
+            "intent_analysis_model": orchestration.intent_analysis_model,
+            "consolidation_enabled": orchestration.consolidation_enabled,
+            "consolidation_interval_seconds": orchestration.consolidation_interval_seconds,
+            "consolidation_min_entries": orchestration.consolidation_min_entries,
+            "consolidation_min_notes": orchestration.consolidation_min_notes,
+            "consolidation_min_facts": orchestration.consolidation_min_facts,
+            "session_reply_mode": orchestration.session_reply_mode,
+            "engagement_sensitivity": orchestration.engagement_sensitivity,
+            "heat_window_seconds": orchestration.heat_window_seconds,
+            "message_debounce_seconds": orchestration.message_debounce_seconds,
+            "memory": {
+                "max_facts_per_user": orchestration.memory.max_facts_per_user,
+                "transient_confidence_threshold": orchestration.memory.transient_confidence_threshold,
+                "event_dedup_window_minutes": orchestration.memory.event_dedup_window_minutes,
+                "max_observed_set_size": orchestration.memory.max_observed_set_size,
+                "max_summary_facts_per_type": orchestration.memory.max_summary_facts_per_type,
+                "max_summary_total_chars": orchestration.memory.max_summary_total_chars,
+                "decay_schedule": dict(orchestration.memory.decay_schedule),
+            },
+            "enable_self_memory": orchestration.enable_self_memory,
+            "self_memory_extract_batch_size": orchestration.self_memory_extract_batch_size,
+            "self_memory_min_chars": orchestration.self_memory_min_chars,
+            "self_memory_max_diary_prompt_entries": orchestration.self_memory_max_diary_prompt_entries,
+            "self_memory_max_glossary_prompt_terms": orchestration.self_memory_max_glossary_prompt_terms,
+            "reply_frequency_window_seconds": orchestration.reply_frequency_window_seconds,
+            "reply_frequency_max_replies": orchestration.reply_frequency_max_replies,
+            "reply_frequency_exempt_on_mention": orchestration.reply_frequency_exempt_on_mention,
+            "max_concurrent_llm_calls": orchestration.max_concurrent_llm_calls,
+            "enable_skills": orchestration.enable_skills,
+            "skill_call_marker": orchestration.skill_call_marker,
+            "max_skill_rounds": orchestration.max_skill_rounds,
+            "skill_execution_timeout": orchestration.skill_execution_timeout,
+            "auto_install_skill_deps": orchestration.auto_install_skill_deps,
         },
     }
     return payload
@@ -586,15 +640,6 @@ def _load_or_persist_session_bundle(
 ) -> tuple[SessionConfig, list[dict[str, object]]]:
     resolved_config_root = config_root or work_path
     persisted_path = WorkspaceLayout(work_path, config_path=resolved_config_root).persisted_session_bundle_path()
-    if persisted_path.exists():
-        session_config, providers_config = _load_session_config(
-            persisted_path,
-            work_path,
-            config_root=resolved_config_root,
-        )
-        print_func(f"已加载持久化 SessionConfig：{persisted_path}")
-        return session_config, providers_config
-
     session_config, providers_config = _load_session_config(
         config_path,
         work_path,

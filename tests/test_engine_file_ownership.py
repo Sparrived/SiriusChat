@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
+from typing import Any, cast
 
 from sirius_chat.config import ConfigManager
 from sirius_chat.config.models import (
@@ -112,8 +113,9 @@ def test_bootstrap_session_defaults_persisted(tmp_path: Path) -> None:
         try:
             await runtime.initialize()
             exported = runtime.export_workspace_defaults()
-            assert exported["session_defaults"]["history_max_messages"] == 99
-            assert exported["session_defaults"]["history_max_chars"] == 5000
+            session_defaults = cast(dict[str, Any], exported["session_defaults"])
+            assert session_defaults["history_max_messages"] == 99
+            assert session_defaults["history_max_chars"] == 5000
         finally:
             await runtime.close()
 
@@ -122,7 +124,8 @@ def test_bootstrap_session_defaults_persisted(tmp_path: Path) -> None:
         try:
             await runtime2.initialize()
             exported2 = runtime2.export_workspace_defaults()
-            assert exported2["session_defaults"]["history_max_messages"] == 99
+            session_defaults2 = cast(dict[str, Any], exported2["session_defaults"])
+            assert session_defaults2["history_max_messages"] == 99
         finally:
             await runtime2.close()
 
@@ -151,7 +154,8 @@ def test_bootstrap_no_persist(tmp_path: Path) -> None:
         try:
             await runtime2.initialize()
             exported = runtime2.export_workspace_defaults()
-            assert exported["session_defaults"]["history_max_messages"] != 123
+            session_defaults = cast(dict[str, Any], exported["session_defaults"])
+            assert session_defaults["history_max_messages"] != 123
         finally:
             await runtime2.close()
 
@@ -171,7 +175,8 @@ def test_bootstrap_provider_policy(tmp_path: Path) -> None:
         try:
             await runtime.initialize()
             exported = runtime.export_workspace_defaults()
-            assert exported["provider_policy"]["prefer_workspace_registry"] is False
+            provider_policy = cast(dict[str, Any], exported["provider_policy"])
+            assert provider_policy["prefer_workspace_registry"] is False
         finally:
             await runtime.close()
 
@@ -238,9 +243,55 @@ def test_apply_workspace_updates_persists(tmp_path: Path) -> None:
         try:
             await runtime2.initialize()
             exported = runtime2.export_workspace_defaults()
-            assert exported["session_defaults"]["history_max_chars"] == 9999
+            session_defaults = cast(dict[str, Any], exported["session_defaults"])
+            assert session_defaults["history_max_chars"] == 9999
         finally:
             await runtime2.close()
+
+    asyncio.run(_run())
+
+
+def test_apply_workspace_updates_merges_nested_orchestration_defaults(tmp_path: Path) -> None:
+    async def _run() -> None:
+        _write_workspace_agents(tmp_path)
+        manager = ConfigManager(base_path=tmp_path)
+        workspace_config = manager.load_workspace_config(tmp_path)
+        workspace_config.orchestration_defaults = {
+            "task_models": {
+                "memory_extract": "memory-model",
+                "event_extract": "event-model",
+            },
+            "task_enabled": {
+                "memory_extract": True,
+                "event_extract": True,
+            },
+        }
+        manager.save_workspace_config(tmp_path, workspace_config)
+
+        runtime = WorkspaceRuntime.open(tmp_path, provider=MockProvider(responses=["ok"]))
+        try:
+            await runtime.initialize()
+            await runtime.apply_workspace_updates(
+                {
+                    "orchestration_defaults": {
+                        "task_models": {"intent_analysis": "intent-model"},
+                        "task_enabled": {"intent_analysis": True},
+                    }
+                }
+            )
+
+            exported = runtime.export_workspace_defaults()
+            orchestration = cast(dict[str, Any], exported["orchestration_defaults"])
+            task_models = cast(dict[str, Any], orchestration["task_models"])
+            task_enabled = cast(dict[str, Any], orchestration["task_enabled"])
+            assert task_models["memory_extract"] == "memory-model"
+            assert task_models["event_extract"] == "event-model"
+            assert task_models["intent_analysis"] == "intent-model"
+            assert task_enabled["memory_extract"] is True
+            assert task_enabled["event_extract"] is True
+            assert task_enabled["intent_analysis"] is True
+        finally:
+            await runtime.close()
 
     asyncio.run(_run())
 
