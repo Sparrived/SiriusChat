@@ -111,7 +111,7 @@ description: "当你需要在不通读全部代码的情况下快速理解 Siriu
   - 实现真正的**双向观测**：事件不再被单向消费，而是成为用户理解的重要信号源
 - `Transcript.find_user_by_channel_uid(channel, uid)` 支持按渠道+外部 UID 直接定位用户。
 - `session/store.py` ✨ **（包重构）** 提供会话持久化与重启恢复（`SessionStore`、`JsonSessionStore`、`SqliteSessionStore`）。默认 `SqliteSessionStore` 现使用结构化表保存消息、reply runtime、用户 profile/runtime/facts 与 token 记录，不再是单条 payload 快照；首次打开会自动迁移 sibling `session_state.json` 与旧 `session_state(payload)` SQLite。
-- `workspace/` ✨ **（v0.23.0 新增）** 提供 `WorkspaceLayout`、`WorkspaceRuntime`、`WorkspaceMigrationManager`：统一 layout、迁移与高层自动持久化入口。
+- `workspace/` ✨ **（v0.25.0 更新）** 提供 `WorkspaceLayout`、`WorkspaceRuntime`、`RoleplayWorkspaceManager`、`WorkspaceBootstrap`：统一 layout、高层自动持久化入口、workspace 读写 API。旧版 `WorkspaceMigrationManager` 已移除。
 - `session/runner.py` ✨ **（包重构）** 提供上层兼容运行器（`JsonPersistentSessionRunner`），内部尽量复用 `WorkspaceRuntime`，保留 `primary_user.json` 兼容行为。
 - `Transcript.token_usage_records` 全量归档每次模型调用的 token 消耗信息（通过 `token/usage.py` 提供的 `summarize_token_usage` 与 `build_token_usage_baseline` 汇总）。
 - ✨ `token/store.py` **(v0.11.0)** 提供 SQLite 持久化后端（`TokenUsageStore`），自动写入 `{work_path}/token_usage.db`，支持跨会话查询。

@@ -302,7 +302,7 @@ class EventMemoryManager:
     def from_dict(cls, payload: dict[str, Any]) -> EventMemoryManager:
         version = payload.get("version", 1)
         if version < 2:
-            return cls._migrate_v1(payload)
+            return cls()
         manager = cls()
         for item in payload.get("entries", []):
             if not isinstance(item, dict):
@@ -317,31 +317,6 @@ class EventMemoryManager:
                 manager._buffer[uid] = [str(m) for m in msgs]
         return manager
 
-    @classmethod
-    def _migrate_v1(cls, payload: dict[str, Any]) -> EventMemoryManager:
-        """Migrate v1 events.json (keyword-based entries) → v2 observations."""
-        manager = cls()
-        for item in payload.get("entries", []):
-            if not isinstance(item, dict):
-                continue
-            event_id = str(item.get("event_id", "")).strip()
-            summary = str(item.get("summary", "")).strip()
-            if not event_id or not summary:
-                continue
-            manager.entries.append(EventMemoryEntry(
-                event_id=event_id,
-                user_id="",           # v1 had no user_id
-                category="custom",    # cannot infer from v1
-                summary=summary,
-                confidence=0.7 if item.get("verified") else 0.4,
-                evidence_samples=list(item.get("evidence_samples", [])),
-                created_at=str(item.get("created_at", "")),
-                updated_at=str(item.get("updated_at", "")),
-                mention_count=int(item.get("mention_count", 0)),
-                verified=bool(item.get("verified", False)),
-            ))
-        logger.info("事件记忆 v1→v2 迁移完成，共迁移 %d 条记录", len(manager.entries))
-        return manager
 
     # ── consolidation ──────────────────────────────────────────
 

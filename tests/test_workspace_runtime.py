@@ -266,10 +266,16 @@ def test_workspace_runtime_delete_session_removes_session_directory(tmp_path: Pa
     asyncio.run(_run())
 
 
-def test_workspace_runtime_initialization_migrates_legacy_layout(tmp_path: Path) -> None:
+def test_workspace_runtime_initialization_reads_new_layout(tmp_path: Path) -> None:
+    """After removing WorkspaceMigrationManager, initialize() only recognises
+    files already placed under the workspace-layout directories."""
     async def _run() -> None:
-        legacy_generated_agents = tmp_path / "generated_agents.json"
-        legacy_generated_agents.write_text(
+        layout = WorkspaceLayout(tmp_path)
+        layout.ensure_directories()
+
+        # Place generated_agents at the canonical layout path
+        layout.generated_agents_path().parent.mkdir(parents=True, exist_ok=True)
+        layout.generated_agents_path().write_text(
             json.dumps(
                 {
                     "selected_generated_agent": "main_agent",
@@ -277,109 +283,32 @@ def test_workspace_runtime_initialization_migrates_legacy_layout(tmp_path: Path)
                         "main_agent": {
                             "agent": {
                                 "name": "主助手",
-                                "persona": "旧人格",
+                                "persona": "新布局人格",
                                 "model": "mock-model",
                                 "temperature": 0.7,
                                 "max_tokens": 512,
                             },
-                            "global_system_prompt": "旧提示词",
+                            "global_system_prompt": "新布局提示词",
                         }
                     },
                 },
                 ensure_ascii=False,
                 indent=2,
             ),
-            encoding="utf-8",
-        )
-        (tmp_path / "provider_keys.json").write_text(
-            json.dumps(
-                {
-                    "providers": {
-                        "openai-compatible": {
-                            "type": "openai-compatible",
-                            "api_key": "legacy-key",
-                            "base_url": "https://api.openai.com",
-                            "healthcheck_model": "gpt-4o-mini",
-                            "enabled": True,
-                            "models": ["mock-model"],
-                        }
-                    }
-                },
-                ensure_ascii=False,
-                indent=2,
-            ),
-            encoding="utf-8",
-        )
-        (tmp_path / "primary_user.json").write_text(
-            json.dumps({"name": "Alice", "user_id": "alice_legacy"}, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        legacy_transcript = Transcript(messages=[Message(role="user", speaker="Alice", content="legacy")])
-        (tmp_path / "session_state.json").write_text(
-            json.dumps(legacy_transcript.to_dict(), ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
 
         runtime = WorkspaceRuntime.open(tmp_path, provider=MockProvider(responses=["ignored"]))
         try:
             await runtime.initialize()
-
-            layout = WorkspaceLayout(tmp_path)
             assert layout.generated_agents_path().exists()
-            assert layout.provider_registry_path().exists()
-            assert layout.session_participants_path("default").exists()
 
+            # No pre-existing transcript → get_transcript returns None
             restored = await runtime.get_transcript("default")
-            assert restored is not None
-            assert restored.messages[0].content == "legacy"
+            assert restored is None
         finally:
             await runtime.close()
 
     asyncio.run(_run())
 
 
-def test_config_manager_bootstrap_workspace_from_legacy_session_json(tmp_path: Path) -> None:
-    config_path = tmp_path / "session.json"
-    config_path.write_text(
-        json.dumps(
-            {
-                "generated_agent_key": "main_agent",
-                "history_max_messages": 18,
-                "history_max_chars": 4096,
-                "max_recent_participant_messages": 3,
-                "enable_auto_compression": False,
-                "orchestration": {
-                    "message_debounce_seconds": 0.0,
-                    "task_enabled": {
-                        "memory_extract": False,
-                        "event_extract": False,
-                    },
-                },
-                "providers": [
-                    {
-                        "type": "openai-compatible",
-                        "api_key": "test-key",
-                        "base_url": "https://api.openai.com",
-                        "healthcheck_model": "gpt-4o-mini",
-                    }
-                ],
-            },
-            ensure_ascii=False,
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
-
-    manager = ConfigManager(base_path=tmp_path)
-    workspace_config, providers = manager.bootstrap_workspace_from_legacy_session_json(
-        config_path,
-        work_path=tmp_path,
-    )
-
-    layout = WorkspaceLayout(tmp_path)
-    assert workspace_config.active_agent_key == "main_agent"
-    assert workspace_config.session_defaults.history_max_messages == 18
-    assert providers[0]["type"] == "openai-compatible"
-    assert layout.workspace_manifest_path().exists()
-    assert layout.session_config_path().exists()
-    assert layout.provider_registry_path().exists()

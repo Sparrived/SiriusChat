@@ -16,6 +16,7 @@ from sirius_chat.config.models import (
     SessionConfig,
     SessionDefaults,
     TokenUsageRecord,
+    WorkspaceBootstrap,
     WorkspaceConfig,
 )
 
@@ -43,6 +44,7 @@ __all__ = [
     "SessionConfig",
     "SessionDefaults",
     "TokenUsageRecord",
+    "WorkspaceBootstrap",
     "WorkspaceConfig",
     # Management
     "ConfigManager",

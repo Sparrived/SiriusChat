@@ -548,9 +548,6 @@ def _generated_agent_trace_read_dir_path(work_path: Path) -> Path:
     new_dir = layout.generated_agent_trace_dir()
     if new_dir.exists():
         return new_dir
-    legacy_dir = layout.legacy_generated_agent_trace_dir()
-    if legacy_dir.exists():
-        return legacy_dir
     return new_dir
 
 
@@ -1446,11 +1443,6 @@ def _build_preset_from_response(
     agent_alias_value = str(parsed.get("agent_alias", "")).strip() or agent_alias.strip()
     global_system_prompt = str(parsed.get("global_system_prompt", "")).strip()
 
-    # Accept legacy field names from older prompts
-    if not agent_persona:
-        agent_persona = str(parsed.get("persona", "")).strip()
-    if not global_system_prompt:
-        global_system_prompt = str(parsed.get("prompt", "")).strip()
 
     if not agent_persona and not global_system_prompt:
         if _looks_like_roleplay_json_response(raw):

@@ -296,43 +296,6 @@ class ConfigManager:
         )
         return session_config
 
-    def bootstrap_workspace_from_legacy_session_json(
-        self,
-        path: Path | str,
-        *,
-        work_path: Path | str,
-        data_path: Path | str | None = None,
-    ) -> tuple[WorkspaceConfig, list[dict[str, object]]]:
-        """Import legacy session.json defaults into workspace config and provider registry."""
-        from sirius_chat.providers.routing import WorkspaceProviderManager
-
-        config_path = Path(path)
-        raw_dict = load_json_document(config_path)
-        resolved = self._resolve_values(raw_dict)
-        config_root = Path(work_path)
-        runtime_root = Path(data_path) if data_path is not None else config_root
-        layout = WorkspaceLayout(runtime_root, config_path=config_root)
-        workspace_config = self.load_workspace_config(layout.config_root, data_path=layout.data_root)
-
-        generated_agent_key = str(resolved.get("generated_agent_key", "")).strip()
-        if generated_agent_key:
-            workspace_config.active_agent_key = generated_agent_key
-
-        workspace_config.session_defaults = SessionDefaults(
-            history_max_messages=int(resolved.get("history_max_messages", 24)),
-            history_max_chars=int(resolved.get("history_max_chars", 6000)),
-            max_recent_participant_messages=int(
-                resolved.get("max_recent_participant_messages", 5)
-            ),
-            enable_auto_compression=bool(resolved.get("enable_auto_compression", True)),
-        )
-        workspace_config.orchestration_defaults = dict(resolved.get("orchestration", {}))
-        self.save_workspace_config(layout.config_root, workspace_config, data_path=layout.data_root)
-
-        providers_config = list(resolved.get("providers", []))
-        if providers_config:
-            WorkspaceProviderManager(layout).save_from_entries(providers_config)
-        return workspace_config, providers_config
 
     def _resolve_values(self, obj: Any) -> Any:
         """Recursively resolve environment variables in configuration.
@@ -467,3 +430,50 @@ class ConfigManager:
             enable_auto_compression=config_dict.get("enable_auto_compression", True),
             orchestration=orchestration,
         )
+
+    def bootstrap_workspace_from_legacy_session_json(
+        self,
+        config_path: Path | str,
+        *,
+        work_path: Path | str,
+        data_path: Path | str | None = None,
+    ) -> tuple[WorkspaceConfig, list[dict[str, Any]]]:
+        """Bootstrap workspace config from a legacy session.json file.
+
+        Reads a session.json (or JSONC) config, extracts workspace-level
+        defaults and provider entries, persists them into the workspace
+        layout, and returns the resolved WorkspaceConfig and provider list.
+        """
+        path = Path(config_path)
+        if not path.exists():
+            raise FileNotFoundError(f"配置文件不存在：{path}")
+        raw = load_json_document(path)
+        if not isinstance(raw, dict):
+            raise ValueError("配置文件顶层必须是对象")
+
+        config_root = Path(work_path)
+        runtime_root = Path(data_path) if data_path is not None else config_root
+        layout = WorkspaceLayout(runtime_root, config_path=config_root)
+        layout.ensure_directories()
+
+        generated_agent_key = str(raw.get("generated_agent_key", "")).strip()
+        providers_config: list[dict[str, Any]] = list(raw.get("providers", []))
+
+        workspace_config = self.load_workspace_config(config_root, data_path=runtime_root)
+        if generated_agent_key:
+            workspace_config.active_agent_key = generated_agent_key
+        session_defaults_fields = {
+            "history_max_messages", "history_max_chars",
+            "max_recent_participant_messages", "enable_auto_compression",
+        }
+        for field_name in session_defaults_fields:
+            if field_name in raw:
+                setattr(workspace_config.session_defaults, field_name, type(
+                    getattr(workspace_config.session_defaults, field_name)
+                )(raw[field_name]))
+        orchestration_raw = raw.get("orchestration")
+        if isinstance(orchestration_raw, dict) and orchestration_raw:
+            workspace_config.orchestration_defaults = dict(orchestration_raw)
+
+        self.save_workspace_config(config_root, workspace_config, data_path=runtime_root)
+        return workspace_config, providers_config

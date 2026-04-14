@@ -1121,20 +1121,6 @@ class UserMemoryManager:
                 ),
             )
             runtime = manager.entries[user_id].runtime
-            if not runtime.memory_facts:
-                for note in runtime.summary_notes:
-                    value = str(note).strip()
-                    if not value:
-                        continue
-                    runtime.memory_facts.append(
-                        MemoryFact(
-                            fact_type="summary",
-                            value=value,
-                            source="legacy",
-                            confidence=0.4,
-                            observed_at="",
-                        )
-                    )
 
         manager.speaker_index = dict(payload.get("speaker_index", {}))
         manager.identity_index = dict(payload.get("identity_index", {}))

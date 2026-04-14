@@ -135,7 +135,7 @@ class TestEventV2Serialization:
         assert mgr2.pending_buffer_counts().get("u2") == 1
 
     def test_migrate_v1(self):
-        """v1 格式自动迁移"""
+        """v1 格式不再自动迁移，from_dict 丢弃 version<2 的数据"""
         v1_data = {
             "entries": [
                 {
@@ -156,14 +156,8 @@ class TestEventV2Serialization:
             ]
         }
         mgr = EventMemoryManager.from_dict(v1_data)
-        assert len(mgr.entries) == 1
-        e = mgr.entries[0]
-        assert e.event_id == "evt_0001"
-        assert e.summary == "项目延期讨论"
-        assert e.user_id == ""        # v1 had no user_id
-        assert e.category == "custom"  # cannot infer from v1
-        assert e.verified is True
-        assert e.confidence == 0.7     # verified → 0.7
+        # v1 format is no longer supported — returns empty manager
+        assert len(mgr.entries) == 0
 
     def test_top_events_user_filter(self):
         """top_events 支持按用户过滤"""

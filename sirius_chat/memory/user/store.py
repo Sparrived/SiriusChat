@@ -111,20 +111,6 @@ class UserMemoryFileStore:
                 for item in list(runtime_data.get("memory_facts", []))
                 if isinstance(item, dict) and str(item.get("value", "")).strip()
             ]
-            if not entry.runtime.memory_facts:
-                for note in entry.runtime.summary_notes:
-                    value = str(note).strip()
-                    if not value:
-                        continue
-                    entry.runtime.memory_facts.append(
-                        MemoryFact(
-                            fact_type="summary",
-                            value=value,
-                            source="legacy",
-                            confidence=0.4,
-                            observed_at="",
-                        )
-                    )
             entry.runtime.last_seen_channel = str(runtime_data.get("last_seen_channel", "")).strip()
             entry.runtime.last_seen_uid = str(runtime_data.get("last_seen_uid", "")).strip()
 

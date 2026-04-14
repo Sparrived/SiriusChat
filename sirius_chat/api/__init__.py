@@ -31,6 +31,7 @@ from sirius_chat.api.models import (
     TokenUsageRecord,
     Transcript,
     User,
+    WorkspaceBootstrap,
     WorkspaceConfig,
 )
 from sirius_chat.core.intent_v2 import IntentAnalysis, IntentAnalyzer
@@ -81,12 +82,10 @@ from sirius_chat.api.providers import (
 from sirius_chat.api.session import (
     JsonPersistentSessionRunner,
     JsonSessionStore,
-    LegacyLayoutReport,
-    MigrationReport,
+    RoleplayWorkspaceManager,
     SessionStoreFactory,
     SqliteSessionStore,
     WorkspaceLayout,
-    WorkspaceMigrationManager,
     WorkspaceRuntime,
 )
 from sirius_chat.api.token_usage import (
@@ -160,12 +159,11 @@ __all__ = [
     "SessionStoreFactory",
     "AsyncRolePlayEngine",
     "JsonPersistentSessionRunner",
+    "RoleplayWorkspaceManager",
     "WorkspaceLayout",
     "WorkspaceRuntime",
-    "LegacyLayoutReport",
-    "MigrationReport",
-    "WorkspaceMigrationManager",
     "SessionConfig",
+    "WorkspaceBootstrap",
     "WorkspaceConfig",
     "Transcript",
     "AliyunBailianProvider",

@@ -264,10 +264,6 @@ class SqliteSessionStore:
         finally:
             conn.close()
 
-    def _legacy_json_path(self) -> Path:
-        if self._path.suffix:
-            return self._path.with_suffix(".json")
-        return self._path.with_name(f"{self._path.name}.json")
 
     @staticmethod
     def _json_dumps(value: Any) -> str:
@@ -313,24 +309,12 @@ class SqliteSessionStore:
         ).fetchone()
         return row is not None
 
-    @classmethod
-    def _legacy_payload_table_exists(cls, conn: sqlite3.Connection) -> bool:
-        if not cls._table_exists(conn, "session_state"):
-            return False
-        columns = {
-            str(row[1])
-            for row in conn.execute("PRAGMA table_info(session_state)").fetchall()
-        }
-        return "payload" in columns
 
     @staticmethod
     def _has_session_data(conn: sqlite3.Connection) -> bool:
         row = conn.execute("SELECT 1 FROM session_meta WHERE id = 1").fetchone()
         return row is not None
 
-    @staticmethod
-    def _decode_legacy_transcript(raw_payload: str) -> Transcript:
-        return Transcript.from_dict(json.loads(raw_payload))
 
     @staticmethod
     def _delete_session_rows(conn: sqlite3.Connection) -> None:
@@ -644,33 +628,41 @@ class SqliteSessionStore:
             self._set_meta(conn, "session_store_schema_version", str(_SESSION_STORE_SCHEMA_VERSION))
 
     def _migrate_legacy_storage_if_needed(self) -> None:
-        with self._managed_connection() as conn:
-            if self._legacy_payload_table_exists(conn):
-                if not self._has_session_data(conn):
-                    row = conn.execute(
-                        "SELECT payload FROM session_state WHERE id = 1"
-                    ).fetchone()
-                    if row is not None and str(row["payload"]).strip():
-                        transcript = self._decode_legacy_transcript(str(row["payload"]))
-                        self._save_with_connection(conn, transcript)
-                conn.execute("DROP TABLE session_state")
-                self._set_meta(conn, "legacy_payload_migrated", "1")
+        """Import data from legacy storage formats if present.
 
+        Handles two legacy formats:
+        1. ``session_state.json`` alongside the sqlite file (JSON snapshot).
+        2. Old ``session_state`` single-payload table inside the same db.
+        """
+        with self._managed_connection() as conn:
             if self._has_session_data(conn):
                 return
 
-            if self._get_meta(conn, "legacy_json_migrated") == "1":
-                return
+            # Legacy format 1: old single-payload table in same db
+            if self._table_exists(conn, "session_state"):
+                row = conn.execute(
+                    "SELECT payload FROM session_state WHERE id = 1"
+                ).fetchone()
+                if row is not None:
+                    payload = json.loads(row[0])
+                    transcript = Transcript.from_dict(payload)
+                    self._save_with_connection(conn, transcript)
+                    conn.execute("DROP TABLE session_state")
+                    return
 
-            legacy_json_path = self._legacy_json_path()
-            if not legacy_json_path.exists():
-                return
+            # Legacy format 2: JSON file next to the db
+            if self._work_path is not None:
+                json_path = self._work_path / "session_state.json"
+                if json_path.exists():
+                    try:
+                        payload = json.loads(json_path.read_text(encoding="utf-8"))
+                        transcript = Transcript.from_dict(payload)
+                        self._save_with_connection(conn, transcript)
+                        # Rename legacy file to prevent re-import on next open.
+                        json_path.rename(json_path.with_suffix(".json.migrated"))
+                    except (json.JSONDecodeError, OSError):
+                        pass
 
-            transcript = Transcript.from_dict(
-                json.loads(legacy_json_path.read_text(encoding="utf-8"))
-            )
-            self._save_with_connection(conn, transcript)
-            self._set_meta(conn, "legacy_json_migrated", "1")
 
     def exists(self) -> bool:
         if not self._path.exists():

@@ -44,7 +44,21 @@ class ProviderPolicy:
     """Workspace-level provider bootstrap policy."""
 
     prefer_workspace_registry: bool = True
-    allow_legacy_session_json_bootstrap: bool = True
+
+
+@dataclass(slots=True)
+class WorkspaceBootstrap:
+    """Host-provided defaults injected at workspace open time.
+
+    The host (plugin / CLI) fills in the fields it cares about; the runtime
+    decides how to merge them into the workspace and whether to persist.
+    """
+
+    active_agent_key: str | None = None
+    session_defaults: SessionDefaults | None = None
+    orchestration_defaults: dict[str, object] | None = None
+    provider_entries: list[dict[str, object]] | None = None
+    provider_policy: ProviderPolicy | None = None
 
 
 @dataclass(slots=True)
@@ -295,7 +309,6 @@ class WorkspaceConfig:
             "orchestration_defaults": dict(self.orchestration_defaults),
             "provider_policy": {
                 "prefer_workspace_registry": self.provider_policy.prefer_workspace_registry,
-                "allow_legacy_session_json_bootstrap": self.provider_policy.allow_legacy_session_json_bootstrap,
             },
         }
 
@@ -322,12 +335,6 @@ class WorkspaceConfig:
             provider_policy=ProviderPolicy(
                 prefer_workspace_registry=bool(
                     provider_policy_payload.get("prefer_workspace_registry", True)
-                ),
-                allow_legacy_session_json_bootstrap=bool(
-                    provider_policy_payload.get(
-                        "allow_legacy_session_json_bootstrap",
-                        True,
-                    )
                 ),
             ),
         )

@@ -4,6 +4,26 @@
 
 ## [Unreleased]
 
+## [0.25.0] - 2026-04-14
+
+### Added
+- **WorkspaceBootstrap**：新增 `WorkspaceBootstrap` 数据类，可通过 `open_workspace_runtime(bootstrap=...)` 在首次打开 workspace 时注入 active_agent_key、session_defaults、orchestration_defaults、provider_entries 和 provider_policy。支持 `persist_bootstrap=False` 仅在本次运行生效。
+- **Workspace 读写 API**：`WorkspaceRuntime` 新增 `export_workspace_defaults()` / `apply_workspace_updates(patch)` 方法，外部无需理解文件布局即可管理 workspace 配置。
+- **set_provider_entries()**：`WorkspaceRuntime` 新增 `set_provider_entries()` 方法，运行时注入 provider 配置并可选持久化。
+- **RoleplayWorkspaceManager**：新增 `RoleplayWorkspaceManager` 类，封装 agent 选择 + workspace defaults 写入的一站式流程。
+- **Legacy generated_agents.json 回退读取**：`load_generated_agent_library()` 在新路径 `roleplay/generated_agents.json` 找不到时，自动回退到根目录旧路径。
+- **SqliteSessionStore legacy JSON 导入**：从 `session_state.json` 导入后自动重命名为 `.json.migrated`，防止 clear 后重新导入。
+- 新增迁移文档 `docs/migration-v0.25.md`。
+
+### Removed
+- **WorkspaceMigrationManager 已移除**：`sirius_chat.workspace.migration` 模块及其导入均已删除。`WorkspaceRuntime.initialize()` 不再自动迁移根目录平铺布局。
+- **EventMemoryManager v1 格式迁移已移除**：`from_dict()` 遇到 version < 2 数据时返回空 manager。
+
+### Changed
+- `WorkspaceRuntime.open()` 新增 `bootstrap` 和 `persist_bootstrap` 参数。
+- `open_workspace_runtime()` API 新增对应参数。
+- 公开 API 新增导出：`WorkspaceBootstrap`、`RoleplayWorkspaceManager`。
+
 ## [0.24.0] - 2026-04-14
 
 ### Added

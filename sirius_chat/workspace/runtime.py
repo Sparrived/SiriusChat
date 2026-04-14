@@ -13,6 +13,7 @@ from typing import Awaitable, Callable
 from sirius_chat.async_engine import AsyncRolePlayEngine
 from sirius_chat.config import SessionConfig, WorkspaceConfig
 from sirius_chat.config.manager import ConfigManager
+from sirius_chat.config.models import SessionDefaults, WorkspaceBootstrap
 from sirius_chat.memory import UserProfile
 from sirius_chat.models import Message, Participant, Transcript
 from sirius_chat.providers.base import AsyncLLMProvider, LLMProvider
@@ -20,7 +21,6 @@ from sirius_chat.providers.routing import AutoRoutingProvider, WorkspaceProvider
 from sirius_chat.session.store import SessionStore, SessionStoreFactory
 from sirius_chat.workspace.config_watcher import WorkspaceConfigWatcher
 from sirius_chat.workspace.layout import WorkspaceLayout
-from sirius_chat.workspace.migration import MigrationReport, WorkspaceMigrationManager
 
 
 logger = logging.getLogger(__name__)
@@ -33,10 +33,11 @@ class WorkspaceRuntime:
     provider: LLMProvider | AsyncLLMProvider | None = None
     store_factory: SessionStoreFactory = field(default_factory=SessionStoreFactory)
     session_config_factory: Callable[[str], SessionConfig] | None = None
+    bootstrap: WorkspaceBootstrap | None = None
+    persist_bootstrap: bool = True
     layout: WorkspaceLayout = field(init=False)
     _config_manager: ConfigManager = field(init=False, repr=False)
     _provider_manager: WorkspaceProviderManager = field(init=False, repr=False)
-    _migration_manager: WorkspaceMigrationManager = field(init=False, repr=False)
     _engine: AsyncRolePlayEngine | None = field(default=None, init=False, repr=False)
     _workspace_config: WorkspaceConfig | None = field(default=None, init=False, repr=False)
     _config_signature: str | None = field(default=None, init=False, repr=False)
@@ -48,7 +49,6 @@ class WorkspaceRuntime:
     _transcripts: dict[str, Transcript] = field(default_factory=dict, init=False, repr=False)
     _stores: dict[str, SessionStore] = field(default_factory=dict, init=False, repr=False)
     _initialized: bool = field(default=False, init=False, repr=False)
-    _last_migration_report: MigrationReport | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
         self.work_path = Path(self.work_path)
@@ -56,7 +56,6 @@ class WorkspaceRuntime:
         self.layout = WorkspaceLayout(self.work_path, config_path=self.config_path)
         self._config_manager = ConfigManager(base_path=self.layout.config_root)
         self._provider_manager = WorkspaceProviderManager(self.layout)
-        self._migration_manager = WorkspaceMigrationManager(self.layout)
 
     @classmethod
     def open(
@@ -67,6 +66,8 @@ class WorkspaceRuntime:
         provider: LLMProvider | AsyncLLMProvider | None = None,
         store_factory: SessionStoreFactory | None = None,
         session_config_factory: Callable[[str], SessionConfig] | None = None,
+        bootstrap: WorkspaceBootstrap | None = None,
+        persist_bootstrap: bool = True,
     ) -> "WorkspaceRuntime":
         return cls(
             work_path=work_path,
@@ -74,24 +75,19 @@ class WorkspaceRuntime:
             provider=provider,
             store_factory=store_factory or SessionStoreFactory(),
             session_config_factory=session_config_factory,
+            bootstrap=bootstrap,
+            persist_bootstrap=persist_bootstrap,
         )
 
     @property
     def workspace_config(self):
         return self._workspace_config
 
-    @property
-    def last_migration_report(self) -> MigrationReport | None:
-        return self._last_migration_report
-
     async def initialize(self) -> None:
         if self._initialized:
             return
         self.layout.ensure_directories(session_id="default")
-        legacy_report = self._migration_manager.detect_legacy_layout(self.work_path)
-        if legacy_report.has_legacy_layout:
-            self._last_migration_report = self._migration_manager.migrate(self.work_path)
-        self.layout.ensure_directories(session_id="default")
+        self._apply_bootstrap()
         await self._refresh_workspace_config(force=True, persist_defaults=True)
         self._initialized = True
         self._start_config_watcher()
@@ -247,6 +243,120 @@ class WorkspaceRuntime:
     def set_provider(self, provider: LLMProvider | AsyncLLMProvider | None) -> None:
         self.provider = provider
         self._engine = None
+
+    def set_provider_entries(self, entries: list[dict[str, object]], *, persist: bool = True) -> None:
+        """Inject provider config entries from the host.
+
+        The runtime validates entries, optionally persists them to the
+        workspace provider registry, and rebuilds the internal routing
+        provider so that subsequent ``run_live_message`` calls use the
+        new configuration.
+        """
+        saved = self._provider_manager.save_from_entries(entries) if persist else {}
+        if not persist:
+            from sirius_chat.providers.routing import ProviderConfig, normalize_provider_type
+            for item in entries:
+                pt = normalize_provider_type(str(item.get("type", "")))
+                api_key = str(item.get("api_key", "")).strip()
+                if not pt or not api_key:
+                    continue
+                models_raw = item.get("models", [])
+                models = [str(m).strip() for m in models_raw if str(m).strip()] if isinstance(models_raw, list) else []
+                saved[pt] = ProviderConfig(
+                    provider_type=pt,
+                    api_key=api_key,
+                    base_url=str(item.get("base_url", "")).strip(),
+                    healthcheck_model=str(item.get("healthcheck_model", "")).strip(),
+                    enabled=bool(item.get("enabled", True)),
+                    models=models,
+                )
+        if saved:
+            self.provider = AutoRoutingProvider(saved)
+            self._engine = None
+
+    def export_workspace_defaults(self) -> dict[str, object]:
+        """Return the current workspace defaults as a plain dict.
+
+        Intended for host wizard / settings UI so the caller never needs to
+        understand the underlying file layout.
+        """
+        cfg = self._workspace_config
+        if cfg is None:
+            cfg = self._config_manager.load_workspace_config(
+                self.layout.config_root, data_path=self.layout.data_root
+            )
+        return {
+            "active_agent_key": cfg.active_agent_key,
+            "session_defaults": {
+                "history_max_messages": cfg.session_defaults.history_max_messages,
+                "history_max_chars": cfg.session_defaults.history_max_chars,
+                "max_recent_participant_messages": cfg.session_defaults.max_recent_participant_messages,
+                "enable_auto_compression": cfg.session_defaults.enable_auto_compression,
+            },
+            "orchestration_defaults": dict(cfg.orchestration_defaults),
+            "provider_policy": {
+                "prefer_workspace_registry": cfg.provider_policy.prefer_workspace_registry,
+            },
+        }
+
+    async def apply_workspace_updates(self, patch: dict[str, object]) -> WorkspaceConfig:
+        """Apply a partial update to workspace defaults and persist.
+
+        The caller provides only the fields it wants to change; the runtime
+        merges them, validates, persists and triggers a hot-refresh.
+        """
+        await self.initialize()
+        cfg = self._workspace_config
+        assert cfg is not None
+
+        if "active_agent_key" in patch:
+            cfg.active_agent_key = str(patch["active_agent_key"]).strip()
+
+        sd_patch = patch.get("session_defaults")
+        if isinstance(sd_patch, dict):
+            for key in ("history_max_messages", "history_max_chars",
+                        "max_recent_participant_messages", "enable_auto_compression"):
+                if key in sd_patch:
+                    setattr(cfg.session_defaults, key,
+                            type(getattr(cfg.session_defaults, key))(sd_patch[key]))
+
+        orch_patch = patch.get("orchestration_defaults")
+        if isinstance(orch_patch, dict):
+            cfg.orchestration_defaults.update(orch_patch)
+
+        pp_patch = patch.get("provider_policy")
+        if isinstance(pp_patch, dict):
+            if "prefer_workspace_registry" in pp_patch:
+                cfg.provider_policy.prefer_workspace_registry = bool(pp_patch["prefer_workspace_registry"])
+
+        self._config_manager.save_workspace_config(
+            self.layout.config_root, cfg, data_path=self.layout.data_root
+        )
+        await self._refresh_workspace_config(force=True)
+        return self._workspace_config  # type: ignore[return-value]
+
+    def _apply_bootstrap(self) -> None:
+        """Merge host-provided bootstrap into workspace config files."""
+        bs = self.bootstrap
+        if bs is None:
+            return
+        cfg = self._config_manager.load_workspace_config(
+            self.layout.config_root, data_path=self.layout.data_root
+        )
+        if bs.active_agent_key:
+            cfg.active_agent_key = bs.active_agent_key
+        if bs.session_defaults is not None:
+            cfg.session_defaults = bs.session_defaults
+        if bs.orchestration_defaults is not None:
+            cfg.orchestration_defaults = dict(bs.orchestration_defaults)
+        if bs.provider_policy is not None:
+            cfg.provider_policy = bs.provider_policy
+        if self.persist_bootstrap:
+            self._config_manager.save_workspace_config(
+                self.layout.config_root, cfg, data_path=self.layout.data_root
+            )
+        if bs.provider_entries:
+            self.set_provider_entries(bs.provider_entries, persist=self.persist_bootstrap)
 
     def _get_engine(self) -> AsyncRolePlayEngine:
         if self._engine is not None:

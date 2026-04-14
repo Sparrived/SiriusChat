@@ -16,10 +16,11 @@ python -m pip install -e /path/to/sirius_chat
 
 ### 推荐入口：WorkspaceRuntime
 
-从 `v0.23.0` 开始，推荐外部系统优先使用 `WorkspaceRuntime`。外部只需要提供：
+从 `v0.25.0` 开始，Engine 全权接管文件管理。外部只需要提供：
 
 - `work_path`（运行态数据根目录）
 - 可选 `config_path`（配置根目录；不传时回退到单根模式）
+- 可选 `bootstrap`（`WorkspaceBootstrap`，首次打开时注入 agent key、session defaults、provider entries 等）
 - `session_id`
 - `turn`
 - 可选的 `environment_context`、`user_profile`、`on_reply`、`timeout`
@@ -29,22 +30,39 @@ workspace runtime 会负责：
 - 自动恢复 `sessions/<session_id>/session_state.db`
 - 自动维护 `sessions/<session_id>/participants.json`
 - 自动把 provider、roleplay、skills 路由到 config root，把 session、memory、token、skill_data 路由到 data root
-- 首次打开时自动迁移旧根目录布局
 - config root 文件被外部修改后，会通过文件监听自动刷新并生效；单轮调用前仍保留一次签名校验作为兜底
+- `set_provider_entries()` 注入 provider 配置
+- `export_workspace_defaults()` / `apply_workspace_updates()` 读写 workspace 默认值
 
 ```python
 import asyncio
 from pathlib import Path
 
-from sirius_chat.api import Message, UserProfile, open_workspace_runtime
-from sirius_chat.providers.mock import MockProvider
+from sirius_chat.api import (
+    Message, UserProfile,
+    open_workspace_runtime, WorkspaceBootstrap,
+)
+from sirius_chat.config.models import SessionDefaults
 
 
 async def main() -> None:
+    bootstrap = WorkspaceBootstrap(
+        active_agent_key="main_agent",
+        session_defaults=SessionDefaults(history_max_messages=100),
+        provider_entries=[
+            {
+                "type": "openai-compatible",
+                "base_url": "https://api.openai.com",
+                "api_key": "YOUR_API_KEY",
+                "models": ["gpt-4o-mini"],
+            }
+        ],
+    )
+
     runtime = open_workspace_runtime(
         Path("data/external_usage"),
         config_path=Path("config/external_usage"),
-        provider=MockProvider(responses=["先做小范围试点，再按反馈逐步放量。"]),
+        bootstrap=bootstrap,
     )
 
     transcript = await runtime.run_live_message(
@@ -58,11 +76,18 @@ async def main() -> None:
         if message.speaker:
             print(f"[{message.speaker}] {message.content}")
 
+    # 读写 workspace 配置（无需知道文件路径）
+    defaults = runtime.export_workspace_defaults()
+    print(defaults)
+    await runtime.apply_workspace_updates({"session_defaults": {"history_max_messages": 200}})
+
+    await runtime.close()
+
 
 asyncio.run(main())
 ```
 
-> `work_path` 保存会话、记忆、token 与 skill_data；`config_path` 保存 workspace/provider/roleplay/skills 配置。不传 `config_path` 时，系统自动回退到单根布局。`session.json`、`config/session_config.json` 都支持 JSONC 风格注释，CLI 的 `--init-config` 会生成带注释模板。CLI、`main.py`、`ConfigManager.bootstrap_workspace_from_legacy_session_json(...)` 和迁移器可用于完成 bootstrap。
+> `work_path` 保存会话、记忆、token 与 skill_data；`config_path` 保存 workspace/provider/roleplay/skills 配置。不传 `config_path` 时，系统自动回退到单根布局。`session.json`、`config/session_config.json` 都支持 JSONC 风格注释，CLI 的 `--init-config` 会生成带注释模板。
 
 ### 低层入口：AsyncRolePlayEngine + SessionConfig
 

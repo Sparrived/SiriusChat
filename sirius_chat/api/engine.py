@@ -4,6 +4,7 @@ from typing import AsyncIterator, Awaitable, Callable
 
 from sirius_chat.async_engine import AsyncRolePlayEngine
 from sirius_chat.config import SessionConfig
+from sirius_chat.config.models import WorkspaceBootstrap
 from sirius_chat.core.events import SessionEvent, SessionEventBus, SessionEventType
 from sirius_chat.models import Message, Transcript
 from sirius_chat.providers.base import AsyncLLMProvider, LLMProvider
@@ -21,9 +22,23 @@ def open_workspace_runtime(
     *,
     config_path=None,
     provider: LLMProvider | AsyncLLMProvider | None = None,
+    bootstrap: WorkspaceBootstrap | None = None,
+    persist_bootstrap: bool = True,
 ) -> WorkspaceRuntime:
-    """Open a workspace runtime that owns persistence and session recovery."""
-    return WorkspaceRuntime.open(work_path, config_path=config_path, provider=provider)
+    """Open a workspace runtime that owns persistence and session recovery.
+
+    When *bootstrap* is provided the host-supplied defaults are merged into the
+    workspace on the first ``initialize()`` call.  If *persist_bootstrap* is
+    ``True`` (default) the merged values are written to the workspace files so
+    that subsequent launches recover them automatically.
+    """
+    return WorkspaceRuntime.open(
+        work_path,
+        config_path=config_path,
+        provider=provider,
+        bootstrap=bootstrap,
+        persist_bootstrap=persist_bootstrap,
+    )
 
 
 async def ainit_live_session(

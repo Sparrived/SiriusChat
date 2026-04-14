@@ -145,8 +145,7 @@ class WorkspaceLayout:
     def legacy_generated_agents_path(self) -> Path:
         return self.config_root / "generated_agents.json"
 
-    def legacy_generated_agent_trace_dir(self) -> Path:
-        return self.config_root / "generated_agent_traces"
+
 
     def config_watch_paths(self) -> list[Path]:
         return [
