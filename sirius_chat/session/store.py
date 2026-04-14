@@ -3,9 +3,156 @@ from __future__ import annotations
 import json
 import sqlite3
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 from sirius_chat.models import Transcript
+
+
+_SESSION_STORE_SCHEMA_VERSION = 2
+
+_CREATE_META_TABLE = """
+CREATE TABLE IF NOT EXISTS _meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+)
+"""
+
+_CREATE_SESSION_META_TABLE = """
+CREATE TABLE IF NOT EXISTS session_meta (
+    id INTEGER PRIMARY KEY CHECK(id = 1),
+    session_summary TEXT NOT NULL DEFAULT '',
+    orchestration_stats TEXT NOT NULL DEFAULT '{}'
+)
+"""
+
+_CREATE_MESSAGES_TABLE = """
+CREATE TABLE IF NOT EXISTS session_messages (
+    message_index INTEGER PRIMARY KEY,
+    role TEXT NOT NULL,
+    content TEXT NOT NULL,
+    speaker TEXT,
+    channel TEXT,
+    channel_user_id TEXT,
+    multimodal_inputs TEXT NOT NULL DEFAULT '[]',
+    reply_mode TEXT NOT NULL DEFAULT 'always'
+)
+"""
+
+_CREATE_REPLY_RUNTIME_TABLE = """
+CREATE TABLE IF NOT EXISTS session_reply_runtime (
+    id INTEGER PRIMARY KEY CHECK(id = 1),
+    last_assistant_reply_at TEXT NOT NULL DEFAULT ''
+)
+"""
+
+_CREATE_REPLY_RUNTIME_USER_TURNS_TABLE = """
+CREATE TABLE IF NOT EXISTS session_reply_runtime_user_turns (
+    user_id TEXT PRIMARY KEY,
+    last_turn_at TEXT NOT NULL
+)
+"""
+
+_CREATE_REPLY_RUNTIME_GROUP_TURNS_TABLE = """
+CREATE TABLE IF NOT EXISTS session_reply_runtime_group_turns (
+    seq INTEGER PRIMARY KEY,
+    timestamp TEXT NOT NULL
+)
+"""
+
+_CREATE_REPLY_RUNTIME_ASSISTANT_TURNS_TABLE = """
+CREATE TABLE IF NOT EXISTS session_reply_runtime_assistant_turns (
+    seq INTEGER PRIMARY KEY,
+    timestamp TEXT NOT NULL
+)
+"""
+
+_CREATE_USER_PROFILES_TABLE = """
+CREATE TABLE IF NOT EXISTS session_user_profiles (
+    user_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    persona TEXT NOT NULL DEFAULT '',
+    identities TEXT NOT NULL DEFAULT '{}',
+    aliases TEXT NOT NULL DEFAULT '[]',
+    traits TEXT NOT NULL DEFAULT '[]',
+    metadata TEXT NOT NULL DEFAULT '{}'
+)
+"""
+
+_CREATE_USER_RUNTIME_TABLE = """
+CREATE TABLE IF NOT EXISTS session_user_runtime (
+    user_id TEXT PRIMARY KEY REFERENCES session_user_profiles(user_id) ON DELETE CASCADE,
+    inferred_persona TEXT NOT NULL DEFAULT '',
+    inferred_traits TEXT NOT NULL DEFAULT '[]',
+    preference_tags TEXT NOT NULL DEFAULT '[]',
+    recent_messages TEXT NOT NULL DEFAULT '[]',
+    summary_notes TEXT NOT NULL DEFAULT '[]',
+    last_seen_channel TEXT NOT NULL DEFAULT '',
+    last_seen_uid TEXT NOT NULL DEFAULT '',
+    observed_keywords TEXT NOT NULL DEFAULT '[]',
+    observed_roles TEXT NOT NULL DEFAULT '[]',
+    observed_emotions TEXT NOT NULL DEFAULT '[]',
+    observed_entities TEXT NOT NULL DEFAULT '[]',
+    last_event_processed_at TEXT
+)
+"""
+
+_CREATE_USER_FACTS_TABLE = """
+CREATE TABLE IF NOT EXISTS session_user_memory_facts (
+    user_id TEXT NOT NULL REFERENCES session_user_profiles(user_id) ON DELETE CASCADE,
+    fact_index INTEGER NOT NULL,
+    fact_type TEXT NOT NULL,
+    value TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT 'unknown',
+    confidence REAL NOT NULL DEFAULT 0.5,
+    observed_at TEXT NOT NULL DEFAULT '',
+    observed_time_desc TEXT NOT NULL DEFAULT '',
+    memory_category TEXT NOT NULL DEFAULT 'custom',
+    validated INTEGER NOT NULL DEFAULT 0,
+    conflict_with TEXT NOT NULL DEFAULT '[]',
+    context_channel TEXT NOT NULL DEFAULT '',
+    context_topic TEXT NOT NULL DEFAULT '',
+    context_metadata TEXT NOT NULL DEFAULT '{}',
+    mention_count INTEGER NOT NULL DEFAULT 0,
+    source_event_id TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (user_id, fact_index)
+)
+"""
+
+_CREATE_TOKEN_USAGE_TABLE = """
+CREATE TABLE IF NOT EXISTS session_token_usage_records (
+    record_index INTEGER PRIMARY KEY,
+    actor_id TEXT NOT NULL,
+    task_name TEXT NOT NULL,
+    model TEXT NOT NULL,
+    prompt_tokens INTEGER NOT NULL DEFAULT 0,
+    completion_tokens INTEGER NOT NULL DEFAULT 0,
+    total_tokens INTEGER NOT NULL DEFAULT 0,
+    input_chars INTEGER NOT NULL DEFAULT 0,
+    output_chars INTEGER NOT NULL DEFAULT 0,
+    estimation_method TEXT NOT NULL DEFAULT 'char_div4',
+    retries_used INTEGER NOT NULL DEFAULT 0
+)
+"""
+
+_CREATE_INDEXES = [
+    "CREATE INDEX IF NOT EXISTS idx_session_messages_role ON session_messages(role);",
+    "CREATE INDEX IF NOT EXISTS idx_session_user_runtime_channel ON session_user_runtime(last_seen_channel);",
+    "CREATE INDEX IF NOT EXISTS idx_session_user_memory_facts_user ON session_user_memory_facts(user_id);",
+    "CREATE INDEX IF NOT EXISTS idx_session_token_usage_task ON session_token_usage_records(task_name);",
+]
+
+_SESSION_DATA_TABLES = [
+    "session_user_memory_facts",
+    "session_user_runtime",
+    "session_user_profiles",
+    "session_reply_runtime_user_turns",
+    "session_reply_runtime_group_turns",
+    "session_reply_runtime_assistant_turns",
+    "session_reply_runtime",
+    "session_token_usage_records",
+    "session_messages",
+    "session_meta",
+]
 
 
 class SessionStore(Protocol):
@@ -62,6 +209,7 @@ class SqliteSessionStore:
         self._work_path = Path(work_path)
         self._path = self._work_path / filename
         self._ensure_schema()
+        self._migrate_legacy_storage_if_needed()
 
     @property
     def path(self) -> Path:
@@ -69,48 +217,441 @@ class SqliteSessionStore:
 
     def _connect(self) -> sqlite3.Connection:
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        return sqlite3.connect(self._path)
+        conn = sqlite3.connect(self._path, timeout=10)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("PRAGMA journal_mode = WAL")
+        return conn
+
+    def _legacy_json_path(self) -> Path:
+        if self._path.suffix:
+            return self._path.with_suffix(".json")
+        return self._path.with_name(f"{self._path.name}.json")
+
+    @staticmethod
+    def _json_dumps(value: Any) -> str:
+        return json.dumps(value, ensure_ascii=False)
+
+    @staticmethod
+    def _json_loads_dict(raw: str | None, default: dict[str, object] | None = None) -> dict[str, object]:
+        if not raw:
+            return dict(default or {})
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            return dict(default or {})
+        return dict(data) if isinstance(data, dict) else dict(default or {})
+
+    @staticmethod
+    def _json_loads_list(raw: str | None, default: list[object] | None = None) -> list[object]:
+        if not raw:
+            return list(default or [])
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            return list(default or [])
+        return list(data) if isinstance(data, list) else list(default or [])
+
+    @staticmethod
+    def _set_meta(conn: sqlite3.Connection, key: str, value: str) -> None:
+        conn.execute(
+            "INSERT INTO _meta(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (key, value),
+        )
+
+    @staticmethod
+    def _get_meta(conn: sqlite3.Connection, key: str) -> str:
+        row = conn.execute("SELECT value FROM _meta WHERE key = ?", (key,)).fetchone()
+        return str(row[0]) if row is not None else ""
+
+    @staticmethod
+    def _table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
+        row = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            (table_name,),
+        ).fetchone()
+        return row is not None
+
+    @classmethod
+    def _legacy_payload_table_exists(cls, conn: sqlite3.Connection) -> bool:
+        if not cls._table_exists(conn, "session_state"):
+            return False
+        columns = {
+            str(row[1])
+            for row in conn.execute("PRAGMA table_info(session_state)").fetchall()
+        }
+        return "payload" in columns
+
+    @staticmethod
+    def _has_session_data(conn: sqlite3.Connection) -> bool:
+        row = conn.execute("SELECT 1 FROM session_meta WHERE id = 1").fetchone()
+        return row is not None
+
+    @staticmethod
+    def _decode_legacy_transcript(raw_payload: str) -> Transcript:
+        return Transcript.from_dict(json.loads(raw_payload))
+
+    @staticmethod
+    def _delete_session_rows(conn: sqlite3.Connection) -> None:
+        for table_name in _SESSION_DATA_TABLES:
+            conn.execute(f"DELETE FROM {table_name}")
+
+    def _save_with_connection(self, conn: sqlite3.Connection, transcript: Transcript) -> None:
+        self._delete_session_rows(conn)
+
+        conn.execute(
+            "INSERT INTO session_meta(id, session_summary, orchestration_stats) VALUES(1, ?, ?)",
+            (
+                transcript.session_summary,
+                self._json_dumps(transcript.orchestration_stats),
+            ),
+        )
+
+        conn.executemany(
+            """
+            INSERT INTO session_messages(
+                message_index, role, content, speaker, channel, channel_user_id,
+                multimodal_inputs, reply_mode
+            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    index,
+                    message.role,
+                    message.content,
+                    message.speaker,
+                    message.channel,
+                    message.channel_user_id,
+                    self._json_dumps(message.multimodal_inputs),
+                    message.reply_mode,
+                )
+                for index, message in enumerate(transcript.messages)
+            ],
+        )
+
+        conn.execute(
+            "INSERT INTO session_reply_runtime(id, last_assistant_reply_at) VALUES(1, ?)",
+            (transcript.reply_runtime.last_assistant_reply_at,),
+        )
+        conn.executemany(
+            "INSERT INTO session_reply_runtime_user_turns(user_id, last_turn_at) VALUES(?, ?)",
+            list(transcript.reply_runtime.user_last_turn_at.items()),
+        )
+        conn.executemany(
+            "INSERT INTO session_reply_runtime_group_turns(seq, timestamp) VALUES(?, ?)",
+            [
+                (index, timestamp)
+                for index, timestamp in enumerate(transcript.reply_runtime.group_recent_turn_timestamps)
+            ],
+        )
+        conn.executemany(
+            "INSERT INTO session_reply_runtime_assistant_turns(seq, timestamp) VALUES(?, ?)",
+            [
+                (index, timestamp)
+                for index, timestamp in enumerate(transcript.reply_runtime.assistant_reply_timestamps)
+            ],
+        )
+
+        for user_id, entry in transcript.user_memory.entries.items():
+            conn.execute(
+                """
+                INSERT INTO session_user_profiles(
+                    user_id, name, persona, identities, aliases, traits, metadata
+                ) VALUES(?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    user_id,
+                    entry.profile.name,
+                    entry.profile.persona,
+                    self._json_dumps(entry.profile.identities),
+                    self._json_dumps(entry.profile.aliases),
+                    self._json_dumps(entry.profile.traits),
+                    self._json_dumps(entry.profile.metadata),
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO session_user_runtime(
+                    user_id, inferred_persona, inferred_traits, preference_tags,
+                    recent_messages, summary_notes, last_seen_channel, last_seen_uid,
+                    observed_keywords, observed_roles, observed_emotions,
+                    observed_entities, last_event_processed_at
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    user_id,
+                    entry.runtime.inferred_persona,
+                    self._json_dumps(entry.runtime.inferred_traits),
+                    self._json_dumps(entry.runtime.preference_tags),
+                    self._json_dumps(entry.runtime.recent_messages),
+                    self._json_dumps(entry.runtime.summary_notes),
+                    entry.runtime.last_seen_channel,
+                    entry.runtime.last_seen_uid,
+                    self._json_dumps(sorted(entry.runtime.observed_keywords)),
+                    self._json_dumps(sorted(entry.runtime.observed_roles)),
+                    self._json_dumps(sorted(entry.runtime.observed_emotions)),
+                    self._json_dumps(sorted(entry.runtime.observed_entities)),
+                    entry.runtime.last_event_processed_at.isoformat()
+                    if entry.runtime.last_event_processed_at is not None
+                    else None,
+                ),
+            )
+            conn.executemany(
+                """
+                INSERT INTO session_user_memory_facts(
+                    user_id, fact_index, fact_type, value, source, confidence,
+                    observed_at, observed_time_desc, memory_category, validated,
+                    conflict_with, context_channel, context_topic, context_metadata,
+                    mention_count, source_event_id
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        user_id,
+                        index,
+                        fact.fact_type,
+                        fact.value,
+                        fact.source,
+                        fact.confidence,
+                        fact.observed_at,
+                        fact.observed_time_desc,
+                        fact.memory_category,
+                        1 if fact.validated else 0,
+                        self._json_dumps(fact.conflict_with),
+                        fact.context_channel,
+                        fact.context_topic,
+                        self._json_dumps(fact.context_metadata),
+                        fact.mention_count,
+                        fact.source_event_id,
+                    )
+                    for index, fact in enumerate(entry.runtime.memory_facts)
+                ],
+            )
+
+        conn.executemany(
+            """
+            INSERT INTO session_token_usage_records(
+                record_index, actor_id, task_name, model, prompt_tokens,
+                completion_tokens, total_tokens, input_chars, output_chars,
+                estimation_method, retries_used
+            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    index,
+                    record.actor_id,
+                    record.task_name,
+                    record.model,
+                    record.prompt_tokens,
+                    record.completion_tokens,
+                    record.total_tokens,
+                    record.input_chars,
+                    record.output_chars,
+                    record.estimation_method,
+                    record.retries_used,
+                )
+                for index, record in enumerate(transcript.token_usage_records)
+            ],
+        )
+
+    def _build_payload_from_connection(self, conn: sqlite3.Connection) -> dict[str, Any]:
+        meta_row = conn.execute(
+            "SELECT session_summary, orchestration_stats FROM session_meta WHERE id = 1"
+        ).fetchone()
+        if meta_row is None:
+            raise FileNotFoundError(f"session state not found in sqlite store: {self._path}")
+
+        profile_rows = conn.execute(
+            "SELECT * FROM session_user_profiles ORDER BY user_id"
+        ).fetchall()
+        runtime_rows = {
+            str(row["user_id"]): row
+            for row in conn.execute("SELECT * FROM session_user_runtime ORDER BY user_id").fetchall()
+        }
+        fact_rows_by_user: dict[str, list[sqlite3.Row]] = {}
+        for row in conn.execute(
+            "SELECT * FROM session_user_memory_facts ORDER BY user_id, fact_index"
+        ).fetchall():
+            fact_rows_by_user.setdefault(str(row["user_id"]), []).append(row)
+
+        entries: dict[str, dict[str, object]] = {}
+        for profile_row in profile_rows:
+            user_id = str(profile_row["user_id"])
+            runtime_row = runtime_rows.get(user_id)
+            entries[user_id] = {
+                "profile": {
+                    "user_id": user_id,
+                    "name": str(profile_row["name"]),
+                    "persona": str(profile_row["persona"]),
+                    "identities": self._json_loads_dict(str(profile_row["identities"])),
+                    "aliases": self._json_loads_list(str(profile_row["aliases"])),
+                    "traits": self._json_loads_list(str(profile_row["traits"])),
+                    "metadata": self._json_loads_dict(str(profile_row["metadata"])),
+                },
+                "runtime": {
+                    "inferred_persona": str(runtime_row["inferred_persona"]) if runtime_row is not None else "",
+                    "inferred_traits": self._json_loads_list(str(runtime_row["inferred_traits"])) if runtime_row is not None else [],
+                    "preference_tags": self._json_loads_list(str(runtime_row["preference_tags"])) if runtime_row is not None else [],
+                    "recent_messages": self._json_loads_list(str(runtime_row["recent_messages"])) if runtime_row is not None else [],
+                    "summary_notes": self._json_loads_list(str(runtime_row["summary_notes"])) if runtime_row is not None else [],
+                    "memory_facts": [
+                        {
+                            "fact_type": str(fact_row["fact_type"]),
+                            "value": str(fact_row["value"]),
+                            "source": str(fact_row["source"]),
+                            "confidence": float(fact_row["confidence"]),
+                            "observed_at": str(fact_row["observed_at"]),
+                            "observed_time_desc": str(fact_row["observed_time_desc"]),
+                            "memory_category": str(fact_row["memory_category"]),
+                            "validated": bool(int(fact_row["validated"])),
+                            "conflict_with": self._json_loads_list(str(fact_row["conflict_with"])),
+                            "context_channel": str(fact_row["context_channel"]),
+                            "context_topic": str(fact_row["context_topic"]),
+                            "context_metadata": self._json_loads_dict(str(fact_row["context_metadata"])),
+                            "mention_count": int(fact_row["mention_count"]),
+                            "source_event_id": str(fact_row["source_event_id"]),
+                        }
+                        for fact_row in fact_rows_by_user.get(user_id, [])
+                    ],
+                    "last_seen_channel": str(runtime_row["last_seen_channel"]) if runtime_row is not None else "",
+                    "last_seen_uid": str(runtime_row["last_seen_uid"]) if runtime_row is not None else "",
+                    "observed_keywords": self._json_loads_list(str(runtime_row["observed_keywords"])) if runtime_row is not None else [],
+                    "observed_roles": self._json_loads_list(str(runtime_row["observed_roles"])) if runtime_row is not None else [],
+                    "observed_emotions": self._json_loads_list(str(runtime_row["observed_emotions"])) if runtime_row is not None else [],
+                    "observed_entities": self._json_loads_list(str(runtime_row["observed_entities"])) if runtime_row is not None else [],
+                    "last_event_processed_at": runtime_row["last_event_processed_at"] if runtime_row is not None else None,
+                },
+            }
+
+        return {
+            "messages": [
+                {
+                    "role": str(row["role"]),
+                    "content": str(row["content"]),
+                    "speaker": row["speaker"],
+                    "channel": row["channel"],
+                    "channel_user_id": row["channel_user_id"],
+                    "multimodal_inputs": self._json_loads_list(str(row["multimodal_inputs"])),
+                    "reply_mode": str(row["reply_mode"]),
+                }
+                for row in conn.execute(
+                    "SELECT * FROM session_messages ORDER BY message_index"
+                ).fetchall()
+            ],
+            "user_memory": {"entries": entries},
+            "reply_runtime": {
+                "user_last_turn_at": {
+                    str(row["user_id"]): str(row["last_turn_at"])
+                    for row in conn.execute(
+                        "SELECT * FROM session_reply_runtime_user_turns ORDER BY user_id"
+                    ).fetchall()
+                },
+                "group_recent_turn_timestamps": [
+                    str(row["timestamp"])
+                    for row in conn.execute(
+                        "SELECT * FROM session_reply_runtime_group_turns ORDER BY seq"
+                    ).fetchall()
+                ],
+                "last_assistant_reply_at": str(
+                    conn.execute(
+                        "SELECT last_assistant_reply_at FROM session_reply_runtime WHERE id = 1"
+                    ).fetchone()[0]
+                ),
+                "assistant_reply_timestamps": [
+                    str(row["timestamp"])
+                    for row in conn.execute(
+                        "SELECT * FROM session_reply_runtime_assistant_turns ORDER BY seq"
+                    ).fetchall()
+                ],
+            },
+            "session_summary": str(meta_row["session_summary"]),
+            "orchestration_stats": self._json_loads_dict(str(meta_row["orchestration_stats"])),
+            "token_usage_records": [
+                {
+                    "actor_id": str(row["actor_id"]),
+                    "task_name": str(row["task_name"]),
+                    "model": str(row["model"]),
+                    "prompt_tokens": int(row["prompt_tokens"]),
+                    "completion_tokens": int(row["completion_tokens"]),
+                    "total_tokens": int(row["total_tokens"]),
+                    "input_chars": int(row["input_chars"]),
+                    "output_chars": int(row["output_chars"]),
+                    "estimation_method": str(row["estimation_method"]),
+                    "retries_used": int(row["retries_used"]),
+                }
+                for row in conn.execute(
+                    "SELECT * FROM session_token_usage_records ORDER BY record_index"
+                ).fetchall()
+            ],
+        }
 
     def _ensure_schema(self) -> None:
         with self._connect() as conn:
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS session_state (
-                    id INTEGER PRIMARY KEY CHECK(id = 1),
-                    payload TEXT NOT NULL
-                )
-                """
+            conn.execute(_CREATE_META_TABLE)
+            conn.execute(_CREATE_SESSION_META_TABLE)
+            conn.execute(_CREATE_MESSAGES_TABLE)
+            conn.execute(_CREATE_REPLY_RUNTIME_TABLE)
+            conn.execute(_CREATE_REPLY_RUNTIME_USER_TURNS_TABLE)
+            conn.execute(_CREATE_REPLY_RUNTIME_GROUP_TURNS_TABLE)
+            conn.execute(_CREATE_REPLY_RUNTIME_ASSISTANT_TURNS_TABLE)
+            conn.execute(_CREATE_USER_PROFILES_TABLE)
+            conn.execute(_CREATE_USER_RUNTIME_TABLE)
+            conn.execute(_CREATE_USER_FACTS_TABLE)
+            conn.execute(_CREATE_TOKEN_USAGE_TABLE)
+            for index_sql in _CREATE_INDEXES:
+                conn.execute(index_sql)
+            self._set_meta(conn, "session_store_schema_version", str(_SESSION_STORE_SCHEMA_VERSION))
+
+    def _migrate_legacy_storage_if_needed(self) -> None:
+        with self._connect() as conn:
+            if self._legacy_payload_table_exists(conn):
+                if not self._has_session_data(conn):
+                    row = conn.execute(
+                        "SELECT payload FROM session_state WHERE id = 1"
+                    ).fetchone()
+                    if row is not None and str(row["payload"]).strip():
+                        transcript = self._decode_legacy_transcript(str(row["payload"]))
+                        self._save_with_connection(conn, transcript)
+                conn.execute("DROP TABLE session_state")
+                self._set_meta(conn, "legacy_payload_migrated", "1")
+
+            if self._has_session_data(conn):
+                return
+
+            if self._get_meta(conn, "legacy_json_migrated") == "1":
+                return
+
+            legacy_json_path = self._legacy_json_path()
+            if not legacy_json_path.exists():
+                return
+
+            transcript = Transcript.from_dict(
+                json.loads(legacy_json_path.read_text(encoding="utf-8"))
             )
+            self._save_with_connection(conn, transcript)
+            self._set_meta(conn, "legacy_json_migrated", "1")
 
     def exists(self) -> bool:
         if not self._path.exists():
             return False
         with self._connect() as conn:
-            row = conn.execute("SELECT 1 FROM session_state WHERE id = 1").fetchone()
-        return row is not None
+            return self._has_session_data(conn)
 
     def load(self) -> Transcript:
         with self._connect() as conn:
-            row = conn.execute("SELECT payload FROM session_state WHERE id = 1").fetchone()
-        if row is None:
-            raise FileNotFoundError(f"session state not found in sqlite store: {self._path}")
-        payload = json.loads(str(row[0]))
+            payload = self._build_payload_from_connection(conn)
         transcript = Transcript.from_dict(payload)
         # Schema write-back: immediately persist any new default fields.
         self.save(transcript)
         return transcript
 
     def save(self, transcript: Transcript) -> None:
-        payload = json.dumps(transcript.to_dict(), ensure_ascii=False)
         with self._connect() as conn:
-            conn.execute(
-                "INSERT INTO session_state(id, payload) VALUES(1, ?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload",
-                (payload,),
-            )
+            self._save_with_connection(conn, transcript)
 
     def clear(self) -> None:
         """Remove the saved session state (deletes rows; keeps schema intact)."""
         if not self._path.exists():
             return
         with self._connect() as conn:
-            conn.execute("DELETE FROM session_state")
+            self._delete_session_rows(conn)

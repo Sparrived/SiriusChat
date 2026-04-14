@@ -475,8 +475,13 @@ msg = Message(
 | `primary_user.json` | 主用户档案（首次启动交互生成） |
 | `provider_keys.json` | Provider 配置（通过 CLI `/provider` 命令管理） |
 | `session_config.persisted.json` | 当前会话配置 |
-| `session_state.json` | 会话状态（支持恢复） |
+| `session_state.db` | 默认会话状态（结构化 SQLite，可恢复；会自动迁移旧 `session_state.json` / 旧 payload SQLite） |
+| `session_state.json` | 可选 JSON 会话状态（仅在显式使用 `JsonSessionStore` 时生成） |
 | `token_usage.db` | Token 消耗计量（SQLite） |
+
+默认 `JsonPersistentSessionRunner` 使用 `session_state.db`。如果你显式传入 `JsonSessionStore`，才会继续写入 `session_state.json`。
+
+如果需要显式执行一次迁移并查看结果，可运行 `python examples/migrate_session_store.py --work-path <你的工作目录>`。
 
 ### 主用户档案管理
 

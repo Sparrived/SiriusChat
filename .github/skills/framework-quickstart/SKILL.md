@@ -106,7 +106,7 @@ description: "当你需要在不通读全部代码的情况下快速理解 Siriu
     * 推荐处理类别：high_confidence (avg>0.6) | normal | low_relevance (avg<0.2) | pending (新用户)
   - 实现真正的**双向观测**：事件不再被单向消费，而是成为用户理解的重要信号源
 - `Transcript.find_user_by_channel_uid(channel, uid)` 支持按渠道+外部 UID 直接定位用户。
-- `session/store.py` ✨ **（包重构）** 提供会话持久化与重启恢复（`SessionStore`、`JsonSessionStore`、`SqliteSessionStore`）。
+- `session/store.py` ✨ **（包重构）** 提供会话持久化与重启恢复（`SessionStore`、`JsonSessionStore`、`SqliteSessionStore`）。默认 `SqliteSessionStore` 现使用结构化表保存消息、reply runtime、用户 profile/runtime/facts 与 token 记录，不再是单条 payload 快照；首次打开会自动迁移 sibling `session_state.json` 与旧 `session_state(payload)` SQLite。
 - `session/runner.py` ✨ **（包重构）** 提供上层封装的会话运行器（`JsonPersistentSessionRunner`），自动维护用户档案与持久化。
 - `Transcript.token_usage_records` 全量归档每次模型调用的 token 消耗信息（通过 `token/usage.py` 提供的 `summarize_token_usage` 与 `build_token_usage_baseline` 汇总）。
 - ✨ `token/store.py` **(v0.11.0)** 提供 SQLite 持久化后端（`TokenUsageStore`），自动写入 `{work_path}/token_usage.db`，支持跨会话查询。
@@ -177,7 +177,7 @@ description: "当你需要在不通读全部代码的情况下快速理解 Siriu
 - 新增 provider 支持：修改 `sirius_chat/providers/`，并保持 `async_engine.py` 不含 provider 细节。
 - 修改主 AI 或多人轮次策略：更新 `sirius_chat/async_engine.py`，并检查 transcript 兼容性。
 - 修改动态参与者或识人记忆逻辑：同步更新 `models/models.py`、`async_engine.py` 与 `docs/external-usage.md`。
-- 修改会话恢复或压缩策略：同步更新 `session/store.py`、`async_engine.py`、`README.md` 与 `docs/architecture.md`。
+- 修改会话恢复或压缩策略：同步更新 `session/store.py`、`session/runner.py`、`docs/architecture.md`、`docs/migration-v0.19.md`；若外部可见行为变化，再同步 `README.md`。
 - 修改配置结构或环境变量处理：同步更新 `sirius_chat/config_manager.py`、`sirius_chat/cli.py`、`README.md` 与 `examples/session.json`。
 - 修改缓存策略或后端：在 `sirius_chat/cache/` 实现新后端或修改现有接口，并更新 `docs/best-practices.md`。
 - 修改性能监控或基准：更新 `sirius_chat/performance/` 中的指标收集或分析逻辑，添加相应测试。

@@ -153,7 +153,7 @@ flowchart LR
 | `sirius_chat/token/usage.py` | `Transcript.token_usage_records` | baseline 与按 actor/task/model 聚合报表（内存级） |
 | `sirius_chat/token/store.py` | `TokenUsageRecord`、`session_id` | SQLite 持久化（`{work_path}/token_usage.db`）、跨会话查询 |
 | `sirius_chat/token/analytics.py` | `TokenUsageStore` | 全局/会话/用户/任务/模型/时间维度分析报告 |
-| `sirius_chat/session/store.py` | `Transcript` | JSON/SQLite 持久化状态文件 |
+| `sirius_chat/session/store.py` | `Transcript` | 会话持久化状态文件：默认结构化 SQLite（`session_state.db`），可选 JSON；SQLite 会自动迁移 legacy JSON / payload SQLite |
 | `sirius_chat/session/runner.py` | `SessionConfig`、Provider、主用户输入、`work_path` | 自动持久化会话循环、主用户档案维护、恢复状态管理 |
 | `sirius_chat/config/manager.py` | JSON 配置文件、环境变量 | 合并配置、环境变量覆盖、配置验证 |
 | `sirius_chat/providers/base.py` | `GenerationRequest` | Provider 协议（同步/异步生成契约） |
@@ -177,7 +177,8 @@ flowchart LR
 - `{work_path}/token_usage.db`: SQLite 持久化的全量 token 使用记录（跨会话累计，由 `TokenUsageStore` 写入）。
 - `generated_agents.json`: 由提示词生成器输出并持久化的 agent 资产库；生成前会先暂存最新 `PersonaSpec`，避免失败时丢失输入。
 - `generated_agent_traces/<agent_key>.json`: 角色生成器的完整本地轨迹（待生成快照、prompt、原始返回、依赖文件快照、最终输出）。
-- `session_state.json` / `session_state.db`: 会话持久化与恢复状态。
+- `session_state.db`: 默认会话持久化与恢复状态，内部为结构化 SQLite 表，并会自动导入 legacy `session_state.json` / payload-style SQLite。
+- `session_state.json`: 仅在显式使用 `JsonSessionStore` 时作为可选后端存在。
 - `events/events.json`: 事件记忆持久化文件（用于跨会话事件命中）。
 - ✨ **(v0.17.0)** 引擎级共享记忆缓存：`AsyncRolePlayEngine` 按 `work_path` 键保存 `UserMemoryManager`、`SelfMemoryManager`、`EventObservationStore` 实例，跨 Session 复用，持久化时同步回写。
 

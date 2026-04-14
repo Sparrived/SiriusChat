@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+## [0.22.3] - 2026-04-14
+
+### Changed
+- **结构化 SQLite 会话存储**：`SqliteSessionStore` 不再把整份 `Transcript` 写成单条 payload；现在按消息、reply runtime、用户 profile/runtime/facts 与 token 使用记录分表持久化，保留 SQLite 的事务语义，同时让存储结构与会话模型对齐。
+- **新增显式迁移示例**：仓库增加 `examples/migrate_session_store.py`，用于在需要人工核验时显式触发 `session_state.json` / 旧 payload SQLite 到结构化 `session_state.db` 的迁移。
+
+### Fixed
+- **旧会话自动迁移**：首次打开默认 `session_state.db` 时会自动导入同目录 legacy `session_state.json`，并原地升级旧 `session_state(payload)` SQLite；`clear()` 后也不会因残留旧 JSON 而反复恢复已清空的会话。
+
 ## [0.22.2] - 2026-04-14
 
 ### Fixed
