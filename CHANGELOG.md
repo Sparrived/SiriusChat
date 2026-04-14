@@ -4,6 +4,18 @@
 
 ## [Unreleased]
 
+## [0.26.0] - 2026-04-15
+
+### Added
+- **BigModelProvider**：新增智谱 BigModel 专用 provider，默认请求 `https://open.bigmodel.cn/api/paas/v4/chat/completions`，适用于 `glm-4.6v` 等 GLM 模型，并兼容 OpenAI 风格多模态 `content` 列表。
+
+### Changed
+- **Provider 路由与平台清单**：新增 `bigmodel` 平台，支持 `zhipu` / `zhipuai` 别名归一化，并可通过 `AutoRoutingProvider`、`ProviderRegistry`、`register_provider_with_validation()` 等统一接入。
+- **公开 API 导出**：`sirius_chat`、`sirius_chat.api` 与 `sirius_chat.api.providers` 新增导出 `BigModelProvider`。
+
+### Documentation
+- 更新 README、架构文档、外部接入文档和 SKILL，补充 BigModel GLM-4.6V 的接入方式。
+
 ## [0.25.0] - 2026-04-14
 
 ### Added

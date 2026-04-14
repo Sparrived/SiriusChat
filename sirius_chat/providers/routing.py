@@ -6,6 +6,7 @@ from pathlib import Path
 
 from sirius_chat.providers.aliyun_bailian import AliyunBailianProvider
 from sirius_chat.providers.base import GenerationRequest, LLMProvider
+from sirius_chat.providers.bigmodel import BigModelProvider
 from sirius_chat.providers.deepseek import DeepSeekProvider
 from sirius_chat.providers.openai_compatible import OpenAICompatibleProvider
 from sirius_chat.providers.siliconflow import SiliconFlowProvider
@@ -17,6 +18,7 @@ PROVIDER_KEYS_FILE = "provider_keys.json"
 
 _OPENAI_PROVIDER_TYPES = {"openai", "openai-compatible"}
 _ALIYUN_BAILIAN_PROVIDER_TYPES = {"aliyun-bailian", "bailian", "dashscope"}
+_BIGMODEL_PROVIDER_TYPES = {"bigmodel", "zhipu", "zhipuai"}
 _DEEPSEEK_PROVIDER_TYPES = {"deepseek"}
 _SILICONFLOW_PROVIDER_TYPES = {"siliconflow"}
 _VOLCENGINE_ARK_PROVIDER_TYPES = {"volcengine-ark", "ark"}
@@ -30,6 +32,10 @@ _SUPPORTED_PROVIDER_PLATFORMS: dict[str, dict[str, str]] = {
     "aliyun-bailian": {
         "default_base_url": "https://dashscope.aliyuncs.com/compatible-mode",
         "notes": "Aliyun Bailian DashScope OpenAI-compatible endpoint",
+    },
+    "bigmodel": {
+        "default_base_url": "https://open.bigmodel.cn/api/paas/v4",
+        "notes": "BigModel GLM chat completions endpoint",
     },
     "deepseek": {
         "default_base_url": "https://api.deepseek.com",
@@ -75,6 +81,8 @@ def normalize_provider_type(provider_type: str) -> str:
         return "volcengine-ark"
     if normalized in {"bailian", "dashscope"}:
         return "aliyun-bailian"
+    if normalized in {"zhipu", "zhipuai"}:
+        return "bigmodel"
     return normalized
 
 
@@ -306,6 +314,11 @@ class AutoRoutingProvider(LLMProvider):
                 api_key=config.api_key,
                 base_url=config.base_url or "https://dashscope.aliyuncs.com/compatible-mode",
             )
+        if config.provider_type in _BIGMODEL_PROVIDER_TYPES:
+            return BigModelProvider(
+                api_key=config.api_key,
+                base_url=config.base_url or "https://open.bigmodel.cn/api/paas/v4",
+            )
         if config.provider_type in _SILICONFLOW_PROVIDER_TYPES:
             return SiliconFlowProvider(api_key=config.api_key)
         if config.provider_type in _DEEPSEEK_PROVIDER_TYPES:
@@ -362,6 +375,11 @@ def _create_provider_from_config(config: ProviderConfig) -> LLMProvider:
         return AliyunBailianProvider(
             api_key=config.api_key,
             base_url=config.base_url or "https://dashscope.aliyuncs.com/compatible-mode",
+        )
+    if provider_type in _BIGMODEL_PROVIDER_TYPES:
+        return BigModelProvider(
+            api_key=config.api_key,
+            base_url=config.base_url or "https://open.bigmodel.cn/api/paas/v4",
         )
     if provider_type in _SILICONFLOW_PROVIDER_TYPES:
         return SiliconFlowProvider(api_key=config.api_key)

@@ -12,6 +12,7 @@ from sirius_chat.api import (
     MemoryPolicy,
     Message,
     MockProvider,
+    BigModelProvider,
     OpenAICompatibleProvider,
     OrchestrationPolicy,
     Participant,
@@ -165,6 +166,7 @@ __all__ = [
     "WorkspaceRuntime",
     # Providers
     "MockProvider",
+    "BigModelProvider",
     "OpenAICompatibleProvider",
     "WorkspaceProviderManager",
     "AsyncLLMProvider",

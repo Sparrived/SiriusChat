@@ -1,5 +1,6 @@
 from sirius_chat.providers.base import GenerationRequest, LLMProvider
 from sirius_chat.providers.aliyun_bailian import AliyunBailianProvider
+from sirius_chat.providers.bigmodel import BigModelProvider
 from sirius_chat.providers.deepseek import DeepSeekProvider
 from sirius_chat.providers.mock import MockProvider
 from sirius_chat.providers.openai_compatible import OpenAICompatibleProvider
@@ -23,6 +24,7 @@ __all__ = [
 	"GenerationRequest",
 	"LLMProvider",
 	"AliyunBailianProvider",
+	"BigModelProvider",
 	"MockProvider",
 	"DeepSeekProvider",
 	"OpenAICompatibleProvider",

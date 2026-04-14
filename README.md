@@ -50,7 +50,7 @@
 - **高并发支持**：自动消息合并（debounce）、LLM 并发限流、后台任务隔离
 
 ### 🔌 **多模型协同**
-- **多 Provider 支持**：OpenAI / 阿里云百炼 / DeepSeek / SiliconFlow / Volcengine Ark 等
+- **多 Provider 支持**：OpenAI / 智谱 BigModel（GLM-4.6V）/ 阿里云百炼 / DeepSeek / SiliconFlow / Volcengine Ark 等
 - **任务级模型选择**：记忆提取、事件分析、意图分析等任务可配置独立模型
 - **自动路由**：按 `healthcheck_model` 智能选择最合适的 Provider
 
@@ -166,6 +166,16 @@ asyncio.run(main())
 ```
 
 > `work_path` 保存运行态数据；`config_path` 保存 workspace 配置、provider 与角色资产。不传 `config_path` 时，runtime 会回退到单根模式。外部修改 `config_path` 下的 workspace/config/provider/roleplay 文件后，runtime 会通过文件监听自动刷新；单轮调用前仍保留一次签名校验作为兜底。
+
+**BigModel GLM-4.6V 示例**
+
+```python
+from sirius_chat.api import BigModelProvider
+
+provider = BigModelProvider(api_key="YOUR_BIGMODEL_API_KEY")
+```
+
+> `BigModelProvider` 默认请求 `https://open.bigmodel.cn/api/paas/v4/chat/completions`，兼容传入根域名 `https://open.bigmodel.cn` 或完整 `api/paas/v4` 前缀。多模态消息沿用 OpenAI 兼容的 `content` 列表格式，可直接用于 `glm-4.6v`。
 
 **底层模式：AsyncRolePlayEngine + SessionConfig（高级控制）**
 

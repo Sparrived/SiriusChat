@@ -110,11 +110,13 @@ def test_get_supported_provider_platforms_contains_core_platforms() -> None:
     platforms = get_supported_provider_platforms()
 
     assert "aliyun-bailian" in platforms
+    assert "bigmodel" in platforms
     assert "siliconflow" in platforms
     assert "deepseek" in platforms
     assert "openai-compatible" in platforms
     assert "volcengine-ark" in platforms
     assert platforms["aliyun-bailian"]["default_base_url"] == "https://dashscope.aliyuncs.com/compatible-mode"
+    assert platforms["bigmodel"]["default_base_url"] == "https://open.bigmodel.cn/api/paas/v4"
     assert platforms["siliconflow"]["default_base_url"] == "https://api.siliconflow.cn"
     assert platforms["deepseek"]["default_base_url"] == "https://api.deepseek.com"
     assert platforms["volcengine-ark"]["default_base_url"] == "https://ark.cn-beijing.volces.com/api/v3"
@@ -275,6 +277,33 @@ def test_register_provider_with_validation_persists_healthcheck_model(tmp_path: 
 def test_ensure_provider_platform_supported_normalizes_alias() -> None:
     assert ensure_provider_platform_supported("ark") == "volcengine-ark"
     assert ensure_provider_platform_supported("bailian") == "aliyun-bailian"
+    assert ensure_provider_platform_supported("zhipu") == "bigmodel"
+
+
+def test_auto_routing_provider_routes_to_bigmodel_when_models_list_contains_model() -> None:
+    routing = AutoRoutingProvider(
+        {
+            "bigmodel": ProviderConfig(
+                provider_type="bigmodel",
+                api_key="bigmodel-key",
+                base_url="",
+                healthcheck_model="",
+                models=["glm-4.6v"],
+            ),
+            "openai-compatible": ProviderConfig(
+                provider_type="openai-compatible",
+                api_key="openai-key",
+                base_url="",
+                healthcheck_model="",
+            ),
+        }
+    )
+
+    with patch("sirius_chat.providers.routing.BigModelProvider.generate", return_value="bigmodel-ok") as gen:
+        output = routing.generate(_request("glm-4.6v"))
+
+    assert output == "bigmodel-ok"
+    assert gen.call_count == 1
 
 
 def test_merge_provider_sources_normalizes_aliyun_bailian_alias(tmp_path: Path) -> None:

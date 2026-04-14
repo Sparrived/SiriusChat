@@ -101,6 +101,13 @@ def test_public_api_exposes_aliyun_bailian_provider() -> None:
     assert provider is not None
 
 
+def test_public_api_exposes_bigmodel_provider() -> None:
+    from sirius_chat.api import BigModelProvider
+
+    provider = BigModelProvider(api_key="test-key")
+    assert provider is not None
+
+
 def test_extract_assistant_messages_filters_system_and_user() -> None:
     async def _run() -> None:
         provider = MockProvider(responses=["ok-1", "ok-2"])

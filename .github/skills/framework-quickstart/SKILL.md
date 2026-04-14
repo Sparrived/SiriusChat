@@ -38,16 +38,17 @@ description: "当你需要在不通读全部代码的情况下快速理解 Siriu
 18. `sirius_chat/skills/` ✨ (SKILL系统)
 19. `sirius_chat/providers/mock.py`
 18. `sirius_chat/providers/openai_compatible.py`
-19. `sirius_chat/providers/aliyun_bailian.py`
-19. `sirius_chat/providers/siliconflow.py`
-20. `sirius_chat/providers/volcengine_ark.py`
-21. `sirius_chat/providers/deepseek.py`
-22. `sirius_chat/providers/routing.py`
-23. `sirius_chat/user_memory.py`
-23. `sirius_chat/performance/` ✨ (P2-002 性能监控)
-24. `sirius_chat/cli.py`
-25. `sirius_chat/api/`
-26. `tests/test_engine.py`
+20. `sirius_chat/providers/bigmodel.py`
+21. `sirius_chat/providers/aliyun_bailian.py`
+22. `sirius_chat/providers/siliconflow.py`
+23. `sirius_chat/providers/volcengine_ark.py`
+24. `sirius_chat/providers/deepseek.py`
+25. `sirius_chat/providers/routing.py`
+26. `sirius_chat/user_memory.py`
+27. `sirius_chat/performance/` ✨ (P2-002 性能监控)
+28. `sirius_chat/cli.py`
+29. `sirius_chat/api/`
+30. `tests/test_engine.py`
 
 ## 心智模型
 

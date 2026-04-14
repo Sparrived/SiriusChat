@@ -14,6 +14,7 @@ import pytest
 
 from sirius_chat.providers.aliyun_bailian import AliyunBailianProvider
 from sirius_chat.providers.base import GenerationRequest
+from sirius_chat.providers.bigmodel import BigModelProvider
 from sirius_chat.providers.deepseek import DeepSeekProvider
 from sirius_chat.providers.mock import MockProvider
 from sirius_chat.providers.openai_compatible import OpenAICompatibleProvider
@@ -70,6 +71,15 @@ _PROVIDER_SPECS: list[dict] = [
         "model": "deepseek-chat",
         "patch_target": "sirius_chat.providers.deepseek.urllib_request.urlopen",
         "expected_url": "https://api.deepseek.com/chat/completions",
+        "has_reasoning": True,
+    },
+    {
+        "id": "bigmodel",
+        "cls": BigModelProvider,
+        "init": {"api_key": "test-key"},
+        "model": "glm-4.6v",
+        "patch_target": "sirius_chat.providers.bigmodel.urllib_request.urlopen",
+        "expected_url": "https://open.bigmodel.cn/api/paas/v4/chat/completions",
         "has_reasoning": True,
     },
     {
@@ -170,6 +180,15 @@ def test_provider_falls_back_to_provider_timeout(spec: dict) -> None:
         )
         provider.generate(_make_request(spec["model"]))
     assert mocked.call_args.kwargs["timeout"] == 41.0
+
+
+def test_bigmodel_provider_normalizes_root_base_url() -> None:
+    provider = BigModelProvider(api_key="test-key", base_url="https://open.bigmodel.cn")
+    with patch("sirius_chat.providers.bigmodel.urllib_request.urlopen") as mocked:
+        mocked.return_value = _FakeResponse({"choices": [{"message": {"content": "ok"}}]})
+        provider.generate(_make_request("glm-4.6v"))
+    called_request = mocked.call_args[0][0]
+    assert called_request.full_url == "https://open.bigmodel.cn/api/paas/v4/chat/completions"
 
 
 # ---------------------------------------------------------------------------

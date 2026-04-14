@@ -89,6 +89,16 @@ asyncio.run(main())
 
 > `work_path` 保存会话、记忆、token 与 skill_data；`config_path` 保存 workspace/provider/roleplay/skills 配置。不传 `config_path` 时，系统自动回退到单根布局。`session.json`、`config/session_config.json` 都支持 JSONC 风格注释，CLI 的 `--init-config` 会生成带注释模板。
 
+若你使用智谱 BigModel 的 `glm-4.6v`，可以直接改用：
+
+```python
+from sirius_chat.api import BigModelProvider
+
+provider = BigModelProvider(api_key="YOUR_BIGMODEL_API_KEY")
+```
+
+`BigModelProvider` 默认请求 `https://open.bigmodel.cn/api/paas/v4/chat/completions`，支持 OpenAI 兼容的多模态 `content` 列表格式，例如 `image_url` + `text` 组合输入。
+
 ### 低层入口：AsyncRolePlayEngine + SessionConfig
 
 ```python
