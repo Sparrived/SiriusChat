@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+## [0.26.1] - 2026-04-15
+
+### Fixed
+- **手动修改配置重启后回退**：修复 `workspace.json` 与 `config/session_config.json` 同时存在时的覆盖优先级问题。现在会以较新的文件作为事实来源，保证手动编辑在重启后不会被旧快照覆盖。
+- **provider_keys.json 热刷新不生效**：修复 `WorkspaceRuntime` 在持有旧 `AutoRoutingProvider` 时，即使检测到 `providers/provider_keys.json` 变更、重建 engine 后仍继续复用旧路由配置的问题。现在 registry 驱动模式会在重建时重新从磁盘加载 provider 配置。
+
+### Added
+- 新增回归测试，覆盖“手动编辑 workspace 配置后重启保持生效”和“手动编辑 provider models 后 watcher 刷新真正切换到新模型路由”两类场景。
+
 ## [0.26.0] - 2026-04-15
 
 ### Added

@@ -49,6 +49,7 @@ class WorkspaceRuntime:
     _transcripts: dict[str, Transcript] = field(default_factory=dict, init=False, repr=False)
     _stores: dict[str, SessionStore] = field(default_factory=dict, init=False, repr=False)
     _initialized: bool = field(default=False, init=False, repr=False)
+    _prefer_workspace_registry_provider: bool = field(default=False, init=False, repr=False)
 
     def __post_init__(self) -> None:
         self.work_path = Path(self.work_path)
@@ -56,6 +57,7 @@ class WorkspaceRuntime:
         self.layout = WorkspaceLayout(self.work_path, config_path=self.config_path)
         self._config_manager = ConfigManager(base_path=self.layout.config_root)
         self._provider_manager = WorkspaceProviderManager(self.layout)
+        self._prefer_workspace_registry_provider = self.provider is None or isinstance(self.provider, AutoRoutingProvider)
 
     @classmethod
     def open(
@@ -242,6 +244,7 @@ class WorkspaceRuntime:
 
     def set_provider(self, provider: LLMProvider | AsyncLLMProvider | None) -> None:
         self.provider = provider
+        self._prefer_workspace_registry_provider = provider is None or isinstance(provider, AutoRoutingProvider)
         self._engine = None
 
     def set_provider_entries(self, entries: list[dict[str, object]], *, persist: bool = True) -> None:
@@ -270,8 +273,14 @@ class WorkspaceRuntime:
                     enabled=bool(item.get("enabled", True)),
                     models=models,
                 )
+        if persist:
+            self.provider = None
+            self._prefer_workspace_registry_provider = True
+            self._engine = None
+            return
         if saved:
             self.provider = AutoRoutingProvider(saved)
+            self._prefer_workspace_registry_provider = False
             self._engine = None
 
     def export_workspace_defaults(self) -> dict[str, object]:
@@ -362,11 +371,14 @@ class WorkspaceRuntime:
         if self._engine is not None:
             return self._engine
         provider = self.provider
-        if provider is None:
+        if self._prefer_workspace_registry_provider:
             providers = self._provider_manager.load()
-            if not providers:
+            if providers:
+                provider = AutoRoutingProvider(providers)
+            elif provider is None:
                 raise RuntimeError("当前 workspace 尚未配置可用 provider。")
-            provider = AutoRoutingProvider(providers)
+        elif provider is None:
+            raise RuntimeError("当前 workspace 尚未配置可用 provider。")
         self._engine = AsyncRolePlayEngine(provider)
         return self._engine
 

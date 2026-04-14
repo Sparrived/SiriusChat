@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import shutil
 from pathlib import Path
+from unittest.mock import patch
 
 from sirius_chat.api import Message, UserProfile, WorkspaceLayout, WorkspaceRuntime
 from sirius_chat.config import ConfigManager
 from sirius_chat.models import Transcript
 from sirius_chat.providers.mock import MockProvider
+from sirius_chat.providers.routing import AutoRoutingProvider, ProviderConfig, ProviderRegistry
 
 
 async def _wait_for_active_agent(runtime: WorkspaceRuntime, expected_agent_key: str) -> None:
@@ -187,6 +190,175 @@ def test_workspace_runtime_applies_external_config_changes_via_file_watch(tmp_pa
             assert len(assistant_messages) == 2
             assert assistant_messages[-1].speaker == "副助手"
             assert assistant_messages[-1].content == "第二轮回复"
+        finally:
+            await runtime.close()
+
+    asyncio.run(_run())
+
+
+def test_workspace_runtime_manual_workspace_manifest_edit_survives_restart(tmp_path: Path) -> None:
+    async def _run() -> None:
+        config_root = tmp_path / "config"
+        data_root = tmp_path / "runtime"
+        _write_workspace_agents(
+            config_root,
+            data_root=data_root,
+            agents_payload={
+                "main_agent": {
+                    "agent": {
+                        "name": "主助手",
+                        "persona": "测试人格",
+                        "model": "mock-model",
+                        "temperature": 0.7,
+                        "max_tokens": 512,
+                        "metadata": {},
+                    },
+                    "global_system_prompt": "测试系统提示词",
+                },
+                "alt_agent": {
+                    "agent": {
+                        "name": "副助手",
+                        "persona": "手改后人格",
+                        "model": "mock-model",
+                        "temperature": 0.7,
+                        "max_tokens": 512,
+                        "metadata": {},
+                    },
+                    "global_system_prompt": "手改后系统提示词",
+                },
+            },
+        )
+
+        runtime = WorkspaceRuntime.open(
+            data_root,
+            config_path=config_root,
+            provider=MockProvider(responses=["第一轮回复"]),
+        )
+        try:
+            await runtime.initialize()
+        finally:
+            await runtime.close()
+
+        layout = WorkspaceLayout(data_root, config_path=config_root)
+        manifest_path = layout.workspace_manifest_path()
+        manifest_payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest_payload["active_agent_key"] = "alt_agent"
+        manifest_path.write_text(
+            json.dumps(manifest_payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        session_config_path = layout.session_config_path()
+        newer_ns = session_config_path.stat().st_mtime_ns + 1_000_000
+        os.utime(manifest_path, ns=(newer_ns, newer_ns))
+
+        reopened = WorkspaceRuntime.open(
+            data_root,
+            config_path=config_root,
+            provider=MockProvider(responses=["第二轮回复"]),
+        )
+        try:
+            await reopened.initialize()
+            workspace_config = reopened.workspace_config
+            assert workspace_config is not None
+            assert workspace_config.active_agent_key == "alt_agent"
+
+            transcript = await reopened.run_live_message(
+                session_id="manual-manifest-edit",
+                turn=Message(role="user", speaker="Alice", content="你好"),
+            )
+            assert transcript.messages[-1].speaker == "副助手"
+        finally:
+            await reopened.close()
+
+    asyncio.run(_run())
+
+
+def test_workspace_runtime_reloads_provider_registry_models_after_manual_edit(tmp_path: Path) -> None:
+    async def _run() -> None:
+        config_root = tmp_path / "config"
+        data_root = tmp_path / "runtime"
+        _write_workspace_agents(
+            config_root,
+            data_root=data_root,
+            agents_payload={
+                "main_agent": {
+                    "agent": {
+                        "name": "主助手",
+                        "persona": "测试人格",
+                        "model": "old-model",
+                        "temperature": 0.7,
+                        "max_tokens": 512,
+                        "metadata": {},
+                    },
+                    "global_system_prompt": "测试系统提示词",
+                },
+                "alt_agent": {
+                    "agent": {
+                        "name": "副助手",
+                        "persona": "切换后人格",
+                        "model": "new-model",
+                        "temperature": 0.7,
+                        "max_tokens": 512,
+                        "metadata": {},
+                    },
+                    "global_system_prompt": "切换后系统提示词",
+                },
+            },
+        )
+
+        layout = WorkspaceLayout(data_root, config_path=config_root)
+        registry = ProviderRegistry(layout)
+        registry.save(
+            {
+                "openai-compatible": ProviderConfig(
+                    provider_type="openai-compatible",
+                    api_key="test-key",
+                    base_url="https://api.openai.com",
+                    healthcheck_model="old-model",
+                    models=["old-model"],
+                )
+            }
+        )
+
+        runtime = WorkspaceRuntime.open(
+            data_root,
+            config_path=config_root,
+            provider=AutoRoutingProvider(registry.load()),
+        )
+        try:
+            with patch(
+                "sirius_chat.providers.openai_compatible.OpenAICompatibleProvider.generate",
+                side_effect=["第一轮回复", "第二轮回复"],
+            ):
+                first = await runtime.run_live_message(
+                    session_id="provider-reload",
+                    turn=Message(role="user", speaker="Alice", content="第一句"),
+                )
+                assert first.messages[-1].content == "第一轮回复"
+
+                provider_payload = json.loads(layout.provider_registry_path().read_text(encoding="utf-8"))
+                provider_payload["providers"]["openai-compatible"]["models"].append("new-model")
+                layout.provider_registry_path().write_text(
+                    json.dumps(provider_payload, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+
+                manager = ConfigManager(base_path=config_root)
+                workspace_config = manager.load_workspace_config(config_root, data_path=data_root)
+                workspace_config.active_agent_key = "alt_agent"
+                manager.save_workspace_config(config_root, workspace_config, data_path=data_root)
+
+                await _wait_for_active_agent(runtime, "alt_agent")
+
+                second = await runtime.run_live_message(
+                    session_id="provider-reload",
+                    turn=Message(role="user", speaker="Alice", content="第二句"),
+                )
+
+                assistant_messages = [item for item in second.messages if item.role == "assistant"]
+                assert len(assistant_messages) == 2
+                assert assistant_messages[-1].speaker == "副助手"
+                assert assistant_messages[-1].content == "第二轮回复"
         finally:
             await runtime.close()
 

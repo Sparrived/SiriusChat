@@ -137,12 +137,18 @@ class ConfigManager:
         manifest_path = layout.workspace_manifest_path()
 
         manifest_payload: dict[str, Any] = {}
+        manifest_mtime_ns = -1
         if manifest_path.exists():
             payload = load_json_document(manifest_path)
             if isinstance(payload, dict):
                 manifest_payload = payload
+                manifest_mtime_ns = manifest_path.stat().st_mtime_ns
 
         session_snapshot = self._load_workspace_session_snapshot(layout)
+        session_snapshot_mtime_ns = -1
+        session_snapshot_path = layout.session_config_path()
+        if session_snapshot and session_snapshot_path.exists():
+            session_snapshot_mtime_ns = session_snapshot_path.stat().st_mtime_ns
         if manifest_payload:
             config = WorkspaceConfig.from_dict(manifest_payload)
         else:
@@ -156,7 +162,12 @@ class ConfigManager:
         config.data_path = layout.data_root
         config.layout_version = layout.layout_version
 
-        if session_snapshot:
+        # workspace.json and config/session_config.json carry overlapping defaults.
+        # Use the newer one as the source of truth so manual edits survive restart.
+        use_session_snapshot = bool(session_snapshot) and (
+            not manifest_payload or session_snapshot_mtime_ns >= manifest_mtime_ns
+        )
+        if use_session_snapshot:
             generated_agent_key = str(session_snapshot.get("generated_agent_key", "")).strip()
             if generated_agent_key:
                 config.active_agent_key = generated_agent_key
