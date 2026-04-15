@@ -109,6 +109,8 @@ class SessionCounters:
     task_token_usage: dict[str, int] = field(default_factory=dict)
     user_message_count_since_extract: dict[str, int] = field(default_factory=dict)
     self_memory_turn_counter: int = 0
+    last_self_memory_context_chars: int = 0
+    last_consolidation_context_chars: int = 0
 
 
 @dataclass(slots=True)
@@ -423,45 +425,14 @@ class AsyncRolePlayEngine:
             _ctx: LiveSessionContext = created,
         ) -> None:
             """Periodically consolidate events + notes + facts for all users."""
-            if not _config.orchestration.is_task_enabled(TASK_MEMORY_MANAGER):
-                return
-
-            adapter = _engine._make_provider_adapter()
-            try:
-                model = _engine.get_model_for_task(_config, TASK_MEMORY_MANAGER)
-            except ValueError:
-                model = _config.agent.model
-
-            for uid in _ctx.subsystems.event_store.get_all_user_ids():
-                await _ctx.subsystems.event_store.consolidate_entries(
-                    user_id=uid,
-                    provider_async=adapter,
-                    model_name=model,
-                    min_entries=bg_config.consolidation_min_entries,
-                )
-
-            for uid in list(_transcript.user_memory.entries.keys()):
-                await _transcript.user_memory.consolidate_summary_notes(
-                    user_id=uid,
-                    provider_async=adapter,
-                    model_name=model,
-                    min_notes=bg_config.consolidation_min_notes,
-                )
-                await _transcript.user_memory.consolidate_memory_facts(
-                    user_id=uid,
-                    provider_async=adapter,
-                    model_name=model,
-                    min_facts=bg_config.consolidation_min_facts,
-                )
-
-            _ctx.stores.file_store.save_all(_transcript.user_memory)
-            _ctx.stores.event_file_store.save(_ctx.subsystems.event_store)
-
-            if _ctx.stores.self_memory_store is not None:
-                removed = _ctx.subsystems.self_memory.apply_diary_decay()
-                if removed > 0:
-                    logger.info("在整理记忆的间隙，悄悄遗忘了 %d 条已褪色的往事", removed)
-                _ctx.stores.self_memory_store.save(_ctx.subsystems.self_memory)
+            await _engine._run_memory_consolidation_pass(
+                config=_config,
+                transcript=_transcript,
+                context=_ctx,
+            )
+            _ctx.counters.last_consolidation_context_chars = (
+                _engine._estimate_transcript_context_chars(_transcript)
+            )
 
         bg_manager.set_consolidation_callback(_consolidation_callback)
         created.subsystems.bg_task_manager = bg_manager
@@ -589,6 +560,31 @@ class AsyncRolePlayEngine:
             except Exception as e:
                 logger.warning(f"事件记忆最终化失败，继续执行: {e}")
 
+        current_context_chars = self._estimate_transcript_context_chars(transcript)
+        if (
+            self._has_consolidation_candidates(
+                config=config,
+                transcript=transcript,
+                context=context,
+            )
+            and self._is_long_context_trigger_due(
+                config=config,
+                current_context_chars=current_context_chars,
+                last_trigger_context_chars=context.counters.last_consolidation_context_chars,
+            )
+        ):
+            logger.debug(
+                "长上下文触发记忆归纳 | chars=%d threshold=%d",
+                current_context_chars,
+                self._long_context_trigger_threshold(config),
+            )
+            await self._run_memory_consolidation_pass(
+                config=config,
+                transcript=transcript,
+                context=context,
+            )
+            context.counters.last_consolidation_context_chars = current_context_chars
+
         context.stores.file_store.save_all(transcript.user_memory)
         context.stores.event_file_store.save(context.subsystems.event_store)
         if context.stores.self_memory_store is not None:
@@ -663,6 +659,126 @@ class AsyncRolePlayEngine:
                 return await engine._call_provider(request)
 
         return _ProviderAdapter()
+
+    @staticmethod
+    def _estimate_transcript_context_chars(transcript: Transcript) -> int:
+        total = len(transcript.session_summary)
+        for item in transcript.messages:
+            if str(item.role or "").strip().lower() == "system":
+                continue
+            total += len(item.content)
+        return total
+
+    @staticmethod
+    def _long_context_trigger_threshold(config: SessionConfig) -> int:
+        history_budget = max(1, int(config.history_max_chars))
+        return max(200, math.ceil(history_budget * 0.7))
+
+    @staticmethod
+    def _long_context_trigger_step(config: SessionConfig) -> int:
+        history_budget = max(1, int(config.history_max_chars))
+        return max(120, math.ceil(history_budget * 0.08))
+
+    def _is_long_context_trigger_due(
+        self,
+        *,
+        config: SessionConfig,
+        current_context_chars: int,
+        last_trigger_context_chars: int,
+    ) -> bool:
+        if current_context_chars < self._long_context_trigger_threshold(config):
+            return False
+        if last_trigger_context_chars <= 0:
+            return True
+        return current_context_chars >= (
+            last_trigger_context_chars + self._long_context_trigger_step(config)
+        )
+
+    def _has_consolidation_candidates(
+        self,
+        *,
+        config: SessionConfig,
+        transcript: Transcript,
+        context: LiveSessionContext,
+    ) -> bool:
+        min_entries = max(1, int(config.orchestration.consolidation_min_entries))
+        min_notes = max(1, int(config.orchestration.consolidation_min_notes))
+        min_facts = max(1, int(config.orchestration.consolidation_min_facts))
+
+        entry_counts: dict[str, int] = {}
+        for entry in context.subsystems.event_store.entries:
+            user_id = str(entry.user_id or "").strip()
+            if not user_id:
+                continue
+            entry_counts[user_id] = entry_counts.get(user_id, 0) + 1
+            if entry_counts[user_id] >= min_entries:
+                return True
+
+        for item in transcript.user_memory.entries.values():
+            runtime = item.runtime
+            if len(runtime.summary_notes) >= min_notes:
+                return True
+            if len(runtime.memory_facts) >= min_facts:
+                return True
+
+        return False
+
+    async def _run_memory_consolidation_pass(
+        self,
+        *,
+        config: SessionConfig,
+        transcript: Transcript,
+        context: LiveSessionContext,
+    ) -> bool:
+        if not config.orchestration.is_task_enabled(TASK_MEMORY_MANAGER):
+            return False
+
+        adapter = self._make_provider_adapter()
+        try:
+            model = self.get_model_for_task(config, TASK_MEMORY_MANAGER)
+        except ValueError:
+            model = config.agent.model
+
+        did_change = False
+        min_entries = max(1, int(config.orchestration.consolidation_min_entries))
+        min_notes = max(1, int(config.orchestration.consolidation_min_notes))
+        min_facts = max(1, int(config.orchestration.consolidation_min_facts))
+
+        for uid in context.subsystems.event_store.get_all_user_ids():
+            removed = await context.subsystems.event_store.consolidate_entries(
+                user_id=uid,
+                provider_async=adapter,
+                model_name=model,
+                min_entries=min_entries,
+            )
+            did_change = did_change or removed > 0
+
+        for uid in list(transcript.user_memory.entries.keys()):
+            removed_notes = await transcript.user_memory.consolidate_summary_notes(
+                user_id=uid,
+                provider_async=adapter,
+                model_name=model,
+                min_notes=min_notes,
+            )
+            removed_facts = await transcript.user_memory.consolidate_memory_facts(
+                user_id=uid,
+                provider_async=adapter,
+                model_name=model,
+                min_facts=min_facts,
+            )
+            did_change = did_change or removed_notes > 0 or removed_facts > 0
+
+        context.stores.file_store.save_all(transcript.user_memory)
+        context.stores.event_file_store.save(context.subsystems.event_store)
+
+        if context.stores.self_memory_store is not None:
+            removed = context.subsystems.self_memory.apply_diary_decay()
+            if removed > 0:
+                logger.info("在整理记忆的间隙，悄悄遗忘了 %d 条已褪色的往事", removed)
+                did_change = True
+            context.stores.self_memory_store.save(context.subsystems.self_memory)
+
+        return did_change
 
     async def _call_provider_with_retry(
         self,
@@ -1576,6 +1692,10 @@ class AsyncRolePlayEngine:
     ) -> Transcript:
 
         context = self._get_or_create_live_context(config=config, transcript=transcript)
+        if not finalize_and_persist:
+            bg_manager = context.subsystems.bg_task_manager
+            if bg_manager is not None and not bg_manager.is_running():
+                await bg_manager.start()
         participant = self._resolve_participant_for_turn(
             transcript=transcript,
             turn=turn,
@@ -1841,14 +1961,29 @@ class AsyncRolePlayEngine:
                 batch_size = max(1, int(config.orchestration.self_memory_extract_batch_size))
                 min_chars = int(getattr(config.orchestration, "self_memory_min_chars", 0))
                 reply_content = assistant_message.content
+                current_context_chars = self._estimate_transcript_context_chars(transcript)
                 trigger_by_count = context.counters.self_memory_turn_counter % batch_size == 0
                 trigger_by_chars = min_chars > 0 and len(reply_content) >= min_chars
-                if trigger_by_count or trigger_by_chars:
+                trigger_by_context = self._is_long_context_trigger_due(
+                    config=config,
+                    current_context_chars=current_context_chars,
+                    last_trigger_context_chars=context.counters.last_self_memory_context_chars,
+                )
+                if trigger_by_count or trigger_by_chars or trigger_by_context:
+                    reason_parts: list[str] = []
+                    if trigger_by_count:
+                        reason_parts.append("count")
+                    if trigger_by_chars:
+                        reason_parts.append("chars")
+                    if trigger_by_context:
+                        reason_parts.append("context")
                     logger.debug(
-                        "自我记忆提取触发 | 轮次=%d batch=%d chars=%d",
+                        "自我记忆提取触发 | reasons=%s | 轮次=%d batch=%d chars=%d ctx=%d",
+                        "/".join(reason_parts) or "unknown",
                         context.counters.self_memory_turn_counter,
                         batch_size,
                         len(reply_content),
+                        current_context_chars,
                     )
                     await self._run_self_memory_extract_task(
                         config=config,
@@ -1857,6 +1992,7 @@ class AsyncRolePlayEngine:
                         assistant_content=reply_content,
                     )
                     context.counters.self_memory_turn_counter = 0
+                    context.counters.last_self_memory_context_chars = current_context_chars
                     if context.stores.self_memory_store is not None:
                         context.stores.self_memory_store.save(context.subsystems.self_memory)
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -25,6 +26,7 @@ from sirius_chat.config.models import (
 )
 from sirius_chat.models.models import Message, ReplyRuntimeState, Transcript
 from sirius_chat.core.engine import AsyncRolePlayEngine
+from sirius_chat.providers.mock import MockProvider
 
 
 # ── Helpers ──
@@ -295,6 +297,7 @@ class TestGlossarySubsystem:
         mgr.add_or_update_term(_make_term(term="API", definition="original", confidence=0.9))
         mgr.add_or_update_term(_make_term(term="API", definition="weaker", confidence=0.3))
         term = mgr.get_term("api")
+        assert term is not None
         assert term.definition == "original"
 
     def test_empty_term_ignored(self):
@@ -328,7 +331,9 @@ class TestGlossarySubsystem:
         mgr = SelfMemoryManager()
         mgr.add_or_update_term(_make_term(term="Docker", domain="custom"))
         mgr.add_or_update_term(_make_term(term="Docker", domain="tech"))
-        assert mgr.get_term("docker").domain == "tech"
+        term = mgr.get_term("docker")
+        assert term is not None
+        assert term.domain == "tech"
 
 
 # ==============================================================================
@@ -444,7 +449,7 @@ class TestPromptIntegration:
                 agent=Agent(name="Bot", persona="helpful", model="m"),
                 global_system_prompt="Global prompt.",
             ),
-            work_path="./data",
+            work_path=Path("./data"),
         )
         transcript = Transcript()
         prompt = build_system_prompt(
@@ -460,7 +465,7 @@ class TestPromptIntegration:
                 agent=Agent(name="Bot", persona="helpful", model="m"),
                 global_system_prompt="Global prompt.",
             ),
-            work_path="./data",
+            work_path=Path("./data"),
         )
         transcript = Transcript()
         prompt = build_system_prompt(
@@ -476,7 +481,7 @@ class TestPromptIntegration:
                 agent=Agent(name="Bot", persona="helpful", model="m"),
                 global_system_prompt="Global prompt.",
             ),
-            work_path="./data",
+            work_path=Path("./data"),
         )
         transcript = Transcript()
         prompt = build_system_prompt(config, transcript, diary_section="", glossary_section="")
@@ -588,7 +593,88 @@ class TestManagerSerialization:
         assert len(restored.diary_entries) == 2
         assert restored.diary_entries[1].keywords == ["kw"]
         assert len(restored.glossary_terms) == 2
-        assert restored.get_term("rest").definition == "RESTful"
+        term = restored.get_term("rest")
+        assert term is not None
+        assert term.definition == "RESTful"
+
+
+class TestSelfMemoryActivation:
+
+    def test_long_context_trigger_uses_memory_manager_model(self):
+        async def _run() -> None:
+            provider = MockProvider(
+                responses=[
+                    "这是一次较长的回复，会把 Apollo 项目继续推进并记下关键术语。",
+                    json.dumps(
+                        {
+                            "diary": [
+                                {
+                                    "content": "记下 Apollo 项目需要继续推进",
+                                    "importance": 0.8,
+                                    "keywords": ["Apollo"],
+                                    "category": "milestone",
+                                }
+                            ],
+                            "glossary": [
+                                {
+                                    "term": "Apollo",
+                                    "definition": "当前对话里的项目代号",
+                                    "domain": "custom",
+                                    "confidence": 0.9,
+                                }
+                            ],
+                        },
+                        ensure_ascii=False,
+                    ),
+                ],
+            )
+            engine = AsyncRolePlayEngine(provider=provider)
+            config = SessionConfig(
+                work_path=Path("data/tests/self_memory_long_context"),
+                preset=AgentPreset(
+                    agent=Agent(name="主助手", persona="会沉淀长期上下文", model="chat-model"),
+                    global_system_prompt="测试系统提示词",
+                ),
+                history_max_chars=200,
+                enable_auto_compression=False,
+                orchestration=OrchestrationPolicy(
+                    task_models={
+                        "memory_extract": "aux-memory-model",
+                        "event_extract": "aux-event-model",
+                        "memory_manager": "memory-manager-model",
+                    },
+                    task_enabled={
+                        "memory_extract": False,
+                        "event_extract": False,
+                        "memory_manager": False,
+                    },
+                    enable_self_memory=True,
+                    self_memory_extract_batch_size=99,
+                    self_memory_min_chars=0,
+                    pending_message_threshold=0.0,
+                ),
+            )
+            transcript = Transcript()
+            transcript.add(Message(role="system", content=config.global_system_prompt))
+
+            transcript = await engine.run_live_message(
+                config=config,
+                turn=Message(role="user", speaker="小王", content="Apollo 计划细节 " * 30),
+                transcript=transcript,
+                finalize_and_persist=True,
+            )
+
+            self_requests = [
+                request for request in provider.requests if request.purpose == "self_memory_extract"
+            ]
+            assert len(self_requests) == 1
+            assert self_requests[0].model == "memory-manager-model"
+
+            context = engine._live_session_contexts[id(transcript)]
+            assert context.subsystems.self_memory.diary_entries[0].content == "记下 Apollo 项目需要继续推进"
+            assert context.subsystems.self_memory.get_term("apollo") is not None
+
+        asyncio.run(_run())
 
 
 # ==============================================================================

@@ -4,6 +4,22 @@
 
 ## [Unreleased]
 
+## [0.27.3] - 2026-04-15
+
+### Changed
+- **长上下文会直接触发记忆归纳**：会话 finalize 时若当前上下文已明显接近 `history_max_chars`，engine 会立即补跑一轮 `memory_manager` 归纳，不再只能等后台定时器。
+- **AI 自身记忆新增长上下文触发**：除 `self_memory_extract_batch_size` 和 `self_memory_min_chars` 外，长对话也会主动触发 diary/glossary 提取，避免低频回复场景几乎不沉淀。
+- **self-memory 默认复用 memory_manager 模型**：未单独配置 `task_models["self_memory_extract"]` 时，自身记忆会复用 `memory_manager` 的模型路由，便于两者共用同一辅助模型。
+
+### Fixed
+- **direct run_live_message 保持活跃会话时会正确启动后台归纳管理器**：不再只有先显式调用 `run_live_session()` 的路径才能让后台循环运行。
+
+### Added
+- 新增回归测试，覆盖长上下文 finalize 触发归纳、self-memory 长上下文触发以及 `run_live_message(..., finalize_and_persist=False)` 下的后台任务启动。
+
+### Documentation
+- 更新 README、架构文档、策略文档、外部接入文档与相关 SKILL，统一说明长上下文触发与 self-memory / memory_manager 的模型复用关系。
+
 ## [0.27.2] - 2026-04-15
 
 ### Added

@@ -1,4 +1,5 @@
 import asyncio
+import json
 
 from sirius_chat.async_engine import AsyncRolePlayEngine
 from sirius_chat.config import Agent, AgentPreset, SessionConfig, OrchestrationPolicy
@@ -27,6 +28,43 @@ async def _run_live_turns(
             finalize_and_persist=index == len(human_turns) - 1,
         )
     return transcript
+
+
+def test_run_live_message_starts_background_manager_when_session_stays_open() -> None:
+    async def _run() -> None:
+        provider = MockProvider(responses=["保持活跃"])
+        engine = AsyncRolePlayEngine(provider=provider)
+        config = SessionConfig(
+            work_path=Path("data/tests/live_message_bg_start"),
+            preset=AgentPreset(
+                agent=Agent(name="主助手", persona="保持活跃会话", model="mock-model"),
+                global_system_prompt="测试系统提示词",
+            ),
+            orchestration=OrchestrationPolicy(
+                unified_model="mock-model",
+                enable_self_memory=False,
+                task_enabled={
+                    "memory_extract": False,
+                    "event_extract": False,
+                    "memory_manager": False,
+                },
+                pending_message_threshold=0.0,
+            ),
+        )
+
+        transcript = await engine.run_live_message(
+            config=config,
+            turn=Message(role="user", speaker="小王", content="先把会话保持住。"),
+            finalize_and_persist=False,
+        )
+
+        context = engine._live_session_contexts[id(transcript)]
+        assert context.subsystems.bg_task_manager is not None
+        assert context.subsystems.bg_task_manager.is_running() is True
+
+        await context.subsystems.bg_task_manager.stop()
+
+    asyncio.run(_run())
 
 
 def test_roleplay_engine_multi_human_single_ai_transcript() -> None:
@@ -214,6 +252,65 @@ def test_auto_compression_limits_context_budget() -> None:
 
         assert len(transcript.messages) <= 5
         assert transcript.session_summary
+
+    asyncio.run(_run())
+
+
+def test_finalize_triggers_memory_consolidation_for_long_context() -> None:
+    async def _run() -> None:
+        provider = MockProvider(
+            responses=[
+                "先继续对话，稍后整理这些记忆。",
+                json.dumps(["综合摘要A", "综合摘要B"], ensure_ascii=False),
+            ],
+        )
+        engine = AsyncRolePlayEngine(provider=provider)
+        config = SessionConfig(
+            work_path=Path("data/tests/long_context_consolidation"),
+            preset=AgentPreset(
+                agent=Agent(name="主助手", persona="会在长上下文里整理记忆", model="chat-model"),
+                global_system_prompt="测试系统提示词",
+            ),
+            history_max_chars=200,
+            enable_auto_compression=False,
+            orchestration=OrchestrationPolicy(
+                task_models={
+                    "memory_extract": "aux-memory-model",
+                    "event_extract": "aux-event-model",
+                    "memory_manager": "memory-manager-model",
+                },
+                enable_self_memory=False,
+                task_enabled={
+                    "memory_extract": False,
+                    "event_extract": False,
+                    "memory_manager": True,
+                },
+                pending_message_threshold=0.0,
+            ),
+        )
+        transcript = Transcript()
+        transcript.add(Message(role="system", content=config.global_system_prompt))
+        transcript.user_memory.register_user(UserProfile(user_id="u1", name="小王"))
+        transcript.user_memory.entries["u1"].runtime.summary_notes = [
+            f"摘要{i}" for i in range(5)
+        ]
+
+        transcript = await engine.run_live_message(
+            config=config,
+            turn=Message(role="user", speaker="小王", content="Apollo 计划细节 " * 30),
+            transcript=transcript,
+            finalize_and_persist=True,
+        )
+
+        summary_requests = [
+            request for request in provider.requests if request.purpose == "summary_consolidation"
+        ]
+        assert len(summary_requests) == 1
+        assert summary_requests[0].model == "memory-manager-model"
+        assert transcript.user_memory.entries["u1"].runtime.summary_notes == [
+            "综合摘要A",
+            "综合摘要B",
+        ]
 
     asyncio.run(_run())
 

@@ -344,7 +344,7 @@ orchestration = OrchestrationPolicy(
 - 频率控制：当消息数达到批次大小且内容长度满足时，执行任务
 - runtime 先按 session 排队；只有当待处理消息数超过 `pending_message_threshold` 时，才会把同一说话人的连续消息静默合并
 - `min_reply_interval_seconds > 0` 时，AI 刚回复后 runtime 会继续保留会话队列；窗口结束后先合并同一说话人的连续消息，再按 `session_reply_mode` 与 `intent_analysis` 进入下一次回复判断
-- `memory_manager` 同时承担会话收尾整理与后台归纳的模型配置；若不希望后台继续调用模型，可关闭 `task_enabled["memory_manager"]`
+- `memory_manager` 同时承担会话收尾整理、长上下文下的即时归纳以及后台归纳的模型配置；若不希望这些路径继续调用模型，可关闭 `task_enabled["memory_manager"]`
 - SKILL 目录：框架会始终先创建 `{work_path}/skills/` 与 `README.md`；关闭 SKILL 仅影响调用，不影响目录引导文件生成
 - 提示词分割：当 `enable_prompt_driven_splitting=True` 时，系统提示会带分割指令，AI 会在适当位置输出内置的 `<MSG_SPLIT>` 标记；外部不再配置 `split_marker`
 - 当前配置统一通过 `task_enabled/task_models/task_temperatures/task_max_tokens/task_retries` 管理 `intent_analysis` 与 `memory_manager`

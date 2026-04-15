@@ -204,7 +204,7 @@ orchestration 负责控制辅助任务、回复节奏、记忆频率和提示词
 
 - intent_analysis 已是正式一等任务，建议显式配置
 - `intent_analysis` 启用后必须通过模型推断；provider 调用失败或解析失败时，不再回退到关键词意图推断
-- `memory_manager` 通过标准任务配置控制，同时承担后台记忆归纳所需的模型参数
+- `memory_manager` 通过标准任务配置控制，同时承担后台记忆归纳、长上下文下的即时归纳以及 self-memory 默认回退模型参数
 - `min_reply_interval_seconds > 0` 时，runtime 会在 AI 刚回复后的最小间隔内继续蓄积消息；窗口结束后会先合并同一说话人的连续消息，再按 `session_reply_mode` 进入正常回复判断
 - multimodal_parse 已在 v0.15.0 移除，不应再出现在配置中
 - 图片能力应通过 agent 资产中的 metadata.multimodal_model 配置，而不是辅助任务

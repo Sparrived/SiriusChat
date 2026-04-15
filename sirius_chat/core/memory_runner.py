@@ -187,9 +187,15 @@ async def run_self_memory_extract_task(
         return
 
     task_name = "self_memory_extract"
-    model = get_model(config, task_name) if config.orchestration.task_models.get(task_name) else (
-        config.orchestration.unified_model or config.agent.model
-    )
+    if config.orchestration.task_models.get(task_name):
+        model = get_model(config, task_name)
+    elif config.orchestration.unified_model:
+        model = config.orchestration.unified_model
+    else:
+        model = config.orchestration.resolve_model_for_task(
+            TASK_MEMORY_MANAGER,
+            default_model=config.agent.model,
+        )
 
     recent_msgs: list[str] = []
     for msg in transcript.messages[-8:]:

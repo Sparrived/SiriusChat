@@ -138,7 +138,7 @@
 记忆管理器：
 
 - `memory_manager` 通过 `task_enabled/task_models/task_temperatures/task_max_tokens/task_retries` 配置。
-- 后台归纳与会话收尾整理都复用 `memory_manager` 的任务模型。
+- 后台归纳与会话收尾整理都复用 `memory_manager` 的任务模型；当 finalize 时发现上下文已接近预算上限，也会立即触发一次归纳。
 - 多模态输入不会触发独立辅助任务；会直接作为主模型请求的一部分传递。
 
 积压静默批处理：
@@ -191,6 +191,8 @@
 - `enable_self_memory`: 是否启用 AI 自身记忆系统（日记 + 名词解释），默认 `true`。
 - `self_memory_extract_batch_size`: 每 N 条 AI 回复后触发一次 LLM 提取（日记条目和名词），默认 `3`。
 - `self_memory_min_chars`: 单条 AI 回复达到指定字符数时也可触发提取，默认 `0`（关闭）。
+- 当当前上下文已接近 `history_max_chars` 的预算上限时，也会提前触发自身记忆提取，避免长对话里几乎不沉淀。
+- 未单独配置 `task_models["self_memory_extract"]` 时，自身记忆默认复用 `memory_manager` 的模型路由。
 - `self_memory_max_diary_prompt_entries`: 系统提示词中包含的日记条目上限，默认 `6`。
 - `self_memory_max_glossary_prompt_terms`: 系统提示词中包含的名词解释上限，默认 `15`。
 
