@@ -14,14 +14,9 @@
     "task_enabled": {
       "memory_extract": true,
       "event_extract": true,
-      "intent_analysis": true
+      "intent_analysis": true,
+      "memory_manager": true
     },
-    "task_budgets": {
-      "memory_extract": 1200,
-      "event_extract": 1000,
-      "intent_analysis": 600
-    },
-    "enable_prompt_driven_splitting": true,
-    "split_marker": "<MSG_SPLIT>"
+    "enable_prompt_driven_splitting": true
   }
 }

@@ -134,8 +134,8 @@ config = create_session_config_from_selected_agent(
         task_models={
             "memory_extract": "doubao-seed-2-0-lite-260215",
             "intent_analysis": "gpt-4o-mini",
+            "memory_manager": "gpt-4o-mini",
         },
-        task_budgets={"memory_extract": 1200, "intent_analysis": 600},
         task_temperatures={"memory_extract": 0.1, "intent_analysis": 0.1},
         task_max_tokens={"memory_extract": 128, "intent_analysis": 192},
         # 频率控制：每3条消息执行一次，且内容≥50字符
@@ -299,29 +299,26 @@ orchestration = OrchestrationPolicy(
         "memory_extract": "gpt-4o-mini",     # 用户记忆提取
         "event_extract": "gpt-4o-mini",      # 事件提取
         "intent_analysis": "gpt-4o-mini",    # 意图分析（reply_mode=auto/smart）
-        "memory_manager": "gpt-4o-mini",     # 记忆管理（可选）
+        "memory_manager": "gpt-4o-mini",     # 记忆管理与后台归纳
     },
     
-    # === 预算与成本控制 ===
-    task_budgets={
-        "memory_extract": 1200,    # token预算
-        "event_extract": 800,
-        "intent_analysis": 600,
-    },
     task_max_tokens={
         "memory_extract": 128,     # 最大输出token
         "event_extract": 256,
         "intent_analysis": 192,
+        "memory_manager": 256,
     },
     task_temperatures={
         "memory_extract": 0.1,     # 温度（越低越稳定）
         "event_extract": 0.3,
         "intent_analysis": 0.1,
+        "memory_manager": 0.3,
     },
     task_retries={
         "memory_extract": 2,       # 失败重试次数
         "event_extract": 1,
         "intent_analysis": 1,
+        "memory_manager": 1,
     },
     
     # === 执行频率控制 ===
@@ -336,21 +333,21 @@ orchestration = OrchestrationPolicy(
     
     # === 提示词驱动分割（可选） ===
     enable_prompt_driven_splitting=True,   # 启用AI主动分割消息
-    split_marker="<MSG_SPLIT>",            # 分割标记
 )
 ```
 
 **配置说明**：
 - 若 `unified_model` 设置，则覆盖所有 `task_models` 配置
 - `reply_mode=auto` / `smart` 下，意图分析会优先使用 `task_models["intent_analysis"]`；未设置时回退 `unified_model` 或主模型
-- 当 `task_enabled["intent_analysis"] = true` 时，该轮意图结论必须来自模型；预算不足、provider 失败或解析失败时，不再自动回退到关键词意图推断
+- 当 `task_enabled["intent_analysis"] = true` 时，该轮意图结论必须来自模型；provider 失败或解析失败时，不再自动回退到关键词意图推断
 - 频率控制：当消息数达到批次大小且内容长度满足时，执行任务
 - runtime 先按 session 排队；只有当待处理消息数超过 `pending_message_threshold` 时，才会把同一说话人的连续消息静默合并
+- `memory_manager` 同时承担会话收尾整理与后台归纳的模型配置；若不希望后台继续调用模型，可关闭 `task_enabled["memory_manager"]`
 - SKILL 目录：框架会始终先创建 `{work_path}/skills/` 与 `README.md`；关闭 SKILL 仅影响调用，不影响目录引导文件生成
-- 提示词分割：当 `enable_prompt_driven_splitting=True` 时，系统提示会带分割指令，AI 会在适当位置输出 `<MSG_SPLIT>` 标记
-- 当前配置统一通过 `task_enabled/task_models/task_budgets/task_temperatures/task_max_tokens/task_retries` 管理 `intent_analysis`
+- 提示词分割：当 `enable_prompt_driven_splitting=True` 时，系统提示会带分割指令，AI 会在适当位置输出内置的 `<MSG_SPLIT>` 标记；外部不再配置 `split_marker`
+- 当前配置统一通过 `task_enabled/task_models/task_temperatures/task_max_tokens/task_retries` 管理 `intent_analysis` 与 `memory_manager`
 - 旧配置文件若仍包含 `enable_intent_analysis` / `intent_analysis_model`，加载时会自动映射到任务配置，但新的模板与持久化输出不再写出这两个字段
-- 旧配置文件若仍包含 `message_debounce_seconds`，加载时会自动映射到 `pending_message_threshold`；迁移细节见 `docs/migration-v0.27.md`
+- 旧配置文件若仍包含 `message_debounce_seconds` 或 `memory_manager_*`，加载时会自动映射到新任务配置；迁移细节见 `docs/migration-v0.27.md` 与 `docs/migration-v0.27.1.md`
 
 若使用 SiliconFlow，可直接替换 provider：
 
@@ -1135,7 +1132,7 @@ print(f"平均执行时间: {result.mean}ms")
 
 - 对外 Python 调用统一从 `sirius_chat/api/` 导入接口。
 - provider 可选 `OpenAICompatibleProvider`、`AliyunBailianProvider` 或 `SiliconFlowProvider`（按上游厂商选择）。
-- **多模型协同现已默认启用**。通过 `SessionConfig.orchestration` 配置 `task_models`、`task_budgets` 等实现记忆提取、事件提取、多模态解析的分任务路由。若需全部由一个模型处理，改为仅设置 `unified_model`（并清空 `task_models`）。
+- **多模型协同现已默认启用**。通过 `SessionConfig.orchestration` 配置 `task_models`、`task_temperatures`、`task_max_tokens`、`task_retries` 等实现记忆提取、事件提取、意图分析与记忆管理的分任务路由。若需全部由一个模型处理，改为仅设置 `unified_model`（并清空 `task_models`）。
 - 若需更稳健的“提事不提人”识别，可为 `event_extract` 配置辅助模型，提取事件结构化字段后参与命中评分。
 - 需要自动选择时，使用 `AutoRoutingProvider`，并在 `work_path/providers/provider_keys.json` 维护可用 key。
 - 当前未发布阶段，内部实现变更若影响外部行为，可直接升级 `api/` 并同步文档。

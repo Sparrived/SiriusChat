@@ -15,8 +15,12 @@
   "history_max_chars": 4000,
   "enable_auto_compression": true,
   "orchestration": {
-    "enabled": false,
-    "task_models": {},
-    "memory_manager_model": ""
+    "task_enabled": {
+      "memory_extract": false,
+      "event_extract": false,
+      "intent_analysis": false,
+      "memory_manager": false
+    },
+    "task_models": {}
   }
 }

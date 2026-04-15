@@ -33,7 +33,7 @@ orchestration=OrchestrationPolicy(
 # 禁止：启用耗时后台任务（除非测试的正是该任务）
 orchestration=OrchestrationPolicy(
     enable_self_memory=True,        # 会启动后台定时任务
-    consolidation_enabled=True,
+    task_enabled={"memory_manager": True},
 )
 task_enabled={
     "memory_extract": True,   # 会触发额外 LLM 调用

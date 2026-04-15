@@ -27,6 +27,7 @@ from sirius_chat.skills.executor import (
     strip_skill_calls,
     _coerce_type,
 )
+from sirius_chat.core.markers import SKILL_CALL_MARKER
 
 
 # ─────────────────────── Model tests ───────────────────────
@@ -283,6 +284,20 @@ class TestSkillRegistry:
         registry.load_from_directory(skills_dir)
         assert len(registry.all_skills()) == 2
 
+    def test_reload_from_directory_replaces_removed_skills(self, tmp_path: Path):
+        skills_dir = tmp_path / "skills"
+        skills_dir.mkdir()
+        (skills_dir / "greet.py").write_text(SAMPLE_SKILL_CODE, encoding="utf-8")
+        (skills_dir / "calc.py").write_text(SAMPLE_SKILL_LIST_PARAMS, encoding="utf-8")
+
+        registry = SkillRegistry()
+        assert registry.reload_from_directory(skills_dir, auto_install_deps=False) == 2
+        assert sorted(registry.skill_names) == ["calc", "greet"]
+
+        (skills_dir / "calc.py").unlink()
+        assert registry.reload_from_directory(skills_dir, auto_install_deps=False) == 1
+        assert registry.skill_names == ["greet"]
+
 
 # ─────────────────────── Executor tests ───────────────────────
 
@@ -373,7 +388,9 @@ def run(**kwargs):
         registry.load_from_directory(skills_dir)
         executor = SkillExecutor(tmp_path)
 
-        result = executor.execute(registry.get("boom"), {})
+        skill = registry.get("boom")
+        assert skill is not None
+        result = executor.execute(skill, {})
         assert not result.success
         assert "kaboom" in result.error
 
@@ -381,6 +398,7 @@ def run(**kwargs):
     async def test_execute_async(self, tmp_path: Path):
         registry, executor = self._make_skill(tmp_path)
         skill = registry.get("greet")
+        assert skill is not None
         result = await executor.execute_async(skill, {"name": "Async"})
         assert result.success
         assert "Async" in str(result.data)
@@ -473,8 +491,8 @@ class TestSkillEngineIntegration:
 
         policy = OrchestrationPolicy(unified_model="test-model", enable_skills=True, pending_message_threshold=0.0)
         assert policy.enable_skills is True
-        assert policy.skill_call_marker == "[SKILL_CALL:"
         assert policy.max_skill_rounds == 3
+        assert SKILL_CALL_MARKER == "[SKILL_CALL:"
 
     def test_orchestration_policy_skills_default_on(self):
         from sirius_chat.config.models import OrchestrationPolicy
@@ -598,6 +616,8 @@ class TestExampleSkillSystemInfo:
             pytest.skip("Example skill not found")
 
         spec = importlib.util.spec_from_file_location("_test_skill_system_info", skill_path)
+        assert spec is not None
+        assert spec.loader is not None
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
 
@@ -637,6 +657,7 @@ class TestExampleSkillSystemInfo:
         executor = SkillExecutor(tmp_path)
 
         skill = registry.get("system_info")
+        assert skill is not None
         result = executor.execute(skill, {"categories": ["os"]})
         assert result.success
         assert "os" in result.data

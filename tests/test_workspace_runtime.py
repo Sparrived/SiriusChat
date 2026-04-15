@@ -76,6 +76,8 @@ def _write_workspace_agents(
         "task_enabled": {
             "memory_extract": False,
             "event_extract": False,
+            "intent_analysis": False,
+            "memory_manager": False,
         },
     }
     manager.save_workspace_config(config_root, workspace_config, data_path=runtime_root)
@@ -133,6 +135,8 @@ def test_workspace_runtime_batches_backlogged_messages_by_threshold(tmp_path: Pa
             "task_enabled": {
                 "memory_extract": False,
                 "event_extract": False,
+                "intent_analysis": False,
+                "memory_manager": False,
             },
         }
         manager.save_workspace_config(tmp_path, workspace_config)
@@ -274,6 +278,86 @@ def test_workspace_runtime_applies_external_config_changes_via_file_watch(tmp_pa
             assert len(assistant_messages) == 2
             assert assistant_messages[-1].speaker == "副助手"
             assert assistant_messages[-1].content == "第二轮回复"
+        finally:
+            await runtime.close()
+
+    asyncio.run(_run())
+
+
+def test_workspace_runtime_watches_skill_files_and_reloads_registry(tmp_path: Path) -> None:
+    async def _run() -> None:
+        _write_generated_agents(tmp_path)
+        runtime = WorkspaceRuntime.open(tmp_path, provider=MockProvider(responses=["ignored"]))
+        try:
+            await runtime.initialize()
+
+            layout = WorkspaceLayout(tmp_path)
+            watched_paths = runtime._config_watcher._watched_paths if runtime._config_watcher is not None else []
+            assert str((layout.skills_dir() / "README.md").resolve(strict=False)).lower() in watched_paths
+
+            skill_path = layout.skills_dir() / "echo.py"
+            skill_path.write_text(
+                "SKILL_META = {\n"
+                "    \"name\": \"echo\",\n"
+                "    \"description\": \"Echo text\",\n"
+                "    \"parameters\": {\n"
+                "        \"text\": {\"type\": \"str\", \"description\": \"text\", \"required\": True}\n"
+                "    },\n"
+                "}\n\n"
+                "def run(text: str, **kwargs):\n"
+                "    return {\"echo\": text}\n",
+                encoding="utf-8",
+            )
+
+            await runtime._refresh_workspace_config(force=True)
+
+            assert runtime._skill_registry is not None
+            assert "echo" in runtime._skill_registry.skill_names
+
+            skill_path.unlink()
+            await runtime._refresh_workspace_config(force=True)
+
+            assert runtime._skill_registry is not None
+            assert "echo" not in runtime._skill_registry.skill_names
+        finally:
+            await runtime.close()
+
+    asyncio.run(_run())
+
+
+def test_workspace_runtime_initializes_shared_skill_runtime_before_first_message(tmp_path: Path) -> None:
+    async def _run() -> None:
+        _write_generated_agents(tmp_path)
+        layout = WorkspaceLayout(tmp_path)
+        layout.ensure_directories()
+        (layout.skills_dir() / "demo.py").write_text(
+            "SKILL_META = {\n"
+            "    \"name\": \"demo\",\n"
+            "    \"description\": \"demo skill\",\n"
+            "    \"parameters\": {},\n"
+            "}\n\n"
+            "def run(**kwargs):\n"
+            "    return {\"ok\": True}\n",
+            encoding="utf-8",
+        )
+
+        runtime = WorkspaceRuntime.open(tmp_path, provider=MockProvider(responses=["第一轮回复"]))
+        try:
+            await runtime.initialize()
+
+            assert runtime._skill_registry is not None
+            assert "demo" in runtime._skill_registry.skill_names
+            assert runtime._skill_executor is not None
+
+            await runtime.run_live_message(
+                session_id="skill-runtime",
+                turn=Message(role="user", speaker="Alice", content="你好"),
+            )
+
+            engine = runtime._get_engine()
+            live_context = next(iter(engine._live_session_contexts.values()))
+            assert live_context.subsystems.skill_registry is runtime._skill_registry
+            assert live_context.subsystems.skill_executor is runtime._skill_executor
         finally:
             await runtime.close()
 
@@ -539,6 +623,7 @@ def test_workspace_runtime_bootstrap_preserves_existing_task_models_and_provider
                 "memory_extract": True,
                 "event_extract": False,
                 "intent_analysis": True,
+                "memory_manager": False,
             },
             "session_reply_mode": "auto",
         }
@@ -755,6 +840,7 @@ def test_workspace_runtime_uses_session_snapshot_task_models_when_manifest_is_ne
                 "memory_extract": False,
                 "event_extract": True,
                 "intent_analysis": False,
+                "memory_manager": False,
             },
             "event_extract_batch_size": 1,
             "pending_message_threshold": 0,
@@ -774,6 +860,7 @@ def test_workspace_runtime_uses_session_snapshot_task_models_when_manifest_is_ne
             "memory_extract": False,
             "event_extract": True,
             "intent_analysis": False,
+            "memory_manager": False,
         }
         snapshot_payload["orchestration"]["event_extract_batch_size"] = 1
         snapshot_payload["orchestration"]["pending_message_threshold"] = 0.0

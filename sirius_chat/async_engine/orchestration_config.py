@@ -28,7 +28,7 @@ def configure_orchestration_models(
             - memory_extract: 用户记忆提取
             - event_extract: 事件提取
             - intent_analysis: 意图分析
-            - memory_manager: 记忆管理器
+            - memory_manager: 记忆整理与后台归纳
             
     Returns:
         更新后的 SessionConfig 对象（原对象被修改并返回）
@@ -58,45 +58,6 @@ def configure_orchestration_models(
     )
     
     # 创建并返回新的 SessionConfig
-    updated_config = replace(
-        config,
-        orchestration=updated_orchestration,
-    )
-    
-    return updated_config
-
-
-def configure_orchestration_budgets(
-    config: SessionConfig,
-    **task_budgets: int,
-) -> SessionConfig:
-    """配置多模型协同任务的 token 预算。
-    
-    Args:
-        config: 会话配置对象
-        **task_budgets: 任务名称到 token 预算的映射
-        
-    Returns:
-        更新后的 SessionConfig 对象
-        
-    Example:
-        >>> config = configure_orchestration_budgets(
-        ...     config,
-        ...     memory_extract=1000,
-        ...     event_extract=500,
-        ... )
-    """
-    if not config.orchestration:
-        raise ValueError("config.orchestration 为 None，无法配置")
-    
-    updated_budgets = dict(config.orchestration.task_budgets)
-    updated_budgets.update(task_budgets)
-    
-    updated_orchestration = replace(
-        config.orchestration,
-        task_budgets=updated_budgets,
-    )
-    
     updated_config = replace(
         config,
         orchestration=updated_orchestration,
@@ -172,7 +133,6 @@ def configure_orchestration_retries(
 def configure_full_orchestration(
     config: SessionConfig,
     task_models: dict[str, str] | None = None,
-    task_budgets: dict[str, int] | None = None,
     task_temperatures: dict[str, float] | None = None,
     task_retries: dict[str, int] | None = None,
     **extra_fields: Any,
@@ -185,10 +145,9 @@ def configure_full_orchestration(
     Args:
         config: 会话配置对象
         task_models: 任务模型映射
-        task_budgets: 任务预算映射
         task_temperatures: 任务温度映射
         task_retries: 任务重试次数映射
-        **extra_fields: 其他 OrchestrationPolicy 字段（如 memory_manager_model）
+        **extra_fields: 其他 OrchestrationPolicy 字段（如 pending_message_threshold）
         
     Returns:
         更新后的 SessionConfig 对象
@@ -200,14 +159,10 @@ def configure_full_orchestration(
         ...         "memory_extract": "gpt-4-mini",
         ...         "event_extract": "gpt-4-mini",
         ...     },
-        ...     task_budgets={
-        ...         "memory_extract": 1000,
-        ...         "event_extract": 500,
-        ...     },
         ...     task_temperatures={
         ...         "memory_extract": 0.1,
         ...     },
-        ...     memory_manager_model="gpt-4",
+        ...     pending_message_threshold=0,
         ... )
     """
     if not config.orchestration:
@@ -222,11 +177,6 @@ def configure_full_orchestration(
         merged_models.update(task_models)
         update_fields["task_models"] = merged_models
         update_fields["unified_model"] = ""  # 清除统一模型
-    
-    if task_budgets is not None:
-        merged_budgets = dict(config.orchestration.task_budgets)
-        merged_budgets.update(task_budgets)
-        update_fields["task_budgets"] = merged_budgets
     
     if task_temperatures is not None:
         merged_temps = dict(config.orchestration.task_temperatures)

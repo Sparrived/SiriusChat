@@ -115,6 +115,15 @@ Categories of events emitted during session processing.
 
 Create an async roleplay engine for non-blocking integration.
 
+#### `open_workspace_runtime(work_path, config_path, provider: LLMProvider | AsyncLLMProvider | None, bootstrap: WorkspaceBootstrap | None, persist_bootstrap: bool) -> WorkspaceRuntime`
+
+Open a workspace runtime that owns persistence and session recovery.
+
+When *bootstrap* is provided the host-supplied defaults are merged into the
+workspace on the first ``initialize()`` call.  If *persist_bootstrap* is
+``True`` (default) the merged values are written to the workspace files so
+that subsequent launches recover them automatically.
+
 #### `async ainit_live_session(engine: AsyncRolePlayEngine, config: SessionConfig, transcript: Transcript | None) -> Transcript`
 
 Async facade for live session initialization.
@@ -394,9 +403,17 @@ Attributes:
 - `as_user_profile(self) -> UserProfile`
 - `to_dict(self) -> dict[str, Any]` - Serialise to a plain dict (recursively via ``dataclasses.asdict``).
 
+#### `ProviderPolicy`
+
+Workspace-level provider bootstrap policy.
+
 #### `SessionConfig`
 
 Session configuration including agent, paths, and orchestration policy.
+
+#### `SessionDefaults`
+
+Workspace-level defaults used to build SessionConfig instances.
 
 #### `TokenUsageRecord`
 
@@ -442,6 +459,21 @@ Attributes:
 - `as_user_profile(self) -> UserProfile`
 - `to_dict(self) -> dict[str, Any]` - Serialise to a plain dict (recursively via ``dataclasses.asdict``).
 
+#### `WorkspaceBootstrap`
+
+Host-provided defaults injected at workspace open time.
+
+The host (plugin / CLI) fills in the fields it cares about; the runtime
+decides how to merge them into the workspace and whether to persist.
+
+#### `WorkspaceConfig`
+
+Persisted workspace-level configuration source.
+
+**方法：**
+
+- `to_dict(self) -> dict[str, Any]`
+
 
 ---
 
@@ -459,14 +491,13 @@ Attributes:
 
 ### Functions
 
-#### `setup_multimodel_config(session_config: SessionConfig, task_models: dict[str, str], task_budgets: dict[str, int] | None, task_temperatures: dict[str, float] | None, task_max_tokens: dict[str, int] | None, task_retries: dict[str, int] | None, max_multimodal_inputs_per_turn: int, max_multimodal_value_length: int) -> SessionConfig`
+#### `setup_multimodel_config(session_config: SessionConfig, task_models: dict[str, str], task_temperatures: dict[str, float] | None, task_max_tokens: dict[str, int] | None, task_retries: dict[str, int] | None, max_multimodal_inputs_per_turn: int, max_multimodal_value_length: int) -> SessionConfig`
 
 在现有会话配置中设置多模型编排。
 
 Args:
     session_config: 现有的 SessionConfig 对象
     task_models: 任务模型映射，例如 {"memory_extract": "model-1", "event_extract": "model-2", "intent_analysis": "model-3"}
-    task_budgets: 各任务的 token 预算，例如 {"memory_extract": 1200, "event_extract": 1000, "intent_analysis": 600}
     task_temperatures: 各任务的采样温度，例如 {"memory_extract": 0.1}
     task_max_tokens: 各任务的最大 token 数，例如 {"memory_extract": 128}
     task_retries: 各任务的重试次数，例如 {"memory_extract": 1}
@@ -486,18 +517,13 @@ Example:
     ...         "event_extract": "doubao-seed-2-0-lite-260215",
     ...         "intent_analysis": "gpt-4o-mini",
     ...     },
-    ...     task_budgets={
-    ...         "memory_extract": 1200,
-    ...         "event_extract": 1000,
-    ...         "intent_analysis": 600,
-    ...     },
     ...     task_temperatures={
     ...         "memory_extract": 0.1,
     ...         "event_extract": 0.1,
     ...     },
     ... )
 
-#### `create_multimodel_config(task_models: dict[str, str], task_budgets: dict[str, int] | None, task_temperatures: dict[str, float] | None, task_max_tokens: dict[str, int] | None, task_retries: dict[str, int] | None, max_multimodal_inputs_per_turn: int, max_multimodal_value_length: int) -> MultiModelConfig`
+#### `create_multimodel_config(task_models: dict[str, str], task_temperatures: dict[str, float] | None, task_max_tokens: dict[str, int] | None, task_retries: dict[str, int] | None, max_multimodal_inputs_per_turn: int, max_multimodal_value_length: int) -> MultiModelConfig`
 
 创建多模型配置对象。
 
@@ -505,7 +531,6 @@ Example:
 
 Args:
     task_models: 任务模型映射
-    task_budgets: 任务预算限制
     task_temperatures: 任务采样温度
     task_max_tokens: 任务最大 token 数
     task_retries: 任务重试次数
@@ -519,7 +544,6 @@ Example:
     >>> from sirius_chat.api import create_multimodel_config
     >>> mm_config = create_multimodel_config(
     ...     task_models={"memory_extract": "model-1", "intent_analysis": "model-2"},
-    ...     task_budgets={"memory_extract": 1200, "intent_analysis": 600},
     ... )
     >>> orchestration = mm_config.to_orchestration_policy()
 
@@ -607,7 +631,7 @@ it with the merged spec.
 Raises :class:`ValueError` if no agent with *agent_key* exists or if
 the agent has no persisted spec (run the initial generation first).
 
-#### `create_session_config_from_selected_agent(work_path: Path, agent_key: str, history_max_messages: int, history_max_chars: int, max_recent_participant_messages: int, enable_auto_compression: bool, orchestration: OrchestrationPolicy | None) -> SessionConfig`
+#### `create_session_config_from_selected_agent(work_path: Path, data_path: Path | None, agent_key: str, history_max_messages: int, history_max_chars: int, max_recent_participant_messages: int, enable_auto_compression: bool, orchestration: OrchestrationPolicy | None) -> SessionConfig`
 
 Create session configuration from a selected agent preset.
 
@@ -671,6 +695,21 @@ Choose a configured provider automatically on each generation request.
 
 - `generate(self, request: GenerationRequest) -> str` - Generate one assistant message from the upstream provider.
 
+#### `BigModelProvider`
+
+BigModel provider backed by /api/paas/v4/chat/completions.
+
+BigModel GLM models use an OpenAI-compatible message schema with a
+BigModel-specific base path. The provider accepts either:
+- https://open.bigmodel.cn
+- https://open.bigmodel.cn/api/paas
+- https://open.bigmodel.cn/api/paas/v4
+and normalizes all of them to the same request endpoint.
+
+**方法：**
+
+- `generate(self, request: GenerationRequest) -> str` - Generate one assistant message from the upstream provider.
+
 #### `DeepSeekProvider`
 
 DeepSeek provider backed by /chat/completions.
@@ -714,6 +753,20 @@ Store provider credentials and routing hints under work_path.
 - `remove(self, provider_type: str) -> bool`
 - `save(self, providers: dict[str, ProviderConfig]) -> None`
 - `upsert(self, provider_type: str, api_key: str, base_url: str, healthcheck_model: str, models: list[str] | None) -> None`
+
+#### `WorkspaceProviderManager`
+
+Workspace-scoped provider registry facade.
+
+**方法：**
+
+- `load(self) -> dict[str, ProviderConfig]`
+- `merge_entries(self, providers_config: list[dict[str, object]]) -> dict[str, ProviderConfig]`
+- `probe(self) -> None`
+- `register(self, provider_type: str, api_key: str, base_url: str, healthcheck_model: str, models: list[str] | None) -> None`
+- `remove(self, provider_type: str) -> bool`
+- `save(self, providers: dict[str, ProviderConfig]) -> None`
+- `save_from_entries(self, providers_config: list[dict[str, object]]) -> dict[str, ProviderConfig]`
 
 #### `SiliconFlowProvider`
 
@@ -841,6 +894,37 @@ JSON-based session store for persisting sessions.
 - `load(self) -> Transcript`
 - `save(self, transcript: Transcript) -> None`
 
+#### `RoleplayWorkspaceManager`
+
+Unify agent selection, session defaults and workspace persistence.
+
+The host calls *bootstrap_active_agent* after a wizard flow completes;
+this class takes care of selecting the agent in the library, updating
+the workspace defaults, and persisting everything — so the host never
+touches workspace files directly.
+
+**方法：**
+
+- `bootstrap_active_agent(self, agent_key: str, session_defaults: SessionDefaults | None, orchestration_defaults: dict[str, object] | None) -> WorkspaceConfig` - Select an agent and optionally update workspace defaults in one call.
+
+1. Validates the agent key exists in the generated agent library.
+2. Marks the agent as *selected* in the library file.
+3. Merges optional session/orchestration defaults into workspace config.
+4. Persists workspace config files.
+- `bootstrap_from_legacy_session_config(self, source: Path, agent_key: str | None) -> WorkspaceConfig` - Bootstrap workspace config from a legacy ``session.json`` file.
+
+Reads the legacy file, extracts defaults and provider list, and
+writes workspace config files.  If *agent_key* is not given the
+``generated_agent_key`` from the file is used.
+
+#### `SessionStoreFactory`
+
+Create session stores for a workspace/session namespace.
+
+**方法：**
+
+- `create(self, layout: WorkspaceLayout, session_id: str) -> SessionStore`
+
 #### `SqliteSessionStore`
 
 SQLite-based session store for persisting sessions.
@@ -851,6 +935,81 @@ SQLite-based session store for persisting sessions.
 - `exists(self) -> bool`
 - `load(self) -> Transcript`
 - `save(self, transcript: Transcript) -> None`
+
+#### `WorkspaceLayout`
+
+Single authority for config-root and data-root persistence paths.
+
+**方法：**
+
+- `config_dir(self) -> Path`
+- `config_watch_paths(self) -> list[Path]`
+- `ensure_directories(self, session_id: str | None) -> None`
+- `event_memory_dir(self) -> Path`
+- `event_memory_path(self) -> Path`
+- `generated_agent_trace_dir(self) -> Path`
+- `generated_agents_path(self) -> Path`
+- `legacy_event_memory_dir(self) -> Path`
+- `legacy_event_memory_path(self) -> Path`
+- `legacy_generated_agents_path(self) -> Path`
+- `legacy_primary_user_path(self) -> Path`
+- `legacy_provider_registry_path(self) -> Path`
+- `legacy_self_memory_path(self) -> Path`
+- `legacy_session_store_path(self, backend: str) -> Path`
+- `legacy_token_usage_db_path(self) -> Path`
+- `legacy_user_memory_dir(self) -> Path`
+- `memory_dir(self) -> Path`
+- `persisted_session_bundle_path(self) -> Path`
+- `primary_user_path(self) -> Path`
+- `provider_registry_path(self) -> Path`
+- `providers_dir(self) -> Path`
+- `roleplay_dir(self) -> Path`
+- `self_memory_path(self) -> Path`
+- `session_config_path(self) -> Path`
+- `session_dir(self, session_id: str) -> Path`
+- `session_id_from_slug(self, slug: str) -> str`
+- `session_participants_path(self, session_id: str) -> Path`
+- `session_slug(self, session_id: str) -> str`
+- `session_store_path(self, session_id: str, backend: str) -> Path`
+- `sessions_dir(self) -> Path`
+- `skill_data_dir(self) -> Path`
+- `skills_dir(self) -> Path`
+- `token_dir(self) -> Path`
+- `token_usage_db_path(self) -> Path`
+- `user_memory_dir(self) -> Path`
+- `workspace_manifest_path(self) -> Path`
+
+#### `WorkspaceRuntime`
+
+WorkspaceRuntime(work_path: 'Path', config_path: 'Path | None' = None, provider: 'LLMProvider | AsyncLLMProvider | None' = None, store_factory: 'SessionStoreFactory' = <factory>, session_config_factory: 'Callable[[str], SessionConfig] | None' = None, bootstrap: 'WorkspaceBootstrap | None' = None, persist_bootstrap: 'bool' = True)
+
+**方法：**
+
+- `async apply_workspace_updates(self, patch: dict[str, object]) -> WorkspaceConfig` - Apply a partial update to workspace defaults and persist.
+
+The caller provides only the fields it wants to change; the runtime
+merges them, validates, persists and triggers a hot-refresh.
+- `async clear_session(self, session_id: str) -> None`
+- `async close(self) -> None`
+- `async delete_session(self, session_id: str) -> None`
+- `export_workspace_defaults(self) -> dict[str, object]` - Return the current workspace defaults as a plain dict.
+
+Intended for host wizard / settings UI so the caller never needs to
+understand the underlying file layout.
+- `async get_primary_user(self, session_id: str) -> Participant | None`
+- `get_session_store(self, session_id: str) -> SessionStore`
+- `async get_transcript(self, session_id: str) -> Transcript | None`
+- `async initialize(self) -> None`
+- `async list_sessions(self) -> list[str]`
+- `async run_live_message(self, session_id: str, turn: Message, environment_context: str, user_profile: UserProfile | None, on_reply: Callable[[Message], Awaitable[None]] | None, timeout: float) -> Transcript`
+- `async set_primary_user(self, session_id: str, participant: Participant) -> None`
+- `set_provider(self, provider: LLMProvider | AsyncLLMProvider | None) -> None`
+- `set_provider_entries(self, entries: list[dict[str, object]], persist: bool) -> None` - Inject provider config entries from the host.
+
+The runtime validates entries, optionally persists them to the
+workspace provider registry, and rebuilds the internal routing
+provider so that subsequent ``run_live_message`` calls use the
+new configuration.
 
 
 ---

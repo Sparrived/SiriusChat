@@ -111,10 +111,10 @@ class OrchestrationPolicy:
         "memory_extract": True,
         "event_extract": True,
         "intent_analysis": True,
+        "memory_manager": True,
     })
     
     # Per-task parameter tuning
-    task_budgets: dict[str, int] = field(default_factory=dict)  # token limits (optional)
     task_temperatures: dict[str, float] = field(default_factory=dict)
     task_max_tokens: dict[str, int] = field(default_factory=dict)
     task_retries: dict[str, int] = field(default_factory=dict)
@@ -123,14 +123,8 @@ class OrchestrationPolicy:
     max_multimodal_inputs_per_turn: int = 4
     max_multimodal_value_length: int = 4096
     
-    # Prompt-driven content splitting (AI autonomously decides granularity)
+    # Prompt-driven content splitting (built-in marker; AI autonomously decides granularity)
     enable_prompt_driven_splitting: bool = True
-    split_marker: str = "<MSG_SPLIT>"
-    
-    # Memory Manager configuration (enabled when memory_manager_model is set)
-    memory_manager_model: str = ""
-    memory_manager_temperature: float = 0.3
-    memory_manager_max_tokens: int = 512
     
     # Memory Extract frequency control (避免调用过于频繁导致内容碎片化)
     memory_extract_batch_size: int = 1  # 每隔N条消息执行一次提取（1=每次，3=每3条）
@@ -139,8 +133,7 @@ class OrchestrationPolicy:
     # Event Extract batch size (v2: 每N条消息批量提取一次用户观察)
     event_extract_batch_size: int = 5  # 每隔N条消息执行一次事件观察提取
 
-    # Background memory consolidation (后台记忆归纳)
-    consolidation_enabled: bool = True  # 是否启用定时记忆归纳
+    # Background memory consolidation (后台记忆归纳; live session 启动后静默常驻)
     consolidation_interval_seconds: int = 7200  # 归纳间隔（秒）
     consolidation_min_entries: int = 6  # 事件最少条数
     consolidation_min_notes: int = 4   # 摘要最少条数
@@ -177,9 +170,8 @@ class OrchestrationPolicy:
     # Set to 0 to disable (unlimited). Recommended: 1~3.
     max_concurrent_llm_calls: int = 1
 
-    # Skill system: allow AI to invoke external code via SKILL_CALL
+    # Skill system: allow AI to invoke external code via built-in SKILL_CALL marker
     enable_skills: bool = True
-    skill_call_marker: str = "[SKILL_CALL:"
     max_skill_rounds: int = 3  # max consecutive skill call rounds per turn
     skill_execution_timeout: float = 30.0  # max seconds per SKILL execution, 0 = no limit
     auto_install_skill_deps: bool = True  # auto-install missing SKILL dependencies via uv/pip
@@ -188,6 +180,9 @@ class OrchestrationPolicy:
         if "intent_analysis" not in self.task_enabled:
             self.task_enabled = dict(self.task_enabled)
             self.task_enabled["intent_analysis"] = True
+        if "memory_manager" not in self.task_enabled:
+            self.task_enabled = dict(self.task_enabled)
+            self.task_enabled["memory_manager"] = True
 
     def is_task_enabled(self, task_name: str) -> bool:
         return bool(self.task_enabled.get(task_name, True))

@@ -112,10 +112,6 @@ async def run_memory_extract_task(
     estimated_cost = estimate_tokens(system_prompt + task_input)
 
     used = task_token_usage.get(task_name, 0)
-    budget = int(config.orchestration.task_budgets.get(task_name, 0))
-    if budget > 0 and used + estimated_cost > budget:
-        record_task_stat(transcript, task_name, "skipped_budget")
-        return
 
     request_payload = GenerationRequest(
         model=model,
@@ -306,10 +302,6 @@ async def run_batch_event_extract(
 
     estimated_cost = 512
     used = task_token_usage.get(task_name, 0)
-    budget = int(config.orchestration.task_budgets.get(task_name, 0))
-    if budget > 0 and used + estimated_cost > budget:
-        record_task_stat(transcript, task_name, "skipped_budget")
-        return []
 
     try:
         new_observations = await event_store.extract_observations(
@@ -374,7 +366,10 @@ async def run_memory_manager_task(
 ) -> None:
     """汇聚、去重、标注、验证用户的记忆事实。"""
     task_name = TASK_MEMORY_MANAGER
-    model = config.orchestration.memory_manager_model.strip()
+    if not config.orchestration.is_task_enabled(task_name):
+        return
+
+    model = config.orchestration.resolve_model_for_task(task_name)
     if not model:
         return
 
@@ -409,18 +404,14 @@ async def run_memory_manager_task(
     task_input = f"记忆事实列表：{json.dumps(facts_json, ensure_ascii=False, indent=2)}"
     estimated_cost = estimate_tokens(system_prompt + task_input)
 
-    budget = int(config.orchestration.task_budgets.get(task_name, 0))
     used = task_token_usage.get(task_name, 0)
-    if budget > 0 and used + estimated_cost > budget:
-        record_task_stat(transcript, task_name, "skipped_budget")
-        return
 
     request_payload = GenerationRequest(
         model=model,
         system_prompt=system_prompt,
         messages=[{"role": "user", "content": task_input}],
-        temperature=float(config.orchestration.memory_manager_temperature),
-        max_tokens=int(config.orchestration.memory_manager_max_tokens),
+        temperature=float(config.orchestration.task_temperatures.get(task_name, 0.3)),
+        max_tokens=int(config.orchestration.task_max_tokens.get(task_name, 512)),
         purpose=task_name,
     )
 

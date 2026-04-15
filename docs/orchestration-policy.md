@@ -6,11 +6,10 @@
 
 `OrchestrationPolicy` 负责控制：
 
-- 辅助任务的模型路由与开关（`memory_extract`、`event_extract`、`intent_analysis`）。
-- 各任务预算、温度、最大输出、重试次数。
+- 辅助任务的模型路由与开关（`memory_extract`、`event_extract`、`intent_analysis`、`memory_manager`）。
+- 各任务温度、最大输出、重试次数。
 - 多模态输入限流。
-- 提示词驱动消息分割（`split_marker`）。
-- 记忆管理器任务（`memory_manager_model`）。
+- 提示词驱动消息分割（内置 `<MSG_SPLIT>` marker）。
 - `reply_mode="auto"` 下的参与决策参数（热度 + 意图 + engagement_sensitivity）。
 - AI 自身记忆系统（日记 + 名词解释）。
 - 会话积压静默批处理（`pending_message_threshold`）。
@@ -37,16 +36,13 @@
 - `memory_extract`: `true`
 - `event_extract`: `true`
 - `intent_analysis`: `true`
+- `memory_manager`: `true`
 
 其他关键默认值：
 
 - `max_multimodal_inputs_per_turn`: `4`
 - `max_multimodal_value_length`: `4096`
 - `enable_prompt_driven_splitting`: `true`
-- `split_marker`: `<MSG_SPLIT>`
-- `memory_manager_model`: 空字符串（不启用）
-- `memory_manager_temperature`: `0.3`
-- `memory_manager_max_tokens`: `512`
 - `memory_extract_batch_size`: `1`
 - `memory_extract_min_content_length`: `0`
 - `session_reply_mode`: `always`
@@ -70,28 +66,26 @@
     "task_models": {
       "memory_extract": "doubao-seed-2-0-lite-260215",
       "event_extract": "doubao-seed-2-0-lite-260215",
-      "intent_analysis": "gpt-4o-mini"
+      "intent_analysis": "gpt-4o-mini",
+      "memory_manager": "gpt-4o-mini"
     },
     "task_enabled": {
       "memory_extract": true,
       "event_extract": true,
-      "intent_analysis": true
-    },
-    "task_budgets": {
-      "memory_extract": 1200,
-      "event_extract": 1000,
-      "intent_analysis": 600,
-      "memory_manager": 800
+      "intent_analysis": true,
+      "memory_manager": true
     },
     "task_temperatures": {
       "memory_extract": 0.1,
       "event_extract": 0.1,
-      "intent_analysis": 0.1
+      "intent_analysis": 0.1,
+      "memory_manager": 0.3
     },
     "task_max_tokens": {
       "memory_extract": 128,
       "event_extract": 192,
-      "intent_analysis": 192
+      "intent_analysis": 192,
+      "memory_manager": 512
     },
     "task_retries": {
       "memory_extract": 1,
@@ -102,10 +96,6 @@
     "max_multimodal_inputs_per_turn": 4,
     "max_multimodal_value_length": 4096,
     "enable_prompt_driven_splitting": true,
-    "split_marker": "<MSG_SPLIT>",
-    "memory_manager_model": "gpt-4o-mini",
-    "memory_manager_temperature": 0.3,
-    "memory_manager_max_tokens": 512,
     "memory_extract_batch_size": 3,
     "memory_extract_min_content_length": 30,
     "enable_self_memory": true,
@@ -130,8 +120,6 @@
 - `task_enabled[task] = false` 时，任务直接跳过。
 - `intent_analysis` 未单独配置模型时，会依次回退到 `unified_model` 和 `agent.model`。
 - 其他任务未配置模型时不会调用该任务模型。
-- `task_budgets[task] <= 0` 或未设置，视为不限制预算。
-- 预算判断采用近似 token 估算（字符数 / 4，向上取整）。
 
 记忆提取频率控制：
 
@@ -141,13 +129,13 @@
 提示词驱动分割：
 
 - `enable_prompt_driven_splitting = true` 时，系统提示会注入分割规则，告知模型当前为群聊场景。
-- 分割规则要求：每条消息简短（通常 1-2 句，最多 3-4 句）；要表达多个独立内容时必须插入 `split_marker`；禁止用连续换行代替分割符。
-- 模型输出中出现 `split_marker` 后，引擎按标记拆分为多条 assistant 消息。
+- 分割规则要求：每条消息简短（通常 1-2 句，最多 3 句）；要表达多个独立内容时必须插入内置 `<MSG_SPLIT>`；禁止用连续换行代替分割符。
+- 模型输出中出现 `<MSG_SPLIT>` 后，引擎按标记拆分为多条 assistant 消息。
 
 记忆管理器：
 
-- `memory_manager_model` 非空时启用记忆管理任务。
-- 该任务可使用 `task_budgets["memory_manager"]` 与 `task_retries["memory_manager"]`。
+- `memory_manager` 通过 `task_enabled/task_models/task_temperatures/task_max_tokens/task_retries` 配置。
+- 后台归纳与会话收尾整理都复用 `memory_manager` 的任务模型。
 - 多模态输入不会触发独立辅助任务；会直接作为主模型请求的一部分传递。
 
 积压静默批处理：
@@ -177,11 +165,10 @@
 `intent_analysis` 任务设置：
 - `task_enabled["intent_analysis"]`：控制是否启用 LLM 意图分析；关闭后直接使用关键词回退路径。
 - `task_models["intent_analysis"]`：为意图分析指定专用模型。
-- `task_budgets["intent_analysis"]`：限制意图分析任务的 token 预算。
 - `task_temperatures["intent_analysis"]`：意图分析采样温度，默认 `0.1`。
 - `task_max_tokens["intent_analysis"]`：意图分析最大输出 token，默认 `192`。
 - `task_retries["intent_analysis"]`：意图分析失败时的重试次数。
-- 当该任务已启用时，本轮意图结论必须来自模型；若预算不足、provider 调用失败或响应解析失败，本轮不会再回退到关键词意图推断，而是仅依赖热度与 engagement 信号继续决策。
+- 当该任务已启用时，本轮意图结论必须来自模型；若 provider 调用失败或响应解析失败，本轮不会再回退到关键词意图推断，而是仅依赖热度与 engagement 信号继续决策。
 
 兼容说明：
 - 当前配置入口统一使用 `task_*["intent_analysis"]`。

@@ -101,6 +101,7 @@ def test_generated_prompt_is_used_by_engine() -> None:
                 task_enabled={
                     "memory_extract": False,
                     "event_extract": False,
+                    "memory_manager": False,
                 },
             pending_message_threshold=0.0,
             ),
@@ -122,10 +123,11 @@ def test_generated_prompt_is_used_by_engine() -> None:
             finalize_and_persist=False,
         )
 
-        assert "先共情后给行动项" in provider.requests[1].system_prompt
-        assert "设定: 行动导向" in provider.requests[1].system_prompt
-        assert provider.requests[1].temperature == 0.35
-        assert provider.requests[1].max_tokens == 256
+        chat_request = next(request for request in provider.requests if request.purpose == "chat_main")
+        assert "先共情后给行动项" in chat_request.system_prompt
+        assert "设定: 行动导向" in chat_request.system_prompt
+        assert chat_request.temperature == 0.35
+        assert chat_request.max_tokens == 256
 
     asyncio.run(_run())
 

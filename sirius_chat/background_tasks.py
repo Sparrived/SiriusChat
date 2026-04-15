@@ -36,7 +36,6 @@ class BackgroundTaskConfig:
     cleanup_transient_max_age_minutes: int = 30
     
     # 记忆归纳配置
-    consolidation_enabled: bool = True
     consolidation_interval_seconds: int = 900 # 15分钟
     consolidation_min_entries: int = 6  # 最少条目数才触发归纳
     consolidation_min_notes: int = 4   # 最少摘要数才触发归纳
@@ -120,7 +119,7 @@ class BackgroundTaskManager:
             return
         
         self._running = True
-        logger.info("开始深层记忆已启动，静静在去头脸Ｆ")
+        logger.info("记忆整理任务已静默启动。")
         
         if self.config.compression_enabled:
             task = asyncio.create_task(
@@ -136,12 +135,11 @@ class BackgroundTaskManager:
             )
             self.tasks["transient_cleanup"] = task
 
-        if self.config.consolidation_enabled:
-            task = asyncio.create_task(
-                self._consolidation_loop(),
-                name="memory_consolidation",
-            )
-            self.tasks["memory_consolidation"] = task
+        task = asyncio.create_task(
+            self._consolidation_loop(),
+            name="memory_consolidation",
+        )
+        self.tasks["memory_consolidation"] = task
 
         if self.config.self_memory_enabled:
             task = asyncio.create_task(
@@ -156,7 +154,7 @@ class BackgroundTaskManager:
             return
         
         self._running = False
-        logger.info("深层记忆已暂停，如需可再次唱醒")
+        logger.info("记忆整理任务已停止。")
         
         # 取消所有任务
         for task_name, task in self.tasks.items():

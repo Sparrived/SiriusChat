@@ -47,37 +47,36 @@
     "task_enabled": {
       "memory_extract": true,
       "event_extract": true,
-      "intent_analysis": true
+      "intent_analysis": true,
+      "memory_manager": true
     },
     "task_models": {
       "memory_extract": "gpt-4o-mini",
       "event_extract": "gpt-4o-mini",
-      "intent_analysis": "gpt-4o-mini"
-    },
-    "task_budgets": {
-      "memory_extract": 1200,
-      "event_extract": 1000,
-      "intent_analysis": 600
+      "intent_analysis": "gpt-4o-mini",
+      "memory_manager": "gpt-4o-mini"
     },
     "task_temperatures": {
       "memory_extract": 0.1,
       "event_extract": 0.1,
-      "intent_analysis": 0.1
+      "intent_analysis": 0.1,
+      "memory_manager": 0.3
     },
     "task_max_tokens": {
       "memory_extract": 128,
       "event_extract": 192,
-      "intent_analysis": 192
+      "intent_analysis": 192,
+      "memory_manager": 256
     },
     "task_retries": {
       "memory_extract": 1,
       "event_extract": 1,
-      "intent_analysis": 1
+      "intent_analysis": 1,
+      "memory_manager": 1
     },
     "memory_extract_batch_size": 3,
     "memory_extract_min_content_length": 50,
     "enable_prompt_driven_splitting": true,
-    "split_marker": "<MSG_SPLIT>",
     "session_reply_mode": "auto"
   }
 }
@@ -190,21 +189,20 @@ orchestration 负责控制辅助任务、回复节奏、记忆频率和提示词
 | --- | --- |
 | task_enabled | 各辅助任务是否启用 |
 | task_models | 任务模型映射 |
-| task_budgets | 各任务 token 预算 |
 | task_temperatures | 各任务温度 |
 | task_max_tokens | 各任务最大输出 |
 | task_retries | 各任务重试次数 |
 | memory_extract_batch_size | 每 N 条消息做一次记忆提取 |
 | memory_extract_min_content_length | 只处理达到最小长度的消息 |
 | enable_prompt_driven_splitting | 是否启用提示词驱动分割 |
-| split_marker | 分割标记 |
 | session_reply_mode | always / never / auto |
 | pending_message_threshold | 单会话待处理消息积压超过该阈值后，runtime 进入静默批处理 |
 
 注意：
 
 - intent_analysis 已是正式一等任务，建议显式配置
-- `intent_analysis` 启用后必须通过模型推断；预算不足、provider 调用失败或解析失败时，不再回退到关键词意图推断
+- `intent_analysis` 启用后必须通过模型推断；provider 调用失败或解析失败时，不再回退到关键词意图推断
+- `memory_manager` 通过标准任务配置控制，同时承担后台记忆归纳所需的模型参数
 - multimodal_parse 已在 v0.15.0 移除，不应再出现在配置中
 - 图片能力应通过 agent 资产中的 metadata.multimodal_model 配置，而不是辅助任务
 - 旧字段 `message_debounce_seconds` 在加载时仍会兼容读取，但新的模板与持久化输出统一使用 `pending_message_threshold`

@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING
 
+from sirius_chat.core.markers import PROMPT_SPLIT_MARKER, SKILL_CALL_MARKER
+
 if TYPE_CHECKING:
     from sirius_chat.config import SessionConfig
     from sirius_chat.models import Transcript
@@ -184,21 +186,23 @@ def build_system_prompt(
 
     # --- Section 7: Splitting instructions ---
     if config.orchestration.enable_prompt_driven_splitting:
-        marker = config.orchestration.split_marker
+        marker = PROMPT_SPLIT_MARKER
         sections.append(
             f"<splitting_instruction>\n"
-            f"当前处于群聊场景聊天，每条消息至多1-2句话。存在多个独立内容、话题切换、内容过长或停顿时插入 '{marker}' 分割。"
-            f"禁止用连续换行代替分割，一律使用 '{marker}' 分割，外部程序会检测 '{marker}' 并将其分离为多个独立内容。\n"
+            f"当前处于实时聊天场景，每条消息尽量控制在1-2句话，通常不要超过3句。"
+            f"当存在多个独立意思、明显话题切换、需要停顿后再说下一件事时，必须显式输出 '{marker}' 作为唯一分割标记。"
+            f"禁止使用两个或更多连续换行来模拟分段，禁止把空行当作分割。即使想停顿，也必须输出 '{marker}'。"
+            f"若整段内容本质上还是同一句话的延续，则不要分割。只有在可以拆成独立发送的多条聊天消息时，才输出 '{marker}'。\n"
             f"示例：\n"
-            f"消息1\n"
+            f"先回第一件事。\n"
             f"{marker}\n"
-            f"消息2\n"
+            f"再补第二件事。\n"
             f"</splitting_instruction>"
         )
 
     # --- Section 8: Skill system ---
     if config.orchestration.enable_skills and skill_descriptions:
-        marker = config.orchestration.skill_call_marker
+        marker = SKILL_CALL_MARKER
         sections.append(
             f"<available_skills>\n"
             f"## 调用格式\n"

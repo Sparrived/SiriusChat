@@ -125,6 +125,7 @@ class TestParseResponse:
             "evidence_span": "天气怎么样",
         })
         result = IntentAnalyzer._parse_response(raw)
+        assert result is not None
         assert result.intent_type == "question"
         assert result.directed_at_ai is True
         assert result.target == "ai"
@@ -136,6 +137,7 @@ class TestParseResponse:
     def test_markdown_fenced_json(self):
         raw = '```json\n{"intent_type":"request","target":"ai","importance":0.6,"needs_memory":true,"needs_summary":false}\n```'
         result = IntentAnalyzer._parse_response(raw)
+        assert result is not None
         assert result.intent_type == "request"
         assert "session_summary" in result.skip_sections
 
@@ -159,17 +161,20 @@ class TestParseResponse:
             "evidence_span": "e" * 200,
         })
         result = IntentAnalyzer._parse_response(raw)
+        assert result is not None
         assert len(result.reason) == 200
         assert len(result.evidence_span) == 120
 
     def test_unknown_intent_type_defaults_to_chat(self):
         raw = json.dumps({"intent_type": "unknown_type", "target": "ai", "importance": 0.5})
         result = IntentAnalyzer._parse_response(raw)
+        assert result is not None
         assert result.intent_type == "chat"
 
     def test_importance_clamped(self):
         raw = json.dumps({"intent_type": "question", "target": "ai", "importance": 5.0})
         result = IntentAnalyzer._parse_response(raw)
+        assert result is not None
         assert result.confidence <= 1.0
 
     def test_reaction_low_importance(self):
@@ -181,6 +186,7 @@ class TestParseResponse:
             "needs_summary": True,
         })
         result = IntentAnalyzer._parse_response(raw)
+        assert result is not None
         assert result.importance <= 0.3
 
     def test_not_directed_at_ai_target(self):
@@ -190,6 +196,7 @@ class TestParseResponse:
             "importance": 0.5,
         })
         result = IntentAnalyzer._parse_response(raw)
+        assert result is not None
         assert result.directed_at_ai is False
         assert result.target == "others"
         directed_raw = json.dumps({
@@ -198,6 +205,7 @@ class TestParseResponse:
             "importance": 0.5,
         })
         directed_result = IntentAnalyzer._parse_response(directed_raw)
+        assert directed_result is not None
         assert directed_result.directed_at_ai is True
         assert directed_result.target == "ai"
 
@@ -444,7 +452,6 @@ class TestBackgroundTaskManager:
 
     def test_config_defaults(self):
         cfg = BackgroundTaskConfig()
-        assert cfg.consolidation_enabled is True
         assert cfg.consolidation_interval_seconds == 900
 
     def test_start_and_stop(self):
@@ -457,7 +464,6 @@ class TestBackgroundTaskManager:
             cfg = BackgroundTaskConfig(
                 compression_enabled=False,
                 cleanup_enabled=False,
-                consolidation_enabled=True,
                 consolidation_interval_seconds=1,
             )
             mgr = BackgroundTaskManager(config=cfg)
@@ -482,7 +488,6 @@ class TestBackgroundTaskManager:
             cfg = BackgroundTaskConfig(
                 compression_enabled=False,
                 cleanup_enabled=False,
-                consolidation_enabled=True,
                 consolidation_interval_seconds=3600,  # long interval
             )
             mgr = BackgroundTaskManager(config=cfg)

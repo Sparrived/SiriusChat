@@ -39,10 +39,10 @@ def test_split_strips_generic_speaker_prefix() -> None:
             orchestration=OrchestrationPolicy(
                 unified_model="mock-model",
                 enable_prompt_driven_splitting=True,
-                split_marker="<MSG_SPLIT>",
                 task_enabled={
                     "memory_extract": False,
                     "event_extract": False,
+                    "memory_manager": False,
                 },
             ),
         )
@@ -83,10 +83,10 @@ def test_split_no_false_positive_on_short_brackets() -> None:
             orchestration=OrchestrationPolicy(
                 unified_model="mock-model",
                 enable_prompt_driven_splitting=True,
-                split_marker="<MSG_SPLIT>",
                 task_enabled={
                     "memory_extract": False,
                     "event_extract": False,
+                    "memory_manager": False,
                 },
             ),
         )
@@ -277,14 +277,14 @@ def test_prompt_splitting_instruction_tag() -> None:
         orchestration=OrchestrationPolicy(
             unified_model="mock-model",
             enable_prompt_driven_splitting=True,
-            split_marker="<MSG_SPLIT>",
         ),
     )
     prompt = build_system_prompt(config, transcript)
     assert "<splitting_instruction>" in prompt
     assert "</splitting_instruction>" in prompt
     assert "<MSG_SPLIT>" in prompt
-    assert "群聊" in prompt
+    assert "实时聊天场景" in prompt
+    assert "禁止使用两个或更多连续换行" in prompt
 
 
 def test_prompt_no_splitting_tag_when_disabled() -> None:

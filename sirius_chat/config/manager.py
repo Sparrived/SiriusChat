@@ -218,6 +218,10 @@ class ConfigManager:
     ) -> dict[str, Any]:
         has_explicit_pending_threshold = isinstance(value, dict) and "pending_message_threshold" in value
         sanitized = self._sanitize_nullable_mapping(value, fallback=fallback)
+        sanitized.pop("task_budgets", None)
+        sanitized.pop("split_marker", None)
+        sanitized.pop("skill_call_marker", None)
+        sanitized.pop("consolidation_enabled", None)
         legacy_pending_threshold = sanitized.pop("message_debounce_seconds", None)
         if legacy_pending_threshold is not None and not has_explicit_pending_threshold:
             try:
@@ -238,6 +242,29 @@ class ConfigManager:
             normalized_task_models = dict(task_models) if isinstance(task_models, dict) else {}
             normalized_task_models.setdefault("intent_analysis", legacy_intent_model)
             sanitized["task_models"] = normalized_task_models
+
+        legacy_memory_manager_model = str(sanitized.pop("memory_manager_model", "")).strip()
+        if legacy_memory_manager_model:
+            task_models = sanitized.get("task_models")
+            normalized_task_models = dict(task_models) if isinstance(task_models, dict) else {}
+            normalized_task_models.setdefault("memory_manager", legacy_memory_manager_model)
+            sanitized["task_models"] = normalized_task_models
+
+        legacy_memory_manager_temperature = sanitized.pop("memory_manager_temperature", None)
+        if legacy_memory_manager_temperature is not None:
+            task_temperatures = sanitized.get("task_temperatures")
+            normalized_task_temperatures = (
+                dict(task_temperatures) if isinstance(task_temperatures, dict) else {}
+            )
+            normalized_task_temperatures.setdefault("memory_manager", float(legacy_memory_manager_temperature))
+            sanitized["task_temperatures"] = normalized_task_temperatures
+
+        legacy_memory_manager_max_tokens = sanitized.pop("memory_manager_max_tokens", None)
+        if legacy_memory_manager_max_tokens is not None:
+            task_max_tokens = sanitized.get("task_max_tokens")
+            normalized_task_max_tokens = dict(task_max_tokens) if isinstance(task_max_tokens, dict) else {}
+            normalized_task_max_tokens.setdefault("memory_manager", int(legacy_memory_manager_max_tokens))
+            sanitized["task_max_tokens"] = normalized_task_max_tokens
 
         policy = build_orchestration_policy_from_dict(sanitized, agent_model="")
         if policy is None:

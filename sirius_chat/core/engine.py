@@ -47,6 +47,7 @@ from sirius_chat.core.intent_v2 import IntentAnalysis, IntentAnalyzer
 from sirius_chat.core.heat import HeatAnalysis, HeatAnalyzer
 from sirius_chat.core.engagement import EngagementCoordinator, EngagementDecision
 from sirius_chat.background_tasks import BackgroundTaskConfig, BackgroundTaskManager
+from sirius_chat.core.markers import PROMPT_SPLIT_MARKER
 from sirius_chat.core.memory_runner import (
     run_memory_extract_task,
     run_self_memory_extract_task,
@@ -136,6 +137,8 @@ class AsyncRolePlayEngine:
     provider: LLMProvider | AsyncLLMProvider
     _live_session_contexts: dict[int, LiveSessionContext] = field(default_factory=dict, init=False, repr=False)
     _orchestration_log_cache: set[str] = field(default_factory=set, init=False, repr=False)
+    _shared_skill_registry: SkillRegistry | None = field(default=None, init=False, repr=False)
+    _shared_skill_executor: SkillExecutor | None = field(default=None, init=False, repr=False)
 
     # ── Engine-level shared memory stores ──
     # Keyed by str(work_path) so that different sessions using the same
@@ -279,6 +282,19 @@ class AsyncRolePlayEngine:
         prepared.add(Message(role="system", content=config.global_system_prompt))
         return prepared
 
+    def set_shared_skill_runtime(
+        self,
+        *,
+        skill_registry: SkillRegistry | None,
+        skill_executor: SkillExecutor | None,
+    ) -> None:
+        self._shared_skill_registry = skill_registry
+        self._shared_skill_executor = skill_executor
+
+        for context in self._live_session_contexts.values():
+            context.subsystems.skill_registry = skill_registry
+            context.subsystems.skill_executor = skill_executor
+
     def _get_or_create_live_context(
         self,
         *,
@@ -360,20 +376,25 @@ class AsyncRolePlayEngine:
 
         skills_dir = layout.skills_dir()
         SkillRegistry.ensure_skills_directory(skills_dir)
-
-        # Initialize skill system if enabled
         if config.orchestration.enable_skills:
-            registry = SkillRegistry()
-            loaded_count = registry.load_from_directory(
-                skills_dir,
-                auto_install_deps=config.orchestration.auto_install_skill_deps,
-            )
-            if loaded_count > 0:
-                created.subsystems.skill_registry = registry
-                created.subsystems.skill_executor = SkillExecutor(layout)
-                logger.info("%s 学会了 %d 项新技能，随时可以施展", config.agent.name, loaded_count)
+            if self._shared_skill_registry is not None:
+                created.subsystems.skill_registry = self._shared_skill_registry
             else:
-                logger.debug("SKILL系统已启用但未找到任何SKILL文件: %s", skills_dir)
+                registry = SkillRegistry()
+                loaded_count = registry.reload_from_directory(
+                    skills_dir,
+                    auto_install_deps=config.orchestration.auto_install_skill_deps,
+                )
+                created.subsystems.skill_registry = registry
+                if loaded_count > 0:
+                    logger.info("%s 学会了 %d 项新技能，随时可以施展", config.agent.name, loaded_count)
+                else:
+                    logger.debug("SKILL系统已启用但未找到任何SKILL文件: %s", skills_dir)
+
+            if self._shared_skill_executor is not None:
+                created.subsystems.skill_executor = self._shared_skill_executor
+            elif created.subsystems.skill_executor is None:
+                created.subsystems.skill_executor = SkillExecutor(layout)
         else:
             logger.debug("SKILL系统已禁用，但已初始化SKILL目录: %s", skills_dir)
 
@@ -382,116 +403,71 @@ class AsyncRolePlayEngine:
         if max_concurrent > 0:
             created.llm_semaphore = asyncio.Semaphore(max_concurrent)
 
-        # ── Background tasks: consolidation + self-memory ──
-        needs_bg = config.orchestration.consolidation_enabled
-        if needs_bg:
-            bg_config = BackgroundTaskConfig(
-                consolidation_enabled=config.orchestration.consolidation_enabled,
-                consolidation_interval_seconds=config.orchestration.consolidation_interval_seconds,
-                consolidation_min_entries=config.orchestration.consolidation_min_entries,
-                consolidation_min_notes=config.orchestration.consolidation_min_notes,
-                consolidation_min_facts=config.orchestration.consolidation_min_facts,
-                self_memory_enabled=False,
-                self_memory_interval_seconds=0,
-                compression_enabled=False,
-                cleanup_enabled=False,
-            )
-            bg_manager = BackgroundTaskManager(config=bg_config)
+        # ── Background tasks: consolidation runs silently after live session startup ──
+        bg_config = BackgroundTaskConfig(
+            consolidation_interval_seconds=config.orchestration.consolidation_interval_seconds,
+            consolidation_min_entries=config.orchestration.consolidation_min_entries,
+            consolidation_min_notes=config.orchestration.consolidation_min_notes,
+            consolidation_min_facts=config.orchestration.consolidation_min_facts,
+            self_memory_enabled=False,
+            self_memory_interval_seconds=0,
+            compression_enabled=False,
+            cleanup_enabled=False,
+        )
+        bg_manager = BackgroundTaskManager(config=bg_config)
 
-            if config.orchestration.consolidation_enabled:
-                async def _consolidation_callback(
-                    _engine: AsyncRolePlayEngine = self,
-                    _config: SessionConfig = config,
-                    _transcript: Transcript = transcript,
-                    _ctx: LiveSessionContext = created,
-                ) -> None:
-                    """Periodically consolidate events + notes + facts for all users."""
-                    adapter = _engine._make_provider_adapter()
-                    try:
-                        model = _engine.get_model_for_task(_config, TASK_EVENT_EXTRACT)
-                    except ValueError:
-                        model = _config.agent.model
+        async def _consolidation_callback(
+            _engine: AsyncRolePlayEngine = self,
+            _config: SessionConfig = config,
+            _transcript: Transcript = transcript,
+            _ctx: LiveSessionContext = created,
+        ) -> None:
+            """Periodically consolidate events + notes + facts for all users."""
+            if not _config.orchestration.is_task_enabled(TASK_MEMORY_MANAGER):
+                return
 
-                    # Consolidate events
-                    for uid in _ctx.subsystems.event_store.get_all_user_ids():
-                        await _ctx.subsystems.event_store.consolidate_entries(
-                            user_id=uid,
-                            provider_async=adapter,
-                            model_name=model,
-                            min_entries=bg_config.consolidation_min_entries,
-                        )
+            adapter = _engine._make_provider_adapter()
+            try:
+                model = _engine.get_model_for_task(_config, TASK_MEMORY_MANAGER)
+            except ValueError:
+                model = _config.agent.model
 
-                    # Consolidate user summaries and facts
-                    for uid in list(_transcript.user_memory.entries.keys()):
-                        await _transcript.user_memory.consolidate_summary_notes(
-                            user_id=uid,
-                            provider_async=adapter,
-                            model_name=model,
-                            min_notes=bg_config.consolidation_min_notes,
-                        )
-                        await _transcript.user_memory.consolidate_memory_facts(
-                            user_id=uid,
-                            provider_async=adapter,
-                            model_name=model,
-                            min_facts=bg_config.consolidation_min_facts,
-                        )
+            for uid in _ctx.subsystems.event_store.get_all_user_ids():
+                await _ctx.subsystems.event_store.consolidate_entries(
+                    user_id=uid,
+                    provider_async=adapter,
+                    model_name=model,
+                    min_entries=bg_config.consolidation_min_entries,
+                )
 
-                    # Persist after consolidation
-                    _ctx.stores.file_store.save_all(_transcript.user_memory)
-                    _ctx.stores.event_file_store.save(_ctx.subsystems.event_store)
+            for uid in list(_transcript.user_memory.entries.keys()):
+                await _transcript.user_memory.consolidate_summary_notes(
+                    user_id=uid,
+                    provider_async=adapter,
+                    model_name=model,
+                    min_notes=bg_config.consolidation_min_notes,
+                )
+                await _transcript.user_memory.consolidate_memory_facts(
+                    user_id=uid,
+                    provider_async=adapter,
+                    model_name=model,
+                    min_facts=bg_config.consolidation_min_facts,
+                )
 
-                    # Diary decay during consolidation
-                    if _ctx.stores.self_memory_store is not None:
-                        removed = _ctx.subsystems.self_memory.apply_diary_decay()
-                        if removed > 0:
-                            logger.info("在整理记忆的间隙，悄悄遗忘了 %d 条已褪色的往事", removed)
-                        _ctx.stores.self_memory_store.save(_ctx.subsystems.self_memory)
+            _ctx.stores.file_store.save_all(_transcript.user_memory)
+            _ctx.stores.event_file_store.save(_ctx.subsystems.event_store)
 
-                bg_manager.set_consolidation_callback(_consolidation_callback)
+            if _ctx.stores.self_memory_store is not None:
+                removed = _ctx.subsystems.self_memory.apply_diary_decay()
+                if removed > 0:
+                    logger.info("在整理记忆的间隙，悄悄遗忘了 %d 条已褪色的往事", removed)
+                _ctx.stores.self_memory_store.save(_ctx.subsystems.self_memory)
 
-            created.subsystems.bg_task_manager = bg_manager
+        bg_manager.set_consolidation_callback(_consolidation_callback)
+        created.subsystems.bg_task_manager = bg_manager
 
         self._live_session_contexts[key] = created
         return created
-
-    def _ensure_skill_runtime(
-        self,
-        *,
-        config: SessionConfig,
-        context: LiveSessionContext,
-    ) -> None:
-        """Ensure SKILL runtime is available for the current session context.
-
-        This covers context-reuse cases where the context was created before
-        SKILL files existed or before ``enable_skills`` became True.
-        """
-        if not config.orchestration.enable_skills:
-            return
-
-        layout = WorkspaceLayout(config.data_path, config_path=config.work_path)
-        skills_dir = layout.skills_dir()
-        SkillRegistry.ensure_skills_directory(skills_dir)
-
-        registry = context.subsystems.skill_registry
-        executor = context.subsystems.skill_executor
-
-        # Initialize missing components, then (re)load skill files.
-        if registry is None:
-            registry = SkillRegistry()
-            context.subsystems.skill_registry = registry
-        if executor is None:
-            executor = SkillExecutor(layout)
-            context.subsystems.skill_executor = executor
-
-        if not registry.all_skills():
-            loaded_count = registry.load_from_directory(
-                skills_dir,
-                auto_install_deps=config.orchestration.auto_install_skill_deps,
-            )
-            if loaded_count > 0:
-                logger.info("技能补充完毕，%d 项新能力已就位", loaded_count)
-            else:
-                logger.debug("SKILL系统已启用，但当前未加载到任何SKILL: %s", skills_dir)
 
     @staticmethod
     def _build_known_entities(known_by_id: dict[str, Participant]) -> list[str]:
@@ -592,30 +568,26 @@ class AsyncRolePlayEngine:
         if event_enabled and pending_event_buffers:
             estimated_cost = 512
             used = context.counters.task_token_usage.get(TASK_EVENT_EXTRACT, 0)
-            budget = int(config.orchestration.task_budgets.get(TASK_EVENT_EXTRACT, 0))
-            if budget > 0 and used + estimated_cost > budget:
-                record_task_stat(transcript, TASK_EVENT_EXTRACT, "skipped_budget")
-            else:
-                try:
-                    event_model = self.get_model_for_task(config, TASK_EVENT_EXTRACT)
-                except ValueError:
-                    event_model = config.agent.model
-                try:
-                    finalize_result = await context.subsystems.event_store.finalize_pending_events(
-                        provider_async=self._make_provider_adapter(),
-                        model_name=event_model,
-                        min_mentions=3,
-                    )
-                    context.counters.task_token_usage[TASK_EVENT_EXTRACT] = used + estimated_cost
-                    logger.info(
-                        "%s 整理了一下记忆：确认了 %s 条，忘掉了 %s 条，还有 %s 条尚未想清楚",
-                        config.agent.name,
-                        finalize_result["verified_count"],
-                        finalize_result["rejected_count"],
-                        finalize_result["pending_count"],
-                    )
-                except Exception as e:
-                    logger.warning(f"事件记忆最终化失败，继续执行: {e}")
+            try:
+                event_model = self.get_model_for_task(config, TASK_EVENT_EXTRACT)
+            except ValueError:
+                event_model = config.agent.model
+            try:
+                finalize_result = await context.subsystems.event_store.finalize_pending_events(
+                    provider_async=self._make_provider_adapter(),
+                    model_name=event_model,
+                    min_mentions=3,
+                )
+                context.counters.task_token_usage[TASK_EVENT_EXTRACT] = used + estimated_cost
+                logger.info(
+                    "%s 整理了一下记忆：确认了 %s 条，忘掉了 %s 条，还有 %s 条尚未想清楚",
+                    config.agent.name,
+                    finalize_result["verified_count"],
+                    finalize_result["rejected_count"],
+                    finalize_result["pending_count"],
+                )
+            except Exception as e:
+                logger.warning(f"事件记忆最终化失败，继续执行: {e}")
 
         context.stores.file_store.save_all(transcript.user_memory)
         context.stores.event_file_store.save(context.subsystems.event_store)
@@ -1041,27 +1013,6 @@ class AsyncRolePlayEngine:
 
                 skill_def = skill_registry.get(skill_name)
                 if skill_def is None:
-                    # Skill registry can be stale — try reloading once.
-                    try:
-                        reloaded = skill_registry.load_from_directory(
-                            WorkspaceLayout(config.data_path, config_path=config.work_path).skills_dir(),
-                            auto_install_deps=config.orchestration.auto_install_skill_deps,
-                        )
-                        if reloaded > 0:
-                            logger.info(
-                                "没找到 '%s'，重新检索了一下技能库，发现了 %d 项技能",
-                                skill_name,
-                                reloaded,
-                            )
-                    except Exception:
-                        logger.warning(
-                            "重载SKILL目录失败，继续按未知SKILL处理: skill=%s",
-                            skill_name,
-                            exc_info=True,
-                        )
-                    skill_def = skill_registry.get(skill_name)
-
-                if skill_def is None:
                     # Unknown skill — inject error; model will recover on re-generation.
                     transcript.add(Message(
                         role="system",
@@ -1118,7 +1069,7 @@ class AsyncRolePlayEngine:
                 remaining_content = strip_skill_calls(content)
                 if remaining_content.strip() and not had_unknown_skill:
                     _split_marker = (
-                        config.orchestration.split_marker
+                        PROMPT_SPLIT_MARKER
                         if config.orchestration.enable_prompt_driven_splitting
                         else None
                     )
@@ -1245,7 +1196,7 @@ class AsyncRolePlayEngine:
         last_message: Message | None = None
 
         if config.orchestration.enable_prompt_driven_splitting:
-            marker = config.orchestration.split_marker
+            marker = PROMPT_SPLIT_MARKER
             # 仅在 marker 精确出现时才分割，避免其他 [...] 模式的误判
             if marker in content:
                 # 识别到分割标记，拆分消息
@@ -1690,8 +1641,6 @@ class AsyncRolePlayEngine:
         environment_context: str = "",
     ) -> Transcript:
         """Core processing logic for a single user turn (after debounce)."""
-        self._ensure_skill_runtime(config=config, context=context)
-
         known_entities = self._build_known_entities(context.known_by_id)
 
         user_last_turn_at: dict[str, datetime] = {}
@@ -1857,8 +1806,16 @@ class AsyncRolePlayEngine:
                 assistant_message = await self._generate_assistant_message(
                     config,
                     transcript,
-                    skill_registry=context.subsystems.skill_registry,
-                    skill_executor=context.subsystems.skill_executor,
+                    skill_registry=(
+                        context.subsystems.skill_registry
+                        if config.orchestration.enable_skills
+                        else None
+                    ),
+                    skill_executor=(
+                        context.subsystems.skill_executor
+                        if config.orchestration.enable_skills
+                        else None
+                    ),
                     environment_context=environment_context,
                     event_bus=context.subsystems.event_bus,
                     skip_sections=intent.skip_sections if intent else [],

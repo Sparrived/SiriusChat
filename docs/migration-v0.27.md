@@ -6,7 +6,7 @@
 
 - 回复窗口策略从时间型 `message_debounce_seconds` 切换为积压计数型 `pending_message_threshold`。
 - `WorkspaceRuntime.run_live_message(...)` 现在先按 session 入队，再由单会话 processor 逐条处理或静默批处理。
-- `intent_analysis` 启用后，意图结论必须来自模型；预算不足、provider 调用失败或解析失败时，不再回退到关键词意图推断。
+- `intent_analysis` 启用后，意图结论必须来自模型；provider 调用失败或解析失败时，不再回退到关键词意图推断。
 - 人格生成器会默认生成更偏短句、纯文本、少 markdown 的角色行为约束。
 
 ## 受影响场景
@@ -15,7 +15,7 @@
 
 - 你在配置中显式使用了 `message_debounce_seconds`。
 - 你依赖旧的时间窗口合并语义，例如“连续 5 秒内的同人消息自动合并”。
-- 你依赖 `intent_analysis` 在预算不足或模型失败时自动降级为关键词推断。
+- 你依赖 `intent_analysis` 在模型失败或解析失败时自动降级为关键词推断。
 - 你依赖旧人格生成器产出偏长、偏 markdown 的角色回复风格。
 
 ## 1. 配置键迁移
@@ -72,20 +72,19 @@
 ### 旧行为
 
 - `task_enabled["intent_analysis"] = true` 时优先走模型。
-- 若预算不足、provider 失败或解析失败，仍可能回退到关键词意图推断，因此日志中可能出现“有意图分析结果但没有实际意图模型调用”。
+- 若 provider 失败或解析失败，仍可能回退到关键词意图推断，因此日志中可能出现“有意图分析结果但没有实际意图模型调用”。
 
 ### 新行为
 
 - `task_enabled["intent_analysis"] = false`：仍使用关键词回退路径。
 - `task_enabled["intent_analysis"] = true`：该轮意图结论必须来自模型。
-- 若预算不足、provider 失败或解析失败：
+- 若 provider 失败或解析失败：
   - 本轮不会生成关键词兜底意图；
   - 自动回复决策仅继续依赖热度与 engagement 信号；
   - 因此“模型没调用但仍有意图结论”的旧现象不会再发生。
 
 如果你依赖旧的兜底行为，请在升级后评估：
 
-- 是否要提高 `task_budgets["intent_analysis"]`
 - 是否要为 `intent_analysis` 显式指定更稳定的模型
 - 是否要把 `session_reply_mode` 调整为 `always` 或提高 `engagement_sensitivity`
 
@@ -162,6 +161,8 @@ v0.27 起，角色生成器会更明确地要求生成的 `global_system_prompt`
 3. 检查所有 `reply_mode=auto` / `session_reply_mode="auto"` 场景，确认不再依赖意图失败时的关键词兜底。
 4. 若需要更稳定的自动参与判断，为 `intent_analysis` 显式指定模型并补足预算。
 5. 若会重新生成人格，确认外部产品接受“更短、更口语、少 markdown”的新默认风格。
+
+> `task_budgets` 已在 v0.27.1 中删除。若你在 v0.27.0 期间短暂使用过该字段，请直接移除，系统不会再根据预算取消任务调用。
 
 ## 8. 兼容性结论
 

@@ -18,6 +18,39 @@
           "docstring": "Create an async roleplay engine for non-blocking integration."
         },
         {
+          "name": "open_workspace_runtime",
+          "is_async": false,
+          "params": [
+            {
+              "name": "work_path",
+              "annotation": null,
+              "kind": "positional"
+            },
+            {
+              "name": "config_path",
+              "annotation": null,
+              "kind": "keyword-only"
+            },
+            {
+              "name": "provider",
+              "annotation": "LLMProvider | AsyncLLMProvider | None",
+              "kind": "keyword-only"
+            },
+            {
+              "name": "bootstrap",
+              "annotation": "WorkspaceBootstrap | None",
+              "kind": "keyword-only"
+            },
+            {
+              "name": "persist_bootstrap",
+              "annotation": "bool",
+              "kind": "keyword-only"
+            }
+          ],
+          "return_type": "WorkspaceRuntime",
+          "docstring": "Open a workspace runtime that owns persistence and session recovery.\n\nWhen *bootstrap* is provided the host-supplied defaults are merged into the\nworkspace on the first ``initialize()`` call.  If *persist_bootstrap* is\n``True`` (default) the merged values are written to the workspace files so\nthat subsequent launches recover them automatically."
+        },
+        {
           "name": "ainit_live_session",
           "is_async": true,
           "params": [
@@ -1559,8 +1592,18 @@
           ]
         },
         {
+          "name": "ProviderPolicy",
+          "docstring": "Workspace-level provider bootstrap policy.",
+          "methods": []
+        },
+        {
           "name": "SessionConfig",
           "docstring": "Session configuration including agent, paths, and orchestration policy.",
+          "methods": []
+        },
+        {
+          "name": "SessionDefaults",
+          "docstring": "Workspace-level defaults used to build SessionConfig instances.",
           "methods": []
         },
         {
@@ -1765,6 +1808,30 @@
               "docstring": "Serialise to a plain dict (recursively via ``dataclasses.asdict``)."
             }
           ]
+        },
+        {
+          "name": "WorkspaceBootstrap",
+          "docstring": "Host-provided defaults injected at workspace open time.\n\nThe host (plugin / CLI) fills in the fields it cares about; the runtime\ndecides how to merge them into the workspace and whether to persist.",
+          "methods": []
+        },
+        {
+          "name": "WorkspaceConfig",
+          "docstring": "Persisted workspace-level configuration source.",
+          "methods": [
+            {
+              "name": "to_dict",
+              "is_async": false,
+              "params": [
+                {
+                  "name": "self",
+                  "annotation": null,
+                  "kind": "positional"
+                }
+              ],
+              "return_type": "dict[str, Any]",
+              "docstring": null
+            }
+          ]
         }
       ]
     },
@@ -1782,11 +1849,6 @@
             {
               "name": "task_models",
               "annotation": "dict[str, str]",
-              "kind": "keyword-only"
-            },
-            {
-              "name": "task_budgets",
-              "annotation": "dict[str, int] | None",
               "kind": "keyword-only"
             },
             {
@@ -1816,7 +1878,7 @@
             }
           ],
           "return_type": "SessionConfig",
-          "docstring": "在现有会话配置中设置多模型编排。\n\nArgs:\n    session_config: 现有的 SessionConfig 对象\n    task_models: 任务模型映射，例如 {\"memory_extract\": \"model-1\", \"event_extract\": \"model-2\", \"intent_analysis\": \"model-3\"}\n    task_budgets: 各任务的 token 预算，例如 {\"memory_extract\": 1200, \"event_extract\": 1000, \"intent_analysis\": 600}\n    task_temperatures: 各任务的采样温度，例如 {\"memory_extract\": 0.1}\n    task_max_tokens: 各任务的最大 token 数，例如 {\"memory_extract\": 128}\n    task_retries: 各任务的重试次数，例如 {\"memory_extract\": 1}\n    max_multimodal_inputs_per_turn: 每轮最多多模态输入数（默认 4）\n    max_multimodal_value_length: 多模态值最大长度（默认 4096）\n\nReturns:\n    配置完成的 SessionConfig 对象（原对象已修改）\n\nExample:\n    >>> from sirius_chat.api import SessionConfig, setup_multimodel_config\n    >>> session = SessionConfig(...)\n    >>> setup_multimodel_config(\n    ...     session_config=session,\n    ...     task_models={\n    ...         \"memory_extract\": \"doubao-seed-2-0-lite-260215\",\n    ...         \"event_extract\": \"doubao-seed-2-0-lite-260215\",\n    ...         \"intent_analysis\": \"gpt-4o-mini\",\n    ...     },\n    ...     task_budgets={\n    ...         \"memory_extract\": 1200,\n    ...         \"event_extract\": 1000,\n    ...         \"intent_analysis\": 600,\n    ...     },\n    ...     task_temperatures={\n    ...         \"memory_extract\": 0.1,\n    ...         \"event_extract\": 0.1,\n    ...     },\n    ... )"
+          "docstring": "在现有会话配置中设置多模型编排。\n\nArgs:\n    session_config: 现有的 SessionConfig 对象\n    task_models: 任务模型映射，例如 {\"memory_extract\": \"model-1\", \"event_extract\": \"model-2\", \"intent_analysis\": \"model-3\"}\n    task_temperatures: 各任务的采样温度，例如 {\"memory_extract\": 0.1}\n    task_max_tokens: 各任务的最大 token 数，例如 {\"memory_extract\": 128}\n    task_retries: 各任务的重试次数，例如 {\"memory_extract\": 1}\n    max_multimodal_inputs_per_turn: 每轮最多多模态输入数（默认 4）\n    max_multimodal_value_length: 多模态值最大长度（默认 4096）\n\nReturns:\n    配置完成的 SessionConfig 对象（原对象已修改）\n\nExample:\n    >>> from sirius_chat.api import SessionConfig, setup_multimodel_config\n    >>> session = SessionConfig(...)\n    >>> setup_multimodel_config(\n    ...     session_config=session,\n    ...     task_models={\n    ...         \"memory_extract\": \"doubao-seed-2-0-lite-260215\",\n    ...         \"event_extract\": \"doubao-seed-2-0-lite-260215\",\n    ...         \"intent_analysis\": \"gpt-4o-mini\",\n    ...     },\n    ...     task_temperatures={\n    ...         \"memory_extract\": 0.1,\n    ...         \"event_extract\": 0.1,\n    ...     },\n    ... )"
         },
         {
           "name": "create_multimodel_config",
@@ -1825,11 +1887,6 @@
             {
               "name": "task_models",
               "annotation": "dict[str, str]",
-              "kind": "keyword-only"
-            },
-            {
-              "name": "task_budgets",
-              "annotation": "dict[str, int] | None",
               "kind": "keyword-only"
             },
             {
@@ -1859,7 +1916,7 @@
             }
           ],
           "return_type": "MultiModelConfig",
-          "docstring": "创建多模型配置对象。\n\n返回 MultiModelConfig 对象，可以用于后续设置或转换为 OrchestrationPolicy。\n\nArgs:\n    task_models: 任务模型映射\n    task_budgets: 任务预算限制\n    task_temperatures: 任务采样温度\n    task_max_tokens: 任务最大 token 数\n    task_retries: 任务重试次数\n    max_multimodal_inputs_per_turn: 最多多模态输入数\n    max_multimodal_value_length: 多模态值最大长度\n\nReturns:\n    MultiModelConfig 对象\n\nExample:\n    >>> from sirius_chat.api import create_multimodel_config\n    >>> mm_config = create_multimodel_config(\n    ...     task_models={\"memory_extract\": \"model-1\", \"intent_analysis\": \"model-2\"},\n    ...     task_budgets={\"memory_extract\": 1200, \"intent_analysis\": 600},\n    ... )\n    >>> orchestration = mm_config.to_orchestration_policy()"
+          "docstring": "创建多模型配置对象。\n\n返回 MultiModelConfig 对象，可以用于后续设置或转换为 OrchestrationPolicy。\n\nArgs:\n    task_models: 任务模型映射\n    task_temperatures: 任务采样温度\n    task_max_tokens: 任务最大 token 数\n    task_retries: 任务重试次数\n    max_multimodal_inputs_per_turn: 最多多模态输入数\n    max_multimodal_value_length: 多模态值最大长度\n\nReturns:\n    MultiModelConfig 对象\n\nExample:\n    >>> from sirius_chat.api import create_multimodel_config\n    >>> mm_config = create_multimodel_config(\n    ...     task_models={\"memory_extract\": \"model-1\", \"intent_analysis\": \"model-2\"},\n    ... )\n    >>> orchestration = mm_config.to_orchestration_policy()"
         }
       ],
       "classes": [
@@ -2261,6 +2318,11 @@
               "kind": "keyword-only"
             },
             {
+              "name": "data_path",
+              "annotation": "Path | None",
+              "kind": "keyword-only"
+            },
+            {
               "name": "agent_key",
               "annotation": "str",
               "kind": "keyword-only"
@@ -2630,6 +2692,30 @@
           ]
         },
         {
+          "name": "BigModelProvider",
+          "docstring": "BigModel provider backed by /api/paas/v4/chat/completions.\n\nBigModel GLM models use an OpenAI-compatible message schema with a\nBigModel-specific base path. The provider accepts either:\n- https://open.bigmodel.cn\n- https://open.bigmodel.cn/api/paas\n- https://open.bigmodel.cn/api/paas/v4\nand normalizes all of them to the same request endpoint.",
+          "methods": [
+            {
+              "name": "generate",
+              "is_async": false,
+              "params": [
+                {
+                  "name": "self",
+                  "annotation": null,
+                  "kind": "positional"
+                },
+                {
+                  "name": "request",
+                  "annotation": "GenerationRequest",
+                  "kind": "positional"
+                }
+              ],
+              "return_type": "str",
+              "docstring": "Generate one assistant message from the upstream provider."
+            }
+          ]
+        },
+        {
           "name": "DeepSeekProvider",
           "docstring": "DeepSeek provider backed by /chat/completions.\n\nDeepSeek is OpenAI-compatible. The constructor accepts either:\n- https://api.deepseek.com\n- https://api.deepseek.com/v1\nand normalizes both to the same request endpoint.",
           "methods": [
@@ -2795,6 +2881,148 @@
                 }
               ],
               "return_type": "None",
+              "docstring": null
+            }
+          ]
+        },
+        {
+          "name": "WorkspaceProviderManager",
+          "docstring": "Workspace-scoped provider registry facade.",
+          "methods": [
+            {
+              "name": "load",
+              "is_async": false,
+              "params": [
+                {
+                  "name": "self",
+                  "annotation": null,
+                  "kind": "positional"
+                }
+              ],
+              "return_type": "dict[str, ProviderConfig]",
+              "docstring": null
+            },
+            {
+              "name": "merge_entries",
+              "is_async": false,
+              "params": [
+                {
+                  "name": "self",
+                  "annotation": null,
+                  "kind": "positional"
+                },
+                {
+                  "name": "providers_config",
+                  "annotation": "list[dict[str, object]]",
+                  "kind": "positional"
+                }
+              ],
+              "return_type": "dict[str, ProviderConfig]",
+              "docstring": null
+            },
+            {
+              "name": "probe",
+              "is_async": false,
+              "params": [
+                {
+                  "name": "self",
+                  "annotation": null,
+                  "kind": "positional"
+                }
+              ],
+              "return_type": "None",
+              "docstring": null
+            },
+            {
+              "name": "register",
+              "is_async": false,
+              "params": [
+                {
+                  "name": "self",
+                  "annotation": null,
+                  "kind": "positional"
+                },
+                {
+                  "name": "provider_type",
+                  "annotation": "str",
+                  "kind": "keyword-only"
+                },
+                {
+                  "name": "api_key",
+                  "annotation": "str",
+                  "kind": "keyword-only"
+                },
+                {
+                  "name": "base_url",
+                  "annotation": "str",
+                  "kind": "keyword-only"
+                },
+                {
+                  "name": "healthcheck_model",
+                  "annotation": "str",
+                  "kind": "keyword-only"
+                },
+                {
+                  "name": "models",
+                  "annotation": "list[str] | None",
+                  "kind": "keyword-only"
+                }
+              ],
+              "return_type": "None",
+              "docstring": null
+            },
+            {
+              "name": "remove",
+              "is_async": false,
+              "params": [
+                {
+                  "name": "self",
+                  "annotation": null,
+                  "kind": "positional"
+                },
+                {
+                  "name": "provider_type",
+                  "annotation": "str",
+                  "kind": "positional"
+                }
+              ],
+              "return_type": "bool",
+              "docstring": null
+            },
+            {
+              "name": "save",
+              "is_async": false,
+              "params": [
+                {
+                  "name": "self",
+                  "annotation": null,
+                  "kind": "positional"
+                },
+                {
+                  "name": "providers",
+                  "annotation": "dict[str, ProviderConfig]",
+                  "kind": "positional"
+                }
+              ],
+              "return_type": "None",
+              "docstring": null
+            },
+            {
+              "name": "save_from_entries",
+              "is_async": false,
+              "params": [
+                {
+                  "name": "self",
+                  "annotation": null,
+                  "kind": "positional"
+                },
+                {
+                  "name": "providers_config",
+                  "annotation": "list[dict[str, object]]",
+                  "kind": "positional"
+                }
+              ],
+              "return_type": "dict[str, ProviderConfig]",
               "docstring": null
             }
           ]
@@ -3034,6 +3262,92 @@
           ]
         },
         {
+          "name": "RoleplayWorkspaceManager",
+          "docstring": "Unify agent selection, session defaults and workspace persistence.\n\nThe host calls *bootstrap_active_agent* after a wizard flow completes;\nthis class takes care of selecting the agent in the library, updating\nthe workspace defaults, and persisting everything — so the host never\ntouches workspace files directly.",
+          "methods": [
+            {
+              "name": "bootstrap_active_agent",
+              "is_async": false,
+              "params": [
+                {
+                  "name": "self",
+                  "annotation": null,
+                  "kind": "positional"
+                },
+                {
+                  "name": "agent_key",
+                  "annotation": "str",
+                  "kind": "keyword-only"
+                },
+                {
+                  "name": "session_defaults",
+                  "annotation": "SessionDefaults | None",
+                  "kind": "keyword-only"
+                },
+                {
+                  "name": "orchestration_defaults",
+                  "annotation": "dict[str, object] | None",
+                  "kind": "keyword-only"
+                }
+              ],
+              "return_type": "WorkspaceConfig",
+              "docstring": "Select an agent and optionally update workspace defaults in one call.\n\n1. Validates the agent key exists in the generated agent library.\n2. Marks the agent as *selected* in the library file.\n3. Merges optional session/orchestration defaults into workspace config.\n4. Persists workspace config files."
+            },
+            {
+              "name": "bootstrap_from_legacy_session_config",
+              "is_async": false,
+              "params": [
+                {
+                  "name": "self",
+                  "annotation": null,
+                  "kind": "positional"
+                },
+                {
+                  "name": "source",
+                  "annotation": "Path",
+                  "kind": "keyword-only"
+                },
+                {
+                  "name": "agent_key",
+                  "annotation": "str | None",
+                  "kind": "keyword-only"
+                }
+              ],
+              "return_type": "WorkspaceConfig",
+              "docstring": "Bootstrap workspace config from a legacy ``session.json`` file.\n\nReads the legacy file, extracts defaults and provider list, and\nwrites workspace config files.  If *agent_key* is not given the\n``generated_agent_key`` from the file is used."
+            }
+          ]
+        },
+        {
+          "name": "SessionStoreFactory",
+          "docstring": "Create session stores for a workspace/session namespace.",
+          "methods": [
+            {
+              "name": "create",
+              "is_async": false,
+              "params": [
+                {
+                  "name": "self",
+                  "annotation": null,
+                  "kind": "positional"
+                },
+                {
+                  "name": "layout",
+                  "annotation": "WorkspaceLayout",
+                  "kind": "keyword-only"
+                },
+                {
+                  "name": "session_id",
+                  "annotation": "str",
+                  "kind": "keyword-only"
+                }
+              ],
+              "return_type": "SessionStore",
+              "docstring": null
+            }
+          ]
+        },
+        {
           "name": "SqliteSessionStore",
           "docstring": "SQLite-based session store for persisting sessions.",
           "methods": [
@@ -3093,6 +3407,793 @@
               ],
               "return_type": "None",
               "docstring": null
+            }
+          ]
+        },
+        {
+          "name": "WorkspaceLayout",
+          "docstring": "Single authority for config-root and data-root persistence paths.",
+          "methods": [
+            {
+              "name": "config_dir",
+              "is_async": false,
+              "params": [
+                {
+                  "name": "self",
+                  "annotation": null,
+                  "kind": "positional"
+                }
+              ],
+              "return_type": "Path",
+              "docstring": null
+            },
+            {
+              "name": "config_watch_paths",
+              "is_async": false,
+              "params": [
+                {
+                  "name": "self",
+                  "annotation": null,
+                  "kind": "positional"
+                }
+              ],
+              "return_type": "list[Path]",
+              "docstring": null
+            },
+            {
+              "name": "ensure_directories",
+              "is_async": false,
+              "params": [
+                {
+                  "name": "self",
+                  "annotation": null,
+                  "kind": "positional"
+                },
+                {
+                  "name": "session_id",
+                  "annotation": "str | None",
+                  "kind": "keyword-only"
+                }
+              ],
+              "return_type": "None",
+              "docstring": null
+            },
+            {
+              "name": "event_memory_dir",
+              "is_async": false,
+              "params": [
+                {
+                  "name": "self",
+                  "annotation": null,
+                  "kind": "positional"
+                }
+              ],
+              "return_type": "Path",
+              "docstring": null
+            },
+            {
+              "name": "event_memory_path",
+              "is_async": false,
+              "params": [
+                {
+                  "name": "self",
+                  "annotation": null,
+                  "kind": "positional"
+                }
+              ],
+              "return_type": "Path",
+              "docstring": null
+            },
+            {
+              "name": "generated_agent_trace_dir",
+              "is_async": false,
+              "params": [
+                {
+                  "name": "self",
+                  "annotation": null,
+                  "kind": "positional"
+                }
+              ],
+              "return_type": "Path",
+              "docstring": null
+            },
+            {
+              "name": "generated_agents_path",
+              "is_async": false,
+              "params": [
+                {
+                  "name": "self",
+                  "annotation": null,
+                  "kind": "positional"
+                }
+              ],
+              "return_type": "Path",
+              "docstring": null
+            },
+            {
+              "name": "legacy_event_memory_dir",
+              "is_async": false,
+              "params": [
+                {
+                  "name": "self",
+                  "annotation": null,
+                  "kind": "positional"
+                }
+              ],
+              "return_type": "Path",
+              "docstring": null
+            },
+            {
+              "name": "legacy_event_memory_path",
+              "is_async": false,
+              "params": [
+                {
+                  "name": "self",
+                  "annotation": null,
+                  "kind": "positional"
+                }
+              ],
+              "return_type": "Path",
+              "docstring": null
+            },
+            {
+              "name": "legacy_generated_agents_path",
+              "is_async": false,
+              "params": [
+                {
+                  "name": "self",
+                  "annotation": null,
+                  "kind": "positional"
+                }
+              ],
+              "return_type": "Path",
+              "docstring": null
+            },
+            {
+              "name": "legacy_primary_user_path",
+              "is_async": false,
+              "params": [
+                {
+                  "name": "self",
+                  "annotation": null,
+                  "kind": "positional"
+                }
+              ],
+              "return_type": "Path",
+              "docstring": null
+            },
+            {
+              "name": "legacy_provider_registry_path",
+              "is_async": false,
+              "params": [
+                {
+                  "name": "self",
+                  "annotation": null,
+                  "kind": "positional"
+                }
+              ],
+              "return_type": "Path",
+              "docstring": null
+            },
+            {
+              "name": "legacy_self_memory_path",
+              "is_async": false,
+              "params": [
+                {
+                  "name": "self",
+                  "annotation": null,
+                  "kind": "positional"
+                }
+              ],
+              "return_type": "Path",
+              "docstring": null
+            },
+            {
+              "name": "legacy_session_store_path",
+              "is_async": false,
+              "params": [
+                {
+                  "name": "self",
+                  "annotation": null,
+                  "kind": "positional"
+                },
+                {
+                  "name": "backend",
+                  "annotation": "str",
+                  "kind": "keyword-only"
+                }
+              ],
+              "return_type": "Path",
+              "docstring": null
+            },
+            {
+              "name": "legacy_token_usage_db_path",
+              "is_async": false,
+              "params": [
+                {
+                  "name": "self",
+                  "annotation": null,
+                  "kind": "positional"
+                }
+              ],
+              "return_type": "Path",
+              "docstring": null
+            },
+            {
+              "name": "legacy_user_memory_dir",
+              "is_async": false,
+              "params": [
+                {
+                  "name": "self",
+                  "annotation": null,
+                  "kind": "positional"
+                }
+              ],
+              "return_type": "Path",
+              "docstring": null
+            },
+            {
+              "name": "memory_dir",
+              "is_async": false,
+              "params": [
+                {
+                  "name": "self",
+                  "annotation": null,
+                  "kind": "positional"
+                }
+              ],
+              "return_type": "Path",
+              "docstring": null
+            },
+            {
+              "name": "persisted_session_bundle_path",
+              "is_async": false,
+              "params": [
+                {
+                  "name": "self",
+                  "annotation": null,
+                  "kind": "positional"
+                }
+              ],
+              "return_type": "Path",
+              "docstring": null
+            },
+            {
+              "name": "primary_user_path",
+              "is_async": false,
+              "params": [
+                {
+                  "name": "self",
+                  "annotation": null,
+                  "kind": "positional"
+                }
+              ],
+              "return_type": "Path",
+              "docstring": null
+            },
+            {
+              "name": "provider_registry_path",
+              "is_async": false,
+              "params": [
+                {
+                  "name": "self",
+                  "annotation": null,
+                  "kind": "positional"
+                }
+              ],
+              "return_type": "Path",
+              "docstring": null
+            },
+            {
+              "name": "providers_dir",
+              "is_async": false,
+              "params": [
+                {
+                  "name": "self",
+                  "annotation": null,
+                  "kind": "positional"
+                }
+              ],
+              "return_type": "Path",
+              "docstring": null
+            },
+            {
+              "name": "roleplay_dir",
+              "is_async": false,
+              "params": [
+                {
+                  "name": "self",
+                  "annotation": null,
+                  "kind": "positional"
+                }
+              ],
+              "return_type": "Path",
+              "docstring": null
+            },
+            {
+              "name": "self_memory_path",
+              "is_async": false,
+              "params": [
+                {
+                  "name": "self",
+                  "annotation": null,
+                  "kind": "positional"
+                }
+              ],
+              "return_type": "Path",
+              "docstring": null
+            },
+            {
+              "name": "session_config_path",
+              "is_async": false,
+              "params": [
+                {
+                  "name": "self",
+                  "annotation": null,
+                  "kind": "positional"
+                }
+              ],
+              "return_type": "Path",
+              "docstring": null
+            },
+            {
+              "name": "session_dir",
+              "is_async": false,
+              "params": [
+                {
+                  "name": "self",
+                  "annotation": null,
+                  "kind": "positional"
+                },
+                {
+                  "name": "session_id",
+                  "annotation": "str",
+                  "kind": "positional"
+                }
+              ],
+              "return_type": "Path",
+              "docstring": null
+            },
+            {
+              "name": "session_id_from_slug",
+              "is_async": false,
+              "params": [
+                {
+                  "name": "self",
+                  "annotation": null,
+                  "kind": "positional"
+                },
+                {
+                  "name": "slug",
+                  "annotation": "str",
+                  "kind": "positional"
+                }
+              ],
+              "return_type": "str",
+              "docstring": null
+            },
+            {
+              "name": "session_participants_path",
+              "is_async": false,
+              "params": [
+                {
+                  "name": "self",
+                  "annotation": null,
+                  "kind": "positional"
+                },
+                {
+                  "name": "session_id",
+                  "annotation": "str",
+                  "kind": "positional"
+                }
+              ],
+              "return_type": "Path",
+              "docstring": null
+            },
+            {
+              "name": "session_slug",
+              "is_async": false,
+              "params": [
+                {
+                  "name": "self",
+                  "annotation": null,
+                  "kind": "positional"
+                },
+                {
+                  "name": "session_id",
+                  "annotation": "str",
+                  "kind": "positional"
+                }
+              ],
+              "return_type": "str",
+              "docstring": null
+            },
+            {
+              "name": "session_store_path",
+              "is_async": false,
+              "params": [
+                {
+                  "name": "self",
+                  "annotation": null,
+                  "kind": "positional"
+                },
+                {
+                  "name": "session_id",
+                  "annotation": "str",
+                  "kind": "positional"
+                },
+                {
+                  "name": "backend",
+                  "annotation": "str",
+                  "kind": "keyword-only"
+                }
+              ],
+              "return_type": "Path",
+              "docstring": null
+            },
+            {
+              "name": "sessions_dir",
+              "is_async": false,
+              "params": [
+                {
+                  "name": "self",
+                  "annotation": null,
+                  "kind": "positional"
+                }
+              ],
+              "return_type": "Path",
+              "docstring": null
+            },
+            {
+              "name": "skill_data_dir",
+              "is_async": false,
+              "params": [
+                {
+                  "name": "self",
+                  "annotation": null,
+                  "kind": "positional"
+                }
+              ],
+              "return_type": "Path",
+              "docstring": null
+            },
+            {
+              "name": "skills_dir",
+              "is_async": false,
+              "params": [
+                {
+                  "name": "self",
+                  "annotation": null,
+                  "kind": "positional"
+                }
+              ],
+              "return_type": "Path",
+              "docstring": null
+            },
+            {
+              "name": "token_dir",
+              "is_async": false,
+              "params": [
+                {
+                  "name": "self",
+                  "annotation": null,
+                  "kind": "positional"
+                }
+              ],
+              "return_type": "Path",
+              "docstring": null
+            },
+            {
+              "name": "token_usage_db_path",
+              "is_async": false,
+              "params": [
+                {
+                  "name": "self",
+                  "annotation": null,
+                  "kind": "positional"
+                }
+              ],
+              "return_type": "Path",
+              "docstring": null
+            },
+            {
+              "name": "user_memory_dir",
+              "is_async": false,
+              "params": [
+                {
+                  "name": "self",
+                  "annotation": null,
+                  "kind": "positional"
+                }
+              ],
+              "return_type": "Path",
+              "docstring": null
+            },
+            {
+              "name": "workspace_manifest_path",
+              "is_async": false,
+              "params": [
+                {
+                  "name": "self",
+                  "annotation": null,
+                  "kind": "positional"
+                }
+              ],
+              "return_type": "Path",
+              "docstring": null
+            }
+          ]
+        },
+        {
+          "name": "WorkspaceRuntime",
+          "docstring": "WorkspaceRuntime(work_path: 'Path', config_path: 'Path | None' = None, provider: 'LLMProvider | AsyncLLMProvider | None' = None, store_factory: 'SessionStoreFactory' = <factory>, session_config_factory: 'Callable[[str], SessionConfig] | None' = None, bootstrap: 'WorkspaceBootstrap | None' = None, persist_bootstrap: 'bool' = True)",
+          "methods": [
+            {
+              "name": "apply_workspace_updates",
+              "is_async": true,
+              "params": [
+                {
+                  "name": "self",
+                  "annotation": null,
+                  "kind": "positional"
+                },
+                {
+                  "name": "patch",
+                  "annotation": "dict[str, object]",
+                  "kind": "positional"
+                }
+              ],
+              "return_type": "WorkspaceConfig",
+              "docstring": "Apply a partial update to workspace defaults and persist.\n\nThe caller provides only the fields it wants to change; the runtime\nmerges them, validates, persists and triggers a hot-refresh."
+            },
+            {
+              "name": "clear_session",
+              "is_async": true,
+              "params": [
+                {
+                  "name": "self",
+                  "annotation": null,
+                  "kind": "positional"
+                },
+                {
+                  "name": "session_id",
+                  "annotation": "str",
+                  "kind": "positional"
+                }
+              ],
+              "return_type": "None",
+              "docstring": null
+            },
+            {
+              "name": "close",
+              "is_async": true,
+              "params": [
+                {
+                  "name": "self",
+                  "annotation": null,
+                  "kind": "positional"
+                }
+              ],
+              "return_type": "None",
+              "docstring": null
+            },
+            {
+              "name": "delete_session",
+              "is_async": true,
+              "params": [
+                {
+                  "name": "self",
+                  "annotation": null,
+                  "kind": "positional"
+                },
+                {
+                  "name": "session_id",
+                  "annotation": "str",
+                  "kind": "positional"
+                }
+              ],
+              "return_type": "None",
+              "docstring": null
+            },
+            {
+              "name": "export_workspace_defaults",
+              "is_async": false,
+              "params": [
+                {
+                  "name": "self",
+                  "annotation": null,
+                  "kind": "positional"
+                }
+              ],
+              "return_type": "dict[str, object]",
+              "docstring": "Return the current workspace defaults as a plain dict.\n\nIntended for host wizard / settings UI so the caller never needs to\nunderstand the underlying file layout."
+            },
+            {
+              "name": "get_primary_user",
+              "is_async": true,
+              "params": [
+                {
+                  "name": "self",
+                  "annotation": null,
+                  "kind": "positional"
+                },
+                {
+                  "name": "session_id",
+                  "annotation": "str",
+                  "kind": "positional"
+                }
+              ],
+              "return_type": "Participant | None",
+              "docstring": null
+            },
+            {
+              "name": "get_session_store",
+              "is_async": false,
+              "params": [
+                {
+                  "name": "self",
+                  "annotation": null,
+                  "kind": "positional"
+                },
+                {
+                  "name": "session_id",
+                  "annotation": "str",
+                  "kind": "positional"
+                }
+              ],
+              "return_type": "SessionStore",
+              "docstring": null
+            },
+            {
+              "name": "get_transcript",
+              "is_async": true,
+              "params": [
+                {
+                  "name": "self",
+                  "annotation": null,
+                  "kind": "positional"
+                },
+                {
+                  "name": "session_id",
+                  "annotation": "str",
+                  "kind": "positional"
+                }
+              ],
+              "return_type": "Transcript | None",
+              "docstring": null
+            },
+            {
+              "name": "initialize",
+              "is_async": true,
+              "params": [
+                {
+                  "name": "self",
+                  "annotation": null,
+                  "kind": "positional"
+                }
+              ],
+              "return_type": "None",
+              "docstring": null
+            },
+            {
+              "name": "list_sessions",
+              "is_async": true,
+              "params": [
+                {
+                  "name": "self",
+                  "annotation": null,
+                  "kind": "positional"
+                }
+              ],
+              "return_type": "list[str]",
+              "docstring": null
+            },
+            {
+              "name": "run_live_message",
+              "is_async": true,
+              "params": [
+                {
+                  "name": "self",
+                  "annotation": null,
+                  "kind": "positional"
+                },
+                {
+                  "name": "session_id",
+                  "annotation": "str",
+                  "kind": "keyword-only"
+                },
+                {
+                  "name": "turn",
+                  "annotation": "Message",
+                  "kind": "keyword-only"
+                },
+                {
+                  "name": "environment_context",
+                  "annotation": "str",
+                  "kind": "keyword-only"
+                },
+                {
+                  "name": "user_profile",
+                  "annotation": "UserProfile | None",
+                  "kind": "keyword-only"
+                },
+                {
+                  "name": "on_reply",
+                  "annotation": "Callable[[Message], Awaitable[None]] | None",
+                  "kind": "keyword-only"
+                },
+                {
+                  "name": "timeout",
+                  "annotation": "float",
+                  "kind": "keyword-only"
+                }
+              ],
+              "return_type": "Transcript",
+              "docstring": null
+            },
+            {
+              "name": "set_primary_user",
+              "is_async": true,
+              "params": [
+                {
+                  "name": "self",
+                  "annotation": null,
+                  "kind": "positional"
+                },
+                {
+                  "name": "session_id",
+                  "annotation": "str",
+                  "kind": "positional"
+                },
+                {
+                  "name": "participant",
+                  "annotation": "Participant",
+                  "kind": "positional"
+                }
+              ],
+              "return_type": "None",
+              "docstring": null
+            },
+            {
+              "name": "set_provider",
+              "is_async": false,
+              "params": [
+                {
+                  "name": "self",
+                  "annotation": null,
+                  "kind": "positional"
+                },
+                {
+                  "name": "provider",
+                  "annotation": "LLMProvider | AsyncLLMProvider | None",
+                  "kind": "positional"
+                }
+              ],
+              "return_type": "None",
+              "docstring": null
+            },
+            {
+              "name": "set_provider_entries",
+              "is_async": false,
+              "params": [
+                {
+                  "name": "self",
+                  "annotation": null,
+                  "kind": "positional"
+                },
+                {
+                  "name": "entries",
+                  "annotation": "list[dict[str, object]]",
+                  "kind": "positional"
+                },
+                {
+                  "name": "persist",
+                  "annotation": "bool",
+                  "kind": "keyword-only"
+                }
+              ],
+              "return_type": "None",
+              "docstring": "Inject provider config entries from the host.\n\nThe runtime validates entries, optionally persists them to the\nworkspace provider registry, and rebuilds the internal routing\nprovider so that subsequent ``run_live_message`` calls use the\nnew configuration."
             }
           ]
         }

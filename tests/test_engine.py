@@ -53,6 +53,7 @@ def test_roleplay_engine_multi_human_single_ai_transcript() -> None:
                 task_enabled={
                     "memory_extract": False,
                     "event_extract": False,
+                    "memory_manager": False,
                 },
             pending_message_threshold=0.0,
             ),
@@ -113,6 +114,7 @@ def test_run_live_session_supports_dynamic_participants_and_memory() -> None:
                 task_enabled={
                     "memory_extract": False,
                     "event_extract": False,
+                    "memory_manager": False,
                 },
             pending_message_threshold=0.0,
             ),
@@ -154,6 +156,7 @@ def test_transcript_can_resume_after_persist_and_reboot(tmp_path) -> None:
                 task_enabled={
                     "memory_extract": False,
                     "event_extract": False,
+                    "memory_manager": False,
                 },
             pending_message_threshold=0.0,
             ),
@@ -230,6 +233,7 @@ def test_cross_environment_identity_mapping_resolves_same_user() -> None:
                 task_enabled={
                     "memory_extract": False,
                     "event_extract": False,
+                    "memory_manager": False,
                 },
             pending_message_threshold=0.0,
             ),
@@ -336,6 +340,7 @@ def test_on_reply_callback_receives_assistant_messages() -> None:
                 task_enabled={
                     "memory_extract": False,
                     "event_extract": False,
+                    "memory_manager": False,
                 },
             pending_message_threshold=0.0,
             ),
@@ -558,6 +563,7 @@ def run(text: str, **kwargs):
                 task_enabled={
                     "memory_extract": False,
                     "event_extract": False,
+                    "memory_manager": False,
                 },
             pending_message_threshold=0.0,
             ),
@@ -632,6 +638,7 @@ def run(**kwargs):
                 task_enabled={
                     "memory_extract": False,
                     "event_extract": False,
+                    "memory_manager": False,
                 },
             pending_message_threshold=0.0,
             ),
@@ -650,6 +657,7 @@ def run(**kwargs):
                 task_enabled={
                     "memory_extract": False,
                     "event_extract": False,
+                    "memory_manager": False,
                 },
             pending_message_threshold=0.0,
             ),
@@ -668,15 +676,15 @@ def run(**kwargs):
             transcript=transcript,
         )
 
-        # one request for first turn + two requests for skill round in second turn
-        assert len(provider.requests) == 3
-        assert any(
+        # Direct engine no longer lazily reloads skills on the message path.
+        assert len(provider.requests) == 2
+        assert not any(
             "SKILL执行结果: system_info" in message.content
             for message in transcript.messages
             if message.role == "system"
         )
         assert any(
-            message.role == "assistant" and "检查完成" in message.content
+            message.role == "assistant" and "开始检查中" in message.content
             for message in transcript.messages
         )
 
@@ -725,6 +733,7 @@ def run(text: str, **kwargs):
                 task_enabled={
                     "memory_extract": False,
                     "event_extract": False,
+                    "memory_manager": False,
                 },
             pending_message_threshold=0.0,
             ),
@@ -800,7 +809,7 @@ def test_unknown_skill_triggers_regeneration_instead_of_partial_output(tmp_path)
 
 
 def test_skill_reload_on_miss_when_registry_non_empty(tmp_path) -> None:
-    """If registry is non-empty but missing target skill, engine should reload and execute it."""
+    """Direct engine should not hot-reload missing skills from the message path anymore."""
     async def _run() -> None:
         work_path = tmp_path / "skill_reload_on_miss"
         skills_dir = work_path / "skills"
@@ -837,6 +846,7 @@ def run(**kwargs):
                 task_enabled={
                     "memory_extract": False,
                     "event_extract": False,
+                    "memory_manager": False,
                 },
             pending_message_threshold=0.0,
             ),
@@ -871,7 +881,7 @@ def run(x: int, **kwargs):
         )
 
         assert len(provider.requests) == 3
-        assert any(
+        assert not any(
             "SKILL执行结果: beta" in message.content
             for message in transcript.messages
             if message.role == "system"
@@ -923,6 +933,7 @@ def run(**kwargs):
                 task_enabled={
                     "memory_extract": False,
                     "event_extract": False,
+                    "memory_manager": False,
                 },
             pending_message_threshold=0.0,
             ),
@@ -994,6 +1005,7 @@ def run(**kwargs):
                 task_enabled={
                     "memory_extract": False,
                     "event_extract": False,
+                    "memory_manager": False,
                 },
             pending_message_threshold=0.0,
             ),

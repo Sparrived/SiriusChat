@@ -49,6 +49,7 @@ def test_async_engine_runs_live_session() -> None:
                 task_enabled={
                     "memory_extract": False,
                     "event_extract": False,
+                    "memory_manager": False,
                 },
             pending_message_threshold=0.0,
             ),
@@ -169,10 +170,6 @@ def test_async_engine_memory_extract_task_uses_aux_model() -> None:
                     "memory_extract": "memory-model",
                     "event_extract": "mock-model",
                 },
-                task_budgets={
-                    "memory_extract": 1000,
-                    "event_extract": 1000,
-                },
                 task_temperatures={"memory_extract": 0.1},
                 task_max_tokens={"memory_extract": 64},
             pending_message_threshold=0.0,
@@ -253,8 +250,8 @@ def test_memory_extract_task_includes_recent_conversation_context() -> None:
     asyncio.run(_run())
 
 
-def test_async_engine_memory_extract_task_skips_when_budget_exceeded() -> None:
-    class BudgetProvider:
+def test_async_engine_memory_extract_task_skips_when_disabled() -> None:
+    class DisabledTaskProvider:
         def __init__(self) -> None:
             self.models: list[str] = []
 
@@ -265,10 +262,10 @@ def test_async_engine_memory_extract_task_skips_when_budget_exceeded() -> None:
             return "主回复"
 
     async def _run() -> None:
-        provider = BudgetProvider()
+        provider = DisabledTaskProvider()
         engine = create_async_engine(provider)
         config = SessionConfig(
-            work_path=Path("data/tests/orchestration_budget"),
+            work_path=Path("data/tests/orchestration_disabled"),
             preset=AgentPreset(
                 agent=Agent(name="主助手", persona="异步测试", model="main-model"),
                 global_system_prompt="测试系统提示词",
@@ -279,7 +276,11 @@ def test_async_engine_memory_extract_task_skips_when_budget_exceeded() -> None:
                     "memory_extract": "memory-model",
                     "event_extract": "mock-model",
                 },
-                task_budgets={"memory_extract": 1},
+                task_enabled={
+                    "memory_extract": False,
+                    "event_extract": False,
+                    "intent_analysis": False,
+                },
             pending_message_threshold=0.0,
             ),
         )
@@ -290,9 +291,7 @@ def test_async_engine_memory_extract_task_skips_when_budget_exceeded() -> None:
         )
 
         entry = transcript.user_memory.entries["小王"]
-        # TODO: Heuristic extraction behavior needs investigation after routing refactor
-        # When memory_extract budget is exceeded, heuristic should still extract persona
-        # assert entry.runtime.inferred_persona == "产品经理"
+        assert entry.runtime.inferred_persona == ""
         assert "memory-model" not in provider.models
         assert "main-model" in provider.models
 
@@ -322,7 +321,7 @@ def test_async_engine_multimodal_image_passed_to_main_model_vision_format() -> N
             ),
             orchestration=OrchestrationPolicy(
                 unified_model="main-model",
-                task_enabled={"memory_extract": False, "event_extract": False},
+                task_enabled={"memory_extract": False, "event_extract": False, "memory_manager": False},
                 pending_message_threshold=0.0,
             ),
         )
@@ -378,7 +377,7 @@ def test_async_engine_multimodal_non_image_messages_use_text_format() -> None:
             ),
             orchestration=OrchestrationPolicy(
                 unified_model="main-model",
-                task_enabled={"memory_extract": False, "event_extract": False},
+                task_enabled={"memory_extract": False, "event_extract": False, "memory_manager": False},
                 pending_message_threshold=0.0,
             ),
         )
@@ -426,7 +425,6 @@ def test_async_engine_task_retry_can_recover_from_transient_failure() -> None:
                     "memory_extract": "memory-model",
                     "event_extract": "mock-model",
                 },
-                task_budgets={"memory_extract": 1000},
                 task_retries={"memory_extract": 1},
             pending_message_threshold=0.0,
             ),
@@ -465,7 +463,7 @@ def test_async_engine_multimodal_validation_filters_and_truncates_inputs() -> No
             ),
             orchestration=OrchestrationPolicy(
                 unified_model="main-model",
-                task_enabled={"memory_extract": False, "event_extract": False},
+                task_enabled={"memory_extract": False, "event_extract": False, "memory_manager": False},
                 max_multimodal_inputs_per_turn=1,
                 max_multimodal_value_length=16,
             pending_message_threshold=0.0,
@@ -526,7 +524,6 @@ def test_async_engine_records_token_usage_for_task_and_main_calls() -> None:
                     "memory_extract": "memory-model",
                     "event_extract": "mock-model",
                 },
-                task_budgets={"memory_extract": 1000},
             pending_message_threshold=0.0,
             ),
         )
@@ -626,7 +623,6 @@ def test_async_engine_event_extract_task_enriches_event_features() -> None:
                     "event_extract": "event-model",
                     "memory_extract": "mock-model",
                 },
-                task_budgets={"event_extract": 1000},
             pending_message_threshold=0.0,
             ),
         )
@@ -761,6 +757,7 @@ def test_run_live_session_reply_mode_auto_infers_when_to_reply() -> None:
                     "memory_extract": False,
                     "event_extract": False,
                     "intent_analysis": False,
+                    "memory_manager": False,
                 },
             pending_message_threshold=0.0,
             ),
@@ -814,6 +811,7 @@ def test_reply_mode_auto_uses_intent_analysis_task_model() -> None:
                     "memory_extract": False,
                     "event_extract": False,
                     "intent_analysis": True,
+                    "memory_manager": False,
                 },
                 session_reply_mode="auto",
                 pending_message_threshold=0.0,
@@ -853,6 +851,7 @@ def test_reply_mode_auto_can_disable_intent_analysis_task() -> None:
                     "memory_extract": False,
                     "event_extract": False,
                     "intent_analysis": False,
+                    "memory_manager": False,
                 },
                 session_reply_mode="auto",
                 pending_message_threshold=0.0,
@@ -874,12 +873,12 @@ def test_reply_mode_auto_can_disable_intent_analysis_task() -> None:
     asyncio.run(_run())
 
 
-def test_reply_mode_auto_skips_intent_fallback_when_budget_exceeded() -> None:
+def test_reply_mode_auto_skips_intent_fallback_when_analysis_parse_fails() -> None:
     async def _run() -> None:
-        provider = MockProvider(responses=["不应触发主回复"])
+        provider = MockProvider(responses=["not-json", "不应触发主回复"])
         engine = create_async_engine(provider)
         config = SessionConfig(
-            work_path=Path("data/tests/intent_analysis_budget_strict"),
+            work_path=Path("data/tests/intent_analysis_parse_strict"),
             preset=AgentPreset(
                 agent=Agent(name="主助手", persona="异步测试", model="mock-model"),
                 global_system_prompt="测试系统提示词",
@@ -891,8 +890,8 @@ def test_reply_mode_auto_skips_intent_fallback_when_budget_exceeded() -> None:
                     "memory_extract": False,
                     "event_extract": False,
                     "intent_analysis": True,
+                    "memory_manager": False,
                 },
-                task_budgets={"intent_analysis": 1},
                 session_reply_mode="auto",
                 pending_message_threshold=0,
             ),
@@ -906,10 +905,10 @@ def test_reply_mode_auto_skips_intent_fallback_when_budget_exceeded() -> None:
             ],
         )
 
-        assert provider.requests == []
+        assert [request.purpose for request in provider.requests] == ["intent_analysis"]
         stats = transcript.orchestration_stats["intent_analysis"]
         assert stats["attempted"] == 1
-        assert stats["skipped_budget"] == 1
+        assert stats["failed_parse"] == 1
         assistant_messages = [msg for msg in transcript.messages if msg.role == "assistant"]
         assert assistant_messages == []
 
@@ -972,6 +971,7 @@ def test_run_live_session_reply_mode_auto_probability_fallback_can_trigger_reply
                     "memory_extract": False,
                     "event_extract": False,
                     "intent_analysis": False,
+                    "memory_manager": False,
                 },
                 engagement_sensitivity=1.0,
             pending_message_threshold=0.0,
@@ -1239,6 +1239,7 @@ def test_run_live_session_reply_mode_auto_threshold_is_configurable() -> None:
                     "memory_extract": False,
                     "event_extract": False,
                     "intent_analysis": False,
+                    "memory_manager": False,
                 },
                 engagement_sensitivity=0.9,
             pending_message_threshold=0.0,
@@ -1361,6 +1362,7 @@ def test_run_live_message_uses_session_level_auto_reply_mode() -> None:
                     "memory_extract": False,
                     "event_extract": False,
                     "intent_analysis": False,
+                    "memory_manager": False,
                 },
             pending_message_threshold=0.0,
             ),
@@ -1380,8 +1382,8 @@ def test_run_live_message_uses_session_level_auto_reply_mode() -> None:
     asyncio.run(_run())
 
 
-def test_async_engine_event_extract_task_skips_when_budget_exceeded() -> None:
-    class BudgetProvider:
+def test_async_engine_event_extract_task_skips_when_disabled() -> None:
+    class DisabledTaskProvider:
         def __init__(self) -> None:
             self.models: list[str] = []
 
@@ -1392,10 +1394,10 @@ def test_async_engine_event_extract_task_skips_when_budget_exceeded() -> None:
             return "主回复"
 
     async def _run() -> None:
-        provider = BudgetProvider()
+        provider = DisabledTaskProvider()
         engine = create_async_engine(provider)
         config = SessionConfig(
-            work_path=Path("data/tests/event_extract_budget"),
+            work_path=Path("data/tests/event_extract_disabled"),
             preset=AgentPreset(
                 agent=Agent(name="主助手", persona="预算测试", model="main-model"),
                 global_system_prompt="测试系统提示词",
@@ -1406,7 +1408,12 @@ def test_async_engine_event_extract_task_skips_when_budget_exceeded() -> None:
                     "event_extract": "event-model",
                     "memory_extract": "mock-model",
                 },
-                task_budgets={"event_extract": 1},
+                task_enabled={
+                    "memory_extract": False,
+                    "event_extract": False,
+                    "intent_analysis": False,
+                    "memory_manager": False,
+                },
             pending_message_threshold=0.0,
             ),
         )
@@ -1441,7 +1448,7 @@ def test_multimodal_vision_format_only_when_current_batch_has_images() -> None:
             orchestration=OrchestrationPolicy(
                 unified_model="mock-model",
                 enable_self_memory=False,
-                task_enabled={"memory_extract": False, "event_extract": False},
+                task_enabled={"memory_extract": False, "event_extract": False, "memory_manager": False},
                 pending_message_threshold=0.0,
             ),
         )

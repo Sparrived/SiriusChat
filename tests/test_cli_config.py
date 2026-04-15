@@ -179,9 +179,11 @@ def test_load_session_config_parses_orchestration_policy(tmp_path) -> None:
                         "memory_extract": "doubao-seed-2-0-lite-260215",
                         "intent_analysis": "gpt-4o-mini"
                     },
-                    "task_budgets": {"memory_extract": 1200},
                     "task_temperatures": {"memory_extract": 0.1},
                     "task_max_tokens": {"memory_extract": 128},
+                    "memory_manager_model": "gpt-4.1-mini",
+                    "memory_manager_temperature": 0.3,
+                    "memory_manager_max_tokens": 256,
                     "session_reply_mode": "auto",
                     "pending_message_threshold": 0
                 },
@@ -199,8 +201,10 @@ def test_load_session_config_parses_orchestration_policy(tmp_path) -> None:
     assert session.orchestration.unified_model or session.orchestration.task_models
     assert session.orchestration.task_models.get("memory_extract") == "doubao-seed-2-0-lite-260215"
     assert session.orchestration.task_models.get("intent_analysis") == "gpt-4o-mini"
+    assert session.orchestration.task_models.get("memory_manager") == "gpt-4.1-mini"
     assert session.orchestration.task_enabled["intent_analysis"] is False
-    assert session.orchestration.task_budgets["memory_extract"] == 1200
+    assert session.orchestration.task_temperatures["memory_manager"] == 0.3
+    assert session.orchestration.task_max_tokens["memory_manager"] == 256
     assert session.orchestration.session_reply_mode == "auto"
     assert session.orchestration.pending_message_threshold == 0
 

@@ -23,7 +23,6 @@ from sirius_chat.api import (
     RolePlayAnswer,
     abuild_roleplay_prompt_from_answers_and_apply,
     create_session_config_from_selected_agent,
-    create_multimodel_config,
     setup_multimodel_config,
     ensure_provider_platform_supported,
     generate_humanized_roleplay_questions,
@@ -151,7 +150,6 @@ def _load_session_config(
 def _setup_multimodel_orchestration(
     session: SessionConfig,
     task_models: dict[str, str] | None = None,
-    task_budgets: dict[str, int] | None = None,
     task_temperatures: dict[str, float] | None = None,
     task_max_tokens: dict[str, int] | None = None,
     task_retries: dict[str, int] | None = None,
@@ -163,7 +161,6 @@ def _setup_multimodel_orchestration(
     Args:
         session: 会话配置对象
         task_models: 任务模型映射（例如 {"memory_extract": "doubao-seed-2-0-lite-260215"}）
-        task_budgets: 任务 token 预算（例如 {"memory_extract": 1200}）
         task_temperatures: 采样温度（例如 {"memory_extract": 0.1}）
         task_max_tokens: 最大 token 数（例如 {"memory_extract": 128}）
         task_retries: 重试次数（例如 {"memory_extract": 1}）
@@ -180,10 +177,6 @@ def _setup_multimodel_orchestration(
                 "memory_extract": "doubao-seed-2-0-lite-260215",
                 "event_extract": "doubao-seed-2-0-lite-260215",
             },
-            task_budgets={
-                "memory_extract": 1200,
-                "event_extract": 1000,
-            },
             task_retries={
                 "memory_extract": 1,
                 "event_extract": 1,
@@ -194,7 +187,6 @@ def _setup_multimodel_orchestration(
         # setup_multimodel_config(
         #     session_config=session,
         #     task_models={"memory_extract": "model-1"},
-        #     task_budgets={"memory_extract": 1200},
         # )
     """
     if not task_models:
@@ -202,7 +194,6 @@ def _setup_multimodel_orchestration(
     return setup_multimodel_config(
         session_config=session,
         task_models=task_models,
-        task_budgets=task_budgets or {},
         task_temperatures=task_temperatures or {},
         task_max_tokens=task_max_tokens or {},
         task_retries=task_retries or {},
@@ -571,21 +562,15 @@ def _serialize_session_bundle(
             "unified_model": orchestration.unified_model,
             "task_models": dict(orchestration.task_models),
             "task_enabled": dict(orchestration.task_enabled),
-            "task_budgets": dict(orchestration.task_budgets),
             "task_temperatures": dict(orchestration.task_temperatures),
             "task_max_tokens": dict(orchestration.task_max_tokens),
             "task_retries": dict(orchestration.task_retries),
             "max_multimodal_inputs_per_turn": orchestration.max_multimodal_inputs_per_turn,
             "max_multimodal_value_length": orchestration.max_multimodal_value_length,
             "enable_prompt_driven_splitting": orchestration.enable_prompt_driven_splitting,
-            "split_marker": orchestration.split_marker,
-            "memory_manager_model": orchestration.memory_manager_model,
-            "memory_manager_temperature": orchestration.memory_manager_temperature,
-            "memory_manager_max_tokens": orchestration.memory_manager_max_tokens,
             "memory_extract_batch_size": orchestration.memory_extract_batch_size,
             "memory_extract_min_content_length": orchestration.memory_extract_min_content_length,
             "event_extract_batch_size": orchestration.event_extract_batch_size,
-            "consolidation_enabled": orchestration.consolidation_enabled,
             "consolidation_interval_seconds": orchestration.consolidation_interval_seconds,
             "consolidation_min_entries": orchestration.consolidation_min_entries,
             "consolidation_min_notes": orchestration.consolidation_min_notes,
@@ -613,7 +598,6 @@ def _serialize_session_bundle(
             "reply_frequency_exempt_on_mention": orchestration.reply_frequency_exempt_on_mention,
             "max_concurrent_llm_calls": orchestration.max_concurrent_llm_calls,
             "enable_skills": orchestration.enable_skills,
-            "skill_call_marker": orchestration.skill_call_marker,
             "max_skill_rounds": orchestration.max_skill_rounds,
             "skill_execution_timeout": orchestration.skill_execution_timeout,
             "auto_install_skill_deps": orchestration.auto_install_skill_deps,

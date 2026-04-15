@@ -4,6 +4,27 @@
 
 ## [Unreleased]
 
+## [0.27.1] - 2026-04-15
+
+### Changed
+- **移除 task_budgets 配置与预算跳过逻辑**：辅助任务不再根据预算近似值取消模型调用，`task_budgets` 从公开配置、示例、模板与持久化镜像中移除。
+- **split marker 与 skill call marker 改为内置常量**：提示词分割统一使用内置 `<MSG_SPLIT>`，SKILL 调用统一使用内置 `[SKILL_CALL:`，不再对外暴露配置入口。
+- **memory_manager 统一并入任务模型体系**：原 `memory_manager_model` / `memory_manager_temperature` / `memory_manager_max_tokens` 改为通过 `task_models/task_temperatures/task_max_tokens/task_retries` 配置 `memory_manager` 任务；旧字段仅在加载时做兼容映射。
+- **后台记忆归纳改为静默常驻**：live session 启动后总会初始化后台归纳循环，不再暴露 `consolidation_enabled` 开关；若需停用相关 LLM 调用，改为关闭 `task_enabled["memory_manager"]`。
+- **SKILL 生命周期前移到 runtime**：`WorkspaceRuntime` 现在在框架启动时预加载 `skills/`，并在 skill 文件变化时全量重载；消息路径不再按次扫描或热重载 SKILL。
+
+### Added
+- 新增 runtime 回归测试，覆盖 skill 目录监听与启动即初始化共享 skill runtime 的场景。
+- 新增 skill registry 回归测试，覆盖全量 reload 会移除已删除 SKILL 的场景。
+- 新增迁移说明 `docs/migration-v0.27.1.md`，说明配置面收缩与兼容迁移策略。
+
+### Fixed
+- **提示词分割约束更严格**：系统提示现在明确禁止用连续空行伪造多条消息，assistant 内容清洗也会压缩过多空行，减少错误分段。
+- **background consolidation 使用 memory_manager 任务路由**：后台归纳、会话收尾整理与 live path 现在共享同一 `memory_manager` 任务模型配置。
+
+### Documentation
+- 更新 README、架构文档、外部接入文档、迁移文档与相关 SKILL，统一说明内置 marker、`memory_manager` 任务化、后台归纳默认常驻，以及 SKILL 启动时加载/变更时重载的新行为。
+
 ## [0.27.0] - 2026-04-15
 
 ### Changed

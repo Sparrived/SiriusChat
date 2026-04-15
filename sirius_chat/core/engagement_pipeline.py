@@ -102,14 +102,8 @@ async def run_engagement_intent_analysis(
     )
     estimated_cost = estimate_tokens(prompt_text)
     used = task_token_usage.get(task_name, 0)
-    budget = int(config.orchestration.task_budgets.get(task_name, 0))
 
     record_task_stat(transcript, task_name, "attempted")
-    if budget > 0 and used + estimated_cost > budget:
-        record_task_stat(transcript, task_name, "skipped_budget")
-        logger.info("意图分析任务预算不足，跳过模型推断。")
-        return None
-
     retry_times = int(config.orchestration.task_retries.get(task_name, 0))
     try:
         raw = await call_with_retry(

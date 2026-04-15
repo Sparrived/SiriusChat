@@ -111,6 +111,7 @@ def sanitize_assistant_content(content: str) -> str:
         cleaned_lines.append(line)
 
     cleaned = "\n".join(cleaned_lines).strip()
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
     if cleaned:
         return cleaned
     return "收到。"

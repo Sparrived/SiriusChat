@@ -26,7 +26,6 @@ from sirius_chat.config.manager import ConfigManager
 # Orchestration configuration utilities
 from sirius_chat.config.helpers import (
     configure_full_orchestration,
-    configure_orchestration_budgets,
     configure_orchestration_models,
     configure_orchestration_retries,
     configure_orchestration_temperatures,
@@ -50,7 +49,6 @@ __all__ = [
     "ConfigManager",
     # Helpers
     "configure_full_orchestration",
-    "configure_orchestration_budgets",
     "configure_orchestration_models",
     "configure_orchestration_retries",
     "configure_orchestration_temperatures",

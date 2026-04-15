@@ -22,32 +22,32 @@
     "task_enabled": {
       "memory_extract": true,
       "event_extract": true,
-      "intent_analysis": true
+      "intent_analysis": true,
+      "memory_manager": true
     },
     "task_models": {
       "memory_extract": "doubao-seed-2-0-lite-260215",
       "event_extract": "doubao-seed-2-0-lite-260215",
-      "intent_analysis": "gpt-4o-mini"
-    },
-    "task_budgets": {
-      "memory_extract": 1200,
-      "event_extract": 1000,
-      "intent_analysis": 600
+      "intent_analysis": "gpt-4o-mini",
+      "memory_manager": "gpt-4o-mini"
     },
     "task_temperatures": {
       "memory_extract": 0.1,
       "event_extract": 0.1,
-      "intent_analysis": 0.1
+      "intent_analysis": 0.1,
+      "memory_manager": 0.3
     },
     "task_max_tokens": {
       "memory_extract": 128,
       "event_extract": 192,
-      "intent_analysis": 192
+      "intent_analysis": 192,
+      "memory_manager": 256
     },
     "task_retries": {
       "memory_extract": 1,
       "event_extract": 1,
-      "intent_analysis": 1
+      "intent_analysis": 1,
+      "memory_manager": 1
     },
     "max_multimodal_inputs_per_turn": 4,
     "max_multimodal_value_length": 4096

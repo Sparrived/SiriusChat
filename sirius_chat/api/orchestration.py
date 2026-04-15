@@ -17,7 +17,6 @@ class MultiModelConfig:
     """多模型协作配置对象。"""
 
     task_models: dict[str, str]  # {"memory_extract": "model_name", ...}
-    task_budgets: dict[str, int]  # token 预算限制
     task_temperatures: dict[str, float] = None  # type: ignore
     task_max_tokens: dict[str, int] = None  # type: ignore
     task_retries: dict[str, int] = None  # type: ignore
@@ -37,7 +36,6 @@ class MultiModelConfig:
         return OrchestrationPolicy(
             unified_model="",  # 使用按任务配置模式
             task_models=self.task_models,
-            task_budgets=self.task_budgets,
             task_temperatures=self.task_temperatures or {},
             task_max_tokens=self.task_max_tokens or {},
             task_retries=self.task_retries or {},
@@ -50,7 +48,6 @@ def setup_multimodel_config(
     *,
     session_config: SessionConfig,
     task_models: dict[str, str],
-    task_budgets: dict[str, int] | None = None,
     task_temperatures: dict[str, float] | None = None,
     task_max_tokens: dict[str, int] | None = None,
     task_retries: dict[str, int] | None = None,
@@ -62,7 +59,6 @@ def setup_multimodel_config(
     Args:
         session_config: 现有的 SessionConfig 对象
         task_models: 任务模型映射，例如 {"memory_extract": "model-1", "event_extract": "model-2", "intent_analysis": "model-3"}
-        task_budgets: 各任务的 token 预算，例如 {"memory_extract": 1200, "event_extract": 1000, "intent_analysis": 600}
         task_temperatures: 各任务的采样温度，例如 {"memory_extract": 0.1}
         task_max_tokens: 各任务的最大 token 数，例如 {"memory_extract": 128}
         task_retries: 各任务的重试次数，例如 {"memory_extract": 1}
@@ -82,11 +78,6 @@ def setup_multimodel_config(
         ...         "event_extract": "doubao-seed-2-0-lite-260215",
         ...         "intent_analysis": "gpt-4o-mini",
         ...     },
-        ...     task_budgets={
-        ...         "memory_extract": 1200,
-        ...         "event_extract": 1000,
-        ...         "intent_analysis": 600,
-        ...     },
         ...     task_temperatures={
         ...         "memory_extract": 0.1,
         ...         "event_extract": 0.1,
@@ -95,7 +86,6 @@ def setup_multimodel_config(
     """
     config = MultiModelConfig(
         task_models=task_models,
-        task_budgets=task_budgets or {},
         task_temperatures=task_temperatures or {},
         task_max_tokens=task_max_tokens or {},
         task_retries=task_retries or {},
@@ -109,7 +99,6 @@ def setup_multimodel_config(
 def create_multimodel_config(
     *,
     task_models: dict[str, str],
-    task_budgets: dict[str, int] | None = None,
     task_temperatures: dict[str, float] | None = None,
     task_max_tokens: dict[str, int] | None = None,
     task_retries: dict[str, int] | None = None,
@@ -122,7 +111,6 @@ def create_multimodel_config(
 
     Args:
         task_models: 任务模型映射
-        task_budgets: 任务预算限制
         task_temperatures: 任务采样温度
         task_max_tokens: 任务最大 token 数
         task_retries: 任务重试次数
@@ -136,13 +124,11 @@ def create_multimodel_config(
         >>> from sirius_chat.api import create_multimodel_config
         >>> mm_config = create_multimodel_config(
         ...     task_models={"memory_extract": "model-1", "intent_analysis": "model-2"},
-        ...     task_budgets={"memory_extract": 1200, "intent_analysis": 600},
         ... )
         >>> orchestration = mm_config.to_orchestration_policy()
     """
     return MultiModelConfig(
         task_models=task_models,
-        task_budgets=task_budgets or {},
         task_temperatures=task_temperatures or {},
         task_max_tokens=task_max_tokens or {},
         task_retries=task_retries or {},

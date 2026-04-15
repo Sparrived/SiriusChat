@@ -69,6 +69,10 @@ class SkillRegistry:
         """Manually register a skill definition."""
         self._skills[skill.name] = skill
 
+    def replace_all(self, skills: list[SkillDefinition]) -> None:
+        """Replace the whole registry atomically."""
+        self._skills = {skill.name: skill for skill in skills}
+
     @staticmethod
     def ensure_skills_directory(skills_dir: Path) -> None:
         """Ensure the skills directory and its README bootstrap file exist."""
@@ -109,6 +113,30 @@ class SkillRegistry:
             except Exception as exc:
                 logger.warning("加载SKILL文件失败 (%s): %s", py_file.name, exc)
         return loaded
+
+    def reload_from_directory(self, skills_dir: Path, *, auto_install_deps: bool = True) -> int:
+        """Reload all skill files from a directory, replacing removed entries too."""
+        self.ensure_skills_directory(skills_dir)
+
+        loaded_skills: list[SkillDefinition] = []
+        for py_file in sorted(skills_dir.glob("*.py")):
+            if py_file.name.startswith("_"):
+                continue
+            try:
+                if auto_install_deps:
+                    installed = resolve_skill_dependencies(py_file, auto_install=True)
+                    if installed:
+                        logger.info("SKILL '%s': 已自动安装依赖: %s", py_file.stem, ", ".join(installed))
+
+                skill = self._load_skill_file(py_file)
+                if skill is not None:
+                    loaded_skills.append(skill)
+                    logger.info("已重载SKILL: %s (v%s) from %s", skill.name, skill.version, py_file.name)
+            except Exception as exc:
+                logger.warning("重载SKILL文件失败 (%s): %s", py_file.name, exc)
+
+        self.replace_all(loaded_skills)
+        return len(loaded_skills)
 
     @staticmethod
     def _load_skill_file(file_path: Path) -> SkillDefinition | None:

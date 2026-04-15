@@ -16,16 +16,13 @@
   "orchestration": {
     "task_enabled": {
       "memory_extract": true,
-      "event_extract": true
+      "event_extract": true,
+      "memory_manager": true
     },
     "task_models": {
       "memory_extract": "gpt-4-mini",
-      "event_extract": "gpt-4-mini"
-    },
-    "task_budgets": {
-      "memory_extract": 2000,
-      "event_extract": 2000,
-      "memory_manager": 2000
+      "event_extract": "gpt-4-mini",
+      "memory_manager": "gpt-4-mini"
     },
     "task_temperatures": {
       "memory_extract": 0.2,
@@ -37,7 +34,6 @@
       "event_extract": 256,
       "memory_manager": 512
     },
-    "memory_manager_model": "gpt-4-mini",
     "enable_prompt_driven_splitting": true
   }
 }

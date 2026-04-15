@@ -54,15 +54,16 @@ python main.py --init-config session.jsonc
     "task_enabled": {
       "memory_extract": true,
       "event_extract": true,
-      "intent_analysis": true
+      "intent_analysis": true,
+      "memory_manager": true
     },
     "task_models": {
       "memory_extract": "gpt-4o-mini",
       "event_extract": "gpt-4o-mini",
-      "intent_analysis": "gpt-4o-mini"
+      "intent_analysis": "gpt-4o-mini",
+      "memory_manager": "gpt-4o-mini"
     },
-    "enable_prompt_driven_splitting": true,
-    "split_marker": "<MSG_SPLIT>"
+    "enable_prompt_driven_splitting": true
   }
 }
 ```
@@ -217,8 +218,7 @@ sirius-chat --config session.jsonc --work-path data/runtime --output transcript.
 ```json
 {
   "orchestration": {
-    "enable_prompt_driven_splitting": true,
-    "split_marker": "<MSG_SPLIT>"
+    "enable_prompt_driven_splitting": true
   }
 }
 ```

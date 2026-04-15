@@ -113,7 +113,6 @@ from sirius_chat.api.orchestration import (
 )
 from sirius_chat.config import (
     configure_orchestration_models,
-    configure_orchestration_budgets,
     configure_orchestration_temperatures,
     configure_orchestration_retries,
     configure_full_orchestration,
@@ -227,7 +226,6 @@ __all__ = [
     "time_series",
     # 多模型协同配置函数
     "configure_orchestration_models",
-    "configure_orchestration_budgets",
     "configure_orchestration_temperatures",
     "configure_orchestration_retries",
     "auto_configure_multimodal_agent",

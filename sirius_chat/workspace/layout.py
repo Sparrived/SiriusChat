@@ -148,12 +148,17 @@ class WorkspaceLayout:
 
 
     def config_watch_paths(self) -> list[Path]:
-        return [
+        paths = [
             self.workspace_manifest_path(),
             self.session_config_path(),
             self.provider_registry_path(),
             self.generated_agents_path(),
         ]
+        skills_dir = self.skills_dir()
+        if skills_dir.exists():
+            paths.extend(sorted(skills_dir.glob("*.py")))
+            paths.append(skills_dir / "README.md")
+        return paths
 
     def ensure_directories(self, *, session_id: str | None = None) -> None:
         directories = [

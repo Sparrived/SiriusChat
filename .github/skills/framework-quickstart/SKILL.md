@@ -55,13 +55,14 @@ description: "当你需要在不通读全部代码的情况下快速理解 Siriu
 26. `tests/test_workspace_runtime.py`
 27. `tests/test_engine.py`
 - `models/models.py` ✨ **（包重构）** 定义数据契约（多人用户 + 单 AI 主助手）。
-- `OrchestrationPolicy` 用于任务路由与预算控制，支持 `memory_extract`、`event_extract`、`intent_analysis`、`memory_manager` 等任务的模型配置与预算限制。`reply_mode=auto` 下的 LLM 意图分析已纳入 `intent_analysis` 任务；关闭该任务时才会走关键词回退，任务启用后若预算不足、调用失败或解析失败，本轮不会再回退关键词意图推断。同时支持提示词驱动的内容分割（`enable_prompt_driven_splitting=True`）与基于 `pending_message_threshold` 的 runtime 积压静默批处理。✨ `memory_manager` 是新增的可选 LLM 任务，用于汇聚、去重、标注、冲突检测记忆。
+- `OrchestrationPolicy` 用于任务路由与任务级参数控制，支持 `memory_extract`、`event_extract`、`intent_analysis`、`memory_manager` 等任务的模型配置。`reply_mode=auto` 下的 LLM 意图分析已纳入 `intent_analysis` 任务；关闭该任务时才会走关键词回退，任务启用后若调用失败或解析失败，本轮不会再回退关键词意图推断。同时支持提示词驱动的内容分割（`enable_prompt_driven_splitting=True`）与基于 `pending_message_threshold` 的 runtime 积压静默批处理。✨ `memory_manager` 是标准 LLM 任务，用于汇聚、去重、标注、冲突检测记忆，并为后台归纳提供模型参数。
 - 兼容层面，旧 `enable_intent_analysis` / `intent_analysis_model` 仅作为读取时的映射入口存在；当前模板、workspace 持久化与示例应统一使用 `task_enabled/task_models`。
 - ✨ **(v0.13.0)** `OrchestrationPolicy` 新增 AI 自身记忆配置（`enable_self_memory`、`self_memory_extract_batch_size`、`self_memory_max_diary_prompt_entries`、`self_memory_max_glossary_prompt_terms`）。
 ## 心智模型
 
 - 当前推荐入口是 `WorkspaceRuntime`；它负责文件布局、session 恢复、participants 写回、watcher 热刷新和 provider 注册表联动。
 - `WorkspaceRuntime.run_live_message(...)` 先按 session 入队，再由单会话 processor 决定逐条处理或按 `pending_message_threshold` 执行静默批处理。
+- `WorkspaceRuntime.initialize()` 会预先初始化共享 SKILL runtime，并在 `skills/` 目录变化时通过 watcher 触发全量 reload，不再在消息路径按次扫描目录。
 - `WorkspaceRuntime` 会把 `WorkspaceBootstrap` 的签名记入 `workspace.json`；同一份 bootstrap 只在首次命中时持久化一次，后续重启会保留用户在 config root 下的手工修改。
 - `WorkspaceLayout` 是路径语义的单一事实来源：config root 放配置与资产，data root 放运行态数据。
 - `AsyncRolePlayEngine` 的真实实现位于 `sirius_chat/core/engine.py`；`sirius_chat/async_engine/` 只承担兼容导出与 prompts/orchestration/utils 辅助层。

@@ -20,6 +20,8 @@ from sirius_chat.models import Message, Participant, Transcript
 from sirius_chat.providers.base import AsyncLLMProvider, LLMProvider
 from sirius_chat.providers.routing import AutoRoutingProvider, WorkspaceProviderManager
 from sirius_chat.session.store import SessionStore, SessionStoreFactory
+from sirius_chat.skills.executor import SkillExecutor
+from sirius_chat.skills.registry import SkillRegistry
 from sirius_chat.workspace.config_watcher import WorkspaceConfigWatcher
 from sirius_chat.workspace.layout import WorkspaceLayout
 
@@ -61,6 +63,8 @@ class WorkspaceRuntime:
     _session_processors: dict[str, asyncio.Task[None]] = field(default_factory=dict, init=False, repr=False)
     _transcripts: dict[str, Transcript] = field(default_factory=dict, init=False, repr=False)
     _stores: dict[str, SessionStore] = field(default_factory=dict, init=False, repr=False)
+    _skill_registry: SkillRegistry | None = field(default=None, init=False, repr=False)
+    _skill_executor: SkillExecutor | None = field(default=None, init=False, repr=False)
     _initialized: bool = field(default=False, init=False, repr=False)
     _prefer_workspace_registry_provider: bool = field(default=False, init=False, repr=False)
 
@@ -102,6 +106,7 @@ class WorkspaceRuntime:
         if self._initialized:
             return
         self.layout.ensure_directories(session_id="default")
+        self._initialize_skill_runtime()
         self._apply_bootstrap()
         await self._refresh_workspace_config(force=True, persist_defaults=True)
         self._initialized = True
@@ -131,6 +136,8 @@ class WorkspaceRuntime:
                 close()
         self._stores.clear()
         self._transcripts.clear()
+        self._skill_registry = None
+        self._skill_executor = None
 
     def __del__(self) -> None:
         self._stop_config_watcher()
@@ -583,7 +590,37 @@ class WorkspaceRuntime:
         elif provider is None:
             raise RuntimeError("当前 workspace 尚未配置可用 provider。")
         self._engine = AsyncRolePlayEngine(provider)
+        self._inject_skill_runtime_into_engine()
         return self._engine
+
+    def _initialize_skill_runtime(self) -> None:
+        skills_dir = self.layout.skills_dir()
+        SkillRegistry.ensure_skills_directory(skills_dir)
+
+        registry = self._skill_registry or SkillRegistry()
+        registry.reload_from_directory(
+            skills_dir,
+            auto_install_deps=self._workspace_auto_install_skill_deps(),
+        )
+        self._skill_registry = registry
+
+        if self._skill_executor is None:
+            self._skill_executor = SkillExecutor(self.layout)
+
+        self._inject_skill_runtime_into_engine()
+
+    def _inject_skill_runtime_into_engine(self) -> None:
+        if self._engine is None:
+            return
+        self._engine.set_shared_skill_runtime(
+            skill_registry=self._skill_registry,
+            skill_executor=self._skill_executor,
+        )
+
+    def _workspace_auto_install_skill_deps(self) -> bool:
+        workspace = self._workspace_config
+        orchestration_defaults = workspace.orchestration_defaults if workspace is not None else {}
+        return bool(orchestration_defaults.get("auto_install_skill_deps", True))
 
     def _build_session_config(self, session_id: str) -> SessionConfig:
         if self.session_config_factory is not None:
@@ -676,6 +713,7 @@ class WorkspaceRuntime:
 
             self._workspace_config = workspace_config
             self._config_signature = signature
+            self._initialize_skill_runtime()
 
     def _start_config_watcher(self) -> None:
         if self._config_watcher is not None:

@@ -89,12 +89,10 @@ async def asubscribe(
 class OrchestrationPolicy:
     unified_model: str = ""
     enable_skills: bool = True
-    skill_call_marker: str = "SKILL_CALL"
     max_skill_rounds: int = 3
     skill_execution_timeout: float = 30.0   # v0.8.0 新增，0=不限制
     auto_install_skill_deps: bool = True    # v0.8.0 新增，自动安装 SKILL 依赖
     enable_prompt_driven_splitting: bool = False
-    split_marker: str = "<MSG_SPLIT>"
     session_reply_mode: str = "always"
     memory_extract_batch_size: int = 5
     memory_extract_min_content_length: int = 30

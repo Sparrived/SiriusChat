@@ -70,6 +70,7 @@ def test_public_api_async_facade() -> None:
                 task_enabled={
                     "memory_extract": False,
                     "event_extract": False,
+                    "memory_manager": False,
                 },
             pending_message_threshold=0.0,
             ),

@@ -12,6 +12,9 @@ from sirius_chat.config.models import Agent, MemoryPolicy, OrchestrationPolicy, 
 from sirius_chat.exceptions import OrchestrationConfigError
 
 
+_TASK_MEMORY_MANAGER = "memory_manager"
+
+
 def _coerce_legacy_debounce_to_threshold(value: object) -> int:
     try:
         numeric = float(str(value))
@@ -98,12 +101,6 @@ def build_orchestration_policy_from_dict(
             for key, value in dict(raw.get("task_enabled", {})).items()
             if str(key).strip()
         }
-    if "task_budgets" in raw and isinstance(raw.get("task_budgets"), dict):
-        kwargs["task_budgets"] = {
-            str(key).strip(): int(value)
-            for key, value in dict(raw.get("task_budgets", {})).items()
-            if str(key).strip()
-        }
     if "task_temperatures" in raw and isinstance(raw.get("task_temperatures"), dict):
         kwargs["task_temperatures"] = {
             str(key).strip(): float(value)
@@ -127,14 +124,9 @@ def build_orchestration_policy_from_dict(
         "max_multimodal_inputs_per_turn": (int, 4),
         "max_multimodal_value_length": (int, 4096),
         "enable_prompt_driven_splitting": (bool, True),
-        "split_marker": (str, "<MSG_SPLIT>"),
-        "memory_manager_model": (str, ""),
-        "memory_manager_temperature": (float, 0.3),
-        "memory_manager_max_tokens": (int, 512),
         "memory_extract_batch_size": (int, 1),
         "memory_extract_min_content_length": (int, 0),
         "event_extract_batch_size": (int, 5),
-        "consolidation_enabled": (bool, True),
         "consolidation_interval_seconds": (int, 7200),
         "consolidation_min_entries": (int, 6),
         "consolidation_min_notes": (int, 4),
@@ -153,7 +145,6 @@ def build_orchestration_policy_from_dict(
         "reply_frequency_exempt_on_mention": (bool, True),
         "max_concurrent_llm_calls": (int, 1),
         "enable_skills": (bool, True),
-        "skill_call_marker": (str, "[SKILL_CALL:"),
         "max_skill_rounds": (int, 3),
         "skill_execution_timeout": (float, 30.0),
         "auto_install_skill_deps": (bool, True),
@@ -180,6 +171,30 @@ def build_orchestration_policy_from_dict(
         task_models = dict(kwargs.get("task_models", {}))
         task_models["intent_analysis"] = legacy_intent_model
         kwargs["task_models"] = task_models
+
+    legacy_memory_manager_model = str(raw.get("memory_manager_model", "")).strip()
+    if legacy_memory_manager_model and _TASK_MEMORY_MANAGER not in kwargs.get("task_models", {}):
+        task_models = dict(kwargs.get("task_models", {}))
+        task_models[_TASK_MEMORY_MANAGER] = legacy_memory_manager_model
+        kwargs["task_models"] = task_models
+
+    legacy_memory_manager_temperature = raw.get("memory_manager_temperature")
+    if (
+        legacy_memory_manager_temperature is not None
+        and _TASK_MEMORY_MANAGER not in kwargs.get("task_temperatures", {})
+    ):
+        task_temperatures = dict(kwargs.get("task_temperatures", {}))
+        task_temperatures[_TASK_MEMORY_MANAGER] = float(legacy_memory_manager_temperature)
+        kwargs["task_temperatures"] = task_temperatures
+
+    legacy_memory_manager_max_tokens = raw.get("memory_manager_max_tokens")
+    if (
+        legacy_memory_manager_max_tokens is not None
+        and _TASK_MEMORY_MANAGER not in kwargs.get("task_max_tokens", {})
+    ):
+        task_max_tokens = dict(kwargs.get("task_max_tokens", {}))
+        task_max_tokens[_TASK_MEMORY_MANAGER] = int(legacy_memory_manager_max_tokens)
+        kwargs["task_max_tokens"] = task_max_tokens
 
     if not kwargs.get("unified_model") and not kwargs.get("task_models"):
         kwargs["unified_model"] = agent_model
@@ -303,7 +318,7 @@ def configure_orchestration_models(
             - memory_extract: 用户记忆提取
             - event_extract: 事件提取
             - intent_analysis: 意图分析
-            - memory_manager: 记忆管理器
+            - memory_manager: 记忆整理与后台归纳
             
     Returns:
         更新后的 SessionConfig 对象（原对象被修改并返回）
@@ -333,45 +348,6 @@ def configure_orchestration_models(
     )
     
     # 创建并返回新的 SessionConfig
-    updated_config = replace(
-        config,
-        orchestration=updated_orchestration,
-    )
-    
-    return updated_config
-
-
-def configure_orchestration_budgets(
-    config: SessionConfig,
-    **task_budgets: int,
-) -> SessionConfig:
-    """配置多模型协同任务的 token 预算。
-    
-    Args:
-        config: 会话配置对象
-        **task_budgets: 任务名称到 token 预算的映射
-        
-    Returns:
-        更新后的 SessionConfig 对象
-        
-    Example:
-        >>> config = configure_orchestration_budgets(
-        ...     config,
-        ...     memory_extract=1000,
-        ...     event_extract=500,
-        ... )
-    """
-    if not config.orchestration:
-        raise ValueError("config.orchestration 为 None，无法配置")
-    
-    updated_budgets = dict(config.orchestration.task_budgets)
-    updated_budgets.update(task_budgets)
-    
-    updated_orchestration = replace(
-        config.orchestration,
-        task_budgets=updated_budgets,
-    )
-    
     updated_config = replace(
         config,
         orchestration=updated_orchestration,
@@ -447,7 +423,6 @@ def configure_orchestration_retries(
 def configure_full_orchestration(
     config: SessionConfig,
     task_models: dict[str, str] | None = None,
-    task_budgets: dict[str, int] | None = None,
     task_temperatures: dict[str, float] | None = None,
     task_retries: dict[str, int] | None = None,
     **extra_fields: Any,
@@ -460,10 +435,9 @@ def configure_full_orchestration(
     Args:
         config: 会话配置对象
         task_models: 任务模型映射
-        task_budgets: 任务预算映射
         task_temperatures: 任务温度映射
         task_retries: 任务重试次数映射
-        **extra_fields: 其他 OrchestrationPolicy 字段（如 memory_manager_model）
+        **extra_fields: 其他 OrchestrationPolicy 字段（如 pending_message_threshold）
         
     Returns:
         更新后的 SessionConfig 对象
@@ -475,14 +449,10 @@ def configure_full_orchestration(
         ...         "memory_extract": "gpt-4-mini",
         ...         "event_extract": "gpt-4-mini",
         ...     },
-        ...     task_budgets={
-        ...         "memory_extract": 1000,
-        ...         "event_extract": 500,
-        ...     },
         ...     task_temperatures={
         ...         "memory_extract": 0.1,
         ...     },
-        ...     memory_manager_model="gpt-4",
+        ...     pending_message_threshold=0,
         ... )
     """
     if not config.orchestration:
@@ -497,11 +467,6 @@ def configure_full_orchestration(
         merged_models.update(task_models)
         update_fields["task_models"] = merged_models
         update_fields["unified_model"] = ""  # 清除统一模型
-    
-    if task_budgets is not None:
-        merged_budgets = dict(config.orchestration.task_budgets)
-        merged_budgets.update(task_budgets)
-        update_fields["task_budgets"] = merged_budgets
     
     if task_temperatures is not None:
         merged_temps = dict(config.orchestration.task_temperatures)

@@ -17,27 +17,26 @@
     "task_enabled": {
       "memory_extract": true,
       "event_extract": true,
-      "intent_analysis": true
-    },
-    "task_budgets": {
-      "memory_extract": 1200,
-      "event_extract": 1000,
-      "intent_analysis": 600
+      "intent_analysis": true,
+      "memory_manager": true
     },
     "task_temperatures": {
       "memory_extract": 0.1,
       "event_extract": 0.1,
-      "intent_analysis": 0.1
+      "intent_analysis": 0.1,
+      "memory_manager": 0.3
     },
     "task_max_tokens": {
       "memory_extract": 128,
       "event_extract": 192,
-      "intent_analysis": 192
+      "intent_analysis": 192,
+      "memory_manager": 256
     },
     "task_retries": {
       "memory_extract": 1,
       "event_extract": 1,
       "intent_analysis": 1,
+      "memory_manager": 1,
       "chat_main": 1
     },
     "memory_extract_batch_size": 2,
