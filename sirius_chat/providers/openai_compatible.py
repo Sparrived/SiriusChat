@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 import logging
+from typing import cast
 from urllib import error, request as urllib_request
 
 from sirius_chat.providers.base import (
+    build_chat_completion_payload,
     build_generation_debug_context,
     GenerationRequest,
     LLMProvider,
@@ -43,16 +45,10 @@ class OpenAICompatibleProvider(LLMProvider):
             f"| 预计输入Token: {debug_context['estimated_input_tokens']} "
             f"| 预计总Token上限: {debug_context['estimated_total_token_upper_bound']}"
         )
-        payload = {
-            "model": request.model,
-            "temperature": request.temperature,
-            "max_tokens": request.max_tokens,
-            "messages": [
-                {"role": "system", "content": request.system_prompt},
-                *request.messages,
-            ],
-        }
-        wire_messages, transport_stats = prepare_openai_compatible_messages(payload["messages"])
+        payload = build_chat_completion_payload(request, provider_name=self._provider_name)
+        wire_messages, transport_stats = prepare_openai_compatible_messages(
+            cast(list[dict[str, object]], payload["messages"])
+        )
         wire_payload = dict(payload)
         wire_payload["messages"] = wire_messages
 
@@ -124,7 +120,7 @@ class OpenAICompatibleProvider(LLMProvider):
                 f"| 响应为空 | message_keys={list(message.keys())}"
             )
             raise RuntimeError("提供商响应内容为空。")
-        
+
         logger.info(f"[模型调用成功] {request.model} | Provider: {self._provider_name} | 字数: {len(content)}")
         logger.debug(
             f"[模型输出] {request.model} | Provider: {self._provider_name} | URL: {url} | 响应内容:\n{content}"

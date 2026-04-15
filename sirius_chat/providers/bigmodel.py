@@ -5,6 +5,7 @@ import logging
 from urllib import error, request as urllib_request
 
 from sirius_chat.providers.base import (
+    build_chat_completion_payload,
     build_generation_debug_context,
     GenerationRequest,
     LLMProvider,
@@ -69,15 +70,7 @@ class BigModelProvider(LLMProvider):
             f"| 预计输入Token: {debug_context['estimated_input_tokens']} "
             f"| 预计总Token上限: {debug_context['estimated_total_token_upper_bound']}"
         )
-        payload = {
-            "model": request.model,
-            "temperature": request.temperature,
-            "max_tokens": request.max_tokens,
-            "messages": [
-                {"role": "system", "content": request.system_prompt},
-                *request.messages,
-            ],
-        }
+        payload = build_chat_completion_payload(request, provider_name=self._provider_name)
 
         body = json.dumps(payload).encode("utf-8")
         logger.debug(

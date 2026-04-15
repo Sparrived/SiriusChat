@@ -58,6 +58,7 @@ _PROVIDER_SPECS: list[dict] = [
         "patch_target": "sirius_chat.providers.openai_compatible.urllib_request.urlopen",
         "expected_url": "https://api.openai.com/v1/chat/completions",
         "has_reasoning": False,
+        "thinking_defaults": {},
     },
     {
         "id": "aliyun_bailian",
@@ -67,6 +68,7 @@ _PROVIDER_SPECS: list[dict] = [
         "patch_target": "sirius_chat.providers.openai_compatible.urllib_request.urlopen",
         "expected_url": "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
         "has_reasoning": True,
+        "thinking_defaults": {"enable_thinking": False},
     },
     {
         "id": "deepseek",
@@ -76,6 +78,7 @@ _PROVIDER_SPECS: list[dict] = [
         "patch_target": "sirius_chat.providers.deepseek.urllib_request.urlopen",
         "expected_url": "https://api.deepseek.com/chat/completions",
         "has_reasoning": True,
+        "thinking_defaults": {"thinking": {"type": "disabled"}},
     },
     {
         "id": "bigmodel",
@@ -85,6 +88,7 @@ _PROVIDER_SPECS: list[dict] = [
         "patch_target": "sirius_chat.providers.bigmodel.urllib_request.urlopen",
         "expected_url": "https://open.bigmodel.cn/api/paas/v4/chat/completions",
         "has_reasoning": True,
+        "thinking_defaults": {"thinking": {"type": "disabled"}},
     },
     {
         "id": "siliconflow",
@@ -94,6 +98,7 @@ _PROVIDER_SPECS: list[dict] = [
         "patch_target": "sirius_chat.providers.siliconflow.urllib_request.urlopen",
         "expected_url": "https://api.siliconflow.cn/v1/chat/completions",
         "has_reasoning": True,
+        "thinking_defaults": {"enable_thinking": False},
     },
     {
         "id": "volcengine_ark",
@@ -103,6 +108,7 @@ _PROVIDER_SPECS: list[dict] = [
         "patch_target": "sirius_chat.providers.volcengine_ark.urllib_request.urlopen",
         "expected_url": "https://ark.cn-beijing.volces.com/api/v3/chat/completions",
         "has_reasoning": True,
+        "thinking_defaults": {"thinking": {"type": "disabled"}},
     },
     {
         "id": "ytea",
@@ -112,6 +118,7 @@ _PROVIDER_SPECS: list[dict] = [
         "patch_target": "sirius_chat.providers.ytea.urllib_request.urlopen",
         "expected_url": "https://api.ytea.top/v1/chat/completions",
         "has_reasoning": False,
+        "thinking_defaults": {},
     },
 ]
 
@@ -167,6 +174,27 @@ def test_provider_uses_correct_default_endpoint(spec: dict) -> None:
         provider.generate(_make_request(spec["model"]))
     called_request = mocked.call_args[0][0]
     assert called_request.full_url == spec["expected_url"]
+
+
+@pytest.mark.parametrize("spec", _PROVIDER_SPECS, ids=_ids(_PROVIDER_SPECS))
+def test_provider_applies_expected_thinking_defaults(spec: dict) -> None:
+    provider = spec["cls"](**spec["init"])
+    with patch(spec["patch_target"]) as mocked:
+        mocked.return_value = _FakeResponse(
+            {"choices": [{"message": {"content": "ok"}}]}
+        )
+        provider.generate(_make_request(spec["model"]))
+
+    called_request = mocked.call_args[0][0]
+    payload = json.loads(called_request.data.decode("utf-8"))
+    thinking_defaults = spec["thinking_defaults"]
+    if thinking_defaults:
+        for key, value in thinking_defaults.items():
+            assert payload[key] == value
+        return
+
+    assert "enable_thinking" not in payload
+    assert "thinking" not in payload
 
 
 @pytest.mark.parametrize("spec", _PROVIDER_SPECS, ids=_ids(_PROVIDER_SPECS))

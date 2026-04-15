@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+## [0.26.9] - 2026-04-15
+
+### Fixed
+- **推理模型默认关闭 thinking 模式**：provider 出站请求现在会按上游协议显式附加关闭推理参数，避免 DeepSeek、GLM、火山方舟、百炼和 SiliconFlow 的支持模型默认进入深度思考模式，带来额外时延与 token 开销。
+
+### Added
+- 新增 provider 回归测试，覆盖不同 provider 的请求体会携带正确的 thinking 关闭字段，且不支持该能力的 OpenAI-compatible / YTea provider 不会误发未知参数。
+
 ## [0.26.8] - 2026-04-15
 
 ### Fixed

@@ -91,6 +91,33 @@ def build_generation_debug_context(
     }
 
 
+def _build_thinking_disabled_defaults(provider_name: str) -> dict[str, object]:
+    normalized_name = provider_name.strip().lower()
+    if normalized_name in {"aliyun-bailian", "siliconflow"}:
+        return {"enable_thinking": False}
+    if normalized_name in {"deepseek", "bigmodel", "volcengine-ark"}:
+        return {"thinking": {"type": "disabled"}}
+    return {}
+
+
+def build_chat_completion_payload(
+    request: GenerationRequest,
+    *,
+    provider_name: str,
+) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "model": request.model,
+        "temperature": request.temperature,
+        "max_tokens": request.max_tokens,
+        "messages": [
+            {"role": "system", "content": request.system_prompt},
+            *request.messages,
+        ],
+    }
+    payload.update(_build_thinking_disabled_defaults(provider_name))
+    return payload
+
+
 def _resolve_local_file_reference(value: str) -> Path | None:
     text = str(value).strip()
     if not text:
