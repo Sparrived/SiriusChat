@@ -96,7 +96,9 @@ async def asubscribe(
 
     Returns an async iterator that yields :class:`SessionEvent` objects
     (new messages, SKILL execution status, processing lifecycle, etc.)
-    as they are produced by the engine.
+    as they are produced by the engine. SKILL status events only expose
+    execution state; the raw SKILL result text remains internal until the
+    assistant emits a user-facing reply.
 
     Example::
 

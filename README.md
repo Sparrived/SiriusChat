@@ -680,6 +680,7 @@ SKILL 系统支持可扩展任务编排：
 - 在 `work_path` 下自动初始化 `skills/` 目录
 - 支持外部 Python 技能文件
 - 链式调用与迭代反馈
+- 会话事件流仅暴露 SKILL 状态，不直接暴露内部技能结果正文；外部投递应消费 assistant 回复
 
 详见 [`docs/skill-authoring.md`](docs/skill-authoring.md)。
 

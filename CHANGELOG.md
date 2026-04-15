@@ -4,6 +4,21 @@
 
 ## [Unreleased]
 
+## [0.27.8] - 2026-04-16
+
+### Changed
+- **SKILL 完成事件收紧为状态元数据**：`SessionEventType.SKILL_COMPLETED` 不再携带 `result_preview`，只保留 `skill_name` 与 `success`，避免把内部技能执行结果重复暴露给外部订阅方。
+
+### Fixed
+- **SKILL 执行结果不再通过事件流外泄**：engine 在技能执行完成后，外部订阅者不会再从 `SKILL_COMPLETED` 事件里读到内部技能结果摘要。
+- **`on_reply` 路径保持只转发面向用户的 assistant 内容**：技能结果仍会作为内部 system 上下文参与下一轮生成，但不会以内部结果文本的形式透出到外部回调语义中。
+
+### Added
+- 新增回归测试，覆盖正常 SKILL / 未知 SKILL 两条 `SKILL_COMPLETED` 路径不再暴露结果预览，以及 `on_reply` 不接收内部 `SKILL执行结果` 文本的场景。
+
+### Documentation
+- 更新 README、架构文档、外部接入文档、事件流迁移说明与相关 SKILL，统一说明 `SKILL_COMPLETED` 现在只表达执行状态，外部投递应消费 assistant 消息。
+
 ## [0.27.7] - 2026-04-16
 
 ### Changed

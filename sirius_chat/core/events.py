@@ -30,7 +30,8 @@ class SessionEventType(enum.Enum):
     PROCESSING_COMPLETED = "processing_completed"
     # A SKILL call was detected and execution is starting.
     SKILL_STARTED = "skill_started"
-    # A SKILL execution finished (success or failure).
+    # A SKILL execution finished (success or failure). Result text stays
+    # internal until it is turned into assistant output.
     SKILL_COMPLETED = "skill_completed"
     # The engagement check decided to skip this turn.
     REPLY_SKIPPED = "reply_skipped"

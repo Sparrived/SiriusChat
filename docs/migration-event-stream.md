@@ -78,7 +78,7 @@ async def event_listener():
 | `PROCESSING_STARTED` | AI 开始生成回复 | `None` | `speaker` |
 | `PROCESSING_COMPLETED` | AI 完成回复生成（含所有 SKILL 轮次） | 最终 `Message` | — |
 | `SKILL_STARTED` | 检测到 SKILL 调用并开始执行 | `None` | `skill_name`, `params` |
-| `SKILL_COMPLETED` | SKILL 执行完成 | `None` | `skill_name`, `success`, `result_preview` |
+| `SKILL_COMPLETED` | SKILL 执行完成 | `None` | `skill_name`, `success` |
 | `REPLY_SKIPPED` | 回复意愿判定不回复 | `None` | `speaker` |
 | `ERROR` | 处理过程中发生错误 | `None` | 错误详情 |
 
@@ -125,3 +125,6 @@ A: 每个订阅者有独立的缓冲队列（默认 256 条）。如果消费速
 
 **Q: `run_live_message()` 仍然返回 `Transcript` 吗？**
 A: 是的。事件流是额外的实时通知通道，不影响返回值语义。
+
+**Q: 为什么 `SKILL_COMPLETED` 里看不到技能结果正文？**
+A: `SKILL_COMPLETED` 现在只表达执行状态，不再携带结果预览，避免把内部技能结果重复暴露给外部订阅者。真正面向外部的内容仍应从 assistant 的 `MESSAGE_ADDED` 事件或 `on_reply` 回调中消费。

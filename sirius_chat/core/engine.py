@@ -1142,7 +1142,6 @@ class AsyncRolePlayEngine:
                             data={
                                 "skill_name": skill_name,
                                 "success": False,
-                                "result_preview": "SKILL未找到",
                             },
                         ))
                     had_unknown_skill = True
@@ -1172,7 +1171,6 @@ class AsyncRolePlayEngine:
                             data={
                                 "skill_name": skill_name,
                                 "success": skill_result.success,
-                                "result_preview": result_text[:200],
                             },
                         ))
 

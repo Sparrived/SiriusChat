@@ -684,6 +684,7 @@ def run(text: str, **kwargs):
         assert received
         assert any("已执行技能" in content for content in received)
         assert all("SKILL_CALL" not in content for content in received)
+        assert all("SKILL执行结果" not in content for content in received)
         assert any(
             "SKILL执行结果: echo" in message.content
             for message in transcript.messages

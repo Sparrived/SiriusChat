@@ -234,6 +234,8 @@ transcript = await arun_live_message(
 
 > `asubscribe` 原始事件流仍然可用，适合需要监听 `SKILL_STARTED` 等更多事件类型的场景。
 
+> `SKILL_COMPLETED` 事件仅提供 `skill_name` 和 `success` 这类状态字段，不再携带技能结果正文；实际要投递到外部平台的内容，仍应只消费 assistant 的 `MESSAGE_ADDED` 或 `on_reply`。
+
 #### Agent 配置：多模态模型（动态模型路由）
 
 当需要在有图像时自动升级模型（例如使用廉价模型处理纯文本，但遇到图像时自动升级到多模态模型）时，可以为 Agent 配置 `multimodal_model`：
@@ -352,7 +354,7 @@ orchestration = OrchestrationPolicy(
 - 提示词分割：当 `enable_prompt_driven_splitting=True` 时，系统提示会带分割指令，AI 会在适当位置输出内置的 `<MSG_SPLIT>` 标记；外部不再配置 `split_marker`
 - 当前配置统一通过 `task_enabled/task_models/task_temperatures/task_max_tokens/task_retries` 管理 `intent_analysis` 与 `memory_manager`
 - 旧配置文件若仍包含 `enable_intent_analysis` / `intent_analysis_model`，加载时会自动映射到任务配置，但新的模板与持久化输出不再写出这两个字段
-- 旧配置文件若仍包含 `message_debounce_seconds` 或 `memory_manager_*`，加载时会自动映射到新任务配置；若需要理解 `min_reply_interval_seconds`、长上下文触发与多 AI 自动回复抑制的配合方式，见 `docs/migration-v0.27.md`、`docs/migration-v0.27.1.md`、`docs/migration-v0.27.2.md`、`docs/migration-v0.27.3.md`、`docs/migration-v0.27.4.md`、`docs/migration-v0.27.5.md`、`docs/migration-v0.27.6.md` 与 `docs/migration-v0.27.7.md`
+- 旧配置文件若仍包含 `message_debounce_seconds` 或 `memory_manager_*`，加载时会自动映射到新任务配置；若需要理解 `min_reply_interval_seconds`、长上下文触发与多 AI 自动回复抑制的配合方式，见 `docs/migration-v0.27.md`、`docs/migration-v0.27.1.md`、`docs/migration-v0.27.2.md`、`docs/migration-v0.27.3.md`、`docs/migration-v0.27.4.md`、`docs/migration-v0.27.5.md`、`docs/migration-v0.27.6.md`、`docs/migration-v0.27.7.md` 与 `docs/migration-v0.27.8.md`
 
 若使用 SiliconFlow，可直接替换 provider：
 

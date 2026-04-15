@@ -4,6 +4,7 @@ Covers:
 - SessionEventBus subscribe / emit / close lifecycle
 - Event emission during run_live_message (MESSAGE_ADDED, PROCESSING_*)
 - Event emission during SKILL execution (SKILL_STARTED, SKILL_COMPLETED)
+- SKILL completion events do not expose raw execution result text
 - REPLY_SKIPPED event when engagement check decides not to reply
 - Multiple concurrent subscribers
 - Queue-full behavior
@@ -36,7 +37,12 @@ from sirius_chat.providers.mock import MockProvider
 # ------------------------------------------------------------------ helpers
 
 
-def _make_config(work_path: Path, reply_mode: str = "always") -> SessionConfig:
+def _make_config(
+    work_path: Path,
+    reply_mode: str = "always",
+    *,
+    enable_skills: bool = False,
+) -> SessionConfig:
     return SessionConfig(
         preset=AgentPreset(
             agent=Agent(
@@ -49,10 +55,11 @@ def _make_config(work_path: Path, reply_mode: str = "always") -> SessionConfig:
         orchestration=OrchestrationPolicy(
             unified_model="mock-model",
             session_reply_mode=reply_mode,
-            enable_skills=False,
+            enable_skills=enable_skills,
             task_enabled={
                 "memory_extract": False,
                 "event_extract": False,
+                "memory_manager": False,
             },
         pending_message_threshold=0.0,
         ),
@@ -298,6 +305,118 @@ class TestEngineEventIntegration:
 
         type_names = [e.type for e in received]
         assert SessionEventType.REPLY_SKIPPED in type_names
+
+    @pytest.mark.asyncio
+    async def test_skill_completed_event_does_not_expose_result_preview(self, work_dir: Path):
+        """SKILL_COMPLETED should only expose status metadata, not raw result text."""
+        skills_dir = work_dir / "skills"
+        skills_dir.mkdir(parents=True, exist_ok=True)
+        (skills_dir / "echo.py").write_text(
+            """
+SKILL_META = {
+    "name": "echo",
+    "description": "Return the given text",
+    "parameters": {
+        "text": {"type": "str", "description": "text", "required": True}
+    },
+}
+
+def run(text: str, **kwargs):
+    return {"echo": text}
+""".strip(),
+            encoding="utf-8",
+        )
+
+        provider = MockProvider(
+            responses=[
+                '[SKILL_CALL: echo | {"text": "苹果"}]\n\n正在处理...',
+                "处理完成。",
+            ]
+        )
+        engine = create_async_engine(provider)
+        config = _make_config(work_dir, enable_skills=True)
+        transcript = await engine.run_live_session(config=config)
+
+        received: list[SessionEvent] = []
+
+        async def _collect():
+            async for event in engine.subscribe(transcript):
+                received.append(event)
+
+        collector = asyncio.create_task(_collect())
+        await asyncio.sleep(0)
+
+        transcript = await engine.run_live_message(
+            config=config,
+            turn=Message(role="user", speaker="Alice", content="帮我调用技能"),
+            transcript=transcript,
+        )
+        await asyncio.sleep(0.05)
+
+        key = id(transcript)
+        ctx = engine._live_session_contexts.get(key)
+        if ctx:
+            await ctx.subsystems.event_bus.close()
+        await asyncio.sleep(0)
+        collector.cancel()
+        try:
+            await collector
+        except asyncio.CancelledError:
+            pass
+
+        skill_completed = [e for e in received if e.type == SessionEventType.SKILL_COMPLETED]
+        assert len(skill_completed) == 1
+        assert skill_completed[0].data == {"skill_name": "echo", "success": True}
+        assert "result_preview" not in skill_completed[0].data
+
+    @pytest.mark.asyncio
+    async def test_unknown_skill_completed_event_does_not_expose_error_preview(self, work_dir: Path):
+        """Unknown SKILL completion should still avoid exposing internal result previews."""
+        skills_dir = work_dir / "skills"
+        skills_dir.mkdir(parents=True, exist_ok=True)
+
+        provider = MockProvider(
+            responses=[
+                "[SKILL_CALL: missing_skill]",
+                "我暂时没有这个技能。",
+            ]
+        )
+        engine = create_async_engine(provider)
+        config = _make_config(work_dir, enable_skills=True)
+        transcript = await engine.run_live_session(config=config)
+
+        received: list[SessionEvent] = []
+
+        async def _collect():
+            async for event in engine.subscribe(transcript):
+                received.append(event)
+
+        collector = asyncio.create_task(_collect())
+        await asyncio.sleep(0)
+
+        transcript = await engine.run_live_message(
+            config=config,
+            turn=Message(role="user", speaker="Alice", content="调用一个不存在的技能"),
+            transcript=transcript,
+        )
+        await asyncio.sleep(0.05)
+
+        key = id(transcript)
+        ctx = engine._live_session_contexts.get(key)
+        if ctx:
+            await ctx.subsystems.event_bus.close()
+        await asyncio.sleep(0)
+        collector.cancel()
+        try:
+            await collector
+        except asyncio.CancelledError:
+            pass
+
+        skill_completed = [e for e in received if e.type == SessionEventType.SKILL_COMPLETED]
+        assert len(skill_completed) == 1
+        assert skill_completed[0].data == {"skill_name": "missing_skill", "success": False}
+        assert "result_preview" not in skill_completed[0].data
+        assert SessionEventType.SKILL_STARTED not in [e.type for e in received]
 
     @pytest.mark.asyncio
     async def test_asubscribe_facade(self, work_dir: Path):
