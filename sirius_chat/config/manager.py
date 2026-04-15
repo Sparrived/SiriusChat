@@ -6,6 +6,7 @@ environment variables, and secret management.
 
 from __future__ import annotations
 
+from dataclasses import asdict
 import json
 import os
 import re
@@ -209,6 +210,37 @@ class ConfigManager:
             sanitized[key_str] = item
         return sanitized
 
+    def _normalize_orchestration_defaults(
+        self,
+        value: object,
+        *,
+        fallback: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        sanitized = self._sanitize_nullable_mapping(value, fallback=fallback)
+        legacy_intent_enabled = sanitized.pop("enable_intent_analysis", None)
+        if legacy_intent_enabled is not None:
+            task_enabled = sanitized.get("task_enabled")
+            normalized_task_enabled = dict(task_enabled) if isinstance(task_enabled, dict) else {}
+            normalized_task_enabled.setdefault("intent_analysis", bool(legacy_intent_enabled))
+            sanitized["task_enabled"] = normalized_task_enabled
+
+        legacy_intent_model = str(sanitized.pop("intent_analysis_model", "")).strip()
+        if legacy_intent_model:
+            task_models = sanitized.get("task_models")
+            normalized_task_models = dict(task_models) if isinstance(task_models, dict) else {}
+            normalized_task_models.setdefault("intent_analysis", legacy_intent_model)
+            sanitized["task_models"] = normalized_task_models
+
+        policy = build_orchestration_policy_from_dict(sanitized, agent_model="")
+        if policy is None:
+            return {}
+        normalized = asdict(policy)
+        return {
+            key: normalized[key]
+            for key in sanitized
+            if key in normalized
+        }
+
     def _build_session_defaults(self, payload: object, fallback: SessionDefaults) -> SessionDefaults:
         if not isinstance(payload, dict):
             return SessionDefaults(
@@ -260,7 +292,7 @@ class ConfigManager:
                 fallback.active_agent_key,
             ),
             session_defaults=session_defaults,
-            orchestration_defaults=self._sanitize_nullable_mapping(
+            orchestration_defaults=self._normalize_orchestration_defaults(
                 payload.get("orchestration_defaults"),
                 fallback=dict(fallback.orchestration_defaults),
             ),
@@ -315,7 +347,7 @@ class ConfigManager:
                 session_defaults_payload,
                 fallback.session_defaults,
             ),
-            orchestration_defaults=self._sanitize_nullable_mapping(
+            orchestration_defaults=self._normalize_orchestration_defaults(
                 getattr(config, "orchestration_defaults", None),
                 fallback=dict(fallback.orchestration_defaults),
             ),
@@ -391,7 +423,7 @@ class ConfigManager:
                 session_snapshot,
                 config.session_defaults,
             )
-            config.orchestration_defaults = self._sanitize_nullable_mapping(
+            config.orchestration_defaults = self._normalize_orchestration_defaults(
                 session_snapshot.get("orchestration"),
                 fallback=dict(config.orchestration_defaults),
             )

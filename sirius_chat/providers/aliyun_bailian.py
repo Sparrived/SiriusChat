@@ -21,6 +21,8 @@ class AliyunBailianProvider(OpenAICompatibleProvider):
     and normalizes both to the same request endpoint.
     """
 
+    _provider_name = "aliyun-bailian"
+
     def __init__(
         self,
         *,

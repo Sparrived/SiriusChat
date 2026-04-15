@@ -298,8 +298,6 @@ def test_serialize_session_bundle_preserves_full_orchestration_settings(tmp_path
             },
             task_max_tokens={"intent_analysis": 256},
             task_retries={"intent_analysis": 2},
-            enable_intent_analysis=True,
-            intent_analysis_model="legacy-intent-model",
             session_reply_mode="auto",
             message_debounce_seconds=0.0,
         ),
@@ -316,7 +314,7 @@ def test_serialize_session_bundle_preserves_full_orchestration_settings(tmp_path
     assert orchestration["task_enabled"]["event_extract"] is False
     assert orchestration["task_max_tokens"]["intent_analysis"] == 256
     assert orchestration["task_retries"]["intent_analysis"] == 2
-    assert orchestration["intent_analysis_model"] == "legacy-intent-model"
+    assert "intent_analysis_model" not in orchestration
     assert orchestration["session_reply_mode"] == "auto"
     assert orchestration["message_debounce_seconds"] == 0.0
 
@@ -430,6 +428,7 @@ def test_load_or_persist_session_bundle_prefers_workspace_settings_over_stale_pe
     assert session.orchestration.session_reply_mode == "auto"
     refreshed = json.loads(persisted.read_text(encoding="utf-8"))
     assert refreshed["orchestration"]["task_models"]["intent_analysis"] == "intent-model"
+    assert "intent_analysis_model" not in refreshed["orchestration"]
 
 
 def test_save_generated_agent_key_to_config_preserves_jsonc_comments(tmp_path) -> None:

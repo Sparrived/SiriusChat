@@ -4,6 +4,18 @@
 
 ## [Unreleased]
 
+## [0.26.6] - 2026-04-15
+
+### Added
+- **provider DEBUG 日志增强**：各个上游 provider 在 DEBUG 级别下现在会输出结构化请求详情，包含实际请求 URL、base_url、超时、请求体大小、多模态统计与完整 payload，便于直接定位“模型实际打到了哪个地址”。
+- **AutoRoutingProvider 路由 DEBUG 日志**：自动路由在发起调用前会记录命中的 provider_type、匹配来源（models 或 healthcheck_model）、base_url 与候选模型列表，便于排查模型为何被分配到某个 provider。
+- 新增 provider / routing 回归测试，覆盖“DEBUG 日志包含真实请求 URL”和“自动路由日志包含命中的 provider 元信息”两类场景。
+
+### Fixed
+- **intent_analysis 配置入口彻底统一到 task 配置**：`OrchestrationPolicy` 默认任务开关现在直接包含 `intent_analysis`，引擎日志也会按真实任务解析结果输出模型分配，避免旧兼容字段与 `task_*` 配置并存时产生歧义。
+- **旧 intent 字段改为只读兼容、不再写回模板与持久化文件**：`ConfigManager`、默认 JSONC 模板与 `main.py` 持久化镜像现在会把 `enable_intent_analysis` / `intent_analysis_model` 自动映射到 `task_enabled` / `task_models`，但新的 `workspace.json`、`config/session_config.json` 与默认配置不再继续写出旧字段。
+- 新增配置回归测试，覆盖“旧字段自动映射到任务配置”和“保存 workspace 后旧字段被规范化移除”两类场景。
+
 ## [0.26.5] - 2026-04-15
 
 ### Fixed

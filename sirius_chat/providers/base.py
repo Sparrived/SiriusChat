@@ -37,6 +37,56 @@ def estimate_generation_request_input_tokens(request: GenerationRequest) -> int:
     return max(1, (len(merged) + 3) // 4)
 
 
+def build_generation_debug_context(
+    request: GenerationRequest,
+    *,
+    provider_name: str,
+    url: str = "",
+    base_url: str = "",
+    timeout_seconds: float | None = None,
+    method: str = "POST",
+) -> dict[str, object]:
+    """Build structured debug metadata for upstream provider calls."""
+    estimated_input_tokens = estimate_generation_request_input_tokens(request)
+    estimated_total_upper = estimated_input_tokens + max(0, int(request.max_tokens))
+
+    multimodal_message_count = 0
+    multimodal_part_count = 0
+    text_part_count = 0
+    for msg in request.messages:
+        content = msg.get("content", "")
+        if not isinstance(content, list):
+            continue
+        multimodal_message_count += 1
+        multimodal_part_count += len(content)
+        text_part_count += sum(
+            1
+            for part in content
+            if isinstance(part, dict) and str(part.get("type", "")).strip() == "text"
+        )
+
+    return {
+        "provider": provider_name,
+        "method": method,
+        "url": url,
+        "base_url": base_url,
+        "timeout_seconds": timeout_seconds,
+        "purpose": request.purpose,
+        "model": request.model,
+        "temperature": request.temperature,
+        "max_tokens": request.max_tokens,
+        "input_message_count": len(request.messages),
+        "total_message_count": len(request.messages) + (1 if request.system_prompt else 0),
+        "multimodal_message_count": multimodal_message_count,
+        "multimodal_part_count": multimodal_part_count,
+        "multimodal_text_part_count": text_part_count,
+        "has_system_prompt": bool(request.system_prompt),
+        "system_prompt_chars": len(request.system_prompt),
+        "estimated_input_tokens": estimated_input_tokens,
+        "estimated_total_token_upper_bound": estimated_total_upper,
+    }
+
+
 def resolve_generation_timeout_seconds(
     request: GenerationRequest,
     default_timeout_seconds: float,

@@ -75,8 +75,6 @@ def build_orchestration_policy_from_dict(
         for key, value in dict(raw.get("task_models", {})).items()
         if str(key).strip() and str(value).strip()
     }
-    if not unified_model and not task_models:
-        unified_model = agent_model
 
     kwargs: dict[str, Any] = {
         "unified_model": unified_model,
@@ -125,8 +123,6 @@ def build_orchestration_policy_from_dict(
         "memory_extract_batch_size": (int, 1),
         "memory_extract_min_content_length": (int, 0),
         "event_extract_batch_size": (int, 5),
-        "enable_intent_analysis": (bool, True),
-        "intent_analysis_model": (str, ""),
         "consolidation_enabled": (bool, True),
         "consolidation_interval_seconds": (int, 7200),
         "consolidation_min_entries": (int, 6),
@@ -156,6 +152,21 @@ def build_orchestration_policy_from_dict(
             continue
         value = raw.get(field_name)
         kwargs[field_name] = caster(value) if caster is not bool else bool(value)
+
+    legacy_intent_enabled = raw.get("enable_intent_analysis")
+    if legacy_intent_enabled is not None and "intent_analysis" not in kwargs.get("task_enabled", {}):
+        task_enabled = dict(kwargs.get("task_enabled", {}))
+        task_enabled["intent_analysis"] = bool(legacy_intent_enabled)
+        kwargs["task_enabled"] = task_enabled
+
+    legacy_intent_model = str(raw.get("intent_analysis_model", "")).strip()
+    if legacy_intent_model and "intent_analysis" not in kwargs.get("task_models", {}):
+        task_models = dict(kwargs.get("task_models", {}))
+        task_models["intent_analysis"] = legacy_intent_model
+        kwargs["task_models"] = task_models
+
+    if not kwargs.get("unified_model") and not kwargs.get("task_models"):
+        kwargs["unified_model"] = agent_model
 
     memory_raw = raw.get("memory")
     if isinstance(memory_raw, dict):

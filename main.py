@@ -585,8 +585,6 @@ def _serialize_session_bundle(
             "memory_extract_batch_size": orchestration.memory_extract_batch_size,
             "memory_extract_min_content_length": orchestration.memory_extract_min_content_length,
             "event_extract_batch_size": orchestration.event_extract_batch_size,
-            "enable_intent_analysis": orchestration.enable_intent_analysis,
-            "intent_analysis_model": orchestration.intent_analysis_model,
             "consolidation_enabled": orchestration.consolidation_enabled,
             "consolidation_interval_seconds": orchestration.consolidation_interval_seconds,
             "consolidation_min_entries": orchestration.consolidation_min_entries,

@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from unittest.mock import patch
 from urllib import error
 
@@ -156,6 +157,22 @@ def test_provider_uses_correct_default_endpoint(spec: dict) -> None:
         provider.generate(_make_request(spec["model"]))
     called_request = mocked.call_args[0][0]
     assert called_request.full_url == spec["expected_url"]
+
+
+@pytest.mark.parametrize("spec", _PROVIDER_SPECS, ids=_ids(_PROVIDER_SPECS))
+def test_provider_debug_log_includes_actual_url_and_metadata(caplog: pytest.LogCaptureFixture, spec: dict) -> None:
+    provider = spec["cls"](**spec["init"])
+    logger_name = str(spec["patch_target"]).removesuffix(".urllib_request.urlopen")
+    with caplog.at_level(logging.DEBUG, logger=logger_name), patch(spec["patch_target"]) as mocked:
+        mocked.return_value = _FakeResponse(
+            {"choices": [{"message": {"content": "ok"}}]}
+        )
+        provider.generate(_make_request(spec["model"], timeout_seconds=12.5))
+
+    assert spec["expected_url"] in caplog.text
+    assert '"timeout_seconds": 12.5' in caplog.text
+    assert '"payload"' in caplog.text
+    assert '"provider":' in caplog.text
 
 
 @pytest.mark.parametrize("spec", _PROVIDER_SPECS, ids=_ids(_PROVIDER_SPECS))

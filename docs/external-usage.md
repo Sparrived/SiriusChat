@@ -341,7 +341,8 @@ orchestration = OrchestrationPolicy(
 - 频率控制：当消息数达到批次大小且内容长度满足时，执行任务
 - SKILL 目录：框架会始终先创建 `{work_path}/skills/` 与 `README.md`；关闭 SKILL 仅影响调用，不影响目录引导文件生成
 - 提示词分割：当 `enable_prompt_driven_splitting=True` 时，系统提示会带分割指令，AI 会在适当位置输出 `<MSG_SPLIT>` 标记
-- 兼容字段 `enable_intent_analysis` / `intent_analysis_model` 仍然可用，但建议迁移到任务配置，详见 `docs/migration-v0.16.md`
+- 当前配置统一通过 `task_enabled/task_models/task_budgets/task_temperatures/task_max_tokens/task_retries` 管理 `intent_analysis`
+- 旧配置文件若仍包含 `enable_intent_analysis` / `intent_analysis_model`，加载时会自动映射到任务配置，但新的模板与持久化输出不再写出这两个字段
 
 若使用 SiliconFlow，可直接替换 provider：
 

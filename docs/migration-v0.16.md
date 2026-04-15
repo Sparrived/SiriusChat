@@ -12,7 +12,7 @@
   - `task_temperatures["intent_analysis"]`
   - `task_max_tokens["intent_analysis"]`
   - `task_retries["intent_analysis"]`
-- `enable_intent_analysis` 与 `intent_analysis_model` 仍保留兼容，但建议尽快迁移
+- `enable_intent_analysis` 与 `intent_analysis_model` 仍保留兼容读取，但建议尽快迁移；自 v0.26.6 起，新的模板与持久化文件不再写回这两个旧字段
 - `main.py`、库内 CLI 与 `ConfigManager` 现在会正确读取上述 orchestration JSON 设置
 
 ## 迁移前
@@ -104,5 +104,6 @@ OrchestrationPolicy(
 
 ## 兼容性说明
 
-- `enable_intent_analysis` 和 `intent_analysis_model` 仍可继续使用
-- 但后续版本将优先围绕 `intent_analysis` 任务维护文档、示例与能力扩展
+- 旧配置里的 `enable_intent_analysis` 和 `intent_analysis_model` 仍可继续读取，并会在加载时自动映射到 `task_enabled["intent_analysis"]` / `task_models["intent_analysis"]`
+- 自 v0.26.6 起，`workspace.json`、`config/session_config.json`、CLI 默认模板与 `main.py` 兼容镜像不再写回这两个旧字段
+- 后续版本将优先围绕 `intent_analysis` 任务维护文档、示例与能力扩展

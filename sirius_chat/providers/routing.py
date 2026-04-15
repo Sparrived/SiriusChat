@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -57,6 +58,8 @@ _SUPPORTED_PROVIDER_PLATFORMS: dict[str, dict[str, str]] = {
 
 _PROVIDER_HEALTHCHECK_SYSTEM_PROMPT = "你是可用性检查助手，请简短回复 ok。"
 _PROVIDER_HEALTHCHECK_USER_MESSAGE = "ping"
+
+logger = logging.getLogger(__name__)
 
 
 def get_supported_provider_platforms() -> dict[str, dict[str, str]]:
@@ -361,20 +364,34 @@ class AutoRoutingProvider(LLMProvider):
             return OpenAICompatibleProvider(api_key=config.api_key, base_url=config.base_url or "https://api.openai.com")
         raise RuntimeError(f"不支持的提供商类型：{config.provider_type}")
 
-    def _pick_provider(self, model: str) -> ProviderConfig:
+    def _pick_provider(self, model: str) -> tuple[ProviderConfig, str]:
         if not self._providers:
             raise RuntimeError("未配置任何提供商，请先添加至少一个提供商 API Key。")
 
         for provider in self._providers.values():
-            if self._provider_matches_model(provider, model):
-                return provider
+            model_stripped = model.strip()
+            if provider.models and model_stripped in provider.models:
+                return provider, "models"
+            expected = provider.healthcheck_model.strip()
+            if expected and model_stripped == expected:
+                return provider, "healthcheck_model"
 
         raise RuntimeError(
             f"无法为模型 '{model}' 找到合适的提供商。请确保在 provider_keys.json 或配置中的 'models' 列表中包含了该模型。"
         )
 
     def generate(self, request: GenerationRequest) -> str:
-        selected = self._pick_provider(request.model)
+        selected, matched_by = self._pick_provider(request.model)
+        logger.debug(
+            "[Provider路由] model=%s | purpose=%s | provider_type=%s | matched_by=%s | base_url=%s | healthcheck_model=%s | models=%s",
+            request.model,
+            request.purpose,
+            selected.provider_type,
+            matched_by,
+            selected.base_url or "(默认)",
+            selected.healthcheck_model or "(未设置)",
+            selected.models,
+        )
         provider = self._create_provider(selected)
         return provider.generate(request)
 

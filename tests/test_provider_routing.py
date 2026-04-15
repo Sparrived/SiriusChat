@@ -1,5 +1,6 @@
 ﻿from __future__ import annotations
 
+import logging
 from pathlib import Path
 import pytest
 from unittest.mock import patch
@@ -64,6 +65,34 @@ def test_auto_routing_provider_selects_provider_by_exact_model_name() -> None:
 
     assert output == "sf-ok"
     assert sf_generate.call_count == 1
+
+
+def test_auto_routing_provider_emits_debug_log_with_selected_provider(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    routing = AutoRoutingProvider(
+        {
+            "openai-compatible": ProviderConfig(
+                provider_type="openai-compatible",
+                api_key="openai-key",
+                base_url="https://api.openai.com",
+                healthcheck_model="gpt-4o-mini",
+                models=["gpt-4o-mini", "gpt-4.1-mini"],
+            ),
+        }
+    )
+
+    with caplog.at_level(logging.DEBUG, logger="sirius_chat.providers.routing"), patch(
+        "sirius_chat.providers.routing.OpenAICompatibleProvider.generate",
+        return_value="openai-ok",
+    ):
+        output = routing.generate(_request("gpt-4.1-mini"))
+
+    assert output == "openai-ok"
+    assert "[Provider路由]" in caplog.text
+    assert "provider_type=openai-compatible" in caplog.text
+    assert "matched_by=models" in caplog.text
+    assert "base_url=https://api.openai.com" in caplog.text
 
 
 def test_auto_routing_provider_raises_for_unknown_model_without_explicit_match() -> None:

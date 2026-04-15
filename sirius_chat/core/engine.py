@@ -161,6 +161,26 @@ class AsyncRolePlayEngine:
         TASK_EVENT_EXTRACT,
     ]
 
+    @classmethod
+    def _orchestration_log_models(cls, config: SessionConfig) -> dict[str, str]:
+        orchestration = config.orchestration
+        logged_tasks = list(cls._REQUIRED_TASKS)
+        if (
+            cls._resolve_session_reply_mode(config) == "auto"
+            and orchestration.is_task_enabled(TASK_INTENT_ANALYSIS)
+        ):
+            logged_tasks.append(TASK_INTENT_ANALYSIS)
+
+        resolved: dict[str, str] = {}
+        for task in logged_tasks:
+            model = orchestration.resolve_model_for_task(
+                task,
+                default_model=config.agent.model if task == TASK_INTENT_ANALYSIS else "",
+            )
+            if model:
+                resolved[task] = model
+        return resolved
+
     def validate_orchestration_config(self, config: SessionConfig) -> None:
         """验证多模型协同配置的完整性。
         
@@ -211,15 +231,16 @@ class AsyncRolePlayEngine:
                 task: bool(orchestration.is_task_enabled(task))
                 for task in self._REQUIRED_TASKS
             }
+            log_models = self._orchestration_log_models(config)
             log_key = (
                 "task_models:"
-                f"{json.dumps(dict(sorted(orchestration.task_models.items())), ensure_ascii=False, sort_keys=True)}|"
+                f"{json.dumps(dict(sorted(log_models.items())), ensure_ascii=False, sort_keys=True)}|"
                 f"{json.dumps(enabled_flag, ensure_ascii=False, sort_keys=True)}"
             )
             if log_key not in self._orchestration_log_cache:
                 logger.info(
                     "思维线路就绪，各辅助任务已分配专属模型 - %s",
-                    orchestration.task_models,
+                    log_models,
                 )
                 self._orchestration_log_cache.add(log_key)
             return

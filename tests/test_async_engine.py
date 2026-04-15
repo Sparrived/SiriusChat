@@ -699,10 +699,10 @@ def test_run_live_session_reply_mode_auto_infers_when_to_reply() -> None:
             ),
             orchestration=OrchestrationPolicy(
                 unified_model="mock-model",
-                enable_intent_analysis=False,
                 task_enabled={
                     "memory_extract": False,
                     "event_extract": False,
+                    "intent_analysis": False,
                 },
             message_debounce_seconds=0.0,
             ),
@@ -871,8 +871,8 @@ def test_run_live_session_reply_mode_auto_probability_fallback_can_trigger_reply
                 task_enabled={
                     "memory_extract": False,
                     "event_extract": False,
+                    "intent_analysis": False,
                 },
-                enable_intent_analysis=False,
                 engagement_sensitivity=1.0,
             message_debounce_seconds=0.0,
             ),
@@ -1138,8 +1138,8 @@ def test_run_live_session_reply_mode_auto_threshold_is_configurable() -> None:
                 task_enabled={
                     "memory_extract": False,
                     "event_extract": False,
+                    "intent_analysis": False,
                 },
-                enable_intent_analysis=False,
                 engagement_sensitivity=0.9,
             message_debounce_seconds=0.0,
             ),
@@ -1174,9 +1174,9 @@ def test_run_live_session_reply_runtime_persists_across_calls() -> None:
                 task_enabled={
                     "memory_extract": False,
                     "event_extract": False,
+                    "intent_analysis": False,
                 },
                 engagement_sensitivity=0.8,
-                enable_intent_analysis=False,
             message_debounce_seconds=0.0,
             ),
         )
@@ -1257,10 +1257,10 @@ def test_run_live_message_uses_session_level_auto_reply_mode() -> None:
             orchestration=OrchestrationPolicy(
                 unified_model="mock-model",
                 session_reply_mode="auto",
-                enable_intent_analysis=False,
                 task_enabled={
                     "memory_extract": False,
                     "event_extract": False,
+                    "intent_analysis": False,
                 },
             message_debounce_seconds=0.0,
             ),

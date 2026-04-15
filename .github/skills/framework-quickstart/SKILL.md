@@ -56,6 +56,7 @@ description: "当你需要在不通读全部代码的情况下快速理解 Siriu
 27. `tests/test_engine.py`
 - `models/models.py` ✨ **（包重构）** 定义数据契约（多人用户 + 单 AI 主助手）。
 - `OrchestrationPolicy` 用于任务路由与预算控制，支持 `memory_extract`、`event_extract`、`intent_analysis`、`memory_manager` 等任务的模型配置与预算限制。`reply_mode=auto` 下的 LLM 意图分析已纳入 `intent_analysis` 任务；若关闭该任务或调用失败，则回退关键词路径。同时支持提示词驱动的内容分割（`enable_prompt_driven_splitting=True`）。✨ `memory_manager` 是新增的可选 LLM 任务，用于汇聚、去重、标注、冲突检测记忆。
+- 兼容层面，旧 `enable_intent_analysis` / `intent_analysis_model` 仅作为读取时的映射入口存在；当前模板、workspace 持久化与示例应统一使用 `task_enabled/task_models`。
 - ✨ **(v0.13.0)** `OrchestrationPolicy` 新增 AI 自身记忆配置（`enable_self_memory`、`self_memory_extract_batch_size`、`self_memory_max_diary_prompt_entries`、`self_memory_max_glossary_prompt_terms`）。
 ## 心智模型
 

@@ -173,8 +173,8 @@
 - `task_retries["intent_analysis"]`：意图分析失败时的重试次数。
 
 兼容说明：
-- `enable_intent_analysis` 与 `intent_analysis_model` 仍可使用，但已转为兼容字段。
-- 新配置建议统一迁移到 `task_*["intent_analysis"]`，迁移步骤见 `docs/migration-v0.16.md`。
+- 当前配置入口统一使用 `task_*["intent_analysis"]`。
+- 旧配置文件中的 `enable_intent_analysis` 与 `intent_analysis_model` 在加载时会自动映射到任务配置，但新的模板与持久化输出不再写出这两个字段。
 
 > **注意**：v0.14.1 已彻底移除旧版 `auto_reply_*` 参数。迁移详情见 `docs/migration-v0.14.md`。
 
