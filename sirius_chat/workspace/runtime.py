@@ -8,6 +8,7 @@ import json
 import logging
 import shutil
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Awaitable, Callable
 
@@ -216,18 +217,55 @@ class WorkspaceRuntime:
         *,
         session_id: str,
         pending_message_threshold: int,
+        force_batch: bool = False,
     ) -> tuple[list[_QueuedLiveMessageRequest], int]:
         queue = self._session_queues.setdefault(session_id, deque())
         pending_count = len(queue)
         if not queue:
             return [], pending_count
-        if pending_message_threshold <= 0 or pending_count <= pending_message_threshold:
+        if not force_batch and (
+            pending_message_threshold <= 0 or pending_count <= pending_message_threshold
+        ):
             return [queue.popleft()], pending_count
 
         batch = [queue.popleft()]
         while queue and self._can_batch_requests(batch[-1], queue[0]):
             batch.append(queue.popleft())
         return batch, pending_count
+
+    @staticmethod
+    def _parse_runtime_datetime(raw: str) -> datetime | None:
+        text = str(raw or "").strip()
+        if not text:
+            return None
+        try:
+            parsed = datetime.fromisoformat(text)
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+
+    @staticmethod
+    def _utcnow() -> datetime:
+        return datetime.now(timezone.utc)
+
+    def _compute_reply_cooldown_wait(
+        self,
+        *,
+        session_config: SessionConfig,
+        transcript: Transcript,
+    ) -> float:
+        min_interval = float(getattr(session_config.orchestration, "min_reply_interval_seconds", 0.0))
+        if min_interval <= 0:
+            return 0.0
+        last_assistant_reply_at = self._parse_runtime_datetime(
+            transcript.reply_runtime.last_assistant_reply_at
+        )
+        if last_assistant_reply_at is None:
+            return 0.0
+        elapsed = (self._utcnow() - last_assistant_reply_at).total_seconds()
+        return max(0.0, min_interval - elapsed)
 
     @staticmethod
     def _merge_environment_contexts(batch: list[_QueuedLiveMessageRequest]) -> str:
@@ -269,6 +307,7 @@ class WorkspaceRuntime:
         return _dispatch
 
     async def _drain_session_queue(self, session_id: str) -> None:
+        force_batch_after_wait = False
         while True:
             queue = self._session_queues.get(session_id)
             if not queue:
@@ -277,60 +316,78 @@ class WorkspaceRuntime:
 
             await self._refresh_workspace_config()
             lock = self._session_locks.setdefault(session_id, asyncio.Lock())
+            cooldown_wait = 0.0
             async with lock:
                 session_config = self._build_session_config(session_id)
-                batch, pending_count = self._dequeue_runtime_batch(
-                    session_id=session_id,
-                    pending_message_threshold=int(session_config.orchestration.pending_message_threshold),
-                )
-                if not batch:
-                    continue
                 transcript = await self._load_session_for_runtime(session_id, session_config)
-
-                for request in batch:
-                    if request.user_profile is not None:
-                        transcript.user_memory.register_user(request.user_profile)
-
-                merged_turn = batch[0].turn
-                if len(batch) > 1:
-                    merged_turn = self._get_engine()._merge_pending_turns([request.turn for request in batch])
+                cooldown_wait = self._compute_reply_cooldown_wait(
+                    session_config=session_config,
+                    transcript=transcript,
+                )
+                if cooldown_wait > 0:
                     logger.info(
-                        "会话 %s 待处理消息积压=%d，进入静默批处理：合并 %d 条来自 %s 的消息",
+                        "会话 %s 回复冷却中，等待 %.2f 秒后再做下一次回复判断；期间消息继续排队并参与合并",
                         session_id,
-                        pending_count,
-                        len(batch),
-                        merged_turn.speaker or "unknown",
+                        cooldown_wait,
                     )
+                    force_batch_after_wait = True
+                else:
+                    batch, pending_count = self._dequeue_runtime_batch(
+                        session_id=session_id,
+                        pending_message_threshold=int(session_config.orchestration.pending_message_threshold),
+                        force_batch=force_batch_after_wait,
+                    )
+                    force_batch_after_wait = False
+                    if not batch:
+                        continue
 
-                try:
-                    transcript = await self._get_engine().run_live_message(
-                        config=session_config,
-                        turn=merged_turn,
+                    for request in batch:
+                        if request.user_profile is not None:
+                            transcript.user_memory.register_user(request.user_profile)
+
+                    merged_turn = batch[0].turn
+                    if len(batch) > 1:
+                        merged_turn = self._get_engine()._merge_pending_turns([request.turn for request in batch])
+                        logger.info(
+                            "会话 %s 待处理消息积压=%d，进入静默批处理：合并 %d 条来自 %s 的消息",
+                            session_id,
+                            pending_count,
+                            len(batch),
+                            merged_turn.speaker or "unknown",
+                        )
+
+                    try:
+                        transcript = await self._get_engine().run_live_message(
+                            config=session_config,
+                            turn=merged_turn,
+                            transcript=transcript,
+                            environment_context=self._merge_environment_contexts(batch),
+                            user_profile=None,
+                            on_reply=self._build_batch_on_reply(batch),
+                            timeout=self._pick_engine_timeout(batch),
+                            finalize_and_persist=True,
+                        )
+                    except Exception as exc:
+                        self._drop_cached_session(session_id)
+                        for request in batch:
+                            if request.future is not None and not request.future.done():
+                                request.future.set_exception(exc)
+                        continue
+
+                    self._transcripts[session_id] = transcript
+                    store = self.get_session_store(session_id)
+                    store.save(transcript)
+                    self._persist_participants(
+                        session_id,
                         transcript=transcript,
-                        environment_context=self._merge_environment_contexts(batch),
-                        user_profile=None,
-                        on_reply=self._build_batch_on_reply(batch),
-                        timeout=self._pick_engine_timeout(batch),
-                        finalize_and_persist=True,
+                        primary_user_id=self._pick_primary_user_id(batch),
                     )
-                except Exception as exc:
-                    self._drop_cached_session(session_id)
                     for request in batch:
                         if request.future is not None and not request.future.done():
-                            request.future.set_exception(exc)
-                    continue
+                            request.future.set_result(transcript)
 
-                self._transcripts[session_id] = transcript
-                store = self.get_session_store(session_id)
-                store.save(transcript)
-                self._persist_participants(
-                    session_id,
-                    transcript=transcript,
-                    primary_user_id=self._pick_primary_user_id(batch),
-                )
-                for request in batch:
-                    if request.future is not None and not request.future.done():
-                        request.future.set_result(transcript)
+            if cooldown_wait > 0:
+                await asyncio.sleep(cooldown_wait)
 
     async def get_transcript(self, session_id: str) -> Transcript | None:
         await self.initialize()

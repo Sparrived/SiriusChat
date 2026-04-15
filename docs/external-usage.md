@@ -325,6 +325,7 @@ orchestration = OrchestrationPolicy(
     memory_extract_batch_size=3,           # 每3条消息执行一次
     memory_extract_min_content_length=50,  # 消息内容需≥50字符才触发
     pending_message_threshold=4,           # 单会话积压超过 4 条后进入静默批处理
+    min_reply_interval_seconds=15.0,       # 两次 AI 回复至少间隔 15 秒；等待期间继续收消息并合并后再判断
     
     # === SKILL 系统 ===
     enable_skills=True,                    # SKILL 默认已启用；仅在需要关闭时显式设为 False
@@ -342,12 +343,13 @@ orchestration = OrchestrationPolicy(
 - 当 `task_enabled["intent_analysis"] = true` 时，该轮意图结论必须来自模型；provider 失败或解析失败时，不再自动回退到关键词意图推断
 - 频率控制：当消息数达到批次大小且内容长度满足时，执行任务
 - runtime 先按 session 排队；只有当待处理消息数超过 `pending_message_threshold` 时，才会把同一说话人的连续消息静默合并
+- `min_reply_interval_seconds > 0` 时，AI 刚回复后 runtime 会继续保留会话队列；窗口结束后先合并同一说话人的连续消息，再按 `session_reply_mode` 与 `intent_analysis` 进入下一次回复判断
 - `memory_manager` 同时承担会话收尾整理与后台归纳的模型配置；若不希望后台继续调用模型，可关闭 `task_enabled["memory_manager"]`
 - SKILL 目录：框架会始终先创建 `{work_path}/skills/` 与 `README.md`；关闭 SKILL 仅影响调用，不影响目录引导文件生成
 - 提示词分割：当 `enable_prompt_driven_splitting=True` 时，系统提示会带分割指令，AI 会在适当位置输出内置的 `<MSG_SPLIT>` 标记；外部不再配置 `split_marker`
 - 当前配置统一通过 `task_enabled/task_models/task_temperatures/task_max_tokens/task_retries` 管理 `intent_analysis` 与 `memory_manager`
 - 旧配置文件若仍包含 `enable_intent_analysis` / `intent_analysis_model`，加载时会自动映射到任务配置，但新的模板与持久化输出不再写出这两个字段
-- 旧配置文件若仍包含 `message_debounce_seconds` 或 `memory_manager_*`，加载时会自动映射到新任务配置；迁移细节见 `docs/migration-v0.27.md` 与 `docs/migration-v0.27.1.md`
+- 旧配置文件若仍包含 `message_debounce_seconds` 或 `memory_manager_*`，加载时会自动映射到新任务配置；若需要理解 `min_reply_interval_seconds` 与批处理/自动回复的配合方式，见 `docs/migration-v0.27.md`、`docs/migration-v0.27.1.md` 与 `docs/migration-v0.27.2.md`
 
 若使用 SiliconFlow，可直接替换 provider：
 

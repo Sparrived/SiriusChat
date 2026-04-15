@@ -186,6 +186,185 @@ def test_workspace_runtime_batches_backlogged_messages_by_threshold(tmp_path: Pa
     asyncio.run(_run())
 
 
+def test_workspace_runtime_waits_for_min_reply_interval_and_merges_waiting_messages(tmp_path: Path) -> None:
+    class RecordingProvider(AsyncLLMProvider):
+        def __init__(self) -> None:
+            self.requests: list[GenerationRequest] = []
+            self.responses = ["第一轮回复", "冷却后合并回复"]
+
+        async def generate_async(self, request: GenerationRequest) -> str:
+            self.requests.append(request)
+            if request.purpose != "chat_main":
+                return "ignored"
+            return self.responses.pop(0)
+
+    async def _run() -> None:
+        _write_generated_agents(tmp_path)
+        manager = ConfigManager(base_path=tmp_path)
+        workspace_config = manager.load_workspace_config(tmp_path)
+        workspace_config.orchestration_defaults = {
+            "pending_message_threshold": 99,
+            "min_reply_interval_seconds": 30.0,
+            "session_reply_mode": "always",
+            "task_enabled": {
+                "memory_extract": False,
+                "event_extract": False,
+                "intent_analysis": False,
+                "memory_manager": False,
+            },
+        }
+        manager.save_workspace_config(tmp_path, workspace_config)
+
+        provider = RecordingProvider()
+        runtime = WorkspaceRuntime.open(tmp_path, provider=provider)
+        wait_started = asyncio.Event()
+        release_wait = asyncio.Event()
+        original_sleep = asyncio.sleep
+        cooldown_calls = 0
+
+        async def _fake_sleep(seconds: float) -> None:
+            if seconds > 0:
+                wait_started.set()
+                await release_wait.wait()
+            await original_sleep(0)
+
+        def _fake_cooldown(_self, *, session_config, transcript):
+            nonlocal cooldown_calls
+            if transcript.reply_runtime.last_assistant_reply_at and cooldown_calls == 0:
+                cooldown_calls += 1
+                return 30.0
+            return 0.0
+
+        try:
+            first = await runtime.run_live_message(
+                session_id="group:cooldown",
+                turn=Message(role="user", speaker="Alice", content="第一句", reply_mode="always"),
+            )
+            assert first.messages[-1].content == "第一轮回复"
+
+            with patch.object(WorkspaceRuntime, "_compute_reply_cooldown_wait", autospec=True, side_effect=_fake_cooldown), patch(
+                "sirius_chat.workspace.runtime.asyncio.sleep",
+                new=_fake_sleep,
+            ):
+                second_task = asyncio.create_task(
+                    runtime.run_live_message(
+                        session_id="group:cooldown",
+                        turn=Message(role="user", speaker="Alice", content="第二句", reply_mode="always"),
+                    )
+                )
+                await wait_started.wait()
+                third_task = asyncio.create_task(
+                    runtime.run_live_message(
+                        session_id="group:cooldown",
+                        turn=Message(role="user", speaker="Alice", content="第三句", reply_mode="always"),
+                    )
+                )
+                release_wait.set()
+
+                second, third = await asyncio.gather(second_task, third_task)
+
+            chat_requests = [request for request in provider.requests if request.purpose == "chat_main"]
+            assert len(chat_requests) == 2
+            merged_payload = "\n".join(str(item.get("content", "")) for item in chat_requests[-1].messages)
+            assert "第二句，第三句" in merged_payload
+            assert second is third
+            assistant_messages = [item for item in third.messages if item.role == "assistant"]
+            assert [item.content for item in assistant_messages] == ["第一轮回复", "冷却后合并回复"]
+        finally:
+            await runtime.close()
+
+    asyncio.run(_run())
+
+
+def test_workspace_runtime_min_reply_interval_still_respects_auto_reply_decision(tmp_path: Path) -> None:
+    class RecordingProvider(AsyncLLMProvider):
+        def __init__(self) -> None:
+            self.requests: list[GenerationRequest] = []
+
+        async def generate_async(self, request: GenerationRequest) -> str:
+            self.requests.append(request)
+            if request.purpose != "chat_main":
+                return "ignored"
+            return "第一轮回复"
+
+    async def _run() -> None:
+        _write_generated_agents(tmp_path)
+        manager = ConfigManager(base_path=tmp_path)
+        workspace_config = manager.load_workspace_config(tmp_path)
+        workspace_config.orchestration_defaults = {
+            "pending_message_threshold": 99,
+            "min_reply_interval_seconds": 30.0,
+            "session_reply_mode": "auto",
+            "task_enabled": {
+                "memory_extract": False,
+                "event_extract": False,
+                "intent_analysis": False,
+                "memory_manager": False,
+            },
+        }
+        manager.save_workspace_config(tmp_path, workspace_config)
+
+        provider = RecordingProvider()
+        runtime = WorkspaceRuntime.open(tmp_path, provider=provider)
+        wait_started = asyncio.Event()
+        release_wait = asyncio.Event()
+        original_sleep = asyncio.sleep
+        cooldown_calls = 0
+
+        async def _fake_sleep(seconds: float) -> None:
+            if seconds > 0:
+                wait_started.set()
+                await release_wait.wait()
+            await original_sleep(0)
+
+        def _fake_cooldown(_self, *, session_config, transcript):
+            nonlocal cooldown_calls
+            if transcript.reply_runtime.last_assistant_reply_at and cooldown_calls == 0:
+                cooldown_calls += 1
+                return 30.0
+            return 0.0
+
+        try:
+            first = await runtime.run_live_message(
+                session_id="group:auto-cooldown",
+                turn=Message(role="user", speaker="Alice", content="月白，帮我看一下", reply_mode="always"),
+            )
+            assert first.messages[-1].content == "第一轮回复"
+
+            with patch.object(WorkspaceRuntime, "_compute_reply_cooldown_wait", autospec=True, side_effect=_fake_cooldown), patch(
+                "sirius_chat.workspace.runtime.asyncio.sleep",
+                new=_fake_sleep,
+            ):
+                second_task = asyncio.create_task(
+                    runtime.run_live_message(
+                        session_id="group:auto-cooldown",
+                        turn=Message(role="user", speaker="Alice", content="今天打卡。", reply_mode="auto"),
+                    )
+                )
+                await wait_started.wait()
+                third_task = asyncio.create_task(
+                    runtime.run_live_message(
+                        session_id="group:auto-cooldown",
+                        turn=Message(role="user", speaker="Alice", content="准备继续工作。", reply_mode="auto"),
+                    )
+                )
+                release_wait.set()
+
+                second, third = await asyncio.gather(second_task, third_task)
+
+            chat_requests = [request for request in provider.requests if request.purpose == "chat_main"]
+            assert len(chat_requests) == 1
+            assert second is third
+            user_messages = [item for item in third.messages if item.role == "user"]
+            assert [item.content for item in user_messages][-1] == "今天打卡。，准备继续工作。"
+            assistant_messages = [item for item in third.messages if item.role == "assistant"]
+            assert [item.content for item in assistant_messages] == ["第一轮回复"]
+        finally:
+            await runtime.close()
+
+    asyncio.run(_run())
+
+
 def test_workspace_runtime_separates_config_root_and_data_root(tmp_path: Path) -> None:
     async def _run() -> None:
         config_root = tmp_path / "config"

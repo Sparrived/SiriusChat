@@ -172,6 +172,12 @@ def test_pending_message_threshold_default_four() -> None:
     assert policy.pending_message_threshold == 4
 
 
+def test_min_reply_interval_seconds_default_zero() -> None:
+    """Default minimum reply interval is disabled."""
+    policy = OrchestrationPolicy()
+    assert policy.min_reply_interval_seconds == 0.0
+
+
 def test_pending_message_threshold_negative_raises() -> None:
     """Negative pending-message threshold should raise ValueError."""
     policy = OrchestrationPolicy(
@@ -183,6 +189,19 @@ def test_pending_message_threshold_negative_raises() -> None:
         assert False, "Should have raised ValueError"
     except ValueError as e:
         assert "pending_message_threshold" in str(e)
+
+
+def test_min_reply_interval_seconds_negative_raises() -> None:
+    """Negative minimum reply interval should raise ValueError."""
+    policy = OrchestrationPolicy(
+        unified_model="mock-model",
+        min_reply_interval_seconds=-1.0,
+    )
+    try:
+        policy.validate()
+        assert False, "Should have raised ValueError"
+    except ValueError as e:
+        assert "min_reply_interval_seconds" in str(e)
 
 
 # ---------------------------------------------------------------------------

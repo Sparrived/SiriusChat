@@ -185,7 +185,8 @@ def test_load_session_config_parses_orchestration_policy(tmp_path) -> None:
                     "memory_manager_temperature": 0.3,
                     "memory_manager_max_tokens": 256,
                     "session_reply_mode": "auto",
-                    "pending_message_threshold": 0
+                    "pending_message_threshold": 0,
+                    "min_reply_interval_seconds": 12.5
                 },
             },
             ensure_ascii=False,
@@ -207,6 +208,7 @@ def test_load_session_config_parses_orchestration_policy(tmp_path) -> None:
     assert session.orchestration.task_max_tokens["memory_manager"] == 256
     assert session.orchestration.session_reply_mode == "auto"
     assert session.orchestration.pending_message_threshold == 0
+    assert session.orchestration.min_reply_interval_seconds == 12.5
 
 
 def test_load_session_config_supports_separate_config_root_and_work_path(tmp_path) -> None:

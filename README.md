@@ -517,6 +517,7 @@ msg = Message(
     },
     "memory_extract_batch_size": 3,
     "memory_extract_min_content_length": 50,
+    "min_reply_interval_seconds": 15,
     "max_multimodal_inputs_per_turn": 4,
     "max_multimodal_value_length": 4096
   }
@@ -534,6 +535,7 @@ msg = Message(
   - `batch_size=3` 表示每 3 条消息提取一次
   - `min_content_length=50` 表示只提取 ≥50 字符的消息
   - 两个条件同时满足时才执行
+- `min_reply_interval_seconds` 可配置（默认 0，关闭）：AI 刚回复后，runtime 会在最小间隔内继续排队；窗口结束后先合并同一说话人的连续消息，再进入正常的 reply_mode/intent 判断
 - `intent_analysis` 启用后必须通过模型推断；若调用失败或解析失败，该轮不会再回退到关键词意图推断
 - `max_concurrent_llm_calls` 可配置（默认 1）：LLM 并发数限流
 - `pending_message_threshold` 可配置（默认 4）：当单会话待处理消息积压超过阈值时，runtime 会进入静默批处理并合并同一说话人的连续消息

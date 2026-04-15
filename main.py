@@ -579,6 +579,7 @@ def _serialize_session_bundle(
             "engagement_sensitivity": orchestration.engagement_sensitivity,
             "heat_window_seconds": orchestration.heat_window_seconds,
             "pending_message_threshold": orchestration.pending_message_threshold,
+            "min_reply_interval_seconds": orchestration.min_reply_interval_seconds,
             "memory": {
                 "max_facts_per_user": orchestration.memory.max_facts_per_user,
                 "transient_confidence_threshold": orchestration.memory.transient_confidence_threshold,

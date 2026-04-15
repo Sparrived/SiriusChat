@@ -13,6 +13,7 @@
 - `reply_mode="auto"` 下的参与决策参数（热度 + 意图 + engagement_sensitivity）。
 - AI 自身记忆系统（日记 + 名词解释）。
 - 会话积压静默批处理（`pending_message_threshold`）。
+- 两次 AI 回复之间的最小间隔控制（`min_reply_interval_seconds`）。
 - 回复频率限制（滑动窗口）。
 
 注意：没有 `orchestration.enabled` 字段。
@@ -49,6 +50,7 @@
 - `engagement_sensitivity`: `0.5`
 - `heat_window_seconds`: `60.0`
 - `pending_message_threshold`: `4`
+- `min_reply_interval_seconds`: `0.0`
 - `enable_self_memory`: `true`
 - `self_memory_extract_batch_size`: `3`
 - `self_memory_max_diary_prompt_entries`: `6`
@@ -102,6 +104,7 @@
     "self_memory_extract_batch_size": 3,
     "self_memory_max_diary_prompt_entries": 6,
     "self_memory_max_glossary_prompt_terms": 15,
+    "min_reply_interval_seconds": 15.0,
     "reply_frequency_window_seconds": 60.0,
     "reply_frequency_max_replies": 8,
     "reply_frequency_exempt_on_mention": true,
@@ -144,6 +147,12 @@
 - 当待处理消息数超过阈值时，runtime 会把同一说话人的连续消息合并成一次主流程调用。
 - 该策略取代旧的时间窗口 debounce；是否合并由积压数量决定，而不是 sleep 等待窗口。
 - 设为 `0` 可关闭该批处理行为，恢复每条消息独立送入主流程。
+
+最小回复间隔：
+
+- `min_reply_interval_seconds > 0` 时，若 AI 刚完成过一次回复，`WorkspaceRuntime` 不会立刻处理下一条消息，而是继续保留会话队列。
+- 等到最小间隔满足后，runtime 会先按静默批处理的规则合并同一说话人的连续消息，再把合并后的 turn 送进 engine。
+- 该参数不会强制 AI 一定回复；合并后的消息仍然会按 `session_reply_mode` 与 `intent_analysis` 走正常决策。
 
 ## 参与决策参数（reply_mode=auto）
 

@@ -161,6 +161,7 @@ class OrchestrationPolicy:
     self_memory_max_glossary_prompt_terms: int = 15  # Max glossary terms injected into prompt
 
     # Reply frequency limiter (global rate control independent of auto_reply)
+    min_reply_interval_seconds: float = 0.0  # Minimum gap between two assistant replies; 0 = disabled
     reply_frequency_window_seconds: float = 60.0  # Sliding window
     reply_frequency_max_replies: int = 8  # Max replies within the window
     reply_frequency_exempt_on_mention: bool = True  # Bypass limit when AI is directly mentioned
@@ -242,6 +243,8 @@ class OrchestrationPolicy:
             raise ValueError("heat_window_seconds 必须大于 0。")
         if self.pending_message_threshold < 0:
             raise ValueError("pending_message_threshold 不能小于 0。")
+        if self.min_reply_interval_seconds < 0:
+            raise ValueError("min_reply_interval_seconds 不能小于 0。")
 
 
 @dataclass(slots=True)

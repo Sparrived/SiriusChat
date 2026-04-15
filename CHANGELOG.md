@@ -4,6 +4,23 @@
 
 ## [Unreleased]
 
+## [0.27.2] - 2026-04-15
+
+### Added
+- **最小回复间隔配置**：新增 `OrchestrationPolicy.min_reply_interval_seconds`，用于控制两次 AI 实际回复之间的最小时间间隔。
+- 新增 runtime 回归测试，覆盖“冷却窗口内继续收消息、窗口结束后先合并再判断回复”的场景。
+- 新增迁移说明 `docs/migration-v0.27.2.md`，说明新参数与现有 `reply_mode=auto` / `pending_message_threshold` 的关系。
+
+### Changed
+- **WorkspaceRuntime 队列新增冷却期蓄积逻辑**：当 AI 刚完成过一次回复且 `min_reply_interval_seconds > 0` 时，runtime 不会立刻处理下一条消息，而是继续保留会话队列，直到冷却结束后再进入下一次回复判断。
+- **冷却结束后统一走合并入口**：等待期间同一说话人的连续消息会先按静默批处理规则合并，再作为一次 turn 送入 engine，从而让模型看到更完整的上下文。
+
+### Fixed
+- **最小回复间隔不再与自动回复语义冲突**：冷却只会推迟“下一次是否回复”的判断时机，不会绕过 `reply_mode=auto`、意图分析或 engagement 决策；因此冷却结束后仍可能选择不回复。
+
+### Documentation
+- 更新 README、配置说明、架构文档、外部接入文档与相关 SKILL，统一说明 `min_reply_interval_seconds` 的语义、与 `pending_message_threshold` 的区别，以及等待期内的消息合并行为。
+
 ## [0.27.1] - 2026-04-15
 
 ### Changed

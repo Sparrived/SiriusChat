@@ -58,6 +58,7 @@ _SESSION_CONFIG_COMMENTS = {
     "orchestration.engagement_sensitivity": "参与敏感度，范围 0 到 1。越大越主动。",
     "orchestration.heat_window_seconds": "热度分析的滑动时间窗口（秒）。",
     "orchestration.pending_message_threshold": "单会话待处理消息积压超过该阈值后，runtime 会进入静默批处理并合并同一说话人的连续消息。设为 0 表示关闭。",
+    "orchestration.min_reply_interval_seconds": "两次 AI 实际回复之间的最小间隔（秒）。大于 0 时，runtime 会在间隔内继续蓄积消息，并在下次判断前按静默批处理方式合并。",
     "orchestration.memory": "中央记忆系统参数。",
     "orchestration.memory.max_facts_per_user": "每个用户最多保留多少条记忆事实。",
     "orchestration.memory.transient_confidence_threshold": "临时记忆阈值。高于该置信度的事实更可能保留。",
@@ -106,6 +107,7 @@ def build_default_orchestration_payload() -> dict[str, Any]:
         "engagement_sensitivity": defaults.engagement_sensitivity,
         "heat_window_seconds": defaults.heat_window_seconds,
         "pending_message_threshold": defaults.pending_message_threshold,
+        "min_reply_interval_seconds": defaults.min_reply_interval_seconds,
         "memory": {
             "max_facts_per_user": memory_defaults.max_facts_per_user,
             "transient_confidence_threshold": memory_defaults.transient_confidence_threshold,
