@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+## [0.26.10] - 2026-04-15
+
+### Fixed
+- **event_extract 收尾阶段不再错误回退到主模型**：`AsyncRolePlayEngine` 在会话结束时对刷新的事件缓冲执行 `finalize_pending_events()` 时，现改为沿用 `event_extract` 的任务模型解析逻辑；当配置了 `task_models["event_extract"]` 时，即使消息数未达到批量阈值，最后一次事件提取也不会再错误落到主模型。
+- **event_extract 收尾阶段恢复预算门禁**：会话结束时的事件缓冲刷新现在会复用 `event_extract` 的预算判断；当任务预算已超限时，不会再额外触发一次事件提取调用。
+
+### Added
+- 新增 event_extract 回归测试，覆盖“未满批次时收尾提取仍使用 event-model”场景，并保留预算超限场景不触发 event-model 的行为断言。
+
 ## [0.26.9] - 2026-04-15
 
 ### Fixed

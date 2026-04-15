@@ -648,6 +648,64 @@ def test_async_engine_event_extract_task_enriches_event_features() -> None:
     asyncio.run(_run())
 
 
+def test_event_extract_finalize_uses_event_task_model() -> None:
+    class FinalizeModelProvider:
+        def __init__(self) -> None:
+            self.requests: list[tuple[str, str]] = []
+
+        async def generate_async(self, request: GenerationRequest) -> str:
+            self.requests.append((request.purpose, request.model))
+            if request.purpose == "event_extract":
+                return '[]'
+            return "不应触发主回复"
+
+    async def _run() -> None:
+        work_path = Path("data/tests/event_extract_finalize_model")
+        if work_path.exists():
+            shutil.rmtree(work_path)
+
+        provider = FinalizeModelProvider()
+        engine = create_async_engine(provider)
+        config = SessionConfig(
+            work_path=work_path,
+            preset=AgentPreset(
+                agent=Agent(name="主助手", persona="事件收尾测试", model="main-model"),
+                global_system_prompt="测试系统提示词",
+            ),
+            orchestration=OrchestrationPolicy(
+                unified_model="",
+                event_extract_batch_size=10,
+                task_models={
+                    "event_extract": "event-model",
+                    "memory_extract": "mock-model",
+                },
+                task_enabled={
+                    "memory_extract": False,
+                    "event_extract": True,
+                    "intent_analysis": False,
+                },
+                message_debounce_seconds=0.0,
+            ),
+        )
+
+        await _run_live_turns(
+            engine=engine,
+            config=config,
+            human_turns=[
+                Message(
+                    role="user",
+                    speaker="小王",
+                    content="这周项目预算收紧了，需要重新排期。",
+                    reply_mode="never",
+                )
+            ],
+        )
+
+        assert provider.requests == [("event_extract", "event-model")]
+
+    asyncio.run(_run())
+
+
 def test_run_live_session_reply_mode_never_updates_memory_without_reply() -> None:
     async def _run() -> None:
         provider = MockProvider(responses=["不应被调用"])

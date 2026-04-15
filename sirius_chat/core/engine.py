@@ -595,21 +595,35 @@ class AsyncRolePlayEngine:
             await context.subsystems.bg_task_manager.stop()
 
         # 最终化事件记忆：对积累的事件进行 LLM 验证
-        try:
-            finalize_result = await context.subsystems.event_store.finalize_pending_events(
-                provider_async=self._make_provider_adapter(),
-                model_name=config.agent.model,
-                min_mentions=3,
-            )
-            logger.info(
-                "%s 整理了一下记忆：确认了 %s 条，忘掉了 %s 条，还有 %s 条尚未想清楚",
-                config.agent.name,
-                finalize_result["verified_count"],
-                finalize_result["rejected_count"],
-                finalize_result["pending_count"],
-            )
-        except Exception as e:
-            logger.warning(f"事件记忆最终化失败，继续执行: {e}")
+        event_enabled = config.orchestration.task_enabled.get(TASK_EVENT_EXTRACT, True)
+        pending_event_buffers = context.subsystems.event_store.pending_buffer_counts()
+        if event_enabled and pending_event_buffers:
+            estimated_cost = 512
+            used = context.counters.task_token_usage.get(TASK_EVENT_EXTRACT, 0)
+            budget = int(config.orchestration.task_budgets.get(TASK_EVENT_EXTRACT, 0))
+            if budget > 0 and used + estimated_cost > budget:
+                record_task_stat(transcript, TASK_EVENT_EXTRACT, "skipped_budget")
+            else:
+                try:
+                    event_model = self.get_model_for_task(config, TASK_EVENT_EXTRACT)
+                except ValueError:
+                    event_model = config.agent.model
+                try:
+                    finalize_result = await context.subsystems.event_store.finalize_pending_events(
+                        provider_async=self._make_provider_adapter(),
+                        model_name=event_model,
+                        min_mentions=3,
+                    )
+                    context.counters.task_token_usage[TASK_EVENT_EXTRACT] = used + estimated_cost
+                    logger.info(
+                        "%s 整理了一下记忆：确认了 %s 条，忘掉了 %s 条，还有 %s 条尚未想清楚",
+                        config.agent.name,
+                        finalize_result["verified_count"],
+                        finalize_result["rejected_count"],
+                        finalize_result["pending_count"],
+                    )
+                except Exception as e:
+                    logger.warning(f"事件记忆最终化失败，继续执行: {e}")
 
         context.stores.file_store.save_all(transcript.user_memory)
         context.stores.event_file_store.save(context.subsystems.event_store)
