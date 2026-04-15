@@ -8,6 +8,7 @@ from sirius_chat.providers.base import (
     build_generation_debug_context,
     GenerationRequest,
     LLMProvider,
+    prepare_openai_compatible_messages,
     resolve_generation_timeout_seconds,
 )
 from sirius_chat.providers.response_utils import extract_assistant_text
@@ -51,11 +52,14 @@ class OpenAICompatibleProvider(LLMProvider):
                 *request.messages,
             ],
         }
+        wire_messages, transport_stats = prepare_openai_compatible_messages(payload["messages"])
+        wire_payload = dict(payload)
+        wire_payload["messages"] = wire_messages
 
-        body = json.dumps(payload).encode("utf-8")
+        body = json.dumps(wire_payload).encode("utf-8")
         logger.debug(
             f"[模型调用详情] {request.model} | 请求详情:\n"
-            f"{json.dumps({**debug_context, 'request_body_bytes': len(body), 'payload': payload}, ensure_ascii=False, indent=2)}"
+            f"{json.dumps({**debug_context, **transport_stats, 'request_body_bytes': len(body), 'payload': payload}, ensure_ascii=False, indent=2)}"
         )
         req = urllib_request.Request(
             url=url,
@@ -78,7 +82,14 @@ class OpenAICompatibleProvider(LLMProvider):
                 f"[模型调用失败] {request.model} | Provider: {self._provider_name} | URL: {url} "
                 f"| HTTP {exc.code}: {details[:100]}"
             )
-            raise RuntimeError(f"提供商 HTTP 错误 {exc.code}：{details}") from exc
+            message = f"提供商 HTTP 错误 {exc.code}：{details}"
+            if exc.code == 400 and "Failed to download multimodal content" in details:
+                message = (
+                    f"{message}。多模态文件下载失败：请确认 image_url 使用公网可访问的 http/https URL，"
+                    "且响应头包含 Content-Type 与 Content-Length；若传入的是本地图片路径，"
+                    "请直接传本地文件路径让框架自动转换为 data URL，或自行传入 data:*;base64,...。"
+                )
+            raise RuntimeError(message) from exc
         except error.URLError as exc:
             logger.error(
                 f"[模型调用失败] {request.model} | Provider: {self._provider_name} | URL: {url} "

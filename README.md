@@ -356,6 +356,8 @@ msg = Message(
 )
 ```
 
+若使用 OpenAI-compatible 或 Aliyun Bailian 等 HTTP provider，`multimodal_inputs` 中也可以直接传本地图片路径或 `file://` URI；框架会在发送前自动转换为 Data URL。若使用公网 URL，请确保上游可以直接访问该地址。
+
 更多示例见 [`examples/`](examples/) 目录。
 
 ---

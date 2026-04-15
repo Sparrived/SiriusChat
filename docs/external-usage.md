@@ -376,6 +376,7 @@ provider = AliyunBailianProvider(
 - 若外部配置传入 `https://dashscope.aliyuncs.com/compatible-mode/v1` 也可兼容，内部会自动规范化。
 - 若需美国站或国际站，可通过 `base_url` 传入对应地域的 DashScope 兼容地址。
 - 接口路径遵循 OpenAI 兼容的 `/v1/chat/completions`。
+- 若多模态消息里的图片值是本地文件路径（含 `file://` URI），框架会在发送前自动转为 Data URL；若使用公网 URL，请确保上游可直接访问，且响应头包含 `Content-Type` 与 `Content-Length`。
 
 若使用 DeepSeek，可使用：
 
@@ -539,6 +540,7 @@ turn = Message(
 ```
 
 若消息包含图片，引擎会直接把图片以 vision 格式发送给主模型；如需升级模型，请配置 `Agent.metadata["multimodal_model"]`。
+对于 OpenAI-compatible / Aliyun Bailian 这类 HTTP provider，本地图片路径会在发送前自动转换为 Data URL；若使用公网图片地址，请确保该地址可被上游 provider 直接下载。
 
 token 消耗分析示例：
 

@@ -6,8 +6,11 @@
 
 from __future__ import annotations
 
+from email.message import Message as EmailMessage
+import io
 import json
 import logging
+from pathlib import Path
 from unittest.mock import patch
 from urllib import error
 
@@ -122,6 +125,13 @@ def _make_request(model: str, *, timeout_seconds: float | None = None) -> Genera
     )
 
 
+_OPENAI_COMPATIBLE_SPECS = [
+    spec
+    for spec in _PROVIDER_SPECS
+    if spec["patch_target"] == "sirius_chat.providers.openai_compatible.urllib_request.urlopen"
+]
+
+
 def _ids(specs: list[dict]) -> list[str]:
     return [s["id"] for s in specs]
 
@@ -233,6 +243,60 @@ def test_provider_accepts_structured_content_list(spec: dict) -> None:
         )
         output = provider.generate(_make_request(spec["model"]))
     assert output == "段落A\n段落B"
+
+
+@pytest.mark.parametrize("spec", _OPENAI_COMPATIBLE_SPECS, ids=_ids(_OPENAI_COMPATIBLE_SPECS))
+def test_provider_converts_local_image_path_to_data_url(spec: dict, tmp_path: Path) -> None:
+    provider = spec["cls"](**spec["init"])
+    image_path = tmp_path / "sample.png"
+    image_path.write_bytes(b"fake-png-bytes")
+    request = GenerationRequest(
+        model=spec["model"],
+        system_prompt="你是一个有用的助手",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "请描述这张图片"},
+                    {"type": "image_url", "image_url": {"url": str(image_path)}},
+                ],
+            }
+        ],
+    )
+
+    with patch(spec["patch_target"]) as mocked:
+        mocked.return_value = _FakeResponse({"choices": [{"message": {"content": "ok"}}]})
+        provider.generate(request)
+
+    called_request = mocked.call_args[0][0]
+    payload = json.loads(called_request.data.decode("utf-8"))
+    image_url = payload["messages"][1]["content"][1]["image_url"]["url"]
+    assert image_url.startswith("data:image/png;base64,")
+
+
+@pytest.mark.parametrize("spec", _OPENAI_COMPATIBLE_SPECS, ids=_ids(_OPENAI_COMPATIBLE_SPECS))
+def test_provider_surfaces_multimodal_download_hint(spec: dict) -> None:
+    provider = spec["cls"](**spec["init"])
+    details = (
+        '{"error":{"message":"<400> InternalError.Algo.InvalidParameter: '
+        'Failed to download multimodal content","type":"invalid_request_error"}}'
+    ).encode("utf-8")
+    http_error = error.HTTPError(
+        spec["expected_url"],
+        400,
+        "Bad Request",
+        hdrs=EmailMessage(),
+        fp=io.BytesIO(details),
+    )
+
+    with patch(spec["patch_target"], side_effect=http_error):
+        with pytest.raises(RuntimeError) as exc_info:
+            provider.generate(_make_request(spec["model"]))
+
+    message = str(exc_info.value)
+    assert "多模态文件下载失败" in message
+    assert "Content-Type" in message
+    assert "data URL" in message
 
 
 # ---------------------------------------------------------------------------

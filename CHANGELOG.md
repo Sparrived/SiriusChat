@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+## [0.26.7] - 2026-04-15
+
+### Fixed
+- **Aliyun Bailian / OpenAI-compatible 多模态本地图片修复**：当 `image_url` 实际上传入的是本地文件路径或 `file://` URI 时，provider 现在会在发送前自动转换为 Data URL，避免 OpenAI 兼容 HTTP 接口把本地路径误当成可下载公网地址，触发 `Failed to download multimodal content`。
+- **多模态下载失败错误提示增强**：当百炼上游返回图片下载失败的 400 错误时，运行时异常现在会明确提示检查公网 URL 可访问性，以及 `Content-Type` / `Content-Length` 响应头要求，便于快速判断是本地文件路径问题还是远端资源头信息问题。
+
+### Added
+- 新增 provider 回归测试，覆盖本地图片路径自动转换为 Data URL 和多模态下载失败提示增强两类场景。
+
 ## [0.26.6] - 2026-04-15
 
 ### Added
