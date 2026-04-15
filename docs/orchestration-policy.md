@@ -178,6 +178,8 @@
 - `task_max_tokens["intent_analysis"]`：意图分析最大输出 token，默认 `192`。
 - `task_retries["intent_analysis"]`：意图分析失败时的重试次数。
 - 当该任务已启用时，本轮意图结论必须来自模型；若 provider 调用失败或响应解析失败，本轮不会再回退到关键词意图推断，而是仅依赖热度与 engagement 信号继续决策。
+- 多 AI 群聊里，分析结果会进一步区分 `target_scope=self_ai|other_ai|human|everyone|unknown`；其中只有 `self_ai` 会触发“当前模型被点名”的高优先级回复路径。
+- 当 `target_scope=other_ai` 时，`reply_mode=auto` 会主动抑制当前模型回复，避免抢答其他 AI。
 
 兼容说明：
 - 当前配置入口统一使用 `task_*["intent_analysis"]`。

@@ -5,6 +5,7 @@ import time
 from pathlib import Path
 
 from sirius_chat.api import Agent, AgentPreset, Message, OrchestrationPolicy, SessionConfig, create_async_engine
+from sirius_chat.models import Transcript
 from sirius_chat.providers.base import GenerationRequest
 from sirius_chat.providers.mock import MockProvider
 from sirius_chat.memory import UserMemoryManager, UserProfile
@@ -1015,7 +1016,68 @@ def test_engagement_boosts_when_directly_addressed() -> None:
     assert addressed_decision.engagement_score > plain_decision.engagement_score
     assert addressed_decision.should_reply is True
     assert addressed_intent.directed_at_ai is True
+    assert addressed_intent.directed_at_current_ai is True
     assert plain_intent.directed_at_ai is False
+
+
+def test_reply_mode_auto_does_not_reply_to_other_ai_mentions() -> None:
+    async def _run() -> None:
+        provider = MockProvider(
+            responses=[
+                json.dumps(
+                    {
+                        "intent_type": "question",
+                        "target": "ai",
+                        "target_scope": "other_ai",
+                        "importance": 0.9,
+                        "needs_memory": True,
+                        "needs_summary": True,
+                        "reason": "用户点名的是 Claude，不是当前主助手。",
+                        "evidence_span": "Claude 你怎么看",
+                    },
+                    ensure_ascii=False,
+                ),
+                "不应触发主回复",
+            ]
+        )
+        engine = create_async_engine(provider)
+        config = SessionConfig(
+            work_path=Path("data/tests/intent_analysis_other_ai"),
+            preset=AgentPreset(
+                agent=Agent(name="主助手", persona="异步测试", model="mock-model"),
+                global_system_prompt="测试系统提示词",
+            ),
+            orchestration=OrchestrationPolicy(
+                unified_model="",
+                task_models={"intent_analysis": "intent-model"},
+                task_enabled={
+                    "memory_extract": False,
+                    "event_extract": False,
+                    "intent_analysis": True,
+                    "memory_manager": False,
+                },
+                session_reply_mode="auto",
+                engagement_sensitivity=0.0,
+                pending_message_threshold=0.0,
+            ),
+        )
+
+        transcript = Transcript()
+        transcript.add(Message(role="system", content=config.global_system_prompt))
+        transcript.add(Message(role="assistant", speaker="Claude", content="我先说一下我的看法。"))
+
+        transcript = await engine.run_live_message(
+            config=config,
+            turn=Message(role="user", speaker="小王", content="Claude 你怎么看？", reply_mode="auto"),
+            transcript=transcript,
+            finalize_and_persist=True,
+        )
+
+        assert [request.purpose for request in provider.requests] == ["intent_analysis"]
+        assistant_messages = [msg for msg in transcript.messages if msg.role == "assistant" and msg.speaker == "主助手"]
+        assert assistant_messages == []
+
+    asyncio.run(_run())
 
 
 def test_run_live_session_reply_mode_auto_suppresses_rapid_chatter() -> None:

@@ -5,6 +5,7 @@ AI 无法正确识别对话对象的核心问题。
 
 核心改进:
 - 显式判断消息指向 (target): ai / others / everyone / unknown
+- 在 target=ai 内进一步细分 target_scope: self_ai / other_ai
 - 上下文感知：携带近期对话与参与者列表做推断
 - LLM 路径增强：要求模型解释判断理由与证据片段
 """
@@ -30,6 +31,7 @@ INTENT_TYPES = frozenset({
 })
 
 TARGET_TYPES = frozenset({"ai", "others", "everyone", "unknown"})
+TARGET_SCOPES = frozenset({"self_ai", "other_ai", "human", "everyone", "unknown"})
 
 _INTENT_SYSTEM_PROMPT = (
     "你是一个对话意图分析器。你的任务是分析群聊中的每条消息，判断说话者在跟谁对话、意图是什么。\n"
@@ -37,6 +39,7 @@ _INTENT_SYSTEM_PROMPT = (
     "{\n"
     '  "intent_type": "question|request|chat|reaction|information_share|command",\n'
     '  "target": "ai|others|everyone|unknown",\n'
+    '  "target_scope": "self_ai|other_ai|human|everyone|unknown",\n'
     '  "importance": float(0-1),\n'
     '  "needs_memory": bool,\n'
     '  "needs_summary": bool,\n'
@@ -44,12 +47,14 @@ _INTENT_SYSTEM_PROMPT = (
     '  "evidence_span": "从原消息中摘取的关键短语"\n'
     "}\n\n"
     "判断指南：\n"
-    "- target=ai：消息明确指向AI（提及AI名字/别名、使用\"你\"且上下文指向AI、对AI说话）\n"
-    "- target=others：消息明确指向群内其他人（提及其他人名字、@其他人、回复其他人话题）\n"
+    "- target=ai 且 target_scope=self_ai：消息明确指向当前模型自身（提及当前模型名字/别名、使用\"你\"且上下文指向当前模型、直接回复当前模型）\n"
+    "- target=ai 且 target_scope=other_ai：消息明确指向群内其他 AI，而不是当前模型\n"
+    "- target=others 且 target_scope=human：消息明确指向群内其他人类参与者（提及其他人名字、@其他人、回复其他人话题）\n"
     "- target=everyone：消息面向全体（公告、一般感叹、分享信息）\n"
     "- target=unknown：无法确定指向\n\n"
     "重要规则：\n"
     "- 仅凭\"你\"字不能判定指向AI，必须结合上下文确认\n"
+    "- 群聊里可能有多个 AI，必须优先判断消息是指向当前模型自身，还是指向其他 AI\n"
     "- 如果上一条消息是某个人说的，当前消息可能在回复那个人而非AI\n"
     "- 当群聊中有多人对话时，要根据话题连续性判断说话对象\n"
     "- 不要输出任何额外文字\n"
@@ -62,8 +67,10 @@ class IntentAnalysis:
 
     intent_type: str = "chat"
     target: str = "unknown"          # ai | others | everyone | unknown
+    target_scope: str = "unknown"    # self_ai | other_ai | human | everyone | unknown
     confidence: float = 0.5
     directed_at_ai: bool = False     # 便利属性：target == "ai"
+    directed_at_current_ai: bool = False
     importance: float = 0.5
     skip_sections: list[str] = field(default_factory=list)
     reason: str = ""
@@ -115,12 +122,12 @@ class IntentAnalyzer:
                 return parsed
             logger.warning("意图分析响应解析失败，使用回退。")
             return IntentAnalyzer.fallback_analysis(
-                content, agent_name, agent_alias, participant_names,
+                content, agent_name, agent_alias, participant_names, recent_messages,
             )
         except Exception as exc:
             logger.warning("意图分析 LLM 调用失败，使用回退: %s", exc)
             return IntentAnalyzer.fallback_analysis(
-                content, agent_name, agent_alias, participant_names,
+                content, agent_name, agent_alias, participant_names, recent_messages,
             )
 
     @staticmethod
@@ -147,11 +154,22 @@ class IntentAnalyzer:
                 label = speaker if speaker else role
                 context_lines.append(f"[{label}] {text}")
 
+        current_ai_names = [name for name in (agent_name, agent_alias) if str(name).strip()]
+        other_ai_names = IntentAnalyzer._extract_other_ai_names(
+            recent_messages=recent_messages,
+            agent_name=agent_name,
+            agent_alias=agent_alias,
+        )
+
         participants_info = f"群内参与者：{', '.join(participant_names)}" if participant_names else ""
+        current_ai_info = f"当前模型自身：{', '.join(current_ai_names)}" if current_ai_names else ""
+        other_ai_info = f"近期其他AI发言者：{', '.join(other_ai_names)}" if other_ai_names else ""
 
         user_prompt = (
             f"AI名称: {agent_name}"
             + (f" (别名: {agent_alias})" if agent_alias else "")
+            + (f"\n{current_ai_info}" if current_ai_info else "")
+            + (f"\n{other_ai_info}" if other_ai_info else "")
             + (f"\n{participants_info}" if participants_info else "")
             + (f"\n\n近期对话:\n" + "\n".join(context_lines) if context_lines else "")
             + f"\n\n当前消息: {content[:400]}"
@@ -195,10 +213,11 @@ class IntentAnalyzer:
             intent_type = "chat"
 
         target = str(data.get("target", "unknown")).strip().lower()
-        if target not in TARGET_TYPES:
-            target = "unknown"
+        target_scope = str(data.get("target_scope", "")).strip().lower()
+        target, target_scope = IntentAnalyzer._normalize_target_fields(target, target_scope)
 
         directed_at_ai = target == "ai"
+        directed_at_current_ai = target_scope == "self_ai"
         importance = max(0.0, min(1.0, float(data.get("importance", 0.5))))
         needs_memory = bool(data.get("needs_memory", True))
         needs_summary = bool(data.get("needs_summary", True))
@@ -219,8 +238,10 @@ class IntentAnalyzer:
         return IntentAnalysis(
             intent_type=intent_type,
             target=target,
+            target_scope=target_scope,
             confidence=importance,
             directed_at_ai=directed_at_ai,
+            directed_at_current_ai=directed_at_current_ai,
             importance=importance,
             skip_sections=skip_sections,
             reason=reason,
@@ -233,59 +254,96 @@ class IntentAnalyzer:
         agent_name: str,
         agent_alias: str,
         participant_names: list[str] | None = None,
+        recent_messages: list[dict[str, str]] | None = None,
     ) -> IntentAnalysis:
         """关键词快速回退分析（零 LLM 开销）。
 
-        增强版：当消息中提到了其他参与者名字时，target 判定为 others。
+        增强版：区分当前模型自身、其他 AI 与其他参与者。
         """
         text = content.strip().lower()
         original_text = content.strip()
+        current_ai_names = {
+            str(name).strip().lower()
+            for name in (agent_name, agent_alias)
+            if str(name).strip()
+        }
+        other_ai_names = {
+            name.lower()
+            for name in IntentAnalyzer._extract_other_ai_names(
+                recent_messages=recent_messages or [],
+                agent_name=agent_name,
+                agent_alias=agent_alias,
+            )
+        }
+        human_names = {
+            str(name).strip().lower()
+            for name in (participant_names or [])
+            if str(name).strip()
+        }
 
         # ── 判断 target ──
-        # 优先检查是否提及 AI
-        ai_directed = False
-        for name in (agent_name.lower(), agent_alias.lower()):
-            if name and name in text:
-                ai_directed = True
-                break
-
-        # 检查是否提及其他参与者（排除 AI 名字）
-        other_directed = False
-        if participant_names:
-            ai_names = {agent_name.lower(), agent_alias.lower()} - {""}
-            for pname in participant_names:
-                pname_lower = pname.strip().lower()
-                if pname_lower and pname_lower not in ai_names and pname_lower in text:
-                    other_directed = True
-                    break
+        self_ai_directed = any(name in text for name in current_ai_names)
+        other_ai_directed = any(name in text for name in other_ai_names)
+        other_human_directed = any(name in text for name in human_names - current_ai_names)
 
         # @ 提及检测
         if "@" in text:
-            # 如果 @了AI名字 → ai_directed
-            for name in (agent_name.lower(), agent_alias.lower()):
-                if name and f"@{name}" in text:
-                    ai_directed = True
+            for name in current_ai_names:
+                if f"@{name}" in text:
+                    self_ai_directed = True
                     break
-            else:
-                # @了别人
-                other_directed = True
+            for name in other_ai_names:
+                if f"@{name}" in text:
+                    other_ai_directed = True
+                    break
+            for name in human_names:
+                if f"@{name}" in text:
+                    other_human_directed = True
+                    break
 
         # 代词推断 —— 仅在没有明确提及他人时才考虑
-        pronoun_hint = ("你" in text or "您" in text) and not other_directed
+        pronoun_hint = (
+            ("你" in text or "您" in text)
+            and not self_ai_directed
+            and not other_ai_directed
+            and not other_human_directed
+        )
 
         # 确定 target
-        if ai_directed:
+        if self_ai_directed:
             target = "ai"
-        elif other_directed:
+            target_scope = "self_ai"
+        elif other_ai_directed:
+            target = "ai"
+            target_scope = "other_ai"
+        elif other_human_directed:
             target = "others"
+            target_scope = "human"
         elif pronoun_hint:
-            # 有「你」但没有明确指向 → 标记为 unknown 而非 ai
-            # 这是核心修复：避免群聊中对他人说「你」时被误判为指向 AI
-            target = "unknown"
+            inferred_scope = IntentAnalyzer._infer_pronoun_target_scope(
+                recent_messages=recent_messages or [],
+                current_ai_names=current_ai_names,
+                other_ai_names=other_ai_names,
+                human_names=human_names,
+            )
+            if inferred_scope == "self_ai":
+                target = "ai"
+                target_scope = "self_ai"
+            elif inferred_scope == "other_ai":
+                target = "ai"
+                target_scope = "other_ai"
+            elif inferred_scope == "human":
+                target = "others"
+                target_scope = "human"
+            else:
+                target = "unknown"
+                target_scope = "unknown"
         else:
             target = "everyone"
+            target_scope = "everyone"
 
         directed_at_ai = target == "ai"
+        directed_at_current_ai = target_scope == "self_ai"
 
         # ── 判断 intent_type ──
         intent_type = "chat"
@@ -311,7 +369,9 @@ class IntentAnalyzer:
                     evidence_span = marker
                     break
 
-        if not directed_at_ai and target == "others":
+        if target_scope == "other_ai":
+            reason = f"消息更像是在对其他AI说话，而不是当前模型。{reason}"
+        elif not directed_at_ai and target == "others":
             reason = f"消息指向其他参与者，非 AI 对话。{reason}"
         elif not evidence_span and original_text:
             evidence_span = original_text[:24]
@@ -319,17 +379,107 @@ class IntentAnalyzer:
         return IntentAnalysis(
             intent_type=intent_type,
             target=target,
+            target_scope=target_scope,
             confidence=0.5,
             directed_at_ai=directed_at_ai,
-            importance=0.5 if directed_at_ai else 0.3,
+            directed_at_current_ai=directed_at_current_ai,
+            importance=0.5 if directed_at_current_ai else 0.3,
             reason=reason,
             evidence_span=evidence_span,
         )
+
+    @staticmethod
+    def _normalize_target_fields(target: str, target_scope: str) -> tuple[str, str]:
+        normalized_target = target.strip().lower()
+        normalized_scope = target_scope.strip().lower()
+
+        if normalized_target == "self_ai":
+            normalized_target = "ai"
+            normalized_scope = "self_ai"
+        elif normalized_target == "other_ai":
+            normalized_target = "ai"
+            normalized_scope = "other_ai"
+
+        if normalized_scope == "self":
+            normalized_scope = "self_ai"
+        elif normalized_scope == "other":
+            normalized_scope = "other_ai"
+
+        if normalized_target not in TARGET_TYPES:
+            normalized_target = "unknown"
+
+        if normalized_scope not in TARGET_SCOPES:
+            if normalized_target == "ai":
+                normalized_scope = "self_ai"
+            elif normalized_target == "others":
+                normalized_scope = "human"
+            elif normalized_target == "everyone":
+                normalized_scope = "everyone"
+            else:
+                normalized_scope = "unknown"
+
+        if normalized_scope in {"self_ai", "other_ai"}:
+            normalized_target = "ai"
+        elif normalized_scope == "human":
+            normalized_target = "others"
+        elif normalized_scope == "everyone":
+            normalized_target = "everyone"
+
+        return normalized_target, normalized_scope
+
+    @staticmethod
+    def _extract_other_ai_names(
+        *,
+        recent_messages: list[dict[str, str]],
+        agent_name: str,
+        agent_alias: str,
+    ) -> list[str]:
+        current_ai_names = {
+            str(name).strip().lower()
+            for name in (agent_name, agent_alias)
+            if str(name).strip()
+        }
+        other_ai_names: list[str] = []
+        seen: set[str] = set()
+        for msg in recent_messages:
+            role = str(msg.get("role", "")).strip().lower()
+            speaker = str(msg.get("speaker", "")).strip()
+            if role != "assistant" or not speaker:
+                continue
+            lowered = speaker.lower()
+            if lowered in current_ai_names or lowered in seen:
+                continue
+            seen.add(lowered)
+            other_ai_names.append(speaker)
+        return other_ai_names
+
+    @staticmethod
+    def _infer_pronoun_target_scope(
+        *,
+        recent_messages: list[dict[str, str]],
+        current_ai_names: set[str],
+        other_ai_names: set[str],
+        human_names: set[str],
+    ) -> str:
+        for msg in reversed(recent_messages):
+            role = str(msg.get("role", "")).strip().lower()
+            speaker = str(msg.get("speaker", "")).strip().lower()
+            if role == "assistant":
+                if not speaker or speaker in current_ai_names:
+                    return "self_ai"
+                if speaker in other_ai_names:
+                    return "other_ai"
+                return "other_ai"
+            if role == "user":
+                if speaker in human_names or speaker:
+                    return "human"
+        return "unknown"
 
 
 __all__ = [
     "INTENT_TYPES",
     "TARGET_TYPES",
+    "TARGET_SCOPES",
     "IntentAnalysis",
     "IntentAnalyzer",
 ]

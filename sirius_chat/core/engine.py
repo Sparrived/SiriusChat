@@ -1888,7 +1888,7 @@ class AsyncRolePlayEngine:
 
         # ── Reply frequency limiter ──
         is_mentioned = (
-            intent is not None and intent.directed_at_ai
+            intent is not None and intent.directed_at_current_ai
         ) if intent else False
         if should_reply and EngagementCoordinator.check_reply_frequency_limit(
             assistant_reply_timestamps=list(

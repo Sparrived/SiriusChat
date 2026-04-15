@@ -71,13 +71,6 @@ async def run_engagement_intent_analysis(
             seen.add(msg.speaker)
             participant_names.append(msg.speaker)
 
-    if not config.orchestration.is_task_enabled(task_name):
-        return IntentAnalyzer.fallback_analysis(
-            content, config.agent.name, agent_alias, participant_names,
-        )
-
-    model = get_model(config, task_name)
-
     recent_messages: list[dict[str, str]] = []
     for msg in transcript.messages[-8:]:
         if msg.role in ("user", "assistant"):
@@ -85,6 +78,13 @@ async def run_engagement_intent_analysis(
             if msg.speaker:
                 entry["speaker"] = msg.speaker
             recent_messages.append(entry)
+
+    if not config.orchestration.is_task_enabled(task_name):
+        return IntentAnalyzer.fallback_analysis(
+            content, config.agent.name, agent_alias, participant_names, recent_messages,
+        )
+
+    model = get_model(config, task_name)
 
     request_payload = IntentAnalyzer.build_request(
         content=content,

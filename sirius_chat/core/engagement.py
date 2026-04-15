@@ -53,16 +53,33 @@ class EngagementCoordinator:
         """
         sensitivity = max(0.0, min(1.0, sensitivity))
 
-        # ── 直接指向 AI 的消息 → 高概率回复 ──
-        if intent is not None and intent.directed_at_ai:
+        # ── 直接指向当前模型自身的消息 → 高概率回复 ──
+        if intent is not None and intent.directed_at_current_ai:
             # 即便群聊过热，被直接点名时仍应回复
             engagement = _compute_directed_engagement(intent, heat, sensitivity)
             should_reply = engagement >= 0.35
-            reason = f"消息指向AI (target={intent.target}), engagement={engagement:.2f}"
+            reason = (
+                f"消息指向当前模型 (target={intent.target}, scope={intent.target_scope}), "
+                f"engagement={engagement:.2f}"
+            )
             return EngagementDecision(
                 should_reply=should_reply,
                 engagement_score=engagement,
                 reason=reason,
+                heat=heat,
+                intent=intent,
+            )
+
+        if intent is not None and intent.target_scope == "other_ai":
+            engagement = 0.03 + sensitivity * 0.06
+            if event_hit:
+                engagement += 0.05
+            engagement = min(1.0, engagement)
+            should_reply = False
+            return EngagementDecision(
+                should_reply=should_reply,
+                engagement_score=engagement,
+                reason=f"消息更像是在对其他AI说话 (scope=other_ai), engagement={engagement:.2f}",
                 heat=heat,
                 intent=intent,
             )

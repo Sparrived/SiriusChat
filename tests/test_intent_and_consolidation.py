@@ -76,23 +76,66 @@ class TestFallbackAnalysis:
     def test_directed_at_ai_by_name(self):
         result = IntentAnalyzer.fallback_analysis("小助手你好", "小助手", "")
         assert result.directed_at_ai is True
+        assert result.directed_at_current_ai is True
         assert result.target == "ai"
+        assert result.target_scope == "self_ai"
 
     def test_directed_at_ai_by_alias(self):
         result = IntentAnalyzer.fallback_analysis("阿助你好", "助手", "阿助")
         assert result.directed_at_ai is True
+        assert result.directed_at_current_ai is True
         assert result.target == "ai"
+        assert result.target_scope == "self_ai"
+
+    def test_target_other_ai_when_other_ai_name_is_mentioned(self):
+        result = IntentAnalyzer.fallback_analysis(
+            "Claude 你怎么看？",
+            "助手",
+            "",
+            ["小王"],
+            [{"role": "assistant", "speaker": "Claude", "content": "我先说一下。"}],
+        )
+        assert result.target == "ai"
+        assert result.target_scope == "other_ai"
+        assert result.directed_at_ai is True
+        assert result.directed_at_current_ai is False
+
+    def test_pronoun_follows_recent_other_ai_context(self):
+        result = IntentAnalyzer.fallback_analysis(
+            "你刚刚那句不太对。",
+            "助手",
+            "",
+            ["小王"],
+            [{"role": "assistant", "speaker": "Claude", "content": "我认为应该这样。"}],
+        )
+        assert result.target == "ai"
+        assert result.target_scope == "other_ai"
+        assert result.directed_at_current_ai is False
+
+    def test_pronoun_follows_recent_current_ai_context(self):
+        result = IntentAnalyzer.fallback_analysis(
+            "你刚刚那句我同意。",
+            "助手",
+            "",
+            ["小王"],
+            [{"role": "assistant", "speaker": "助手", "content": "我建议先观察。"}],
+        )
+        assert result.target == "ai"
+        assert result.target_scope == "self_ai"
+        assert result.directed_at_current_ai is True
 
     def test_pronoun_maps_to_unknown_not_ai(self):
         """核心修复：裸代词「你」不再直接指向 AI，而是 unknown。"""
         result = IntentAnalyzer.fallback_analysis("你觉得呢", "助手", "")
         assert result.target == "unknown"
+        assert result.target_scope == "unknown"
         assert result.directed_at_ai is False
 
     def test_target_others_when_mentioning_participant(self):
         """提及其他参与者时 target 应为 others。"""
         result = IntentAnalyzer.fallback_analysis("小王你觉得呢", "助手", "", ["小王", "小李"])
         assert result.target == "others"
+        assert result.target_scope == "human"
         assert result.directed_at_ai is False
 
     def test_directed_at_ai_engagement_higher_than_ambient(self):
@@ -100,6 +143,7 @@ class TestFallbackAnalysis:
         directed = IntentAnalyzer.fallback_analysis("助手你好吗？", "助手", "")
         not_directed = IntentAnalyzer.fallback_analysis("明天有空吗？", "NoMatch", "")
         assert directed.directed_at_ai is True
+        assert directed.directed_at_current_ai is True
         assert not_directed.directed_at_ai is False
 
     def test_fallback_has_reason_and_evidence(self):
@@ -128,7 +172,9 @@ class TestParseResponse:
         assert result is not None
         assert result.intent_type == "question"
         assert result.directed_at_ai is True
+        assert result.directed_at_current_ai is True
         assert result.target == "ai"
+        assert result.target_scope == "self_ai"
         assert "participant_memory" in result.skip_sections
         assert "session_summary" not in result.skip_sections
         assert result.reason == "用户在询问天气"
@@ -139,6 +185,7 @@ class TestParseResponse:
         result = IntentAnalyzer._parse_response(raw)
         assert result is not None
         assert result.intent_type == "request"
+        assert result.target_scope == "self_ai"
         assert "session_summary" in result.skip_sections
 
     def test_invalid_json_returns_none(self):
@@ -198,7 +245,9 @@ class TestParseResponse:
         result = IntentAnalyzer._parse_response(raw)
         assert result is not None
         assert result.directed_at_ai is False
+        assert result.directed_at_current_ai is False
         assert result.target == "others"
+        assert result.target_scope == "human"
         directed_raw = json.dumps({
             "intent_type": "question",
             "target": "ai",
@@ -207,7 +256,23 @@ class TestParseResponse:
         directed_result = IntentAnalyzer._parse_response(directed_raw)
         assert directed_result is not None
         assert directed_result.directed_at_ai is True
+        assert directed_result.directed_at_current_ai is True
         assert directed_result.target == "ai"
+        assert directed_result.target_scope == "self_ai"
+
+    def test_parse_other_ai_scope(self):
+        raw = json.dumps({
+            "intent_type": "question",
+            "target": "ai",
+            "target_scope": "other_ai",
+            "importance": 0.7,
+        })
+        result = IntentAnalyzer._parse_response(raw)
+        assert result is not None
+        assert result.target == "ai"
+        assert result.target_scope == "other_ai"
+        assert result.directed_at_ai is True
+        assert result.directed_at_current_ai is False
 
 
 # ── IntentAnalyzer.analyze LLM integration ──────────────────────────
@@ -241,7 +306,9 @@ class TestAnalyzeLLM:
             )
             assert result.intent_type == "question"
             assert result.directed_at_ai is True
+            assert result.directed_at_current_ai is True
             assert result.target == "ai"
+            assert result.target_scope == "self_ai"
             assert "session_summary" in result.skip_sections
 
         asyncio.run(_run())
