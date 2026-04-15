@@ -219,7 +219,7 @@ def build_system_prompt(
             f"\n"
             f"可用SKILL：\n{skill_descriptions}\n"
             f"\n"
-            f"规则：仅用列出的SKILL；参数JSON；每轮只放一个调用；拿到结果后自然叙述最终答复。\n"
+            f"规则：仅用列出的SKILL；参数JSON；每轮只放一个调用；考虑SKILL之间的协同作用拿到更详细的内容；拿到结果后自然叙述最终答复。\n"
             f"</available_skills>"
         )
 
