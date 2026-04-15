@@ -26,7 +26,7 @@ def test_json_persistent_session_runner_auto_persistence_and_reset(tmp_path: Pat
                     "memory_extract": False,
                     "event_extract": False,
                 },
-            message_debounce_seconds=0.0,
+            pending_message_threshold=0.0,
             ),
         )
         runner = JsonPersistentSessionRunner(
@@ -89,7 +89,7 @@ def test_json_persistent_session_runner_reuses_saved_profile(tmp_path: Path) -> 
                     "memory_extract": False,
                     "event_extract": False,
                 },
-            message_debounce_seconds=0.0,
+            pending_message_threshold=0.0,
             ),
         )
         runner = JsonPersistentSessionRunner(config=config, provider=MockProvider(responses=["ok"]))
@@ -115,7 +115,7 @@ def test_json_persistent_session_runner_supports_sqlite_store(tmp_path: Path) ->
                     "memory_extract": False,
                     "event_extract": False,
                 },
-            message_debounce_seconds=0.0,
+            pending_message_threshold=0.0,
             ),
         )
         runner = JsonPersistentSessionRunner(

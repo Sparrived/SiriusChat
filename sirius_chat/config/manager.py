@@ -216,7 +216,15 @@ class ConfigManager:
         *,
         fallback: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        has_explicit_pending_threshold = isinstance(value, dict) and "pending_message_threshold" in value
         sanitized = self._sanitize_nullable_mapping(value, fallback=fallback)
+        legacy_pending_threshold = sanitized.pop("message_debounce_seconds", None)
+        if legacy_pending_threshold is not None and not has_explicit_pending_threshold:
+            try:
+                numeric = float(legacy_pending_threshold)
+            except (TypeError, ValueError):
+                numeric = 0.0
+            sanitized["pending_message_threshold"] = 0 if numeric <= 0 else max(1, int(round(numeric)))
         legacy_intent_enabled = sanitized.pop("enable_intent_analysis", None)
         if legacy_intent_enabled is not None:
             task_enabled = sanitized.get("task_enabled")

@@ -67,7 +67,7 @@ def _write_workspace_agents(
     workspace_config = manager.load_workspace_config(config_root)
     workspace_config.active_agent_key = selected_key
     workspace_config.orchestration_defaults = {
-        "message_debounce_seconds": 0.0,
+        "pending_message_threshold": 0,
         "task_enabled": {
             "memory_extract": False,
             "event_extract": False,
@@ -307,7 +307,7 @@ def test_apply_workspace_updates_ignores_none_values(tmp_path: Path) -> None:
             "task_models": {
                 "event_extract": "event-model",
             },
-            "message_debounce_seconds": 0.0,
+            "pending_message_threshold": 0,
         }
         manager.save_workspace_config(tmp_path, workspace_config)
 
@@ -320,7 +320,7 @@ def test_apply_workspace_updates_ignores_none_values(tmp_path: Path) -> None:
                     "session_defaults": {"history_max_messages": None},
                     "orchestration_defaults": {
                         "task_models": {"event_extract": None},
-                        "message_debounce_seconds": None,
+                        "pending_message_threshold": None,
                     },
                     "provider_policy": {"prefer_workspace_registry": None},
                 }
@@ -334,7 +334,7 @@ def test_apply_workspace_updates_ignores_none_values(tmp_path: Path) -> None:
 
             assert exported["active_agent_key"] == "main_agent"
             assert session_defaults["history_max_messages"] == 77
-            assert orchestration["message_debounce_seconds"] == 0.0
+            assert orchestration["pending_message_threshold"] == 0.0
             assert task_models["event_extract"] == "event-model"
             assert provider_policy["prefer_workspace_registry"] is True
         finally:

@@ -139,10 +139,9 @@ class TestParseResponse:
         assert result.intent_type == "request"
         assert "session_summary" in result.skip_sections
 
-    def test_invalid_json_returns_default(self):
+    def test_invalid_json_returns_none(self):
         result = IntentAnalyzer._parse_response("not valid json at all")
-        assert result.intent_type == "chat"
-        assert result.target == "unknown"
+        assert result is None
 
     def test_invalid_json_logs_warning(self, caplog):
         caplog.set_level("WARNING")

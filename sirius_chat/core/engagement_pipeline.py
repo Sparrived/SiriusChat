@@ -59,7 +59,7 @@ async def run_engagement_intent_analysis(
     task_token_usage: dict[str, int],
     call_with_retry: _CallWithRetry,
     get_model: _GetModel,
-) -> IntentAnalysis:
+) -> IntentAnalysis | None:
     """执行新版意图分析（携带参与者上下文）。"""
     agent_alias = str(config.agent.metadata.get("alias", "")).strip()
     task_name = TASK_INTENT_ANALYSIS
@@ -107,9 +107,8 @@ async def run_engagement_intent_analysis(
     record_task_stat(transcript, task_name, "attempted")
     if budget > 0 and used + estimated_cost > budget:
         record_task_stat(transcript, task_name, "skipped_budget")
-        return IntentAnalyzer.fallback_analysis(
-            content, config.agent.name, agent_alias, participant_names,
-        )
+        logger.info("意图分析任务预算不足，跳过模型推断。")
+        return None
 
     retry_times = int(config.orchestration.task_retries.get(task_name, 0))
     try:
@@ -122,16 +121,19 @@ async def run_engagement_intent_analysis(
         )
     except RuntimeError as exc:
         record_task_stat(transcript, task_name, "failed_provider")
-        logger.warning("意图分析任务调用失败，使用回退: %s", exc)
-        return IntentAnalyzer.fallback_analysis(
-            content, config.agent.name, agent_alias, participant_names,
-        )
+        logger.warning("意图分析任务调用失败，放弃本轮意图推断: %s", exc)
+        return None
 
     if retry_times > 0:
         record_task_stat(transcript, task_name, "retry_enabled")
+    parsed = IntentAnalyzer._parse_response(raw)
+    if parsed is None:
+        record_task_stat(transcript, task_name, "failed_parse")
+        logger.warning("意图分析任务响应无法解析，放弃本轮意图推断。")
+        return None
     task_token_usage[task_name] = used + estimated_cost
     record_task_stat(transcript, task_name, "succeeded")
-    return IntentAnalyzer._parse_response(raw)
+    return parsed
 
 
 def should_reply_for_turn(turn: Message) -> bool:

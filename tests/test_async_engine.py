@@ -50,7 +50,7 @@ def test_async_engine_runs_live_session() -> None:
                     "memory_extract": False,
                     "event_extract": False,
                 },
-            message_debounce_seconds=0.0,
+            pending_message_threshold=0.0,
             ),
         )
 
@@ -175,7 +175,7 @@ def test_async_engine_memory_extract_task_uses_aux_model() -> None:
                 },
                 task_temperatures={"memory_extract": 0.1},
                 task_max_tokens={"memory_extract": 64},
-            message_debounce_seconds=0.0,
+            pending_message_threshold=0.0,
             ),
         )
 
@@ -230,7 +230,7 @@ def test_memory_extract_task_includes_recent_conversation_context() -> None:
                     "memory_extract": True,
                     "event_extract": False,
                 },
-            message_debounce_seconds=0.0,
+            pending_message_threshold=0.0,
             ),
         )
 
@@ -280,7 +280,7 @@ def test_async_engine_memory_extract_task_skips_when_budget_exceeded() -> None:
                     "event_extract": "mock-model",
                 },
                 task_budgets={"memory_extract": 1},
-            message_debounce_seconds=0.0,
+            pending_message_threshold=0.0,
             ),
         )
 
@@ -323,7 +323,7 @@ def test_async_engine_multimodal_image_passed_to_main_model_vision_format() -> N
             orchestration=OrchestrationPolicy(
                 unified_model="main-model",
                 task_enabled={"memory_extract": False, "event_extract": False},
-                message_debounce_seconds=0.0,
+                pending_message_threshold=0.0,
             ),
         )
 
@@ -379,7 +379,7 @@ def test_async_engine_multimodal_non_image_messages_use_text_format() -> None:
             orchestration=OrchestrationPolicy(
                 unified_model="main-model",
                 task_enabled={"memory_extract": False, "event_extract": False},
-                message_debounce_seconds=0.0,
+                pending_message_threshold=0.0,
             ),
         )
 
@@ -428,7 +428,7 @@ def test_async_engine_task_retry_can_recover_from_transient_failure() -> None:
                 },
                 task_budgets={"memory_extract": 1000},
                 task_retries={"memory_extract": 1},
-            message_debounce_seconds=0.0,
+            pending_message_threshold=0.0,
             ),
         )
 
@@ -468,7 +468,7 @@ def test_async_engine_multimodal_validation_filters_and_truncates_inputs() -> No
                 task_enabled={"memory_extract": False, "event_extract": False},
                 max_multimodal_inputs_per_turn=1,
                 max_multimodal_value_length=16,
-            message_debounce_seconds=0.0,
+            pending_message_threshold=0.0,
             ),
         )
 
@@ -527,7 +527,7 @@ def test_async_engine_records_token_usage_for_task_and_main_calls() -> None:
                     "event_extract": "mock-model",
                 },
                 task_budgets={"memory_extract": 1000},
-            message_debounce_seconds=0.0,
+            pending_message_threshold=0.0,
             ),
         )
 
@@ -564,7 +564,7 @@ def test_async_engine_event_memory_add_and_hit_across_sessions() -> None:
             orchestration=OrchestrationPolicy(
                 unified_model="mock-model",
                 event_extract_batch_size=1,
-            message_debounce_seconds=0.0,
+            pending_message_threshold=0.0,
             ),
         )
 
@@ -627,7 +627,7 @@ def test_async_engine_event_extract_task_enriches_event_features() -> None:
                     "memory_extract": "mock-model",
                 },
                 task_budgets={"event_extract": 1000},
-            message_debounce_seconds=0.0,
+            pending_message_threshold=0.0,
             ),
         )
 
@@ -684,7 +684,7 @@ def test_event_extract_finalize_uses_event_task_model() -> None:
                     "event_extract": True,
                     "intent_analysis": False,
                 },
-                message_debounce_seconds=0.0,
+                pending_message_threshold=0.0,
             ),
         )
 
@@ -722,7 +722,7 @@ def test_run_live_session_reply_mode_never_updates_memory_without_reply() -> Non
                     "memory_extract": False,
                     "event_extract": False,
                 },
-            message_debounce_seconds=0.0,
+            pending_message_threshold=0.0,
             ),
         )
 
@@ -762,7 +762,7 @@ def test_run_live_session_reply_mode_auto_infers_when_to_reply() -> None:
                     "event_extract": False,
                     "intent_analysis": False,
                 },
-            message_debounce_seconds=0.0,
+            pending_message_threshold=0.0,
             ),
         )
 
@@ -816,7 +816,7 @@ def test_reply_mode_auto_uses_intent_analysis_task_model() -> None:
                     "intent_analysis": True,
                 },
                 session_reply_mode="auto",
-                message_debounce_seconds=0.0,
+                pending_message_threshold=0.0,
             ),
         )
 
@@ -855,7 +855,7 @@ def test_reply_mode_auto_can_disable_intent_analysis_task() -> None:
                     "intent_analysis": False,
                 },
                 session_reply_mode="auto",
-                message_debounce_seconds=0.0,
+                pending_message_threshold=0.0,
             ),
         )
 
@@ -870,6 +870,48 @@ def test_reply_mode_auto_can_disable_intent_analysis_task() -> None:
         assert [request.purpose for request in provider.requests] == ["chat_main"]
         assert "intent_analysis" not in transcript.orchestration_stats
         assert transcript.messages[-1].content == "这是回退路径的回复"
+
+    asyncio.run(_run())
+
+
+def test_reply_mode_auto_skips_intent_fallback_when_budget_exceeded() -> None:
+    async def _run() -> None:
+        provider = MockProvider(responses=["不应触发主回复"])
+        engine = create_async_engine(provider)
+        config = SessionConfig(
+            work_path=Path("data/tests/intent_analysis_budget_strict"),
+            preset=AgentPreset(
+                agent=Agent(name="主助手", persona="异步测试", model="mock-model"),
+                global_system_prompt="测试系统提示词",
+            ),
+            orchestration=OrchestrationPolicy(
+                unified_model="",
+                task_models={"intent_analysis": "intent-model"},
+                task_enabled={
+                    "memory_extract": False,
+                    "event_extract": False,
+                    "intent_analysis": True,
+                },
+                task_budgets={"intent_analysis": 1},
+                session_reply_mode="auto",
+                pending_message_threshold=0,
+            ),
+        )
+
+        transcript = await _run_live_turns(
+            engine=engine,
+            config=config,
+            human_turns=[
+                Message(role="user", speaker="小王", content="主助手，你怎么看？", reply_mode="auto"),
+            ],
+        )
+
+        assert provider.requests == []
+        stats = transcript.orchestration_stats["intent_analysis"]
+        assert stats["attempted"] == 1
+        assert stats["skipped_budget"] == 1
+        assistant_messages = [msg for msg in transcript.messages if msg.role == "assistant"]
+        assert assistant_messages == []
 
     asyncio.run(_run())
 
@@ -890,7 +932,7 @@ def test_chat_main_merges_system_messages_into_system_prompt() -> None:
                     "memory_extract": False,
                     "event_extract": False,
                 },
-            message_debounce_seconds=0.0,
+            pending_message_threshold=0.0,
             ),
         )
 
@@ -932,7 +974,7 @@ def test_run_live_session_reply_mode_auto_probability_fallback_can_trigger_reply
                     "intent_analysis": False,
                 },
                 engagement_sensitivity=1.0,
-            message_debounce_seconds=0.0,
+            pending_message_threshold=0.0,
             ),
         )
 
@@ -992,7 +1034,7 @@ def test_run_live_session_reply_mode_auto_suppresses_rapid_chatter() -> None:
                     "memory_extract": False,
                     "event_extract": False,
                 },
-            message_debounce_seconds=0.0,
+            pending_message_threshold=0.0,
             ),
         )
 
@@ -1052,7 +1094,7 @@ def test_auxiliary_tasks_run_in_parallel_for_single_turn() -> None:
                     "memory_extract": True,
                     "event_extract": True,
                 },
-            message_debounce_seconds=0.0,
+            pending_message_threshold=0.0,
             ),
         )
 
@@ -1112,7 +1154,7 @@ def test_event_extract_runs_for_consecutive_messages_without_dedup() -> None:
                     "memory_extract": False,
                     "event_extract": True,
                 },
-            message_debounce_seconds=0.0,
+            pending_message_threshold=0.0,
             ),
         )
 
@@ -1160,7 +1202,7 @@ def test_memory_extract_provider_timeout_does_not_block_live_message() -> None:
                         "memory_extract": True,
                         "event_extract": False,
                     },
-                message_debounce_seconds=0.0,
+                pending_message_threshold=0.0,
                 ),
             )
 
@@ -1199,7 +1241,7 @@ def test_run_live_session_reply_mode_auto_threshold_is_configurable() -> None:
                     "intent_analysis": False,
                 },
                 engagement_sensitivity=0.9,
-            message_debounce_seconds=0.0,
+            pending_message_threshold=0.0,
             ),
         )
 
@@ -1235,7 +1277,7 @@ def test_run_live_session_reply_runtime_persists_across_calls() -> None:
                     "intent_analysis": False,
                 },
                 engagement_sensitivity=0.8,
-            message_debounce_seconds=0.0,
+            pending_message_threshold=0.0,
             ),
         )
 
@@ -1280,7 +1322,7 @@ def test_run_live_session_auto_engagement_sensitivity_is_configurable() -> None:
                     "event_extract": False,
                 },
                 engagement_sensitivity=0.8,
-            message_debounce_seconds=0.0,
+            pending_message_threshold=0.0,
             ),
         )
 
@@ -1320,7 +1362,7 @@ def test_run_live_message_uses_session_level_auto_reply_mode() -> None:
                     "event_extract": False,
                     "intent_analysis": False,
                 },
-            message_debounce_seconds=0.0,
+            pending_message_threshold=0.0,
             ),
         )
 
@@ -1365,7 +1407,7 @@ def test_async_engine_event_extract_task_skips_when_budget_exceeded() -> None:
                     "memory_extract": "mock-model",
                 },
                 task_budgets={"event_extract": 1},
-            message_debounce_seconds=0.0,
+            pending_message_threshold=0.0,
             ),
         )
 
@@ -1400,7 +1442,7 @@ def test_multimodal_vision_format_only_when_current_batch_has_images() -> None:
                 unified_model="mock-model",
                 enable_self_memory=False,
                 task_enabled={"memory_extract": False, "event_extract": False},
-                message_debounce_seconds=0.0,
+                pending_message_threshold=0.0,
             ),
         )
 
@@ -1420,11 +1462,13 @@ def test_multimodal_vision_format_only_when_current_batch_has_images() -> None:
 
         # The first request should contain image_url parts (vision format)
         first_req = provider.requests[0]
-        msgs_with_image_url = [
-            m for m in first_req.messages
-            if isinstance(m.get("content"), list)
-            and any(p.get("type") == "image_url" for p in m["content"])
-        ]
+        msgs_with_image_url = []
+        for m in first_req.messages:
+            content = m.get("content")
+            if not isinstance(content, list):
+                continue
+            if any(isinstance(part, dict) and part.get("type") == "image_url" for part in content):
+                msgs_with_image_url.append(m)
         assert len(msgs_with_image_url) > 0, "Image turn should use vision format"
 
         # Turn 2: text only, no images
@@ -1437,11 +1481,13 @@ def test_multimodal_vision_format_only_when_current_batch_has_images() -> None:
 
         # The second request should NOT contain image_url parts
         second_req = provider.requests[-1]
-        msgs_with_image_url_2 = [
-            m for m in second_req.messages
-            if isinstance(m.get("content"), list)
-            and any(p.get("type") == "image_url" for p in m["content"])
-        ]
+        msgs_with_image_url_2 = []
+        for m in second_req.messages:
+            content = m.get("content")
+            if not isinstance(content, list):
+                continue
+            if any(isinstance(part, dict) and part.get("type") == "image_url" for part in content):
+                msgs_with_image_url_2.append(m)
         assert len(msgs_with_image_url_2) == 0, "No-image turn should collapse images to text"
 
         # Historical image should be in text descriptor form
@@ -1449,7 +1495,7 @@ def test_multimodal_vision_format_only_when_current_batch_has_images() -> None:
             m["content"] for m in second_req.messages
             if m.get("role") == "user" and isinstance(m.get("content"), str)
         ]
-        has_descriptor = any("[图片:" in t for t in user_texts)
+        has_descriptor = any("[图片:" in str(text) for text in user_texts)
         assert has_descriptor, "Historical image should appear as text descriptor"
 
     asyncio.run(_run())
@@ -1473,7 +1519,7 @@ def test_engine_level_shared_memory_across_sessions() -> None:
                 unified_model="mock-model",
                 enable_self_memory=False,
                 task_enabled={"memory_extract": False, "event_extract": False},
-                message_debounce_seconds=0.0,
+                pending_message_threshold=0.0,
             ),
         )
 
@@ -1532,7 +1578,7 @@ def test_parallel_pipeline_intent_and_add_human_turn_concurrent() -> None:
                 unified_model="mock-model",
                 enable_self_memory=False,
                 task_enabled={"memory_extract": False, "event_extract": False},
-                message_debounce_seconds=0.0,
+                pending_message_threshold=0.0,
                 session_reply_mode="always",
             ),
         )

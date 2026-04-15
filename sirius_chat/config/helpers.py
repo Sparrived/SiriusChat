@@ -12,6 +12,16 @@ from sirius_chat.config.models import Agent, MemoryPolicy, OrchestrationPolicy, 
 from sirius_chat.exceptions import OrchestrationConfigError
 
 
+def _coerce_legacy_debounce_to_threshold(value: object) -> int:
+    try:
+        numeric = float(str(value))
+    except (TypeError, ValueError):
+        return 0
+    if numeric <= 0:
+        return 0
+    return max(1, int(round(numeric)))
+
+
 def build_orchestration_policy_from_dict(
     orch_dict: dict[str, Any] | None,
     *,
@@ -48,6 +58,7 @@ def build_orchestration_policy_from_dict(
         "session_reply_mode",
         "engagement_sensitivity",
         "heat_window_seconds",
+        "pending_message_threshold",
         "message_debounce_seconds",
         "memory",
         "enable_self_memory",
@@ -131,7 +142,7 @@ def build_orchestration_policy_from_dict(
         "session_reply_mode": (str, "always"),
         "engagement_sensitivity": (float, 0.5),
         "heat_window_seconds": (float, 60.0),
-        "message_debounce_seconds": (float, 5.0),
+        "pending_message_threshold": (int, 4),
         "enable_self_memory": (bool, True),
         "self_memory_extract_batch_size": (int, 3),
         "self_memory_min_chars": (int, 0),
@@ -152,6 +163,11 @@ def build_orchestration_policy_from_dict(
             continue
         value = raw.get(field_name)
         kwargs[field_name] = caster(value) if caster is not bool else bool(value)
+
+    if "pending_message_threshold" not in kwargs and "message_debounce_seconds" in raw:
+        kwargs["pending_message_threshold"] = _coerce_legacy_debounce_to_threshold(
+            raw.get("message_debounce_seconds")
+        )
 
     legacy_intent_enabled = raw.get("enable_intent_analysis")
     if legacy_intent_enabled is not None and "intent_analysis" not in kwargs.get("task_enabled", {}):

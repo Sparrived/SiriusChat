@@ -54,7 +54,7 @@ def _make_config(work_path: Path, reply_mode: str = "always") -> SessionConfig:
                 "memory_extract": False,
                 "event_extract": False,
             },
-        message_debounce_seconds=0.0,
+        pending_message_threshold=0.0,
         ),
         work_path=work_path,
     )

@@ -471,7 +471,7 @@ class TestSkillEngineIntegration:
     def test_orchestration_policy_skill_fields(self):
         from sirius_chat.config.models import OrchestrationPolicy
 
-        policy = OrchestrationPolicy(unified_model="test-model", enable_skills=True, message_debounce_seconds=0.0)
+        policy = OrchestrationPolicy(unified_model="test-model", enable_skills=True, pending_message_threshold=0.0)
         assert policy.enable_skills is True
         assert policy.skill_call_marker == "[SKILL_CALL:"
         assert policy.max_skill_rounds == 3
@@ -479,7 +479,7 @@ class TestSkillEngineIntegration:
     def test_orchestration_policy_skills_default_on(self):
         from sirius_chat.config.models import OrchestrationPolicy
 
-        policy = OrchestrationPolicy(unified_model="test-model", message_debounce_seconds=0.0)
+        policy = OrchestrationPolicy(unified_model="test-model", pending_message_threshold=0.0)
         assert policy.enable_skills is True
 
     @pytest.mark.asyncio
@@ -501,7 +501,7 @@ class TestSkillEngineIntegration:
                     "memory_extract": False,
                     "event_extract": False,
                 },
-            message_debounce_seconds=0.0,
+            pending_message_threshold=0.0,
             ),
         )
 
@@ -532,7 +532,7 @@ class TestSkillEngineIntegration:
             orchestration=OrchestrationPolicy(
                 unified_model="test",
                 enable_skills=True,
-            message_debounce_seconds=0.0,
+            pending_message_threshold=0.0,
             ),
         )
         transcript = Transcript()
@@ -648,7 +648,7 @@ class TestSkillExecutionTimeout:
     def test_orchestration_policy_has_timeout_field(self):
         from sirius_chat.config.models import OrchestrationPolicy
 
-        policy = OrchestrationPolicy(unified_model="test-model", enable_skills=True, message_debounce_seconds=0.0)
+        policy = OrchestrationPolicy(unified_model="test-model", enable_skills=True, pending_message_threshold=0.0)
         assert hasattr(policy, "skill_execution_timeout")
         assert policy.skill_execution_timeout == 30.0
 
@@ -659,7 +659,7 @@ class TestSkillExecutionTimeout:
             unified_model="test-model",
             enable_skills=True,
             skill_execution_timeout=10.0,
-        message_debounce_seconds=0.0,
+        pending_message_threshold=0.0,
         )
         assert policy.skill_execution_timeout == 10.0
 
@@ -982,14 +982,14 @@ class TestDependencyResolver:
     def test_orchestration_policy_auto_install_field(self):
         from sirius_chat.config.models import OrchestrationPolicy
 
-        policy = OrchestrationPolicy(unified_model="m", enable_skills=True, message_debounce_seconds=0.0)
+        policy = OrchestrationPolicy(unified_model="m", enable_skills=True, pending_message_threshold=0.0)
         assert policy.auto_install_skill_deps is True
 
         policy2 = OrchestrationPolicy(
             unified_model="m",
             enable_skills=True,
             auto_install_skill_deps=False,
-        message_debounce_seconds=0.0,
+        pending_message_threshold=0.0,
         )
         assert policy2.auto_install_skill_deps is False
 

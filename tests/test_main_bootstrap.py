@@ -299,7 +299,7 @@ def test_serialize_session_bundle_preserves_full_orchestration_settings(tmp_path
             task_max_tokens={"intent_analysis": 256},
             task_retries={"intent_analysis": 2},
             session_reply_mode="auto",
-            message_debounce_seconds=0.0,
+            pending_message_threshold=0.0,
         ),
     )
 
@@ -316,7 +316,7 @@ def test_serialize_session_bundle_preserves_full_orchestration_settings(tmp_path
     assert orchestration["task_retries"]["intent_analysis"] == 2
     assert "intent_analysis_model" not in orchestration
     assert orchestration["session_reply_mode"] == "auto"
-    assert orchestration["message_debounce_seconds"] == 0.0
+    assert orchestration["pending_message_threshold"] == 0.0
 
 
 def test_load_or_persist_session_bundle_prefers_workspace_settings_over_stale_persisted(tmp_path) -> None:
@@ -385,7 +385,7 @@ def test_load_or_persist_session_bundle_prefers_workspace_settings_over_stale_pe
             "intent_analysis": True,
         },
         "session_reply_mode": "auto",
-        "message_debounce_seconds": 0.0,
+        "pending_message_threshold": 0,
         "intent_analysis_model": "legacy-intent-model",
     }
     manager.save_workspace_config(config_root, workspace_config, data_path=work_path)

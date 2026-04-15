@@ -85,7 +85,7 @@ class TestMemoryPolicy:
         assert p.decay_schedule[180] == 0.05
 
     def test_memory_policy_on_orchestration(self):
-        orch = OrchestrationPolicy(message_debounce_seconds=0.0)
+        orch = OrchestrationPolicy(pending_message_threshold=0.0)
         assert isinstance(orch.memory, MemoryPolicy)
         assert orch.memory.max_facts_per_user == 50
 

@@ -102,7 +102,7 @@ def test_generated_prompt_is_used_by_engine() -> None:
                     "memory_extract": False,
                     "event_extract": False,
                 },
-            message_debounce_seconds=0.0,
+            pending_message_threshold=0.0,
             ),
         )
 
@@ -729,6 +729,32 @@ def test_generation_prompt_requests_concrete_expansion_from_high_level_brief() -
         assert "先提炼人生原型" in request.system_prompt
         assert "再展开成具体可信的人物设定" in request.system_prompt
         assert "不要把原句直接拼贴成最终系统提示词" in str(request.messages[0]["content"])
+
+    asyncio.run(_run())
+
+
+def test_generation_prompt_biases_short_plaintext_replies() -> None:
+    async def _run() -> None:
+        provider = MockProvider(
+            responses=[
+                '{"agent_persona":"简洁/克制/自然","global_system_prompt":"生成结果","temperature":0.5,"max_tokens":512}'
+            ]
+        )
+        spec = PersonaSpec(
+            agent_name="临川",
+            trait_keywords=["简洁", "口语", "少解释"],
+        )
+
+        await agenerate_from_persona_spec(
+            provider,
+            spec,
+            model="test-model",
+        )
+
+        request = provider.requests[0]
+        assert "默认短句、口语、少解释" in request.system_prompt
+        assert "不主动使用 markdown 标题、列表、表格或代码块" in request.system_prompt
+        assert "默认偏向短回复、轻量解释和纯文本表达" in str(request.messages[0]["content"])
 
     asyncio.run(_run())
 

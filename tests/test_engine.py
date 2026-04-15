@@ -54,7 +54,7 @@ def test_roleplay_engine_multi_human_single_ai_transcript() -> None:
                     "memory_extract": False,
                     "event_extract": False,
                 },
-            message_debounce_seconds=0.0,
+            pending_message_threshold=0.0,
             ),
         )
 
@@ -114,7 +114,7 @@ def test_run_live_session_supports_dynamic_participants_and_memory() -> None:
                     "memory_extract": False,
                     "event_extract": False,
                 },
-            message_debounce_seconds=0.0,
+            pending_message_threshold=0.0,
             ),
         )
         human_turns = [
@@ -155,7 +155,7 @@ def test_transcript_can_resume_after_persist_and_reboot(tmp_path) -> None:
                     "memory_extract": False,
                     "event_extract": False,
                 },
-            message_debounce_seconds=0.0,
+            pending_message_threshold=0.0,
             ),
         )
         store = JsonSessionStore(config.work_path)
@@ -231,7 +231,7 @@ def test_cross_environment_identity_mapping_resolves_same_user() -> None:
                     "memory_extract": False,
                     "event_extract": False,
                 },
-            message_debounce_seconds=0.0,
+            pending_message_threshold=0.0,
             ),
         )
 
@@ -337,7 +337,7 @@ def test_on_reply_callback_receives_assistant_messages() -> None:
                     "memory_extract": False,
                     "event_extract": False,
                 },
-            message_debounce_seconds=0.0,
+            pending_message_threshold=0.0,
             ),
         )
 
@@ -385,7 +385,7 @@ def test_user_profile_auto_registration() -> None:
                     "memory_extract": False,
                     "event_extract": False,
                 },
-            message_debounce_seconds=0.0,
+            pending_message_threshold=0.0,
             ),
         )
 
@@ -441,7 +441,7 @@ def test_timeout_raises_on_expiry() -> None:
                     "memory_extract": False,
                     "event_extract": False,
                 },
-            message_debounce_seconds=0.0,
+            pending_message_threshold=0.0,
             ),
         )
 
@@ -493,7 +493,7 @@ def test_on_reply_with_timeout_cleans_up_on_expiry() -> None:
                     "memory_extract": False,
                     "event_extract": False,
                 },
-            message_debounce_seconds=0.0,
+            pending_message_threshold=0.0,
             ),
         )
 
@@ -559,7 +559,7 @@ def run(text: str, **kwargs):
                     "memory_extract": False,
                     "event_extract": False,
                 },
-            message_debounce_seconds=0.0,
+            pending_message_threshold=0.0,
             ),
         )
 
@@ -633,7 +633,7 @@ def run(**kwargs):
                     "memory_extract": False,
                     "event_extract": False,
                 },
-            message_debounce_seconds=0.0,
+            pending_message_threshold=0.0,
             ),
         )
 
@@ -651,7 +651,7 @@ def run(**kwargs):
                     "memory_extract": False,
                     "event_extract": False,
                 },
-            message_debounce_seconds=0.0,
+            pending_message_threshold=0.0,
             ),
         )
 
@@ -726,7 +726,7 @@ def run(text: str, **kwargs):
                     "memory_extract": False,
                     "event_extract": False,
                 },
-            message_debounce_seconds=0.0,
+            pending_message_threshold=0.0,
             ),
         )
 
@@ -775,7 +775,7 @@ def test_unknown_skill_triggers_regeneration_instead_of_partial_output(tmp_path)
                     "memory_extract": False,
                     "event_extract": False,
                 },
-            message_debounce_seconds=0.0,
+            pending_message_threshold=0.0,
             ),
         )
 
@@ -838,7 +838,7 @@ def run(**kwargs):
                     "memory_extract": False,
                     "event_extract": False,
                 },
-            message_debounce_seconds=0.0,
+            pending_message_threshold=0.0,
             ),
         )
 
@@ -924,7 +924,7 @@ def run(**kwargs):
                     "memory_extract": False,
                     "event_extract": False,
                 },
-            message_debounce_seconds=0.0,
+            pending_message_threshold=0.0,
             ),
         )
 
@@ -995,7 +995,7 @@ def run(**kwargs):
                     "memory_extract": False,
                     "event_extract": False,
                 },
-            message_debounce_seconds=0.0,
+            pending_message_threshold=0.0,
             ),
         )
 

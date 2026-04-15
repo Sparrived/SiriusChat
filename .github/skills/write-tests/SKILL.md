@@ -25,9 +25,9 @@ import asyncio
 await asyncio.sleep(8)   # 等同于浪费 8 秒
 time.sleep(3)
 
-# 禁止：启用 debounce（除非测试的正是 debounce 本身）
+# 禁止：启用积压静默批处理（除非测试的正是该行为本身）
 orchestration=OrchestrationPolicy(
-    message_debounce_seconds=8.0,   # 会导致每次 run_live_message 睡 8 秒
+    pending_message_threshold=4,    # 可能把并发消息静默合并，导致断言语义变得不稳定
 )
 
 # 禁止：启用耗时后台任务（除非测试的正是该任务）
@@ -51,7 +51,7 @@ orchestration=OrchestrationPolicy(
         "memory_extract": False,    # ← 关闭所有辅助 LLM 任务
         "event_extract": False,
     },
-    # message_debounce_seconds 默认为 0.0，无需显式设置
+    pending_message_threshold=0,    # ← 关闭积压静默批处理，保证每条消息独立处理
 )
 ```
 
@@ -210,7 +210,7 @@ test_<被测对象>_<条件>_<期望结果>()
 
 | 陷阱 | 表现 | 解决 |
 |---|---|---|
-| `message_debounce_seconds > 0` | 每条消息睡 N 秒，测试极慢 | 不要设置此字段（默认 0） |
+| `pending_message_threshold > 0` | 并发消息可能被静默合并，导致请求数和回调次数断言不稳定 | 除非专门测批处理，否则设为 `0` |
 | `enable_self_memory=True` | 后台任务持续运行，teardown 慢 | 测 SelfMemory 功能时才开启 |
 | `task_enabled` 未全部关闭 | MockProvider 被追加调用推高 `requests` 计数 | 关闭所有不需要的任务 |
 | `work_path` 多测试共享 | 上一个测试的持久化文件影响下一个 | 每测试用唯一子目录 |

@@ -5,9 +5,10 @@ import json
 import os
 import shutil
 from pathlib import Path
+from typing import cast
 from unittest.mock import patch
 
-from sirius_chat.api import Message, UserProfile, WorkspaceLayout, WorkspaceRuntime
+from sirius_chat.api import Message, UserProfile
 from sirius_chat.config import ConfigManager
 from sirius_chat.config.jsonc import load_json_document, write_session_config_jsonc
 from sirius_chat.config.models import SessionDefaults, WorkspaceBootstrap
@@ -15,6 +16,8 @@ from sirius_chat.models import Transcript
 from sirius_chat.providers.base import AsyncLLMProvider, GenerationRequest
 from sirius_chat.providers.mock import MockProvider
 from sirius_chat.providers.routing import AutoRoutingProvider, ProviderConfig, ProviderRegistry
+from sirius_chat.workspace.layout import WorkspaceLayout
+from sirius_chat.workspace.runtime import WorkspaceRuntime
 
 
 async def _wait_for_active_agent(runtime: WorkspaceRuntime, expected_agent_key: str) -> None:
@@ -69,7 +72,7 @@ def _write_workspace_agents(
     workspace_config = manager.load_workspace_config(config_root, data_path=runtime_root)
     workspace_config.active_agent_key = selected_key
     workspace_config.orchestration_defaults = {
-        "message_debounce_seconds": 0.0,
+        "pending_message_threshold": 0,
         "task_enabled": {
             "memory_extract": False,
             "event_extract": False,
@@ -95,6 +98,84 @@ def test_workspace_runtime_auto_persists_transcript_and_participants(tmp_path: P
             payload = json.loads(layout.session_participants_path("group:123").read_text(encoding="utf-8"))
             assert payload["primary_user_id"] == "alice_1"
             assert payload["participants"][0]["name"] == "Alice"
+        finally:
+            await runtime.close()
+
+    asyncio.run(_run())
+
+
+def test_workspace_runtime_batches_backlogged_messages_by_threshold(tmp_path: Path) -> None:
+    class BlockingProvider(AsyncLLMProvider):
+        def __init__(self) -> None:
+            self.requests: list[GenerationRequest] = []
+            self._first_chat_started = asyncio.Event()
+            self._release_first_chat = asyncio.Event()
+            self._chat_calls = 0
+
+        async def generate_async(self, request: GenerationRequest) -> str:
+            self.requests.append(request)
+            if request.purpose != "chat_main":
+                return "ignored"
+            self._chat_calls += 1
+            if self._chat_calls == 1:
+                self._first_chat_started.set()
+                await self._release_first_chat.wait()
+                return "第一轮回复"
+            return "合并回复"
+
+    async def _run() -> None:
+        _write_generated_agents(tmp_path)
+        manager = ConfigManager(base_path=tmp_path)
+        workspace_config = manager.load_workspace_config(tmp_path)
+        workspace_config.orchestration_defaults = {
+            "pending_message_threshold": 1,
+            "session_reply_mode": "always",
+            "task_enabled": {
+                "memory_extract": False,
+                "event_extract": False,
+            },
+        }
+        manager.save_workspace_config(tmp_path, workspace_config)
+
+        provider = BlockingProvider()
+        runtime = WorkspaceRuntime.open(tmp_path, provider=provider)
+        try:
+            first_task = asyncio.create_task(
+                runtime.run_live_message(
+                    session_id="group:batch",
+                    turn=Message(role="user", speaker="Alice", content="第一句"),
+                )
+            )
+            await provider._first_chat_started.wait()
+
+            second_task = asyncio.create_task(
+                runtime.run_live_message(
+                    session_id="group:batch",
+                    turn=Message(role="user", speaker="Alice", content="第二句"),
+                )
+            )
+            third_task = asyncio.create_task(
+                runtime.run_live_message(
+                    session_id="group:batch",
+                    turn=Message(role="user", speaker="Alice", content="第三句"),
+                )
+            )
+
+            await asyncio.sleep(0)
+            provider._release_first_chat.set()
+
+            first, second, third = await asyncio.gather(first_task, second_task, third_task)
+
+            chat_requests = [request for request in provider.requests if request.purpose == "chat_main"]
+            assert len(chat_requests) == 2
+            first_payload = "\n".join(str(item.get("content", "")) for item in chat_requests[0].messages)
+            assert "第一句" in first_payload
+            merged_payload = "\n".join(str(item.get("content", "")) for item in chat_requests[-1].messages)
+            assert "第二句，第三句" in merged_payload
+
+            assert first is second is third
+            assistant_messages = [item for item in third.messages if item.role == "assistant"]
+            assert [item.content for item in assistant_messages] == ["第一轮回复", "合并回复"]
         finally:
             await runtime.close()
 
@@ -480,7 +561,7 @@ def test_workspace_runtime_bootstrap_preserves_existing_task_models_and_provider
             data_root,
             config_path=config_root,
             bootstrap=WorkspaceBootstrap(
-                orchestration_defaults={"message_debounce_seconds": 0.0},
+                orchestration_defaults={"pending_message_threshold": 0},
                 provider_entries=[
                     {
                         "type": "openai-compatible",
@@ -493,13 +574,15 @@ def test_workspace_runtime_bootstrap_preserves_existing_task_models_and_provider
         try:
             await runtime.initialize()
             exported = runtime.export_workspace_defaults()
-            orchestration = exported["orchestration_defaults"]
+            orchestration = cast(dict[str, object], exported["orchestration_defaults"])
+            task_models = cast(dict[str, str], orchestration["task_models"])
+            task_enabled = cast(dict[str, bool], orchestration["task_enabled"])
             providers = ProviderRegistry(layout).load()
 
-            assert orchestration["task_models"]["memory_extract"] == "memory-model"
-            assert orchestration["task_models"]["intent_analysis"] == "intent-model"
-            assert orchestration["task_enabled"]["intent_analysis"] is True
-            assert orchestration["message_debounce_seconds"] == 0.0
+            assert task_models["memory_extract"] == "memory-model"
+            assert task_models["intent_analysis"] == "intent-model"
+            assert task_enabled["intent_analysis"] is True
+            assert orchestration["pending_message_threshold"] == 0.0
             assert providers["openai-compatible"].api_key == "test-key-updated"
             assert providers["openai-compatible"].base_url == "https://api.openai.com/v1"
             assert providers["openai-compatible"].models == ["mock-model", "intent-model"]
@@ -552,7 +635,7 @@ def test_workspace_runtime_same_bootstrap_does_not_reset_manual_updates_after_re
             ),
             orchestration_defaults={
                 "session_reply_mode": "always",
-                "message_debounce_seconds": 0.0,
+                "pending_message_threshold": 0,
             },
             provider_entries=[
                 {
@@ -586,7 +669,7 @@ def test_workspace_runtime_same_bootstrap_does_not_reset_manual_updates_after_re
             dict(workspace_config.orchestration_defaults),
             {
                 "session_reply_mode": "auto",
-                "message_debounce_seconds": 1.5,
+                "pending_message_threshold": 2,
             },
         )
         manager.save_workspace_config(config_root, workspace_config, data_path=data_root)
@@ -609,15 +692,17 @@ def test_workspace_runtime_same_bootstrap_does_not_reset_manual_updates_after_re
         try:
             await reopened.initialize()
             exported = reopened.export_workspace_defaults()
+            session_defaults = cast(dict[str, object], exported["session_defaults"])
+            orchestration_defaults = cast(dict[str, object], exported["orchestration_defaults"])
             providers = ProviderRegistry(layout).load()
 
             assert exported["active_agent_key"] == "alt_agent"
-            assert exported["session_defaults"]["history_max_messages"] == 200
-            assert exported["session_defaults"]["history_max_chars"] == 12000
-            assert exported["session_defaults"]["max_recent_participant_messages"] == 9
-            assert exported["session_defaults"]["enable_auto_compression"] is True
-            assert exported["orchestration_defaults"]["session_reply_mode"] == "auto"
-            assert exported["orchestration_defaults"]["message_debounce_seconds"] == 1.5
+            assert session_defaults["history_max_messages"] == 200
+            assert session_defaults["history_max_chars"] == 12000
+            assert session_defaults["max_recent_participant_messages"] == 9
+            assert session_defaults["enable_auto_compression"] is True
+            assert orchestration_defaults["session_reply_mode"] == "auto"
+            assert orchestration_defaults["pending_message_threshold"] == 2
             assert providers["openai-compatible"].api_key == "manual-key"
             assert providers["openai-compatible"].base_url == "https://manual.example"
 
@@ -672,7 +757,7 @@ def test_workspace_runtime_uses_session_snapshot_task_models_when_manifest_is_ne
                 "intent_analysis": False,
             },
             "event_extract_batch_size": 1,
-            "message_debounce_seconds": 0.0,
+            "pending_message_threshold": 0,
         }
         manager.save_workspace_config(config_root, workspace_config, data_path=data_root)
 
@@ -691,7 +776,7 @@ def test_workspace_runtime_uses_session_snapshot_task_models_when_manifest_is_ne
             "intent_analysis": False,
         }
         snapshot_payload["orchestration"]["event_extract_batch_size"] = 1
-        snapshot_payload["orchestration"]["message_debounce_seconds"] = 0.0
+        snapshot_payload["orchestration"]["pending_message_threshold"] = 0.0
         write_session_config_jsonc(snapshot_path, snapshot_payload)
 
         newer_ns = snapshot_path.stat().st_mtime_ns + 2_000_000

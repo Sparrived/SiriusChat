@@ -78,16 +78,17 @@ flowchart TD
   A["外部 turn\nMessage + 可选 UserProfile"] --> B["WorkspaceRuntime.run_live_message(...)"]
   B --> C["initialize()\n确保 workspace 已完成 bootstrap 与 watcher 启动"]
   C --> D["_refresh_workspace_config()\n签名校验 + 热刷新兜底"]
-  D --> E["session_id 级 asyncio.Lock"]
-  E --> F["_build_session_config(session_id)"]
-  F --> G["_load_session_for_runtime()\n读取现有 Transcript\n并调用 engine.run_live_session(...)"]
-  G --> H["AsyncRolePlayEngine.run_live_message(...)"]
+  D --> E["入队到 session 待处理队列"]
+  E --> F["session processor + asyncio.Lock"]
+  F --> G["_build_session_config(session_id)\n按 pending_message_threshold\n选择逐条或静默批处理"]
+  G --> H["_load_session_for_runtime()\n读取现有 Transcript\n并调用 engine.run_live_session(...)"]
+  H --> I["AsyncRolePlayEngine.run_live_message(...)"]
 
   subgraph EnginePipeline["Engine 内部流水线"]
-    H --> I["校验 turn.role=user 且带 speaker\n可选自动 register user_profile"]
-    I --> J["写入用户消息\n更新 Transcript.reply_runtime"]
-    J --> K1["并行前处理 A\nmemory_extract\nevent_extract\nmemory_manager"]
-    J --> K2["并行前处理 B\nintent_analysis 任务\n失败时回退关键词路径"]
+    I --> J["校验 turn.role=user 且带 speaker\n可选自动 register user_profile"]
+    J --> K["写入用户消息\n更新 Transcript.reply_runtime"]
+    K --> K1["并行前处理 A\nmemory_extract\nevent_extract\nmemory_manager"]
+    K --> K2["并行前处理 B\nintent_analysis 任务\n启用时必须走模型推断\n预算/调用/解析失败则本轮无意图结果"]
     K1 --> L["HeatAnalyzer + IntentAnalyzer + EngagementCoordinator\n决定 should_reply"]
     K2 --> L
     L --> M{"需要回复吗"}
@@ -112,8 +113,10 @@ flowchart TD
 ### 需要特别注意的语义
 
 - `run_live_session(...)` 现在只做会话初始化，不再消费用户消息。
-- `run_live_message(...)` 是真正的单轮处理入口，支持 `on_reply`、`timeout`、`environment_context` 与 `user_profile`。
+- `run_live_message(...)` 是真正的单轮处理入口，支持 `on_reply`、`timeout`、`environment_context` 与 `user_profile`；但在 `WorkspaceRuntime` 层会先入队，再由 session processor 决定何时处理。
+- 当单会话待处理消息数超过 `pending_message_threshold` 时，runtime 会进入静默批处理，对同一说话人的连续消息合并后只调用一次主流程。
 - `reply_mode=auto` 不是单一启发式判断，而是热度、意图和参与协调器共同决定。
+- `intent_analysis` 任务关闭时仍可使用关键词回退；任务启用后，本轮意图只能来自模型推断，不再因失败自动降级到关键词路径。
 - `finalize_and_persist=True` 时，引擎会完成最终内存落盘与后台任务状态推进；`WorkspaceRuntime` 再负责 session store 和参与者文件写回。
 
 ## 4. 分层视图与模块职责
@@ -121,7 +124,7 @@ flowchart TD
 | 分层 | 关键模块 | 主要职责 |
 | --- | --- | --- |
 | 入口层 | `main.py`、`sirius_chat/cli.py`、`sirius_chat/api/*` | 接收外部输入、暴露稳定 API、拼接最少的运行参数 |
-| Workspace 层 | `workspace/layout.py`、`workspace/runtime.py`、`workspace/config_watcher.py`、`workspace/roleplay_manager.py` | 路径布局、配置热刷新、session 锁、participants 元数据、roleplay 资产与 workspace 默认值联动 |
+| Workspace 层 | `workspace/layout.py`、`workspace/runtime.py`、`workspace/config_watcher.py`、`workspace/roleplay_manager.py` | 路径布局、配置热刷新、session 队列与锁、静默批处理、participants 元数据、roleplay 资产与 workspace 默认值联动 |
 | 配置构建层 | `config/models.py`、`config/manager.py`、`config/jsonc.py`、`config/helpers.py` | `WorkspaceConfig` / `SessionConfig` 契约、JSON/JSONC 读写、workspace 默认值与 orchestration 构造 |
 | 编排核心层 | `core/engine.py`、`core/chat_builder.py`、`core/memory_runner.py`、`core/engagement_pipeline.py`、`core/heat.py`、`core/intent_v2.py`、`core/events.py` | 单轮消息编排、记忆任务、意图分析、参与决策、提示词上下文构造、事件总线 |
 | 兼容与辅助层 | `async_engine/prompts.py`、`async_engine/orchestration.py`、`async_engine/utils.py`、`async_engine/__init__.py` | 提示词生成、任务常量与配置、辅助工具、向后兼容导出 |

@@ -152,12 +152,10 @@ class OrchestrationPolicy:
     heat_window_seconds: float = 60.0    # 热度分析滑动窗口（秒）
 
     
-    # Message debounce: buffer same-user messages within this window (seconds).
-    # During the window, consecutive messages from the same user are accumulated;
-    # only the last coroutine flushes them all as a single merged message so that
-    # intent analysis and profile extraction fire exactly once per burst.
-    # Default is 5.0 (enabled). Set to 0 to disable debounce (immediate reply).
-    message_debounce_seconds: float = 5.0
+    # Pending-message batching: when the queued messages for a session exceed
+    # this threshold, runtime enters backlog-silent mode and merges consecutive
+    # turns from the same speaker into a single model call. Set to 0 to disable.
+    pending_message_threshold: float = 4.0
     
     # Memory policy (centralized memory system configuration)
     memory: MemoryPolicy = field(default_factory=MemoryPolicy)
@@ -247,8 +245,8 @@ class OrchestrationPolicy:
             raise ValueError("engagement_sensitivity 必须在 [0,1] 范围内。")
         if self.heat_window_seconds <= 0:
             raise ValueError("heat_window_seconds 必须大于 0。")
-        if self.message_debounce_seconds < 0:
-            raise ValueError("message_debounce_seconds 不能小于 0。")
+        if self.pending_message_threshold < 0:
+            raise ValueError("pending_message_threshold 不能小于 0。")
 
 
 @dataclass(slots=True)

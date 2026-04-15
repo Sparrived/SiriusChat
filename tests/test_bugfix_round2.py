@@ -166,23 +166,23 @@ def test_merge_pending_turns_skips_blank_content() -> None:
     assert result.content == "hello\uff0cworld"  # Short messages → comma join
 
 
-def test_debounce_config_default_five() -> None:
-    """Default debounce is 5.0s (production - enable message merging)."""
+def test_pending_message_threshold_default_four() -> None:
+    """Default pending-message threshold is 4 in production."""
     policy = OrchestrationPolicy()
-    assert policy.message_debounce_seconds == 5.0
+    assert policy.pending_message_threshold == 4
 
 
-def test_debounce_config_negative_raises() -> None:
-    """Negative debounce value should raise ValueError."""
+def test_pending_message_threshold_negative_raises() -> None:
+    """Negative pending-message threshold should raise ValueError."""
     policy = OrchestrationPolicy(
         unified_model="mock-model",
-        message_debounce_seconds=-1.0,
+        pending_message_threshold=-1.0,
     )
     try:
         policy.validate()
         assert False, "Should have raised ValueError"
     except ValueError as e:
-        assert "message_debounce_seconds" in str(e)
+        assert "pending_message_threshold" in str(e)
 
 
 # ---------------------------------------------------------------------------

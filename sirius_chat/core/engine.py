@@ -83,13 +83,6 @@ async def _noop_semaphore() -> AsyncIterator[None]:
 
 
 @dataclass(slots=True)
-class _PendingTurn:
-    """Buffered user turn for debounce/batching."""
-    participant_user_id: str
-    messages: list[Message] = field(default_factory=list)
-
-
-@dataclass(slots=True)
 class SessionStores:
     """Storage layer: file-backed persistent stores (disk I/O boundary)."""
     file_store: UserMemoryFileStore
@@ -134,7 +127,6 @@ class LiveSessionContext:
     # ── Request intermediate state & participant registry ──
     known_by_id: dict[str, Participant] = field(default_factory=dict)
     known_by_label: dict[str, str] = field(default_factory=dict)
-    pending_turn: _PendingTurn | None = None
     # ── Concurrency control ──
     llm_semaphore: asyncio.Semaphore | None = None
 
@@ -891,7 +883,7 @@ class AsyncRolePlayEngine:
         participant: Participant,
         content: str,
         task_token_usage: dict[str, int],
-    ) -> IntentAnalysis:
+    ) -> IntentAnalysis | None:
         """执行新版意图分析（携带参与者上下文）。"""
         return await run_engagement_intent_analysis(
             config=config,
@@ -1639,80 +1631,6 @@ class AsyncRolePlayEngine:
             context=context,
         )
 
-        debounce_seconds = float(config.orchestration.message_debounce_seconds)
-        if debounce_seconds > 0:
-            pending = context.pending_turn
-            if pending is not None and pending.participant_user_id == participant.user_id:
-                # Same user — accumulate into buffer, then let the last coroutine flush.
-                # Each coroutine sleeps the full debounce window; only the one whose
-                # `turn` is still at pending.messages[-1] when the sleep ends will merge
-                # all accumulated messages into a single call to _process_live_turn,
-                # ensuring intent analysis and profile extraction fire exactly once.
-                pending.messages.append(turn)
-                # Wait for debounce window.  CancelledError must propagate
-                # so that external timeout (asyncio.wait_for) works correctly.
-                await asyncio.sleep(debounce_seconds)
-                # After sleep, check if we are still the latest (no newer message appended)
-                if context.pending_turn is pending and pending.messages[-1] is turn:
-                    # Timer expired and we are still the latest → flush all as one message
-                    merged_turn = self._merge_pending_turns(pending.messages)
-                    context.pending_turn = None
-                    return await self._process_live_turn(
-                        config=config,
-                        turn=merged_turn,
-                        transcript=transcript,
-                        session_reply_mode=session_reply_mode,
-                        finalize_and_persist=finalize_and_persist,
-                        context=context,
-                        participant=participant,
-                        environment_context=environment_context,
-                    )
-                return transcript
-            else:
-                # Different user or first message — flush pending if any, then buffer new
-                if pending is not None and pending.messages:
-                    old_participant = self._resolve_participant_for_turn(
-                        transcript=transcript,
-                        turn=pending.messages[0],
-                        context=context,
-                    )
-                    merged_old = self._merge_pending_turns(pending.messages)
-                    context.pending_turn = None
-                    await self._process_live_turn(
-                        config=config,
-                        turn=merged_old,
-                        transcript=transcript,
-                        session_reply_mode=session_reply_mode,
-                        finalize_and_persist=False,
-                        context=context,
-                        participant=old_participant,
-                        environment_context=environment_context,
-                    )
-                # Buffer new turn
-                context.pending_turn = _PendingTurn(
-                    participant_user_id=participant.user_id,
-                    messages=[turn],
-                )
-                # Wait for debounce window.  CancelledError must propagate
-                # so that external timeout (asyncio.wait_for) works correctly.
-                await asyncio.sleep(debounce_seconds)
-                # After sleep, check if still the latest
-                if context.pending_turn is not None and context.pending_turn.participant_user_id == participant.user_id and context.pending_turn.messages[-1] is turn:
-                    merged_turn = self._merge_pending_turns(context.pending_turn.messages)
-                    context.pending_turn = None
-                    return await self._process_live_turn(
-                        config=config,
-                        turn=merged_turn,
-                        transcript=transcript,
-                        session_reply_mode=session_reply_mode,
-                        finalize_and_persist=finalize_and_persist,
-                        context=context,
-                        participant=participant,
-                        environment_context=environment_context,
-                    )
-                return transcript
-
-        # No debounce — process immediately
         return await self._process_live_turn(
             config=config,
             turn=turn,
@@ -1749,6 +1667,7 @@ class AsyncRolePlayEngine:
         for m in messages:
             merged_multimodal.extend(m.multimodal_inputs)
         first = messages[0]
+        last = messages[-1]
         return Message(
             role=first.role,
             content=merged_content,
@@ -1756,7 +1675,7 @@ class AsyncRolePlayEngine:
             channel=first.channel,
             channel_user_id=first.channel_user_id,
             multimodal_inputs=merged_multimodal,
-            reply_mode=first.reply_mode,
+            reply_mode=last.reply_mode,
         )
 
     async def _process_live_turn(

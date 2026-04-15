@@ -183,7 +183,7 @@ def test_load_session_config_parses_orchestration_policy(tmp_path) -> None:
                     "task_temperatures": {"memory_extract": 0.1},
                     "task_max_tokens": {"memory_extract": 128},
                     "session_reply_mode": "auto",
-                    "message_debounce_seconds": 0.0
+                    "pending_message_threshold": 0
                 },
             },
             ensure_ascii=False,
@@ -202,7 +202,7 @@ def test_load_session_config_parses_orchestration_policy(tmp_path) -> None:
     assert session.orchestration.task_enabled["intent_analysis"] is False
     assert session.orchestration.task_budgets["memory_extract"] == 1200
     assert session.orchestration.session_reply_mode == "auto"
-    assert session.orchestration.message_debounce_seconds == 0.0
+    assert session.orchestration.pending_message_threshold == 0
 
 
 def test_load_session_config_supports_separate_config_root_and_work_path(tmp_path) -> None:

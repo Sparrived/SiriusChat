@@ -4,6 +4,24 @@
 
 ## [Unreleased]
 
+## [0.27.0] - 2026-04-15
+
+### Changed
+- **消息合并策略改为积压计数批处理**：`WorkspaceRuntime` 现在按 `pending_message_threshold` 决定是否进入静默批处理；当单会话待处理消息数超过阈值时，会合并同一说话人的连续消息并只触发一次主模型调用，替代旧的时间型 `message_debounce_seconds` 策略。
+- **intent_analysis 改为严格模型路径**：当 `task_enabled["intent_analysis"]` 为 `true` 时，意图结论必须来自模型；预算不足、provider 调用失败或解析失败时，不再回退到关键词意图推断。
+- **人格生成默认更克制**：角色生成器现在会默认产出更偏短句、纯文本、少 markdown 的角色行为约束，减少长段落和说明书式回复。
+
+### Added
+- 新增 runtime 回归测试，覆盖“单会话积压超过阈值后对同一说话人的连续消息执行静默批处理”场景。
+- 新增 roleplay 回归测试，覆盖“人格生成提示词默认偏向短回复和纯文本表达”场景。
+- 新增外部迁移文档 `docs/migration-v0.27.md`，说明配置键变更与行为迁移步骤。
+
+### Fixed
+- **意图分析失败时不再产生伪造结论**：启用 `intent_analysis` 的自动回复路径下，预算超限、provider 失败或响应解析失败时，本轮不会再出现“没有模型调用却仍有意图分析结果”的现象。
+
+### Documentation
+- 更新 README、架构文档、流程图、外部接入文档与相关 SKILL，统一说明 `pending_message_threshold`、runtime 队列批处理，以及新的 `intent_analysis` 语义。
+
 ## [0.26.10] - 2026-04-15
 
 ### Fixed

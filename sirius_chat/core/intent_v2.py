@@ -110,7 +110,13 @@ class IntentAnalyzer:
 
         try:
             raw = await call_provider(request)
-            return IntentAnalyzer._parse_response(raw)
+            parsed = IntentAnalyzer._parse_response(raw)
+            if parsed is not None:
+                return parsed
+            logger.warning("意图分析响应解析失败，使用回退。")
+            return IntentAnalyzer.fallback_analysis(
+                content, agent_name, agent_alias, participant_names,
+            )
         except Exception as exc:
             logger.warning("意图分析 LLM 调用失败，使用回退: %s", exc)
             return IntentAnalyzer.fallback_analysis(
@@ -161,7 +167,7 @@ class IntentAnalyzer:
         )
 
     @staticmethod
-    def _parse_response(raw: str) -> IntentAnalysis:
+    def _parse_response(raw: str) -> IntentAnalysis | None:
         """解析 LLM JSON 响应。"""
         text = raw.strip()
         if "```" in text:
@@ -178,11 +184,11 @@ class IntentAnalyzer:
                 "意图分析响应解析失败（非 JSON）: %s",
                 text[:200].replace("\n", " "),
             )
-            return IntentAnalysis()
+            return None
 
         if not isinstance(data, dict):
             logger.warning("意图分析响应解析失败（JSON 非对象）: %s", type(data).__name__)
-            return IntentAnalysis()
+            return None
 
         intent_type = str(data.get("intent_type", "chat")).strip().lower()
         if intent_type not in INTENT_TYPES:

@@ -155,11 +155,11 @@ class TestGenerateDefaultConfig:
         assert content["providers"][0]["type"] == "openai-compatible"
         assert content["orchestration"]["task_enabled"]["intent_analysis"] is True
         assert "enable_intent_analysis" not in content["orchestration"]
-        assert content["orchestration"]["message_debounce_seconds"] == 5.0
+        assert content["orchestration"]["pending_message_threshold"] == 4
         assert content["orchestration"]["memory"]["max_facts_per_user"] == 50
         assert '"intent_analysis_model"' not in raw_text
         assert '"task_enabled"' in raw_text
-        assert '"message_debounce_seconds"' in raw_text
+        assert '"pending_message_threshold"' in raw_text
         assert '"max_facts_per_user"' in raw_text
 
 

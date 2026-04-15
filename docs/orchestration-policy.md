@@ -13,6 +13,7 @@
 - 记忆管理器任务（`memory_manager_model`）。
 - `reply_mode="auto"` 下的参与决策参数（热度 + 意图 + engagement_sensitivity）。
 - AI 自身记忆系统（日记 + 名词解释）。
+- 会话积压静默批处理（`pending_message_threshold`）。
 - 回复频率限制（滑动窗口）。
 
 注意：没有 `orchestration.enabled` 字段。
@@ -51,6 +52,7 @@
 - `session_reply_mode`: `always`
 - `engagement_sensitivity`: `0.5`
 - `heat_window_seconds`: `60.0`
+- `pending_message_threshold`: `4`
 - `enable_self_memory`: `true`
 - `self_memory_extract_batch_size`: `3`
 - `self_memory_max_diary_prompt_entries`: `6`
@@ -115,7 +117,8 @@
     "reply_frequency_exempt_on_mention": true,
     "session_reply_mode": "auto",
     "engagement_sensitivity": 0.5,
-    "heat_window_seconds": 60.0
+    "heat_window_seconds": 60.0,
+    "pending_message_threshold": 4
   }
 }
 ```
@@ -147,6 +150,13 @@
 - 该任务可使用 `task_budgets["memory_manager"]` 与 `task_retries["memory_manager"]`。
 - 多模态输入不会触发独立辅助任务；会直接作为主模型请求的一部分传递。
 
+积压静默批处理：
+
+- `pending_message_threshold > 0` 时，`WorkspaceRuntime` 会先把单会话消息入队。
+- 当待处理消息数超过阈值时，runtime 会把同一说话人的连续消息合并成一次主流程调用。
+- 该策略取代旧的时间窗口 debounce；是否合并由积压数量决定，而不是 sleep 等待窗口。
+- 设为 `0` 可关闭该批处理行为，恢复每条消息独立送入主流程。
+
 ## 参与决策参数（reply_mode=auto）
 
 会话级策略由 `session_reply_mode` 控制，可用值：
@@ -171,10 +181,12 @@
 - `task_temperatures["intent_analysis"]`：意图分析采样温度，默认 `0.1`。
 - `task_max_tokens["intent_analysis"]`：意图分析最大输出 token，默认 `192`。
 - `task_retries["intent_analysis"]`：意图分析失败时的重试次数。
+- 当该任务已启用时，本轮意图结论必须来自模型；若预算不足、provider 调用失败或响应解析失败，本轮不会再回退到关键词意图推断，而是仅依赖热度与 engagement 信号继续决策。
 
 兼容说明：
 - 当前配置入口统一使用 `task_*["intent_analysis"]`。
 - 旧配置文件中的 `enable_intent_analysis` 与 `intent_analysis_model` 在加载时会自动映射到任务配置，但新的模板与持久化输出不再写出这两个字段。
+- 旧配置文件中的 `message_debounce_seconds` 在加载时会自动映射到 `pending_message_threshold`，但新的模板与持久化输出不再写出旧字段。
 
 > **注意**：v0.14.1 已彻底移除旧版 `auto_reply_*` 参数。迁移详情见 `docs/migration-v0.14.md`。
 

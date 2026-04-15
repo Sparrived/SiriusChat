@@ -186,7 +186,7 @@ class TestConfigManager:
                     "intent_analysis": 192,
                 },
                 "session_reply_mode": "auto",
-                "message_debounce_seconds": 0.0,
+                "pending_message_threshold": 0,
             },
         }
 
@@ -196,7 +196,7 @@ class TestConfigManager:
         assert session_config.orchestration.task_models["intent_analysis"] == "intent-model"
         assert session_config.orchestration.task_max_tokens["intent_analysis"] == 192
         assert session_config.orchestration.session_reply_mode == "auto"
-        assert session_config.orchestration.message_debounce_seconds == 0.0
+        assert session_config.orchestration.pending_message_threshold == 0
 
     def test_dict_to_session_config_maps_legacy_intent_fields_to_task_settings(
         self,
@@ -277,12 +277,12 @@ class TestConfigManager:
         assert '"history_max_messages"' in content
         assert '"intent_analysis_model"' not in content
         assert '"task_enabled"' in content
-        assert '"message_debounce_seconds"' in content
+        assert '"pending_message_threshold"' in content
         assert '"max_concurrent_llm_calls"' in content
 
         payload = load_json_document(snapshot_path)
         assert payload["orchestration"]["task_enabled"]["intent_analysis"] is True
-        assert payload["orchestration"]["message_debounce_seconds"] == 5.0
+        assert payload["orchestration"]["pending_message_threshold"] == 4
 
     def test_save_workspace_config_normalizes_legacy_intent_fields(self, tmp_path: Path) -> None:
         """Test workspace persistence rewrites legacy intent fields to task-based keys."""
@@ -354,7 +354,7 @@ class TestConfigManager:
         workspace_config.session_defaults.enable_auto_compression = False
         workspace_config.orchestration_defaults = {
             "task_models": {"event_extract": "deepseek-chat"},
-            "message_debounce_seconds": 0.0,
+            "pending_message_threshold": 0,
         }
         manager.save_workspace_config(tmp_path, workspace_config)
 
@@ -365,7 +365,7 @@ class TestConfigManager:
         object.__setattr__(workspace_config.session_defaults, "enable_auto_compression", None)
         workspace_config.orchestration_defaults = {
             "task_models": {"event_extract": None},
-            "message_debounce_seconds": None,
+            "pending_message_threshold": None,
         }
         object.__setattr__(workspace_config.provider_policy, "prefer_workspace_registry", None)
         manager.save_workspace_config(tmp_path, workspace_config)
@@ -384,7 +384,7 @@ class TestConfigManager:
         assert manifest_payload["session_defaults"]["max_recent_participant_messages"] == 9
         assert manifest_payload["session_defaults"]["enable_auto_compression"] is False
         assert manifest_payload["orchestration_defaults"]["task_models"]["event_extract"] == "deepseek-chat"
-        assert manifest_payload["orchestration_defaults"]["message_debounce_seconds"] == 0.0
+        assert manifest_payload["orchestration_defaults"]["pending_message_threshold"] == 0.0
         assert manifest_payload["provider_policy"]["prefer_workspace_registry"] is True
         assert snapshot_payload["generated_agent_key"] == "main_agent"
         assert snapshot_payload["history_max_messages"] == 111
@@ -392,7 +392,7 @@ class TestConfigManager:
         assert snapshot_payload["max_recent_participant_messages"] == 9
         assert snapshot_payload["enable_auto_compression"] is False
         assert snapshot_payload["orchestration"]["task_models"]["event_extract"] == "deepseek-chat"
-        assert snapshot_payload["orchestration"]["message_debounce_seconds"] == 0.0
+        assert snapshot_payload["orchestration"]["pending_message_threshold"] == 0.0
 
     def test_load_workspace_config_tolerates_null_fields_from_disk(self, tmp_path: Path) -> None:
         manager = ConfigManager(base_path=tmp_path)
@@ -450,7 +450,7 @@ class TestConfigManager:
         assert loaded.session_defaults.history_max_chars == 6000
         assert loaded.session_defaults.max_recent_participant_messages == 5
         assert loaded.session_defaults.enable_auto_compression is True
-        assert loaded.orchestration_defaults["message_debounce_seconds"] == 1.5
+        assert loaded.orchestration_defaults["pending_message_threshold"] == 2
         assert loaded.orchestration_defaults.get("task_models", {}) == {}
         assert loaded.provider_policy.prefer_workspace_registry is True
 

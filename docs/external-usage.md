@@ -31,6 +31,7 @@ workspace runtime 会负责：
 - 自动维护 `sessions/<session_id>/participants.json`
 - 自动把 provider、roleplay、skills 路由到 config root，把 session、memory、token、skill_data 路由到 data root
 - config root 文件被外部修改后，会通过文件监听自动刷新并生效；单轮调用前仍保留一次签名校验作为兜底
+- 单会话消息先进入 runtime 队列；当待处理消息数超过 `pending_message_threshold` 时，会对同一说话人的连续消息执行静默批处理
 - `set_provider_entries()` 注入 provider 配置
 - `export_workspace_defaults()` / `apply_workspace_updates()` 读写 workspace 默认值
 
@@ -140,6 +141,7 @@ config = create_session_config_from_selected_agent(
         # 频率控制：每3条消息执行一次，且内容≥50字符
         memory_extract_batch_size=3,
         memory_extract_min_content_length=50,
+        pending_message_threshold=0,
         session_reply_mode="auto",
     ),
 )
@@ -325,6 +327,7 @@ orchestration = OrchestrationPolicy(
     # === 执行频率控制 ===
     memory_extract_batch_size=3,           # 每3条消息执行一次
     memory_extract_min_content_length=50,  # 消息内容需≥50字符才触发
+    pending_message_threshold=4,           # 单会话积压超过 4 条后进入静默批处理
     
     # === SKILL 系统 ===
     enable_skills=True,                    # SKILL 默认已启用；仅在需要关闭时显式设为 False
@@ -340,11 +343,14 @@ orchestration = OrchestrationPolicy(
 **配置说明**：
 - 若 `unified_model` 设置，则覆盖所有 `task_models` 配置
 - `reply_mode=auto` / `smart` 下，意图分析会优先使用 `task_models["intent_analysis"]`；未设置时回退 `unified_model` 或主模型
+- 当 `task_enabled["intent_analysis"] = true` 时，该轮意图结论必须来自模型；预算不足、provider 失败或解析失败时，不再自动回退到关键词意图推断
 - 频率控制：当消息数达到批次大小且内容长度满足时，执行任务
+- runtime 先按 session 排队；只有当待处理消息数超过 `pending_message_threshold` 时，才会把同一说话人的连续消息静默合并
 - SKILL 目录：框架会始终先创建 `{work_path}/skills/` 与 `README.md`；关闭 SKILL 仅影响调用，不影响目录引导文件生成
 - 提示词分割：当 `enable_prompt_driven_splitting=True` 时，系统提示会带分割指令，AI 会在适当位置输出 `<MSG_SPLIT>` 标记
 - 当前配置统一通过 `task_enabled/task_models/task_budgets/task_temperatures/task_max_tokens/task_retries` 管理 `intent_analysis`
 - 旧配置文件若仍包含 `enable_intent_analysis` / `intent_analysis_model`，加载时会自动映射到任务配置，但新的模板与持久化输出不再写出这两个字段
+- 旧配置文件若仍包含 `message_debounce_seconds`，加载时会自动映射到 `pending_message_threshold`；迁移细节见 `docs/migration-v0.27.md`
 
 若使用 SiliconFlow，可直接替换 provider：
 

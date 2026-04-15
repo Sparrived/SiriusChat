@@ -41,7 +41,7 @@ class TestOrchestrationConfigValidation:
             preset=preset,
             orchestration=OrchestrationPolicy(
                 unified_model="gpt-4",
-            message_debounce_seconds=0.0,
+            pending_message_threshold=0.0,
             ),
         )
 
