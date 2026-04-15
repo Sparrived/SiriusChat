@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any, Callable, Awaitable
 
@@ -55,10 +56,14 @@ _INTENT_SYSTEM_PROMPT = (
     "重要规则：\n"
     "- 仅凭\"你\"字不能判定指向AI，必须结合上下文确认\n"
     "- 群聊里可能有多个 AI，必须优先判断消息是指向当前模型自身，还是指向其他 AI\n"
+    "- 如果当前消息命中了人类名字或其他AI名字，且没有命中当前模型名字，通常不能判定为 self_ai\n"
     "- 如果上一条消息是某个人说的，当前消息可能在回复那个人而非AI\n"
     "- 当群聊中有多人对话时，要根据话题连续性判断说话对象\n"
     "- 不要输出任何额外文字\n"
 )
+
+_INTENT_CONTEXT_MESSAGE_LIMIT = 3
+_INTENT_CONTEXT_TEXT_LIMIT = 48
 
 
 @dataclass(slots=True)
@@ -144,26 +149,23 @@ class IntentAnalyzer:
     ) -> GenerationRequest:
         """Build a GenerationRequest for the intent analysis task."""
 
-        # 构造丰富的上下文
-        context_lines: list[str] = []
-        if recent_messages:
-            for msg in recent_messages[-8:]:
-                role = msg.get("role", "")
-                speaker = msg.get("speaker", "")
-                text = msg.get("content", "")[:120]
-                label = speaker if speaker else role
-                context_lines.append(f"[{label}] {text}")
-
         current_ai_names = [name for name in (agent_name, agent_alias) if str(name).strip()]
         other_ai_names = IntentAnalyzer._extract_other_ai_names(
             recent_messages=recent_messages,
             agent_name=agent_name,
             agent_alias=agent_alias,
         )
+        self_hits = IntentAnalyzer._extract_name_hits(content, current_ai_names)
+        other_ai_hits = IntentAnalyzer._extract_name_hits(content, other_ai_names)
+        human_hits = IntentAnalyzer._extract_name_hits(content, participant_names)
+        context_lines = IntentAnalyzer._summarize_recent_messages(recent_messages)
 
-        participants_info = f"群内参与者：{', '.join(participant_names)}" if participant_names else ""
+        participants_info = f"群内人类参与者：{', '.join(participant_names[:8])}" if participant_names else ""
         current_ai_info = f"当前模型自身：{', '.join(current_ai_names)}" if current_ai_names else ""
-        other_ai_info = f"近期其他AI发言者：{', '.join(other_ai_names)}" if other_ai_names else ""
+        other_ai_info = f"近期其他AI发言者：{', '.join(other_ai_names[:4])}" if other_ai_names else ""
+        self_hit_info = f"当前消息命中的当前模型名字：{', '.join(self_hits)}" if self_hits else ""
+        other_ai_hit_info = f"当前消息命中的其他AI名字：{', '.join(other_ai_hits)}" if other_ai_hits else ""
+        human_hit_info = f"当前消息命中的人类名字：{', '.join(human_hits)}" if human_hits else ""
 
         user_prompt = (
             f"AI名称: {agent_name}"
@@ -171,7 +173,10 @@ class IntentAnalyzer:
             + (f"\n{current_ai_info}" if current_ai_info else "")
             + (f"\n{other_ai_info}" if other_ai_info else "")
             + (f"\n{participants_info}" if participants_info else "")
-            + (f"\n\n近期对话:\n" + "\n".join(context_lines) if context_lines else "")
+            + (f"\n{self_hit_info}" if self_hit_info else "")
+            + (f"\n{other_ai_hit_info}" if other_ai_hit_info else "")
+            + (f"\n{human_hit_info}" if human_hit_info else "")
+            + (f"\n\n最近上下文摘要:\n" + "\n".join(context_lines) if context_lines else "")
             + f"\n\n当前消息: {content[:400]}"
         )
 
@@ -262,29 +267,21 @@ class IntentAnalyzer:
         """
         text = content.strip().lower()
         original_text = content.strip()
-        current_ai_names = {
-            str(name).strip().lower()
-            for name in (agent_name, agent_alias)
-            if str(name).strip()
-        }
-        other_ai_names = {
-            name.lower()
-            for name in IntentAnalyzer._extract_other_ai_names(
-                recent_messages=recent_messages or [],
-                agent_name=agent_name,
-                agent_alias=agent_alias,
-            )
-        }
-        human_names = {
-            str(name).strip().lower()
-            for name in (participant_names or [])
-            if str(name).strip()
-        }
+        current_ai_names = [name for name in (agent_name, agent_alias) if str(name).strip()]
+        other_ai_names = IntentAnalyzer._extract_other_ai_names(
+            recent_messages=recent_messages or [],
+            agent_name=agent_name,
+            agent_alias=agent_alias,
+        )
+        human_names = [str(name).strip() for name in (participant_names or []) if str(name).strip()]
 
         # ── 判断 target ──
-        self_ai_directed = any(name in text for name in current_ai_names)
-        other_ai_directed = any(name in text for name in other_ai_names)
-        other_human_directed = any(name in text for name in human_names - current_ai_names)
+        self_ai_hits = IntentAnalyzer._extract_name_hits(content, current_ai_names)
+        other_ai_hits = IntentAnalyzer._extract_name_hits(content, other_ai_names)
+        other_human_hits = IntentAnalyzer._extract_name_hits(content, human_names)
+        self_ai_directed = bool(self_ai_hits)
+        other_ai_directed = bool(other_ai_hits)
+        other_human_directed = bool(other_human_hits)
 
         # @ 提及检测
         if "@" in text:
@@ -322,9 +319,9 @@ class IntentAnalyzer:
         elif pronoun_hint:
             inferred_scope = IntentAnalyzer._infer_pronoun_target_scope(
                 recent_messages=recent_messages or [],
-                current_ai_names=current_ai_names,
-                other_ai_names=other_ai_names,
-                human_names=human_names,
+                current_ai_names={name.lower() for name in current_ai_names},
+                other_ai_names={name.lower() for name in other_ai_names},
+                human_names={name.lower() for name in human_names},
             )
             if inferred_scope == "self_ai":
                 target = "ai"
@@ -452,6 +449,61 @@ class IntentAnalyzer:
             seen.add(lowered)
             other_ai_names.append(speaker)
         return other_ai_names
+
+    @staticmethod
+    def _summarize_recent_messages(recent_messages: list[dict[str, str]]) -> list[str]:
+        context_lines: list[str] = []
+        for msg in recent_messages[-_INTENT_CONTEXT_MESSAGE_LIMIT:]:
+            role = str(msg.get("role", "")).strip().lower()
+            speaker = str(msg.get("speaker", "")).strip()
+            content = IntentAnalyzer._compact_text(
+                str(msg.get("content", "")),
+                max_chars=_INTENT_CONTEXT_TEXT_LIMIT,
+            )
+            if not content:
+                continue
+            label = speaker if speaker else role or "unknown"
+            context_lines.append(f"[{label}] {content}")
+        return context_lines
+
+    @staticmethod
+    def _compact_text(text: str, *, max_chars: int) -> str:
+        compact = re.sub(r"\s+", " ", text).strip()
+        if len(compact) <= max_chars:
+            return compact
+        return compact[:max_chars]
+
+    @staticmethod
+    def _name_variants(name: str) -> set[str]:
+        normalized = re.sub(r"\s+", " ", str(name).strip())
+        if not normalized:
+            return set()
+
+        variants: set[str] = set()
+        lowered = normalized.lower()
+        compact = normalized.replace(" ", "").lower()
+        if len(lowered) >= 2:
+            variants.add(lowered)
+        if len(compact) >= 2:
+            variants.add(compact)
+
+        for part in re.split(r"[\s/|,，;；:：()（）\[\]<>《》]+", normalized):
+            lowered_part = part.strip().lower()
+            if len(lowered_part) >= 2:
+                variants.add(lowered_part)
+
+        return variants
+
+    @staticmethod
+    def _extract_name_hits(content: str, names: list[str]) -> list[str]:
+        lowered_content = str(content).strip().lower()
+        hits: list[str] = []
+        for name in names:
+            variants = IntentAnalyzer._name_variants(name)
+            if any(variant in lowered_content for variant in variants):
+                if name not in hits:
+                    hits.append(name)
+        return hits
 
     @staticmethod
     def _infer_pronoun_target_scope(

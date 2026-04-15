@@ -538,6 +538,7 @@ msg = Message(
 - `min_reply_interval_seconds` 可配置（默认 0，关闭）：AI 刚回复后，runtime 会在最小间隔内继续排队；窗口结束后先合并同一说话人的连续消息，再进入正常的 reply_mode/intent 判断
 - `intent_analysis` 启用后必须通过模型推断；若调用失败或解析失败，该轮不会再回退到关键词意图推断
 - 多 AI 群聊里，`intent_analysis` 会优先区分“当前模型自身”与“其他 AI”；当用户明显是在调用其他 AI 时，当前模型会抑制自动回复
+- 为减少多 AI 误判，`intent_analysis` 传给模型的上下文已收紧为极小摘要，并会显式标出当前消息命中的当前模型名字、其他 AI 名字和人类名字
 - `max_concurrent_llm_calls` 可配置（默认 1）：LLM 并发数限流
 - `pending_message_threshold` 可配置（默认 4）：当单会话待处理消息积压超过阈值时，runtime 会进入静默批处理并合并同一说话人的连续消息
 - 提示词分割和 SKILL 调用标记现在为框架内置常量，外部配置不再暴露这些 marker

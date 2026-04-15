@@ -138,6 +138,17 @@ class TestFallbackAnalysis:
         assert result.target_scope == "human"
         assert result.directed_at_ai is False
 
+    def test_target_others_when_mentioning_split_participant_name(self):
+        result = IntentAnalyzer.fallback_analysis(
+            "白子晚安，明天见。",
+            "月白",
+            "Sirius",
+            ["砂狼 白子", "小桃"],
+        )
+        assert result.target == "others"
+        assert result.target_scope == "human"
+        assert result.directed_at_ai is False
+
     def test_directed_at_ai_engagement_higher_than_ambient(self):
         """直接提及 AI 的消息 importance 应高于普通消息。"""
         directed = IntentAnalyzer.fallback_analysis("助手你好吗？", "助手", "")
@@ -280,6 +291,36 @@ class TestParseResponse:
 
 class TestAnalyzeLLM:
     """IntentAnalyzer.analyze 通过 MockProvider 测试."""
+
+    def test_build_request_uses_compact_context_summary(self):
+        long_context = "上下文片段" * 12 + "TAIL-MARKER"
+        request = IntentAnalyzer.build_request(
+            content="白子晚安，Claude 先别抢答。",
+            agent_name="月白",
+            agent_alias="Sirius",
+            participant_names=["砂狼 白子", "小桃"],
+            recent_messages=[
+                {"role": "assistant", "speaker": "月白", "content": "first dropped context"},
+                {"role": "user", "speaker": "老师", "content": "second dropped context"},
+                {"role": "assistant", "speaker": "Claude", "content": "Claude recent context should stay"},
+                {
+                    "role": "user",
+                    "speaker": "老师",
+                    "content": long_context,
+                },
+                {"role": "assistant", "speaker": "月白", "content": "last compact context"},
+            ],
+            model="mock-model",
+        )
+
+        prompt = str(request.messages[0]["content"])
+        assert "最近上下文摘要:" in prompt
+        assert "近期对话:" not in prompt
+        assert "first dropped context" not in prompt
+        assert "second dropped context" not in prompt
+        assert "当前消息命中的人类名字：砂狼 白子" in prompt
+        assert "当前消息命中的其他AI名字：Claude" in prompt
+        assert "TAIL-MARKER" not in prompt
 
     def test_analyze_returns_parsed_result(self):
         async def _run():
