@@ -1080,6 +1080,65 @@ def test_reply_mode_auto_does_not_reply_to_other_ai_mentions() -> None:
     asyncio.run(_run())
 
 
+def test_reply_mode_auto_does_not_reply_to_group_ai_control_command_without_self_target() -> None:
+    async def _run() -> None:
+        provider = MockProvider(
+            responses=[
+                json.dumps(
+                    {
+                        "intent_type": "command",
+                        "target": "ai",
+                        "target_scope": "self_ai",
+                        "importance": 0.95,
+                        "needs_memory": True,
+                        "needs_summary": True,
+                        "reason": "用户在命令当前模型关闭群 AI。",
+                        "evidence_span": "关闭本群ai",
+                    },
+                    ensure_ascii=False,
+                ),
+                "不应触发主回复",
+            ]
+        )
+        engine = create_async_engine(provider)
+        config = SessionConfig(
+            work_path=Path("data/tests/intent_analysis_group_ai_control"),
+            preset=AgentPreset(
+                agent=Agent(name="主助手", persona="异步测试", model="mock-model"),
+                global_system_prompt="测试系统提示词",
+            ),
+            orchestration=OrchestrationPolicy(
+                unified_model="",
+                task_models={"intent_analysis": "intent-model"},
+                task_enabled={
+                    "memory_extract": False,
+                    "event_extract": False,
+                    "intent_analysis": True,
+                    "memory_manager": False,
+                },
+                session_reply_mode="auto",
+                engagement_sensitivity=1.0,
+                pending_message_threshold=0.0,
+            ),
+        )
+
+        transcript = await engine.run_live_message(
+            config=config,
+            turn=Message(role="user", speaker="小王", content="关闭本群ai", reply_mode="auto"),
+            transcript=Transcript(messages=[Message(role="system", content=config.global_system_prompt)]),
+            environment_context="当前群名: AI 协作群",
+            finalize_and_persist=True,
+        )
+
+        assert [request.purpose for request in provider.requests] == ["intent_analysis"]
+        prompt = str(provider.requests[0].messages[0]["content"])
+        assert "环境线索：当前群名: AI 协作群" in prompt
+        assistant_messages = [msg for msg in transcript.messages if msg.role == "assistant" and msg.speaker == "主助手"]
+        assert assistant_messages == []
+
+    asyncio.run(_run())
+
+
 def test_run_live_session_reply_mode_auto_suppresses_rapid_chatter() -> None:
     async def _run() -> None:
         provider = MockProvider(responses=["第一条回复", "第二条回复", "第三条回复"])

@@ -179,6 +179,29 @@ class TestFallbackAnalysis:
         assert result.target_scope == "human"
         assert result.directed_at_ai is False
 
+    def test_group_control_command_without_self_target_forces_no_reply(self):
+        result = IntentAnalyzer.fallback_analysis(
+            "关闭本群ai。",
+            "月白",
+            "Sirius",
+            ["小王"],
+        )
+        assert result.intent_type == "command"
+        assert result.force_no_reply is True
+        assert result.directed_at_current_ai is False
+        assert result.target_scope != "self_ai"
+
+    def test_group_control_command_with_explicit_self_target_is_not_suppressed(self):
+        result = IntentAnalyzer.fallback_analysis(
+            "月白，关闭本群ai。",
+            "月白",
+            "Sirius",
+            ["小王"],
+        )
+        assert result.force_no_reply is False
+        assert result.directed_at_current_ai is True
+        assert result.target_scope == "self_ai"
+
     def test_directed_at_ai_engagement_higher_than_ambient(self):
         """直接提及 AI 的消息 importance 应高于普通消息。"""
         directed = IntentAnalyzer.fallback_analysis("助手你好吗？", "助手", "")
@@ -329,6 +352,7 @@ class TestAnalyzeLLM:
             agent_name="月白",
             agent_alias="Sirius",
             participant_names=["砂狼 白子", "小桃"],
+            participant_alias_map={"砂狼 白子": ["白子"]},
             recent_messages=[
                 {"role": "assistant", "speaker": "月白", "content": "first dropped context"},
                 {"role": "user", "speaker": "老师", "content": "second dropped context"},
@@ -340,6 +364,7 @@ class TestAnalyzeLLM:
                 },
                 {"role": "assistant", "speaker": "月白", "content": "last compact context"},
             ],
+            environment_context="当前群名: AI 协作群",
             model="mock-model",
         )
 
@@ -348,7 +373,11 @@ class TestAnalyzeLLM:
         assert "近期对话:" not in prompt
         assert "first dropped context" not in prompt
         assert "second dropped context" in prompt
-        assert "最近AI发言者（近到远）：月白, Claude" in prompt
+        assert "群内人类参与者：砂狼 白子 (别称: 白子), 小桃" in prompt
+        assert "环境线索：当前群名: AI 协作群" in prompt
+        assert "最近AI发言者（近到远）：" in prompt
+        assert "月白" in prompt
+        assert "Claude" in prompt
         assert "最近人类发言者（近到远）：老师" in prompt
         assert "当前消息命中的人类名字：砂狼 白子" in prompt
         assert "当前消息命中的其他AI名字：Claude" in prompt
@@ -360,6 +389,7 @@ class TestAnalyzeLLM:
             agent_name="助手",
             agent_alias="",
             participant_names=["小王", "小李"],
+            participant_alias_map={"小王": ["老王"]},
             recent_messages=[
                 {"role": "assistant", "speaker": "助手", "content": "先观察两天再决定。"},
                 {"role": "user", "speaker": "小王", "content": "我插一句，这里也要看预算。"},
@@ -375,8 +405,11 @@ class TestAnalyzeLLM:
         assert "[小王] 我插一句，这里也要看预算。" in prompt
         assert "[Claude] 如果急的话也能直接上。" in prompt
         assert "[小李] 我更关心上线窗口。" in prompt
-        assert "最近AI发言者（近到远）：Claude, 助手" in prompt
-        assert "最近人类发言者（近到远）：小李, 小王" in prompt
+        assert "最近AI发言者（近到远）：" in prompt
+        assert "Claude" in prompt
+        assert "助手" in prompt
+        assert "最近人类发言者（近到远）：" in prompt
+        assert "小王 (别称: 老王)" in prompt
 
     def test_analyze_returns_parsed_result(self):
         async def _run():

@@ -4,6 +4,21 @@
 
 ## [Unreleased]
 
+## [0.27.7] - 2026-04-16
+
+### Changed
+- **意图分析新增近期发言人别称与环境线索**：`intent_analysis` 现在会把近期人类发言者的 aliases、一部分近期 AI 发言者身份线索，以及 `environment_context` 中的群名/环境摘要一并送入模型，减少只靠原始 speaker 名称带来的歧义。
+
+### Fixed
+- **群控/停用类命令不再误触发当前模型回复**：像“关闭本群ai”“禁用机器人”“别让 bot 说话”这类操作性语句，如果没有明确点名当前模型自身，即使意图模型误判成 `self_ai`，也会被硬抑制，不触发自动回复。
+- **近期发言人别称现在会参与人类目标识别**：当用户近期发言者在记忆里已有 alias，意图分析不再只看 display name，而会把名字和 aliases 一起作为人类线索。
+
+### Added
+- 新增回归测试，覆盖近期发言人 aliases 与 `environment_context` 进入 intent prompt，以及群控命令在 LLM 误判时仍不触发主回复的场景。
+
+### Documentation
+- 更新 README、架构文档、外部接入文档与相关 SKILL，说明意图分析新增近期发言人 aliases / environment_context 线索，以及群控命令的自动回复抑制规则。
+
 ## [0.27.6] - 2026-04-16
 
 ### Changed

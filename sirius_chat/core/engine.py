@@ -970,6 +970,7 @@ class AsyncRolePlayEngine:
         transcript: Transcript,
         participant: Participant,
         content: str,
+        environment_context: str,
         task_token_usage: dict[str, int],
     ) -> IntentAnalysis | None:
         """执行新版意图分析（携带参与者上下文）。"""
@@ -978,6 +979,7 @@ class AsyncRolePlayEngine:
             transcript=transcript,
             participant=participant,
             content=content,
+            environment_context=environment_context,
             task_token_usage=task_token_usage,
             call_with_retry=self._call_provider_with_retry,
             get_model=self.get_model_for_task,
@@ -1838,6 +1840,7 @@ class AsyncRolePlayEngine:
                 transcript=transcript,
                 participant=participant,
                 content=turn.content,
+                environment_context=environment_context,
                 task_token_usage=context.counters.task_token_usage,
             )
 

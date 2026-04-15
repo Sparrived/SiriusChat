@@ -56,6 +56,7 @@ async def run_engagement_intent_analysis(
     transcript: Transcript,
     participant: Participant,
     content: str,
+    environment_context: str,
     task_token_usage: dict[str, int],
     call_with_retry: _CallWithRetry,
     get_model: _GetModel,
@@ -65,23 +66,47 @@ async def run_engagement_intent_analysis(
     task_name = TASK_INTENT_ANALYSIS
 
     participant_names: list[str] = []
+    participant_alias_map: dict[str, list[str]] = {}
     seen: set[str] = set()
     for msg in reversed(transcript.messages[-20:]):
         if msg.role == "user" and msg.speaker and msg.speaker not in seen:
             seen.add(msg.speaker)
             participant_names.append(msg.speaker)
+            aliases: list[str] = []
+            user_id = transcript.user_memory.resolve_user_id(speaker=msg.speaker)
+            if user_id:
+                entry = transcript.user_memory.entries.get(user_id)
+                if entry is not None:
+                    aliases = list(entry.profile.aliases)
+            if not aliases and participant.name == msg.speaker:
+                aliases = list(participant.aliases)
+            participant_alias_map[msg.speaker] = [
+                alias for alias in aliases
+                if alias.strip() and alias.strip().lower() != msg.speaker.strip().lower()
+            ]
+
+    if participant.name and participant.aliases and participant.name not in participant_alias_map:
+        participant_alias_map[participant.name] = [
+            alias for alias in participant.aliases
+            if alias.strip() and alias.strip().lower() != participant.name.strip().lower()
+        ]
 
     recent_messages: list[dict[str, str]] = []
     for msg in transcript.messages[-8:]:
         if msg.role in ("user", "assistant"):
-            entry: dict[str, str] = {"role": msg.role, "content": msg.content}
+            message_entry: dict[str, str] = {"role": msg.role, "content": msg.content}
             if msg.speaker:
-                entry["speaker"] = msg.speaker
-            recent_messages.append(entry)
+                message_entry["speaker"] = msg.speaker
+            recent_messages.append(message_entry)
 
     if not config.orchestration.is_task_enabled(task_name):
         return IntentAnalyzer.fallback_analysis(
-            content, config.agent.name, agent_alias, participant_names, recent_messages,
+            content=content,
+            agent_name=config.agent.name,
+            agent_alias=agent_alias,
+            participant_names=participant_names,
+            recent_messages=recent_messages,
+            participant_alias_map=participant_alias_map,
         )
 
     model = get_model(config, task_name)
@@ -91,7 +116,9 @@ async def run_engagement_intent_analysis(
         agent_name=config.agent.name,
         agent_alias=agent_alias,
         participant_names=participant_names,
+        participant_alias_map=participant_alias_map,
         recent_messages=recent_messages,
+        environment_context=environment_context,
         model=model,
         temperature=float(config.orchestration.task_temperatures.get(task_name, 0.1)),
         max_tokens=int(config.orchestration.task_max_tokens.get(task_name, 192)),
@@ -125,6 +152,15 @@ async def run_engagement_intent_analysis(
         record_task_stat(transcript, task_name, "failed_parse")
         logger.warning("意图分析任务响应无法解析，放弃本轮意图推断。")
         return None
+    parsed = IntentAnalyzer.post_process_analysis(
+        parsed,
+        content=content,
+        agent_name=config.agent.name,
+        agent_alias=agent_alias,
+        participant_names=participant_names,
+        participant_alias_map=participant_alias_map,
+        recent_messages=recent_messages,
+    )
     task_token_usage[task_name] = used + estimated_cost
     record_task_stat(transcript, task_name, "succeeded")
     return parsed

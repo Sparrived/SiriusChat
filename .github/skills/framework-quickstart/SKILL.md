@@ -55,7 +55,7 @@ description: "当你需要在不通读全部代码的情况下快速理解 Siriu
 26. `tests/test_workspace_runtime.py`
 27. `tests/test_engine.py`
 - `models/models.py` ✨ **（包重构）** 定义数据契约（多人用户 + 单 AI 主助手）。
-- `OrchestrationPolicy` 用于任务路由与任务级参数控制，支持 `memory_extract`、`event_extract`、`intent_analysis`、`memory_manager` 等任务的模型配置。`reply_mode=auto` 下的 LLM 意图分析已纳入 `intent_analysis` 任务；关闭该任务时才会走关键词回退，任务启用后若调用失败或解析失败，本轮不会再回退关键词意图推断。多 AI 群聊里，`intent_analysis` 还会区分消息是在叫当前模型自身还是其他 AI，并在后者场景下抑制当前模型自动回复；为降低误判，发给模型的上下文已改为最近交互链摘要，并会额外暴露最近 AI / 人类发言者，以及当前消息命中的当前模型/其他 AI/人类名字线索。同时支持提示词驱动的内容分割（`enable_prompt_driven_splitting=True`）、基于 `pending_message_threshold` 的 runtime 积压静默批处理，以及基于 `min_reply_interval_seconds` 的最小回复间隔冷却。✨ `memory_manager` 是标准 LLM 任务，用于汇聚、去重、标注、冲突检测记忆，并为后台归纳与长上下文下的即时整理提供模型参数。
+- `OrchestrationPolicy` 用于任务路由与任务级参数控制，支持 `memory_extract`、`event_extract`、`intent_analysis`、`memory_manager` 等任务的模型配置。`reply_mode=auto` 下的 LLM 意图分析已纳入 `intent_analysis` 任务；关闭该任务时才会走关键词回退，任务启用后若调用失败或解析失败，本轮不会再回退关键词意图推断。多 AI 群聊里，`intent_analysis` 还会区分消息是在叫当前模型自身还是其他 AI，并在后者场景下抑制当前模型自动回复；为降低误判，发给模型的上下文已改为最近交互链摘要，并会额外暴露最近 AI / 人类发言者、近期发言人的 aliases、`environment_context` 环境线索，以及当前消息命中的当前模型/其他 AI/人类名字线索。对未明确点名当前模型的群控/停用类命令，还会在 engagement 前做硬抑制。同时支持提示词驱动的内容分割（`enable_prompt_driven_splitting=True`）、基于 `pending_message_threshold` 的 runtime 积压静默批处理，以及基于 `min_reply_interval_seconds` 的最小回复间隔冷却。✨ `memory_manager` 是标准 LLM 任务，用于汇聚、去重、标注、冲突检测记忆，并为后台归纳与长上下文下的即时整理提供模型参数。
 - 兼容层面，旧 `enable_intent_analysis` / `intent_analysis_model` 仅作为读取时的映射入口存在；当前模板、workspace 持久化与示例应统一使用 `task_enabled/task_models`。
 - ✨ **(v0.13.0)** `OrchestrationPolicy` 新增 AI 自身记忆配置（`enable_self_memory`、`self_memory_extract_batch_size`、`self_memory_max_diary_prompt_entries`、`self_memory_max_glossary_prompt_terms`）。
 ## 心智模型

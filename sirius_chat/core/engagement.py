@@ -53,6 +53,15 @@ class EngagementCoordinator:
         """
         sensitivity = max(0.0, min(1.0, sensitivity))
 
+        if intent is not None and intent.force_no_reply:
+            return EngagementDecision(
+                should_reply=False,
+                engagement_score=0.0,
+                reason=f"意图规则抑制回复: {intent.reason}",
+                heat=heat,
+                intent=intent,
+            )
+
         # ── 直接指向当前模型自身的消息 → 高概率回复 ──
         if intent is not None and intent.directed_at_current_ai:
             # 即便群聊过热，被直接点名时仍应回复
