@@ -62,8 +62,9 @@ _INTENT_SYSTEM_PROMPT = (
     "- 不要输出任何额外文字\n"
 )
 
-_INTENT_CONTEXT_MESSAGE_LIMIT = 3
+_INTENT_CONTEXT_MESSAGE_LIMIT = 4
 _INTENT_CONTEXT_TEXT_LIMIT = 48
+_PRONOUN_CONTEXT_TURN_LIMIT = 4
 
 
 @dataclass(slots=True)
@@ -159,10 +160,22 @@ class IntentAnalyzer:
         other_ai_hits = IntentAnalyzer._extract_name_hits(content, other_ai_names)
         human_hits = IntentAnalyzer._extract_name_hits(content, participant_names)
         context_lines = IntentAnalyzer._summarize_recent_messages(recent_messages)
+        recent_ai_speakers = IntentAnalyzer._extract_recent_speakers(
+            recent_messages=recent_messages,
+            role="assistant",
+            limit=3,
+        )
+        recent_human_speakers = IntentAnalyzer._extract_recent_speakers(
+            recent_messages=recent_messages,
+            role="user",
+            limit=4,
+        )
 
         participants_info = f"群内人类参与者：{', '.join(participant_names[:8])}" if participant_names else ""
         current_ai_info = f"当前模型自身：{', '.join(current_ai_names)}" if current_ai_names else ""
         other_ai_info = f"近期其他AI发言者：{', '.join(other_ai_names[:4])}" if other_ai_names else ""
+        recent_ai_info = f"最近AI发言者（近到远）：{', '.join(recent_ai_speakers)}" if recent_ai_speakers else ""
+        recent_human_info = f"最近人类发言者（近到远）：{', '.join(recent_human_speakers)}" if recent_human_speakers else ""
         self_hit_info = f"当前消息命中的当前模型名字：{', '.join(self_hits)}" if self_hits else ""
         other_ai_hit_info = f"当前消息命中的其他AI名字：{', '.join(other_ai_hits)}" if other_ai_hits else ""
         human_hit_info = f"当前消息命中的人类名字：{', '.join(human_hits)}" if human_hits else ""
@@ -173,10 +186,12 @@ class IntentAnalyzer:
             + (f"\n{current_ai_info}" if current_ai_info else "")
             + (f"\n{other_ai_info}" if other_ai_info else "")
             + (f"\n{participants_info}" if participants_info else "")
+            + (f"\n{recent_ai_info}" if recent_ai_info else "")
+            + (f"\n{recent_human_info}" if recent_human_info else "")
             + (f"\n{self_hit_info}" if self_hit_info else "")
             + (f"\n{other_ai_hit_info}" if other_ai_hit_info else "")
             + (f"\n{human_hit_info}" if human_hit_info else "")
-            + (f"\n\n最近上下文摘要:\n" + "\n".join(context_lines) if context_lines else "")
+            + (f"\n\n最近交互链摘要:\n" + "\n".join(context_lines) if context_lines else "")
             + f"\n\n当前消息: {content[:400]}"
         )
 
@@ -453,7 +468,10 @@ class IntentAnalyzer:
     @staticmethod
     def _summarize_recent_messages(recent_messages: list[dict[str, str]]) -> list[str]:
         context_lines: list[str] = []
-        for msg in recent_messages[-_INTENT_CONTEXT_MESSAGE_LIMIT:]:
+        for msg in IntentAnalyzer._recent_distinct_turns(
+            recent_messages,
+            limit=_INTENT_CONTEXT_MESSAGE_LIMIT,
+        ):
             role = str(msg.get("role", "")).strip().lower()
             speaker = str(msg.get("speaker", "")).strip()
             content = IntentAnalyzer._compact_text(
@@ -465,6 +483,49 @@ class IntentAnalyzer:
             label = speaker if speaker else role or "unknown"
             context_lines.append(f"[{label}] {content}")
         return context_lines
+
+    @staticmethod
+    def _recent_distinct_turns(
+        recent_messages: list[dict[str, str]],
+        *,
+        limit: int,
+    ) -> list[dict[str, str]]:
+        collapsed: list[dict[str, str]] = []
+        previous_key: tuple[str, str] | None = None
+        for msg in recent_messages:
+            role = str(msg.get("role", "")).strip().lower()
+            speaker = str(msg.get("speaker", "")).strip()
+            key = (role, speaker.lower())
+            if key == previous_key:
+                if collapsed:
+                    collapsed[-1] = msg
+                continue
+            collapsed.append(msg)
+            previous_key = key
+        return collapsed[-limit:] if limit > 0 else collapsed
+
+    @staticmethod
+    def _extract_recent_speakers(
+        *,
+        recent_messages: list[dict[str, str]],
+        role: str,
+        limit: int,
+    ) -> list[str]:
+        speakers: list[str] = []
+        seen: set[str] = set()
+        for msg in reversed(IntentAnalyzer._recent_distinct_turns(recent_messages, limit=limit * 2)):
+            msg_role = str(msg.get("role", "")).strip().lower()
+            speaker = str(msg.get("speaker", "")).strip()
+            if msg_role != role or not speaker:
+                continue
+            lowered = speaker.lower()
+            if lowered in seen:
+                continue
+            seen.add(lowered)
+            speakers.append(speaker)
+            if len(speakers) >= limit:
+                break
+        return speakers
 
     @staticmethod
     def _compact_text(text: str, *, max_chars: int) -> str:
@@ -513,19 +574,44 @@ class IntentAnalyzer:
         other_ai_names: set[str],
         human_names: set[str],
     ) -> str:
-        for msg in reversed(recent_messages):
+        distinct_turns = IntentAnalyzer._recent_distinct_turns(
+            recent_messages,
+            limit=_PRONOUN_CONTEXT_TURN_LIMIT,
+        )
+        if not distinct_turns:
+            return "unknown"
+
+        scores = {
+            "self_ai": 0.0,
+            "other_ai": 0.0,
+            "human": 0.0,
+        }
+        recency_weights = (1.0, 0.7, 0.45, 0.3)
+        for index, msg in enumerate(reversed(distinct_turns)):
             role = str(msg.get("role", "")).strip().lower()
             speaker = str(msg.get("speaker", "")).strip().lower()
+            weight = recency_weights[index] if index < len(recency_weights) else 0.2
             if role == "assistant":
                 if not speaker or speaker in current_ai_names:
-                    return "self_ai"
+                    scores["self_ai"] += weight * 1.25
+                    continue
                 if speaker in other_ai_names:
-                    return "other_ai"
-                return "other_ai"
+                    scores["other_ai"] += weight * 1.25
+                    continue
+                scores["other_ai"] += weight * 1.1
+                continue
             if role == "user":
                 if speaker in human_names or speaker:
-                    return "human"
-        return "unknown"
+                    scores["human"] += weight * 0.55
+
+        ranked = sorted(scores.items(), key=lambda item: item[1], reverse=True)
+        top_label, top_score = ranked[0]
+        second_score = ranked[1][1] if len(ranked) > 1 else 0.0
+        if top_score <= 0:
+            return "unknown"
+        if second_score > 0 and top_score < second_score * 1.15:
+            return "unknown"
+        return top_label
 
 
 __all__ = [

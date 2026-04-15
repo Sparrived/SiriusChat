@@ -124,6 +124,36 @@ class TestFallbackAnalysis:
         assert result.target_scope == "self_ai"
         assert result.directed_at_current_ai is True
 
+    def test_pronoun_still_tracks_current_ai_after_human_interjection(self):
+        result = IntentAnalyzer.fallback_analysis(
+            "你刚才那个建议我会试试。",
+            "助手",
+            "",
+            ["小王", "小李"],
+            [
+                {"role": "assistant", "speaker": "助手", "content": "我建议你先观察两天。"},
+                {"role": "user", "speaker": "小王", "content": "我插一句，这里也要看预算。"},
+            ],
+        )
+        assert result.target == "ai"
+        assert result.target_scope == "self_ai"
+        assert result.directed_at_current_ai is True
+
+    def test_pronoun_still_tracks_other_ai_after_human_interjection(self):
+        result = IntentAnalyzer.fallback_analysis(
+            "你刚才那个思路不错。",
+            "助手",
+            "",
+            ["小王", "小李"],
+            [
+                {"role": "assistant", "speaker": "Claude", "content": "我建议直接拆开做。"},
+                {"role": "user", "speaker": "小王", "content": "我补充一点，这里还有排期问题。"},
+            ],
+        )
+        assert result.target == "ai"
+        assert result.target_scope == "other_ai"
+        assert result.directed_at_current_ai is False
+
     def test_pronoun_maps_to_unknown_not_ai(self):
         """核心修复：裸代词「你」不再直接指向 AI，而是 unknown。"""
         result = IntentAnalyzer.fallback_analysis("你觉得呢", "助手", "")
@@ -314,13 +344,39 @@ class TestAnalyzeLLM:
         )
 
         prompt = str(request.messages[0]["content"])
-        assert "最近上下文摘要:" in prompt
+        assert "最近交互链摘要:" in prompt
         assert "近期对话:" not in prompt
         assert "first dropped context" not in prompt
-        assert "second dropped context" not in prompt
+        assert "second dropped context" in prompt
+        assert "最近AI发言者（近到远）：月白, Claude" in prompt
+        assert "最近人类发言者（近到远）：老师" in prompt
         assert "当前消息命中的人类名字：砂狼 白子" in prompt
         assert "当前消息命中的其他AI名字：Claude" in prompt
         assert "TAIL-MARKER" not in prompt
+
+    def test_build_request_keeps_interjection_chain_context(self):
+        request = IntentAnalyzer.build_request(
+            content="你刚才那个建议我会试试。",
+            agent_name="助手",
+            agent_alias="",
+            participant_names=["小王", "小李"],
+            recent_messages=[
+                {"role": "assistant", "speaker": "助手", "content": "先观察两天再决定。"},
+                {"role": "user", "speaker": "小王", "content": "我插一句，这里也要看预算。"},
+                {"role": "assistant", "speaker": "Claude", "content": "如果急的话也能直接上。"},
+                {"role": "user", "speaker": "小李", "content": "我更关心上线窗口。"},
+            ],
+            model="mock-model",
+        )
+
+        prompt = str(request.messages[0]["content"])
+        assert "最近交互链摘要:" in prompt
+        assert "[助手] 先观察两天再决定。" in prompt
+        assert "[小王] 我插一句，这里也要看预算。" in prompt
+        assert "[Claude] 如果急的话也能直接上。" in prompt
+        assert "[小李] 我更关心上线窗口。" in prompt
+        assert "最近AI发言者（近到远）：Claude, 助手" in prompt
+        assert "最近人类发言者（近到远）：小李, 小王" in prompt
 
     def test_analyze_returns_parsed_result(self):
         async def _run():
