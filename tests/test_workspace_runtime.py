@@ -10,7 +10,7 @@ from unittest.mock import patch
 from sirius_chat.api import Message, UserProfile, WorkspaceLayout, WorkspaceRuntime
 from sirius_chat.config import ConfigManager
 from sirius_chat.config.jsonc import load_json_document, write_session_config_jsonc
-from sirius_chat.config.models import WorkspaceBootstrap
+from sirius_chat.config.models import SessionDefaults, WorkspaceBootstrap
 from sirius_chat.models import Transcript
 from sirius_chat.providers.base import AsyncLLMProvider, GenerationRequest
 from sirius_chat.providers.mock import MockProvider
@@ -505,6 +505,126 @@ def test_workspace_runtime_bootstrap_preserves_existing_task_models_and_provider
             assert providers["openai-compatible"].models == ["mock-model", "intent-model"]
         finally:
             await runtime.close()
+
+    asyncio.run(_run())
+
+
+def test_workspace_runtime_same_bootstrap_does_not_reset_manual_updates_after_restart(tmp_path: Path) -> None:
+    async def _run() -> None:
+        config_root = tmp_path / "config"
+        data_root = tmp_path / "runtime"
+        _write_workspace_agents(
+            config_root,
+            data_root=data_root,
+            agents_payload={
+                "main_agent": {
+                    "agent": {
+                        "name": "主助手",
+                        "persona": "测试人格",
+                        "model": "mock-model",
+                        "temperature": 0.7,
+                        "max_tokens": 512,
+                        "metadata": {},
+                    },
+                    "global_system_prompt": "测试系统提示词",
+                },
+                "alt_agent": {
+                    "agent": {
+                        "name": "副助手",
+                        "persona": "手工切换后人格",
+                        "model": "mock-model",
+                        "temperature": 0.7,
+                        "max_tokens": 512,
+                        "metadata": {},
+                    },
+                    "global_system_prompt": "手工切换后系统提示词",
+                },
+            },
+        )
+
+        bootstrap = WorkspaceBootstrap(
+            active_agent_key="main_agent",
+            session_defaults=SessionDefaults(
+                history_max_messages=100,
+                history_max_chars=8000,
+                max_recent_participant_messages=7,
+                enable_auto_compression=False,
+            ),
+            orchestration_defaults={
+                "session_reply_mode": "always",
+                "message_debounce_seconds": 0.0,
+            },
+            provider_entries=[
+                {
+                    "type": "openai-compatible",
+                    "api_key": "bootstrap-key",
+                    "base_url": "https://bootstrap.example",
+                    "healthcheck_model": "mock-model",
+                }
+            ],
+        )
+
+        first_runtime = WorkspaceRuntime.open(
+            data_root,
+            config_path=config_root,
+            provider=MockProvider(responses=["第一次回复"]),
+            bootstrap=bootstrap,
+        )
+        try:
+            await first_runtime.initialize()
+        finally:
+            await first_runtime.close()
+
+        manager = ConfigManager(base_path=config_root)
+        workspace_config = manager.load_workspace_config(config_root, data_path=data_root)
+        workspace_config.active_agent_key = "alt_agent"
+        workspace_config.session_defaults.history_max_messages = 200
+        workspace_config.session_defaults.history_max_chars = 12000
+        workspace_config.session_defaults.max_recent_participant_messages = 9
+        workspace_config.session_defaults.enable_auto_compression = True
+        workspace_config.orchestration_defaults = manager.merge_configs(
+            dict(workspace_config.orchestration_defaults),
+            {
+                "session_reply_mode": "auto",
+                "message_debounce_seconds": 1.5,
+            },
+        )
+        manager.save_workspace_config(config_root, workspace_config, data_path=data_root)
+
+        layout = WorkspaceLayout(data_root, config_path=config_root)
+        ProviderRegistry(layout).upsert(
+            provider_type="openai-compatible",
+            api_key="manual-key",
+            base_url="https://manual.example",
+            healthcheck_model="mock-model",
+            models=["mock-model"],
+        )
+
+        reopened = WorkspaceRuntime.open(
+            data_root,
+            config_path=config_root,
+            provider=MockProvider(responses=["第二次回复"]),
+            bootstrap=bootstrap,
+        )
+        try:
+            await reopened.initialize()
+            exported = reopened.export_workspace_defaults()
+            providers = ProviderRegistry(layout).load()
+
+            assert exported["active_agent_key"] == "alt_agent"
+            assert exported["session_defaults"]["history_max_messages"] == 200
+            assert exported["session_defaults"]["history_max_chars"] == 12000
+            assert exported["session_defaults"]["max_recent_participant_messages"] == 9
+            assert exported["session_defaults"]["enable_auto_compression"] is True
+            assert exported["orchestration_defaults"]["session_reply_mode"] == "auto"
+            assert exported["orchestration_defaults"]["message_debounce_seconds"] == 1.5
+            assert providers["openai-compatible"].api_key == "manual-key"
+            assert providers["openai-compatible"].base_url == "https://manual.example"
+
+            session_config = reopened._build_session_config("bootstrap-restart")
+            assert session_config.agent.name == "副助手"
+        finally:
+            await reopened.close()
 
     asyncio.run(_run())
 

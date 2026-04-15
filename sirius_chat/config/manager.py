@@ -287,6 +287,10 @@ class ConfigManager:
             work_path=self._coerce_path(payload.get("work_path"), layout.config_root),
             data_path=self._coerce_path(payload.get("data_path"), layout.data_root),
             layout_version=self._coerce_int(payload.get("layout_version"), layout.layout_version),
+            bootstrap_signature=self._coerce_string(
+                payload.get("bootstrap_signature"),
+                fallback.bootstrap_signature,
+            ),
             active_agent_key=self._coerce_string(
                 payload.get("active_agent_key"),
                 fallback.active_agent_key,
@@ -339,6 +343,10 @@ class ConfigManager:
             work_path=layout.config_root,
             data_path=layout.data_root,
             layout_version=layout.layout_version,
+            bootstrap_signature=self._coerce_string(
+                getattr(config, "bootstrap_signature", None),
+                fallback.bootstrap_signature,
+            ),
             active_agent_key=self._coerce_string(
                 getattr(config, "active_agent_key", None),
                 fallback.active_agent_key,

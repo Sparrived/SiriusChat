@@ -4,6 +4,17 @@
 
 ## [Unreleased]
 
+## [0.26.8] - 2026-04-15
+
+### Fixed
+- **同一 WorkspaceBootstrap 重启后不再反复覆盖手工配置**：`WorkspaceRuntime` 现在会把 bootstrap payload 的签名持久化到 `workspace.json`，同一份 bootstrap 在后续重启时不会再次把 `active_agent_key`、`session_defaults`、`orchestration_defaults` 与 provider 注册表覆盖回初始化值，避免外部宿主场景下手工调整配置后再次启动又被重置。
+
+### Added
+- 新增 runtime 回归测试，覆盖“首次应用 bootstrap 后，手工修改 workspace 配置和 provider 注册表，再次重启仍保持生效”的场景。
+
+### Documentation
+- 更新 README、架构文档、外部接入文档和相关 SKILL，明确 `WorkspaceBootstrap` 是按签名一次性注入默认值，而不是每次启动强制覆盖现有 workspace。
+
 ## [0.26.7] - 2026-04-15
 
 ### Fixed

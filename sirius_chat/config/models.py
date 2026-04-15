@@ -274,6 +274,7 @@ class WorkspaceConfig:
     work_path: Path
     data_path: Path | None = None
     layout_version: int = 2
+    bootstrap_signature: str = ""
     active_agent_key: str = ""
     session_defaults: SessionDefaults = field(default_factory=SessionDefaults)
     orchestration_defaults: dict[str, Any] = field(default_factory=dict)
@@ -292,6 +293,7 @@ class WorkspaceConfig:
             "work_path": str(self.work_path),
             "data_path": str(self.data_path),
             "layout_version": self.layout_version,
+            "bootstrap_signature": self.bootstrap_signature,
             "active_agent_key": self.active_agent_key,
             "session_defaults": {
                 "history_max_messages": self.session_defaults.history_max_messages,
@@ -313,6 +315,7 @@ class WorkspaceConfig:
             work_path=Path(payload.get("work_path", ".")),
             data_path=Path(payload.get("data_path", payload.get("work_path", "."))),
             layout_version=int(payload.get("layout_version", 2)),
+            bootstrap_signature=str(payload.get("bootstrap_signature", "")).strip(),
             active_agent_key=str(payload.get("active_agent_key", "")).strip(),
             session_defaults=SessionDefaults(
                 history_max_messages=int(session_defaults_payload.get("history_max_messages", 24)),

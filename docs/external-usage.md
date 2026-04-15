@@ -88,6 +88,8 @@ asyncio.run(main())
 ```
 
 > `work_path` 保存会话、记忆、token 与 skill_data；`config_path` 保存 workspace/provider/roleplay/skills 配置。不传 `config_path` 时，系统自动回退到单根布局。`session.json`、`config/session_config.json` 都支持 JSONC 风格注释，CLI 的 `--init-config` 会生成带注释模板。
+>
+> `WorkspaceBootstrap` 适合“首次打开时注入默认值”。runtime 会把 bootstrap payload 的签名写入 `workspace.json`；同一份 bootstrap 在后续重启时不会再次覆盖你已经手工修改过的 workspace 默认值或 provider 注册表。若要更新已存在 workspace 的配置，请优先使用 `apply_workspace_updates()` / `set_provider_entries()`，或显式修改 bootstrap payload 让其作为一次新的初始化输入。
 
 若你使用智谱 BigModel 的 `glm-4.6v`，可以直接改用：
 

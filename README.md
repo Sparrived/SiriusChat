@@ -166,6 +166,8 @@ asyncio.run(main())
 ```
 
 > `work_path` 保存运行态数据；`config_path` 保存 workspace 配置、provider 与角色资产。不传 `config_path` 时，runtime 会回退到单根模式。外部修改 `config_path` 下的 workspace/config/provider/roleplay 文件后，runtime 会通过文件监听自动刷新；单轮调用前仍保留一次签名校验作为兜底。
+>
+> `WorkspaceBootstrap` 只会按 payload 签名持久化一次；同一份 bootstrap 在后续重启时不会再次覆盖你已经手工修改过的 workspace/config/provider 文件。若需要给已存在的 workspace 下发新默认值，请改用 `apply_workspace_updates()`、`set_provider_entries()`，或显式调整 bootstrap payload。
 
 **BigModel GLM-4.6V 示例**
 

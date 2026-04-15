@@ -345,6 +345,11 @@ class WorkspaceRuntime:
         cfg = self._config_manager.load_workspace_config(
             self.layout.config_root, data_path=self.layout.data_root
         )
+        bootstrap_signature = ""
+        if self.persist_bootstrap:
+            bootstrap_signature = self._calculate_bootstrap_signature(bs)
+            if cfg.bootstrap_signature == bootstrap_signature:
+                return
         if bs.active_agent_key:
             cfg.active_agent_key = bs.active_agent_key
         if bs.session_defaults is not None:
@@ -357,11 +362,37 @@ class WorkspaceRuntime:
         if bs.provider_policy is not None:
             cfg.provider_policy = bs.provider_policy
         if self.persist_bootstrap:
+            cfg.bootstrap_signature = bootstrap_signature
             self._config_manager.save_workspace_config(
                 self.layout.config_root, cfg, data_path=self.layout.data_root
             )
         if bs.provider_entries:
             self.set_provider_entries(bs.provider_entries, persist=self.persist_bootstrap)
+
+    def _calculate_bootstrap_signature(self, bootstrap: WorkspaceBootstrap) -> str:
+        session_defaults = None
+        if bootstrap.session_defaults is not None:
+            session_defaults = {
+                "history_max_messages": bootstrap.session_defaults.history_max_messages,
+                "history_max_chars": bootstrap.session_defaults.history_max_chars,
+                "max_recent_participant_messages": bootstrap.session_defaults.max_recent_participant_messages,
+                "enable_auto_compression": bootstrap.session_defaults.enable_auto_compression,
+            }
+        provider_policy = None
+        if bootstrap.provider_policy is not None:
+            provider_policy = {
+                "prefer_workspace_registry": bootstrap.provider_policy.prefer_workspace_registry,
+            }
+        payload = {
+            "active_agent_key": (bootstrap.active_agent_key or "").strip(),
+            "session_defaults": session_defaults,
+            "orchestration_defaults": dict(bootstrap.orchestration_defaults or {}),
+            "provider_entries": list(bootstrap.provider_entries or []),
+            "provider_policy": provider_policy,
+        }
+        return hashlib.sha256(
+            json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+        ).hexdigest()
 
     def _get_engine(self) -> AsyncRolePlayEngine:
         if self._engine is not None:

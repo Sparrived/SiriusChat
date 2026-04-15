@@ -61,6 +61,7 @@ description: "当你需要在不通读全部代码的情况下快速理解 Siriu
 ## 心智模型
 
 - 当前推荐入口是 `WorkspaceRuntime`；它负责文件布局、session 恢复、participants 写回、watcher 热刷新和 provider 注册表联动。
+- `WorkspaceRuntime` 会把 `WorkspaceBootstrap` 的签名记入 `workspace.json`；同一份 bootstrap 只在首次命中时持久化一次，后续重启会保留用户在 config root 下的手工修改。
 - `WorkspaceLayout` 是路径语义的单一事实来源：config root 放配置与资产，data root 放运行态数据。
 - `AsyncRolePlayEngine` 的真实实现位于 `sirius_chat/core/engine.py`；`sirius_chat/async_engine/` 只承担兼容导出与 prompts/orchestration/utils 辅助层。
 - 一个 `SessionConfig` 只对应一个主 AI，主 AI 由 `preset=AgentPreset(...)` 描述，不再推荐在外部配置里手写完整 agent prompt。
