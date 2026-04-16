@@ -68,6 +68,25 @@ class UserMemoryManager:
             entry.runtime.summary_notes = entry.runtime.summary_notes[-max_notes:]
         return True
 
+    def _append_inferred_alias(self, *, entry: UserMemoryEntry, alias: str, max_aliases: int = 5) -> bool:
+        value = alias.strip()
+        if not value:
+            return False
+        normalized = self._normalize_label(value)
+        trusted_labels = {
+            self._normalize_label(label)
+            for label in [entry.profile.name, entry.profile.user_id, *entry.profile.aliases]
+            if label.strip()
+        }
+        if normalized in trusted_labels:
+            return False
+        if any(self._normalize_label(existing) == normalized for existing in entry.runtime.inferred_aliases):
+            return False
+        entry.runtime.inferred_aliases.append(value)
+        if len(entry.runtime.inferred_aliases) > max_aliases:
+            entry.runtime.inferred_aliases = entry.runtime.inferred_aliases[-max_aliases:]
+        return True
+
     def _normalize_trait(self, trait: str) -> str:
         """B approach: Normalize trait to classification label or preserve original.
         
@@ -316,12 +335,7 @@ class UserMemoryManager:
             entry.runtime.inferred_persona = inferred_persona
         if inferred_aliases:
             for alias in inferred_aliases:
-                value = alias.strip()
-                if not value:
-                    continue
-                if value not in entry.profile.aliases:
-                    entry.profile.aliases.append(value)
-                self.speaker_index[self._normalize_label(value)] = user_id
+                self._append_inferred_alias(entry=entry, alias=alias)
         if inferred_traits:
             for item in inferred_traits:
                 if item not in entry.runtime.inferred_traits:
@@ -377,6 +391,9 @@ class UserMemoryManager:
             for trait in incoming.runtime.inferred_traits:
                 if trait not in current.runtime.inferred_traits:
                     current.runtime.inferred_traits.append(trait)
+
+            for alias in incoming.runtime.inferred_aliases:
+                self._append_inferred_alias(entry=current, alias=alias)
 
             for tag in incoming.runtime.preference_tags:
                 if tag not in current.runtime.preference_tags:
@@ -678,6 +695,7 @@ class UserMemoryManager:
             "user_id": user_id,
             "name": profile.name,
             "aliases": profile.aliases[:3],  # Top 3 aliases
+            "weak_aliases": runtime.inferred_aliases[:3],
             "persona": profile.persona,
             "inferred_persona": runtime.inferred_persona,
             "traits": key_traits,
@@ -1043,6 +1061,7 @@ class UserMemoryManager:
                     },
                     "runtime": {
                         "inferred_persona": entry.runtime.inferred_persona,
+                        "inferred_aliases": entry.runtime.inferred_aliases,
                         "inferred_traits": entry.runtime.inferred_traits,
                         "preference_tags": entry.runtime.preference_tags,
                         "recent_messages": entry.runtime.recent_messages,
@@ -1096,6 +1115,7 @@ class UserMemoryManager:
                 profile=profile,
                 runtime=UserRuntimeState(
                     inferred_persona=str(runtime_data.get("inferred_persona", "")),
+                    inferred_aliases=list(runtime_data.get("inferred_aliases", [])),
                     inferred_traits=list(runtime_data.get("inferred_traits", [])),
                     preference_tags=list(runtime_data.get("preference_tags", [])),
                     recent_messages=list(runtime_data.get("recent_messages", [])),
@@ -1114,8 +1134,9 @@ class UserMemoryManager:
                     observed_entities=set(runtime_data.get("observed_entities", [])),
                     # A1: Deserialize timestamp
                     last_event_processed_at=(
-                        datetime.fromisoformat(runtime_data["last_event_processed_at"])
-                        if runtime_data.get("last_event_processed_at")
+                        datetime.fromisoformat(str(runtime_data["last_event_processed_at"]))
+                        if isinstance(runtime_data.get("last_event_processed_at"), str)
+                        and str(runtime_data.get("last_event_processed_at", "")).strip()
                         else None
                     ),
                 ),

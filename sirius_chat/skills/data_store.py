@@ -76,3 +76,11 @@ class SkillDataStore:
     @property
     def is_dirty(self) -> bool:
         return self._dirty
+
+    @property
+    def store_path(self) -> Path:
+        return self._path
+
+    @property
+    def artifact_dir(self) -> Path:
+        return self._path.parent / "artifacts" / self._path.stem

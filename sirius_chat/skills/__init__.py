@@ -14,6 +14,7 @@ Key components:
 
 from sirius_chat.skills.models import (
     SkillDefinition,
+    SkillInvocationContext,
     SkillParameter,
     SkillResult,
     SkillChainContext,
@@ -25,6 +26,7 @@ from sirius_chat.skills.dependency_resolver import resolve_skill_dependencies
 
 __all__ = [
     "SkillDefinition",
+    "SkillInvocationContext",
     "SkillParameter",
     "SkillResult",
     "SkillChainContext",

@@ -593,4 +593,45 @@ def test_handle_provider_command_registers_under_workspace_root(monkeypatch, tmp
     assert captured["work_path"] == tmp_path
 
 
+def test_collect_primary_user_from_input_marks_developer_by_default() -> None:
+    answers = iter(["Alice", "", "", "", ""])
+
+    participant = main_module._collect_primary_user_from_input(
+        input_func=lambda _prompt: next(answers),
+        print_func=lambda _msg: None,
+    )
+
+    assert participant.name == "Alice"
+    assert participant.user_id == "Alice"
+    assert participant.metadata["is_developer"] is True
+
+
+def test_bootstrap_primary_user_loads_persisted_developer_metadata(tmp_path) -> None:
+    profile_path = tmp_path / main_module.PRIMARY_USER_FILE_NAME
+    profile_path.write_text(
+        json.dumps(
+            {
+                "name": "Alice",
+                "user_id": "alice_1",
+                "persona": "测试用户",
+                "aliases": ["A"],
+                "traits": ["谨慎"],
+                "metadata": {"is_developer": True},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    participant = main_module._bootstrap_primary_user(
+        work_path=tmp_path,
+        input_func=lambda _prompt: "",
+        print_func=lambda _msg: None,
+    )
+
+    assert participant.user_id == "alice_1"
+    assert participant.aliases == ["A"]
+    assert participant.metadata["is_developer"] is True
+
+
 

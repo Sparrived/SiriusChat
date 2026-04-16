@@ -24,9 +24,10 @@ from sirius_chat.memory.user.manager import UserMemoryManager
 from sirius_chat.memory.user.models import MemoryFact, UserProfile
 from sirius_chat.background_tasks import BackgroundTaskConfig, BackgroundTaskManager
 from sirius_chat.async_engine.prompts import build_system_prompt
+from sirius_chat.core.memory_runner import build_memory_extract_task_input
 from sirius_chat.config import OrchestrationPolicy
 from sirius_chat.config.models import Agent, AgentPreset, SessionConfig
-from sirius_chat.models.models import Transcript
+from sirius_chat.models.models import Message, Participant, Transcript
 from sirius_chat.providers.mock import MockProvider
 from sirius_chat.providers.base import GenerationRequest
 
@@ -789,6 +790,92 @@ class TestSkipSections:
             session_summary="摘要信息",
         )
         assert "摘要信息" in prompt
+
+    def test_prompt_focuses_on_current_speaker_and_mentioned_participant(self):
+        config = SessionConfig(
+            work_path=Path("data/tests/memory_prompt_focus"),
+            preset=AgentPreset(
+                agent=Agent(name="助手", persona="测试人设", model="mock-model"),
+                global_system_prompt="系统提示",
+            ),
+        )
+        transcript = Transcript()
+
+        transcript.user_memory.register_user(UserProfile(user_id="u1", name="小王", aliases=["王工"]))
+        transcript.user_memory.register_user(UserProfile(user_id="u2", name="小李"))
+        transcript.user_memory.register_user(UserProfile(user_id="u3", name="无关人"))
+
+        entry_a = transcript.user_memory.entries["u1"]
+        entry_a.runtime.recent_messages = ["这条历史消息不应该进入主 prompt"]
+        entry_a.runtime.summary_notes = ["关注灰度发布"]
+        entry_a.runtime.preference_tags = ["结构化沟通"]
+
+        entry_b = transcript.user_memory.entries["u2"]
+        entry_b.runtime.summary_notes = ["负责预算控制"]
+
+        entry_c = transcript.user_memory.entries["u3"]
+        entry_c.runtime.summary_notes = ["这段无关记忆不应出现"]
+
+        transcript.add(
+            Message(
+                role="user",
+                speaker="小王",
+                content="小李上次提到预算收紧，我们继续聊灰度。",
+            )
+        )
+
+        prompt = build_system_prompt(config=config, transcript=transcript)
+
+        assert "关注灰度发布" in prompt
+        assert "负责预算控制" in prompt
+        assert "这段无关记忆不应出现" not in prompt
+        assert "这条历史消息不应该进入主 prompt" not in prompt
+
+    def test_prompt_compacts_session_summary_tail(self):
+        config = SessionConfig(
+            work_path=Path("data/tests/memory_prompt_summary"),
+            preset=AgentPreset(
+                agent=Agent(name="助手", persona="测试人设", model="mock-model"),
+                global_system_prompt="系统提示",
+            ),
+        )
+        transcript = Transcript(
+            session_summary="第一段摘要 || 第二段摘要 || 第三段摘要 || 第四段摘要"
+        )
+
+        prompt = build_system_prompt(config=config, transcript=transcript)
+
+        assert "第一段摘要" not in prompt
+        assert "第二段摘要" in prompt
+        assert "第三段摘要" in prompt
+        assert "第四段摘要" in prompt
+
+    def test_memory_extract_task_input_contains_identity_guardrails(self):
+        transcript = Transcript()
+        participant = Participant(
+            name="小王",
+            user_id="u1",
+            aliases=["王工"],
+            identities={"wechat": "wx_001"},
+        )
+        transcript.user_memory.register_user(participant.as_user_profile())
+        transcript.user_memory.apply_ai_runtime_update(
+            user_id="u1",
+            inferred_aliases=["运营小王"],
+            source="memory_extract",
+            confidence=0.8,
+        )
+
+        text = build_memory_extract_task_input(
+            transcript=transcript,
+            participant=participant,
+            content="继续讨论灰度发布。",
+        )
+
+        assert "strong_identity=wechat=wx_001" in text
+        assert "trusted_labels=小王, 王工" in text
+        assert "weak_labels=运营小王" in text
+        assert "alias_guardrails=" in text
 
 
 # ── parse helper tests ──────────────────────────────────────────────

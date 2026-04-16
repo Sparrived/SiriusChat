@@ -13,7 +13,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from sirius_chat.skills.models import SkillDefinition, SkillParameter
+from sirius_chat.skills.models import SkillDefinition, SkillInvocationContext, SkillParameter
 from sirius_chat.skills.dependency_resolver import resolve_skill_dependencies
 
 logger = logging.getLogger(__name__)
@@ -81,7 +81,37 @@ class SkillRegistry:
         if not readme_path.exists():
             readme_path.write_text(_SKILLS_README, encoding="utf-8")
 
-    def load_from_directory(self, skills_dir: Path, *, auto_install_deps: bool = True) -> int:
+    @staticmethod
+    def builtin_skills_dir() -> Path:
+        """Return the package directory containing built-in skills."""
+        return Path(__file__).resolve().parent / "builtin"
+
+    def _load_builtin_skills(self, *, auto_install_deps: bool) -> int:
+        """Load package-provided built-in skills into the registry."""
+        loaded = 0
+        builtin_dir = self.builtin_skills_dir()
+        if not builtin_dir.exists():
+            return loaded
+        for py_file in sorted(builtin_dir.glob("*.py")):
+            if py_file.name.startswith("_"):
+                continue
+            try:
+                self._install_skill_dependencies(py_file, auto_install_deps=auto_install_deps)
+                skill = self._load_skill_file(py_file)
+                if skill is not None:
+                    self._skills[skill.name] = skill
+                    loaded += 1
+            except Exception as exc:
+                logger.warning("加载内置SKILL失败 (%s): %s", py_file.name, exc)
+        return loaded
+
+    def load_from_directory(
+        self,
+        skills_dir: Path,
+        *,
+        auto_install_deps: bool = True,
+        include_builtin: bool = False,
+    ) -> int:
         """Load all *.py skill files from a directory.
 
         Args:
@@ -89,44 +119,63 @@ class SkillRegistry:
             auto_install_deps: If True, automatically install missing
                 third-party dependencies declared in SKILL_META or
                 detected from import statements (uses ``uv`` / ``pip``).
+            include_builtin: If True, pre-load package-provided built-in skills
+                before scanning the workspace directory. Workspace skills with the
+                same name override built-ins.
 
         Returns the number of skills successfully loaded.
         """
         self.ensure_skills_directory(skills_dir)
 
-        loaded = 0
+        baseline = len(self._skills)
+        if include_builtin:
+            self._load_builtin_skills(auto_install_deps=auto_install_deps)
+
         for py_file in sorted(skills_dir.glob("*.py")):
             if py_file.name.startswith("_"):
                 continue
             try:
-                # Resolve dependencies before loading the module
-                if auto_install_deps:
-                    installed = resolve_skill_dependencies(py_file, auto_install=True)
-                    if installed:
-                        logger.info("SKILL '%s': 已自动安装依赖: %s", py_file.stem, ", ".join(installed))
+                self._install_skill_dependencies(py_file, auto_install_deps=auto_install_deps)
 
                 skill = self._load_skill_file(py_file)
                 if skill is not None:
                     self._skills[skill.name] = skill
-                    loaded += 1
                     logger.info("已加载SKILL: %s (v%s) from %s", skill.name, skill.version, py_file.name)
             except Exception as exc:
                 logger.warning("加载SKILL文件失败 (%s): %s", py_file.name, exc)
-        return loaded
+        return max(0, len(self._skills) - baseline)
 
-    def reload_from_directory(self, skills_dir: Path, *, auto_install_deps: bool = True) -> int:
+    def reload_from_directory(
+        self,
+        skills_dir: Path,
+        *,
+        auto_install_deps: bool = True,
+        include_builtin: bool = False,
+    ) -> int:
         """Reload all skill files from a directory, replacing removed entries too."""
         self.ensure_skills_directory(skills_dir)
 
         loaded_skills: list[SkillDefinition] = []
+        if include_builtin:
+            builtin_dir = self.builtin_skills_dir()
+            if builtin_dir.exists():
+                for py_file in sorted(builtin_dir.glob("*.py")):
+                    if py_file.name.startswith("_"):
+                        continue
+                    try:
+                        self._install_skill_dependencies(py_file, auto_install_deps=auto_install_deps)
+                        skill = self._load_skill_file(py_file)
+                        if skill is not None:
+                            loaded_skills.append(skill)
+                            logger.info("已重载内置SKILL: %s (v%s) from %s", skill.name, skill.version, py_file.name)
+                    except Exception as exc:
+                        logger.warning("重载内置SKILL失败 (%s): %s", py_file.name, exc)
+
         for py_file in sorted(skills_dir.glob("*.py")):
             if py_file.name.startswith("_"):
                 continue
             try:
-                if auto_install_deps:
-                    installed = resolve_skill_dependencies(py_file, auto_install=True)
-                    if installed:
-                        logger.info("SKILL '%s': 已自动安装依赖: %s", py_file.stem, ", ".join(installed))
+                self._install_skill_dependencies(py_file, auto_install_deps=auto_install_deps)
 
                 skill = self._load_skill_file(py_file)
                 if skill is not None:
@@ -136,7 +185,7 @@ class SkillRegistry:
                 logger.warning("重载SKILL文件失败 (%s): %s", py_file.name, exc)
 
         self.replace_all(loaded_skills)
-        return len(loaded_skills)
+        return len(self._skills)
 
     @staticmethod
     def _load_skill_file(file_path: Path) -> SkillDefinition | None:
@@ -172,6 +221,7 @@ class SkillRegistry:
         name = str(meta.get("name", file_path.stem)).strip()
         description = str(meta.get("description", "")).strip()
         version = str(meta.get("version", "1.0.0")).strip()
+        developer_only = bool(meta.get("developer_only", False))
         if not name:
             name = file_path.stem
         if not description:
@@ -210,11 +260,16 @@ class SkillRegistry:
             description=description,
             parameters=parameters,
             version=version,
+            developer_only=developer_only,
             source_path=file_path,
             _run_func=run_func,
         )
 
-    def build_tool_descriptions(self) -> str:
+    def build_tool_descriptions(
+        self,
+        *,
+        invocation_context: SkillInvocationContext | None = None,
+    ) -> str:
         """Build a formatted text block describing all available skills.
 
         This is injected into the system prompt so the AI knows what tools
@@ -225,7 +280,15 @@ class SkillRegistry:
 
         lines: list[str] = []
         for skill in self._skills.values():
-            lines.append(f"- {skill.name}: {skill.description}")
+            if (
+                skill.developer_only
+                and invocation_context is not None
+                and not invocation_context.caller_is_developer
+            ):
+                continue
+
+            security_note = "（仅 developer 可调用）" if skill.developer_only else ""
+            lines.append(f"- {skill.name}: {skill.description}{security_note}")
             if skill.parameters:
                 param_parts: list[str] = []
                 for p in skill.parameters:
@@ -236,3 +299,13 @@ class SkillRegistry:
                     )
                 lines.extend(param_parts)
         return "\n".join(lines)
+
+    @staticmethod
+    def _install_skill_dependencies(py_file: Path, *, auto_install_deps: bool) -> None:
+        if not auto_install_deps:
+            resolve_skill_dependencies(py_file, auto_install=False)
+            return
+
+        installed = resolve_skill_dependencies(py_file, auto_install=True)
+        if installed:
+            logger.info("SKILL '%s': 已自动安装依赖: %s", py_file.stem, ", ".join(installed))

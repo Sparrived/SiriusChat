@@ -54,6 +54,14 @@ def build_memory_extract_task_input(
     max_context_chars: int = 1200,
 ) -> str:
     """Build the user-content string fed to the memory-extract LLM task."""
+    entry = transcript.user_memory.entries.get(participant.user_id)
+    trusted_labels = [participant.name, *participant.aliases]
+    weak_labels = entry.runtime.inferred_aliases if entry is not None else []
+    identity_lines: list[str] = []
+    for channel, external_uid in list(participant.identities.items())[:2]:
+        if channel and external_uid:
+            identity_lines.append(f"{channel}={external_uid}")
+
     context_lines: list[str] = []
     for message in transcript.messages:
         role = str(message.role or "").strip().lower()
@@ -75,6 +83,11 @@ def build_memory_extract_task_input(
     return (
         f"user_id={participant.user_id}\n"
         f"speaker={participant.name}\n"
+        f"strong_identity={' | '.join(identity_lines) if identity_lines else 'none'}\n"
+        f"trusted_labels={', '.join(label for label in trusted_labels if label.strip()) or 'none'}\n"
+        f"weak_labels={', '.join(label for label in weak_labels if label.strip()) or 'none'}\n"
+        "alias_guardrails=仅当当前说话者在本轮上下文中明确自称某个名字，且不与 strong_identity 或 trusted_labels 冲突时，才可输出 inferred_aliases；"
+        "第三方称呼、玩笑、模仿、引用、群内他人代称一律不要当作该用户别名。\n"
         f"latest_user_content={content}\n"
         "conversation_context=\n"
         f"{context_text}"

@@ -10,10 +10,13 @@
 from __future__ import annotations
 from typing import Any
 
+from sirius_chat import SkillInvocationContext
+
 SKILL_META = {
     "name": "hello",
     "description": "向指定用户打招呼",
     "version": "1.0.0",
+    "developer_only": False,
     "parameters": {
         "username": {
             "type": "str",
@@ -23,7 +26,12 @@ SKILL_META = {
     },
 }
 
-def run(username: str, data_store: Any = None, **kwargs: Any) -> dict[str, Any]:
+def run(
+    username: str,
+    data_store: Any = None,
+    invocation_context: SkillInvocationContext | None = None,
+    **kwargs: Any,
+) -> dict[str, Any]:
     return {"greeting": f"你好，{username}！"}
 ```
 
@@ -31,11 +39,13 @@ def run(username: str, data_store: Any = None, **kwargs: Any) -> dict[str, Any]:
 
 | 约定 | 说明 |
 |------|------|
-| 存放位置 | `{work_path}/skills/` 目录下的 `.py` 文件；目录与 `README.md` 会由框架自动创建 |
+| 存放位置 | `skills/` 目录下的 `.py` 文件；默认位于 `{work_path}`，双根布局时位于 `config_root`；目录与 `README.md` 会由框架自动创建 |
 | 必须导出 | `SKILL_META` 字典 + `run()` 函数 |
 | 命名规则 | 文件名建议与 `SKILL_META["name"]` 一致（如 `hello.py`） |
 | 编码 | UTF-8 |
 | 跳过规则 | 以 `_` 或 `.` 开头的文件会被自动跳过 |
+
+框架也会预加载包内置 SKILL（当前包含 `system_info` 与 developer-only 的 `desktop_screenshot`）。如果你在 workspace 的 `skills/` 中放置同名文件，例如 `skills/system_info.py`，则 workspace 文件会覆盖内置实现。
 
 ## SKILL_META 字段
 
@@ -52,6 +62,9 @@ SKILL_META = {
 
     # [可选] 第三方依赖列表，框架在加载时自动安装缺失的包
     "dependencies": ["requests", "beautifulsoup4"],
+
+    # [可选] 是否仅允许 developer 调用，默认 False
+    "developer_only": False,
 
     # [可选] 参数定义，dict 或 list 格式均可
     "parameters": { ... },
@@ -105,6 +118,7 @@ def run(
     param1: str,           # 与 parameters 中定义的参数名一一对应
     param2: int = 10,      # 可选参数需有默认值
     data_store: Any = None, # 自动注入的持久化存储
+    invocation_context: SkillInvocationContext | None = None, # 可选：自动注入的调用上下文
     **kwargs: Any,          # 吸收未知参数，保持前向兼容
 ) -> Any:
     """执行函数。返回值会被封装为 SkillResult.data。"""
@@ -113,13 +127,41 @@ def run(
 
 **关键规则**：
 - 参数名必须与 `SKILL_META["parameters"]` 中的 `name` 完全匹配
-- `data_store` 由框架自动注入，无需在 `parameters` 中声明
+- `data_store` 与 `invocation_context` 都由框架按函数签名自动注入，无需在 `parameters` 中声明
+- 若你的 `run()` 不接收 `data_store` / `invocation_context`，框架不会强行塞入这些关键字参数
 - `**kwargs` 建议始终保留
 - 返回值推荐使用 `dict`，便于 AI 理解结构化结果
 - 若需要向模型内部传递更细的文本或图片结果，可在返回字典中使用 `text_blocks`、`multimodal_blocks` 与 `internal_metadata`
 - 若返回 `None`，AI 会收到"执行完成（无返回数据）"
 - 抛出异常会被捕获，AI 会收到 `[SKILL执行失败] {异常信息}`
 - **执行超时**：框架有最大执行时间限制（默认 30 秒），超时后 SKILL 会被终止，AI 和用户都会收到超时提示。避免在 `run()` 中执行长时间阻塞操作
+
+## developer_only 与调用上下文
+
+如果某个 SKILL 涉及桌面截图、主机级操作或其他受限能力，推荐在 `SKILL_META` 中显式声明 `developer_only=True`：
+
+```python
+from sirius_chat import SkillInvocationContext
+
+SKILL_META = {
+    "name": "dangerous_tool",
+    "description": "执行受限主机操作",
+    "developer_only": True,
+}
+
+def run(
+    invocation_context: SkillInvocationContext | None = None,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    caller = invocation_context.caller_name if invocation_context else ""
+    return {"caller": caller}
+```
+
+语义说明：
+
+- developer-only SKILL 只会在 developer 当前轮次的提示词中暴露给模型。
+- 即使模型强行伪造调用，runtime 仍会再次校验当前调用者是否为 developer。
+- `SkillInvocationContext` 可用于审计调用者、记录 `caller_user_id`，或在 SKILL 内部做更细粒度的授权逻辑。
 
 ## 结构化结果通道（v0.27.9）
 
@@ -149,9 +191,11 @@ def run(**kwargs: Any) -> dict[str, Any]:
 语义说明：
 
 - `text_blocks`：供模型内部推理使用的附加文本块；会优先作为技能展示文本的一部分。
-- `multimodal_blocks`：当前主要用于图片输入；框架会把可识别图片隐藏注入下一轮模型请求。
+- `multimodal_blocks`：当前主要用于图片输入；框架会把可识别图片隐藏注入下一轮模型请求。`value` 可以是公网 URL、本地文件路径或 `file://` URI。
 - `internal_metadata`：仅供内部链路使用，不应面向用户输出；框架会在系统提示词中明确要求模型不要复述这些元信息。
 - 若同时提供普通字段和 `text_blocks`，最终展示文本优先采用 `text_blocks`，其余普通字段仍可作为兜底摘要。
+
+若 SKILL 会生成本地图片或其他工件，优先把文件写到 `data_store.artifact_dir`，再把路径写入 `multimodal_blocks`，避免把大体积二进制或 base64 文本直接塞进返回结果。
 
 ## data_store 持久化存储
 
@@ -174,6 +218,11 @@ def run(data_store: Any = None, **kwargs: Any) -> dict:
 ```
 
 > 数据在 SKILL 执行后自动持久化，无需手动调用 `save()`。
+
+附加属性：
+
+- `data_store.store_path`：当前 JSON 存储文件路径。
+- `data_store.artifact_dir`：当前 SKILL 推荐使用的工件目录，适合保存截图、临时导出文件等。
 
 ## AI 如何调用 SKILL
 
@@ -239,7 +288,7 @@ def run(city: str, data_store: Any = None, **kwargs: Any) -> dict[str, Any]:
 ### 工作机制
 
 1. 扫描 `SKILL_META["dependencies"]` 中显式声明的包名（优先）。
-2. 扫描文件顶层 `import` / `from ... import` 语句（补充推断）。
+2. 扫描模块中的 `import` / `from ... import` 语句（补充推断，不限于顶层）。
 3. 过滤标准库和已安装的包。
 4. 使用 `uv pip install` 安装缺失包（若 `uv` 不可用则回退到 `pip`）。
 
@@ -285,7 +334,7 @@ config = SessionConfig(
 )
 ```
 
-框架会先创建 `{work_path}/skills/` 与 `README.md`，随后自动加载该目录中的 SKILL 文件；即使关闭 SKILL 执行，目录引导结构仍会保留。
+框架会先注册包内置 SKILL，再创建 workspace `skills/` 与 `README.md`，随后自动加载该目录中的 SKILL 文件；即使关闭 SKILL 执行，目录引导结构仍会保留。同名 workspace 文件会覆盖内置实现。内置与 workspace SKILL 共用同一条依赖自动安装路径。
 
 ## 检查清单
 
@@ -296,7 +345,8 @@ config = SessionConfig(
 - [ ] `name` 仅包含字母、数字、下划线
 - [ ] `description` 足够清晰，AI 能根据它判断何时调用
 - [ ] `run()` 函数存在且参数名与 `parameters` 定义匹配
-- [ ] `run()` 包含 `data_store=None` 和 `**kwargs` 参数
+- [ ] `run()` 至少保留 `**kwargs`；若需要持久化或审计，显式接收 `data_store` / `invocation_context`
+- [ ] 若是受限能力，已显式设置 `developer_only=True`
 - [ ] 返回值为 `dict` 或可序列化对象
 - [ ] 不依赖未安装的第三方库（或在 `dependencies` 中显式声明）
 - [ ] 不包含长时间阻塞操作（注意 30 秒超时限制）

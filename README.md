@@ -38,7 +38,8 @@
 - **结构化 Transcript**：完整记录交互过程，便于下游系统消费
 
 ### 🧠 **智能记忆系统**
-- **结构化用户记忆**：按分类（身份/偏好/情绪/事件）组织，支持置信度标记和冲突检测
+- **结构化用户记忆**：按分类（身份/偏好/情绪/事件）组织，并区分可信身份锚点与弱别称线索
+- **低开销记忆注入**：主提示词只拼接当前发言者与直接相关参与者，`session_summary` 也会做尾部压缩
 - **AI 自身记忆**：日记系统 (Diary) 与名词解释系统 (Glossary)，支持遗忘曲线，并在长上下文或达到回复阈值时自动提取
 - **跨环境身份识别**：通过 `identities` 映射不同平台的外部账号到同一用户
 - **事件记忆管理**：自动提取关键事件，支持历史事件命中评分
@@ -46,7 +47,7 @@
 ### 🚀 **性能与扩展**
 - **智能缓存框架**：内存 LRU + TTL 缓存，支持 LLM 响应缓存
 - **性能监控**：完整的 Token 消耗追踪、基准测试工具、执行指标分析
-- **SKILL 系统**：可扩展的任务编排，支持链式调用、结构化内部文本/多模态结果传输与迭代反馈
+- **SKILL 系统**：支持内置 + 外部任务编排，支持链式调用、结构化内部文本/多模态结果传输与迭代反馈
 - **高并发支持**：会话积压静默批处理、LLM 并发限流、后台任务隔离
 
 ### 🔌 **多模型协同**
@@ -156,7 +157,11 @@ async def main() -> None:
   transcript = await runtime.run_live_message(
     session_id="group:demo",
     turn=Message(role="user", speaker="小王", content="Python 如何学习？"),
-    user_profile=UserProfile(user_id="u_xiaowang", name="小王"),
+    user_profile=UserProfile(
+      user_id="u_xiaowang",
+      name="小王",
+      metadata={"is_developer": True},
+    ),
   )
 
   print(transcript.as_chat_history())
@@ -303,6 +308,8 @@ async def main() -> None:
 
 asyncio.run(main())
 ```
+
+若你需要使用受限内置 SKILL，例如 `desktop_screenshot`，请至少为一个可信用户显式设置 `metadata={"is_developer": True}`。非 developer 当前轮次不会看到这些技能，模型即使强行调用也会被 runtime 拒绝。
 
 ### 示例 2：低层入口 AsyncRolePlayEngine
 
@@ -677,10 +684,14 @@ selected = select_generated_agent_profile(config.work_path, "assistant_v2")
 
 SKILL 系统支持可扩展任务编排：
 
-- 在 `work_path` 下自动初始化 `skills/` 目录
+- 自动初始化 `skills/` 目录；默认位于 `work_path`，双根布局时位于 `config_root`
+- 内置 `system_info` 与 developer-only 的 `desktop_screenshot` 默认可用；若放置同名 workspace skill，workspace 文件会覆盖内置实现
+- 若要使用受限技能，外部至少应显式标记一名 developer：`UserProfile.metadata["is_developer"] = True`
 - 支持外部 Python 技能文件
 - 链式调用与迭代反馈
+- 内置与 workspace SKILL 会共用依赖自动安装流程；`system_info` 会声明 `psutil`，`desktop_screenshot` 会声明 `Pillow`
 - SKILL 可返回结构化文本块与图片块，框架会把它们作为内部推理通道注入下一轮生成，同时隐藏 `internal_metadata` 等元信息
+- developer-only SKILL 会在非 developer 当前轮次的提示词中自动隐藏，执行时也会再次做权限校验
 - 会话事件流仅暴露 SKILL 状态，不直接暴露内部技能结果正文；外部投递应消费 assistant 回复
 
 详见 [`docs/skill-authoring.md`](docs/skill-authoring.md)。
@@ -697,6 +708,8 @@ SKILL 系统支持可扩展任务编排：
 | [📋 full-architecture-flow.md](docs/full-architecture-flow.md) | 详细数据流图解 |
 | [🎬 external-usage.md](docs/external-usage.md) | 库调用指南与集成文档 |
 | [🗂️ migration-v0.27.md](docs/migration-v0.27.md) | v0.27 破坏性变更迁移指南 |
+| [🗂️ migration-v0.27.11.md](docs/migration-v0.27.11.md) | v0.27.11 developer 安全模型与桌面截图 Skill 迁移说明 |
+| [🗂️ migration-v0.27.10.md](docs/migration-v0.27.10.md) | v0.27.10 记忆防污染与内置 Skill 迁移说明 |
 | [🗂️ migration-v0.27.9.md](docs/migration-v0.27.9.md) | v0.27.9 意图分析与 Skill 内部通道迁移说明 |
 | [🗂️ migration-v0.23.md](docs/migration-v0.23.md) | workspace 持久化接管迁移档案 |
 | [🗂️ migration-v0.24.md](docs/migration-v0.24.md) | JSONC 配置与 watcher 热刷新迁移档案 |
@@ -737,15 +750,17 @@ python -m pytest tests/test_engine.py::test_roleplay_engine_multi_human_single_a
 ## 🆕 最新变更
 
 ### ✨ **新增**
-- **SKILL 结构化内部通道**：SKILL 现在可以返回文本块和图片块；框架会把这些结果以隐藏内部通道注入下一轮生成，而不是把原始结构直接抛给用户回复。
-- **v0.27.9 迁移说明**：新增 `docs/migration-v0.27.9.md`，集中说明 AI 证据 / possible-AI 语义与 Skill 结构化返回约定。
+- **developer 元数据安全模型**：`UserProfile` / `Participant` 现在支持通过 `metadata["is_developer"]` 显式声明 developer，并基于该档案信息控制受限 SKILL。
+- **内置 `desktop_screenshot` SKILL**：新增受限桌面截图技能，仅 developer 可调用；结果会作为图片块返回给模型做内部分析。
+- **v0.27.11 迁移说明**：新增 `docs/migration-v0.27.11.md`，集中说明 developer 安全模型、桌面截图 SKILL 与内置依赖自动安装语义。
 
 ### 🚀 **改进**
-- **意图分析改为证据优先**：提示词不再一开始把其它对象硬标为人类；名字/别称里的 `AI`、`bot`、`助手` 等线索会被单独提取，无明确线索的对象则交给模型结合上下文判别。
-- **高热群聊里更克制**：`hot` / `overheated` 情况下，环境插话的 engagement 惩罚略微增强，减少多人高频聊天时的抢答。
+- **内置 SKILL 也进入自动依赖解析路径**：内置 `system_info` 现在显式声明 `psutil`，`desktop_screenshot` 显式声明 `Pillow`，两者都会在加载前走统一的依赖安装逻辑。
+- **受限技能改为双层防护**：非 developer 当前轮次看不到 developer-only 工具；若模型仍强行调用，runtime 会返回明确的权限错误。
+- **CLI 首次引导会显式询问 developer 身份**：`primary_user.json` 现在会持久化 developer 元数据，避免本地入口绕过权限模型。
 
 **迁移提示：**
-> 若你依赖意图分析里“人类参与者”硬标签，或正在编写返回图片/结构化元数据的 SKILL，请先阅读 `docs/migration-v0.27.9.md`。
+> 若你的外部接入需要受限内置 SKILL，请先把至少一名可信用户显式标记为 developer，并阅读 `docs/migration-v0.27.11.md`。
 
 更多信息见 [CHANGELOG.md](CHANGELOG.md)。
 

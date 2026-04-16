@@ -658,6 +658,7 @@ class WorkspaceRuntime:
         registry.reload_from_directory(
             skills_dir,
             auto_install_deps=self._workspace_auto_install_skill_deps(),
+            include_builtin=True,
         )
         self._skill_registry = registry
 

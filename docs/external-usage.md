@@ -70,7 +70,11 @@ async def main() -> None:
         session_id="group:teaching",
         turn=Message(role="user", speaker="校务主任", content="我关心预算和安全约束"),
         environment_context="当前群名: 教务讨论群\n群成员数: 15",
-        user_profile=UserProfile(user_id="principal", name="校务主任"),
+        user_profile=UserProfile(
+            user_id="principal",
+            name="校务主任",
+            metadata={"is_developer": True},
+        ),
     )
 
     for message in transcript.messages:
@@ -91,6 +95,8 @@ asyncio.run(main())
 > `work_path` 保存会话、记忆、token 与 skill_data；`config_path` 保存 workspace/provider/roleplay/skills 配置。不传 `config_path` 时，系统自动回退到单根布局。`session.json`、`config/session_config.json` 都支持 JSONC 风格注释，CLI 的 `--init-config` 会生成带注释模板。
 >
 > `WorkspaceBootstrap` 适合“首次打开时注入默认值”。runtime 会把 bootstrap payload 的签名写入 `workspace.json`；同一份 bootstrap 在后续重启时不会再次覆盖你已经手工修改过的 workspace 默认值或 provider 注册表。若要更新已存在 workspace 的配置，请优先使用 `apply_workspace_updates()` / `set_provider_entries()`，或显式修改 bootstrap payload 让其作为一次新的初始化输入。
+
+若你需要保留 developer-only 内置 SKILL（例如 `desktop_screenshot`）的使用能力，请至少为一个可信用户显式设置 `UserProfile.metadata["is_developer"] = True`。非 developer 当前轮次不会在提示词中看到这些技能，模型即使强行调用也会被 runtime 拒绝。
 
 若你使用智谱 BigModel 的 `glm-4.6v`，可以直接改用：
 
@@ -350,11 +356,15 @@ orchestration = OrchestrationPolicy(
 - 为减少多 AI 误判，`intent_analysis` 传给模型的上下文已改为最近交互链摘要，并会显式标注最近 AI / 人类发言者、近期发言人的 aliases、`environment_context` 环境线索，以及当前消息命中的当前模型名字、其他 AI 名字和人类名字
 - 对“关闭本群AI / 禁用机器人 / 别让 bot 说话”这类群控或停用命令，若未明确点名当前模型自身，当前模型会直接抑制 auto 回复
 - `memory_manager` 同时承担会话收尾整理、长上下文下的即时归纳以及后台归纳的模型配置；若不希望这些路径继续调用模型，可关闭 `task_enabled["memory_manager"]`
-- SKILL 目录：框架会始终先创建 `{work_path}/skills/` 与 `README.md`；关闭 SKILL 仅影响调用，不影响目录引导文件生成
+- 主提示词里的参与者记忆现在只保留当前发言者与当前消息直接相关的参与者；模型推断出的弱别称不会直接进入稳定识人绑定。
+- SKILL 目录：框架会始终先创建 `skills/` 与 `README.md`；默认位于 `{work_path}`，双根布局时位于 `config_root`；关闭 SKILL 仅影响调用，不影响目录引导文件生成
+- SKILL 加载顺序：先加载包内置 SKILL（当前包含 `system_info` 与 developer-only 的 `desktop_screenshot`），再加载 workspace `skills/`；同名 workspace 文件会覆盖内置实现
+- developer-only SKILL 会依据当前发言者的 developer 档案决定是否出现在提示词中；执行时 runtime 也会再次校验权限
+- 内置与 workspace SKILL 都会参与同一条依赖自动安装路径；`system_info` 会声明 `psutil`，`desktop_screenshot` 会声明 `Pillow`
 - 提示词分割：当 `enable_prompt_driven_splitting=True` 时，系统提示会带分割指令，AI 会在适当位置输出内置的 `<MSG_SPLIT>` 标记；外部不再配置 `split_marker`
 - 当前配置统一通过 `task_enabled/task_models/task_temperatures/task_max_tokens/task_retries` 管理 `intent_analysis` 与 `memory_manager`
 - 旧配置文件若仍包含 `enable_intent_analysis` / `intent_analysis_model`，加载时会自动映射到任务配置，但新的模板与持久化输出不再写出这两个字段
-- 旧配置文件若仍包含 `message_debounce_seconds` 或 `memory_manager_*`，加载时会自动映射到新任务配置；若需要理解 `min_reply_interval_seconds`、长上下文触发与多 AI 自动回复抑制的配合方式，见 `docs/migration-v0.27.md`、`docs/migration-v0.27.1.md`、`docs/migration-v0.27.2.md`、`docs/migration-v0.27.3.md`、`docs/migration-v0.27.4.md`、`docs/migration-v0.27.5.md`、`docs/migration-v0.27.6.md`、`docs/migration-v0.27.7.md` 与 `docs/migration-v0.27.8.md`
+- 旧配置文件若仍包含 `message_debounce_seconds` 或 `memory_manager_*`，加载时会自动映射到新任务配置；若需要理解 `min_reply_interval_seconds`、长上下文触发、多 AI 自动回复抑制、记忆防污染与内置 SKILL 的配合方式，见 `docs/migration-v0.27.md`、`docs/migration-v0.27.1.md`、`docs/migration-v0.27.2.md`、`docs/migration-v0.27.3.md`、`docs/migration-v0.27.4.md`、`docs/migration-v0.27.5.md`、`docs/migration-v0.27.6.md`、`docs/migration-v0.27.7.md`、`docs/migration-v0.27.8.md`、`docs/migration-v0.27.9.md`、`docs/migration-v0.27.10.md` 与 `docs/migration-v0.27.11.md`
 
 若使用 SiliconFlow，可直接替换 provider：
 
@@ -933,7 +943,7 @@ asyncio.run(main())
 - 引擎会自动登记未知参与者。
 - 引擎会维护 `transcript.user_memory`：
 - `profile`：初始化档案（`user_id/name/persona/traits/identities`）。
-- `runtime`：运行时状态（近期发言、摘要、推断偏好标签、最近渠道身份）。
+- `runtime`：运行时状态（近期发言、摘要、推断偏好标签、弱别称、最近渠道身份）。
 - 主 AI 每轮会收到“参与者记忆”上下文，从而实现识人与连续记忆。
 
 ## 识人与用户对象
@@ -947,6 +957,10 @@ asyncio.run(main())
 | `UserProfile` | `run_live_message(...)` 时的轻量注册对象 | 推荐给 `WorkspaceRuntime` / `arun_live_message` 传入，用于在当前 turn 前稳定注册用户 |
 
 推荐由外部显式提供稳定的 `user_id` 与 `identities`，让系统优先按渠道身份识别人，再回退到昵称/别名匹配。
+
+其中 `profile.name` / `profile.aliases` / `profile.identities` 属于可信身份锚点；模型在 `memory_extract` 中推断出的昵称只会写入 `entry.runtime.inferred_aliases`，作为弱线索提示，不会直接进入稳定识人绑定。若业务平台确实存在稳定昵称，请显式通过 `aliases` 或 `identities` 传入。
+
+若你需要使用 developer-only SKILL，请再显式提供 developer 元数据。推荐做法是把可信操作者或平台管理员标记为 `metadata={"is_developer": True}`。框架会通过该档案信息构建 `SkillInvocationContext`，据此决定受限技能的可见性与执行权限。
 
 ```python
 from sirius_chat.api import Message, UserProfile, open_workspace_runtime
@@ -967,6 +981,7 @@ transcript = await runtime.run_live_message(
         name="张三",
         aliases=["三哥"],
         identities={"wechat": "wx_zhangsan"},
+        metadata={"is_developer": True},
     ),
 )
 
@@ -974,6 +989,8 @@ entry = transcript.find_user_by_channel_uid(channel="wechat", uid="wx_zhangsan")
 if entry is not None:
     print(entry.profile.user_id)
 ```
+
+如果当前发言者不是 developer，那么 developer-only 内置技能不会出现在该轮提示词里；即使模型伪造了 `[SKILL_CALL: desktop_screenshot]`，runtime 也会返回权限错误，而不是静默放行。
 
 如果你更习惯先构造完整对象，也可以使用 `Participant` / `User`，再把它转成 `UserProfile`：
 
@@ -996,7 +1013,12 @@ profile = participant.as_user_profile()
 
 ```python
 for user_id, entry in transcript.user_memory.entries.items():
-    print(user_id, entry.profile.name, entry.profile.aliases)
+    print(
+        user_id,
+        entry.profile.name,
+        entry.profile.aliases,
+        entry.runtime.inferred_aliases,
+    )
 ```
 
 ## 记忆压缩与上下文预算

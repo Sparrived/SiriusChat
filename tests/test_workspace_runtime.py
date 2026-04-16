@@ -91,7 +91,11 @@ def test_workspace_runtime_auto_persists_transcript_and_participants(tmp_path: P
             transcript = await runtime.run_live_message(
                 session_id="group:123",
                 turn=Message(role="user", speaker="Alice", content="你好"),
-                user_profile=UserProfile(user_id="alice_1", name="Alice"),
+                user_profile=UserProfile(
+                    user_id="alice_1",
+                    name="Alice",
+                    metadata={"is_developer": True},
+                ),
             )
 
             layout = WorkspaceLayout(tmp_path)
@@ -100,6 +104,7 @@ def test_workspace_runtime_auto_persists_transcript_and_participants(tmp_path: P
             payload = json.loads(layout.session_participants_path("group:123").read_text(encoding="utf-8"))
             assert payload["primary_user_id"] == "alice_1"
             assert payload["participants"][0]["name"] == "Alice"
+            assert payload["participants"][0]["metadata"]["is_developer"] is True
         finally:
             await runtime.close()
 

@@ -21,9 +21,13 @@ TASK_MEMORY_MANAGER = "memory_manager"
 
 # System prompts for task execution
 TASK_MEMORY_EXTRACT_SYSTEM_PROMPT = (
-    "你是用户画像提取器。请从输入中提取 JSON，并严格输出 JSON 对象，"
+    "你是用户画像提取器。只提取当前说话者自己的稳定信息，并严格输出 JSON 对象，"
     "字段仅包含 inferred_persona(string)、inferred_traits(array[string])、"
     "inferred_aliases(array[string])、preference_tags(array[string])、summary_note(string)。"
+    "规则：1) inferred_aliases 必须极度保守，只有当前说话者明确自称且不与 strong_identity/trusted_labels 冲突时才可填写；"
+    "2) 不得把第三方称呼、引用、群聊玩笑、临时昵称或他人冒充内容写成别名；"
+    "3) 若不确定，inferred_aliases 返回空数组；"
+    "4) summary_note 只保留对当前说话者长期有参考价值的信息，不要写其他人的事实。"
 )
 
 TASK_EVENT_EXTRACT_SYSTEM_PROMPT = (

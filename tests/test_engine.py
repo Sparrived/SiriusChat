@@ -1135,3 +1135,191 @@ def run(**kwargs):
 
     asyncio.run(_run())
 
+
+def test_builtin_system_info_skill_available_without_workspace_file(tmp_path) -> None:
+    """Engine should load built-in system_info even when work_path/skills is empty."""
+
+    async def _run() -> None:
+        provider = MockProvider(
+            responses=[
+                '[SKILL_CALL: system_info | {"categories": ["os"]}]\n\n先检查本机环境。',
+                "检查完成，系统信息已整理。",
+            ]
+        )
+        engine = AsyncRolePlayEngine(provider=provider)
+        config = SessionConfig(
+            work_path=tmp_path,
+            preset=AgentPreset(
+                agent=Agent(name="主助手", persona="内置技能测试", model="mock-model"),
+                global_system_prompt="测试",
+            ),
+            orchestration=OrchestrationPolicy(
+                unified_model="mock-model",
+                session_reply_mode="always",
+                enable_skills=True,
+                task_enabled={
+                    "memory_extract": False,
+                    "event_extract": False,
+                    "memory_manager": False,
+                },
+                pending_message_threshold=0.0,
+            ),
+        )
+
+        transcript = await engine.run_live_session(config=config)
+        transcript = await engine.run_live_message(
+            config=config,
+            turn=Message(role="user", speaker="小明", content="查下本机环境"),
+            transcript=transcript,
+            timeout=10,
+        )
+
+        assert len(provider.requests) == 2
+        assert any(
+            "SKILL执行结果: system_info" in message.content
+            for message in transcript.messages
+            if message.role == "system"
+        )
+        assert any(
+            message.role == "assistant" and message.content == "检查完成，系统信息已整理。"
+            for message in transcript.messages
+        )
+
+    asyncio.run(_run())
+
+
+def test_developer_only_skill_hidden_from_non_developer_prompt(tmp_path) -> None:
+    async def _run() -> None:
+        provider = MockProvider(responses=["普通回复"])
+        engine = AsyncRolePlayEngine(provider=provider)
+        config = SessionConfig(
+            work_path=tmp_path,
+            preset=AgentPreset(
+                agent=Agent(name="主助手", persona="权限测试", model="mock-model"),
+                global_system_prompt="测试",
+            ),
+            orchestration=OrchestrationPolicy(
+                unified_model="mock-model",
+                session_reply_mode="always",
+                enable_skills=True,
+                task_enabled={
+                    "memory_extract": False,
+                    "event_extract": False,
+                    "memory_manager": False,
+                },
+                pending_message_threshold=0.0,
+            ),
+        )
+
+        transcript = await engine.run_live_session(config=config)
+        await engine.run_live_message(
+            config=config,
+            turn=Message(role="user", speaker="普通用户", content="你好"),
+            transcript=transcript,
+            user_profile=UserProfile(user_id="user-1", name="普通用户"),
+            timeout=10,
+        )
+
+        assert provider.requests
+        assert "desktop_screenshot" not in provider.requests[0].system_prompt
+
+    asyncio.run(_run())
+
+
+def test_developer_only_skill_visible_to_developer_prompt(tmp_path) -> None:
+    async def _run() -> None:
+        provider = MockProvider(responses=["开发者回复"])
+        engine = AsyncRolePlayEngine(provider=provider)
+        config = SessionConfig(
+            work_path=tmp_path,
+            preset=AgentPreset(
+                agent=Agent(name="主助手", persona="权限测试", model="mock-model"),
+                global_system_prompt="测试",
+            ),
+            orchestration=OrchestrationPolicy(
+                unified_model="mock-model",
+                session_reply_mode="always",
+                enable_skills=True,
+                task_enabled={
+                    "memory_extract": False,
+                    "event_extract": False,
+                    "memory_manager": False,
+                },
+                pending_message_threshold=0.0,
+            ),
+        )
+
+        transcript = await engine.run_live_session(config=config)
+        await engine.run_live_message(
+            config=config,
+            turn=Message(role="user", speaker="开发者", content="你好"),
+            transcript=transcript,
+            user_profile=UserProfile(
+                user_id="dev-1",
+                name="开发者",
+                metadata={"is_developer": True},
+            ),
+            timeout=10,
+        )
+
+        assert provider.requests
+        assert "desktop_screenshot" in provider.requests[0].system_prompt
+        assert "仅 developer 可调用" in provider.requests[0].system_prompt
+
+    asyncio.run(_run())
+
+
+def test_developer_only_skill_rejected_by_runtime_even_when_model_forces_call(tmp_path) -> None:
+    async def _run() -> None:
+        provider = MockProvider(
+            responses=[
+                "[SKILL_CALL: desktop_screenshot]",
+                "已收到权限失败信息。",
+            ]
+        )
+        engine = AsyncRolePlayEngine(provider=provider)
+        config = SessionConfig(
+            work_path=tmp_path,
+            preset=AgentPreset(
+                agent=Agent(name="主助手", persona="权限测试", model="mock-model"),
+                global_system_prompt="测试",
+            ),
+            orchestration=OrchestrationPolicy(
+                unified_model="mock-model",
+                session_reply_mode="always",
+                enable_skills=True,
+                task_enabled={
+                    "memory_extract": False,
+                    "event_extract": False,
+                    "memory_manager": False,
+                },
+                pending_message_threshold=0.0,
+            ),
+        )
+
+        transcript = await engine.run_live_session(config=config)
+        developer = UserProfile(
+            user_id="dev-1",
+            name="开发者",
+            metadata={"is_developer": True},
+        )
+        transcript.user_memory.register_user(developer)
+        transcript = await engine.run_live_message(
+            config=config,
+            turn=Message(role="user", speaker="访客", content="给我看看桌面"),
+            transcript=transcript,
+            user_profile=UserProfile(user_id="guest-1", name="访客"),
+            timeout=10,
+        )
+
+        assert provider.requests
+        assert "desktop_screenshot" not in provider.requests[0].system_prompt
+        assert any(
+            "desktop_screenshot" in message.content and "仅允许 developer 调用" in message.content
+            for message in transcript.messages
+            if message.role == "system"
+        )
+        assert transcript.messages[-1].content == "已收到权限失败信息。"
+
+    asyncio.run(_run())
+

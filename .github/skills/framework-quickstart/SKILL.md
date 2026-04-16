@@ -62,14 +62,16 @@ description: "当你需要在不通读全部代码的情况下快速理解 Siriu
 
 - 当前推荐入口是 `WorkspaceRuntime`；它负责文件布局、session 恢复、participants 写回、watcher 热刷新和 provider 注册表联动。
 - `WorkspaceRuntime.run_live_message(...)` 先按 session 入队，再由单会话 processor 决定逐条处理、按 `pending_message_threshold` 执行静默批处理，或在 `min_reply_interval_seconds` 冷却窗口结束后强制合并同一说话人的连续消息再进入下一次回复判断。
-- `WorkspaceRuntime.initialize()` 会预先初始化共享 SKILL runtime，并在 `skills/` 目录变化时通过 watcher 触发全量 reload，不再在消息路径按次扫描目录。
+- `WorkspaceRuntime.initialize()` 会预先初始化共享 SKILL runtime，并在 `skills/` 目录变化时通过 watcher 触发全量 reload，不再在消息路径按次扫描目录。SKILL runtime 会先加载包内置技能（当前包含 `system_info` 与 developer-only 的 `desktop_screenshot`），再加载 workspace `skills/`；同名 workspace 文件覆盖内置实现。
+- 内置 SKILL 与 workspace SKILL 共用依赖自动安装路径；`SKILL_META["dependencies"]` 会在模块真正导入前参与解析。
 - SKILL 执行结果现在支持结构化 `text_blocks` / `multimodal_blocks` / `internal_metadata`；`core/engine.py` 负责把结果注入 transcript，`core/chat_builder.py` 负责把可用文本与图片转成隐藏模型上下文，并避免把元信息泄露到用户回复中。
+- `Participant.metadata` / `UserProfile.metadata` 中的 `is_developer` 是 SKILL 安全模型的显式权限来源；engine 会据此构建 `SkillInvocationContext`，让 developer-only 工具在非 developer 当前轮次中自动隐藏，并在执行时再次校验。
 - 会话事件流里的 `SKILL_COMPLETED` 仅表示技能执行状态，技能结果正文不会直接通过该事件暴露；只有落成 assistant 回复后才会进入外部消息流或 `on_reply`。
 - `WorkspaceRuntime` 会把 `WorkspaceBootstrap` 的签名记入 `workspace.json`；同一份 bootstrap 只在首次命中时持久化一次，后续重启会保留用户在 config root 下的手工修改。
 - `WorkspaceLayout` 是路径语义的单一事实来源：config root 放配置与资产，data root 放运行态数据。
 - `AsyncRolePlayEngine` 的真实实现位于 `sirius_chat/core/engine.py`；`sirius_chat/async_engine/` 只承担兼容导出与 prompts/orchestration/utils 辅助层。
 - 一个 `SessionConfig` 只对应一个主 AI，主 AI 由 `preset=AgentPreset(...)` 描述，不再推荐在外部配置里手写完整 agent prompt。
-- `User` 只是 `Participant` 的别名；运行时识人与记忆的事实来源是 `transcript.user_memory`，而不是旧版 `participants` 配置字段。
+- `User` 只是 `Participant` 的别名；运行时识人与记忆的事实来源是 `transcript.user_memory`，而不是旧版 `participants` 配置字段。`profile.identities/name/aliases` 是可信身份锚点，`runtime.inferred_aliases` 只是弱线索，不参与稳定识人绑定。
 - provider 注册表由 `WorkspaceProviderManager` 管理，路由顺序是 `models` 列表优先、`healthcheck_model` 次之、最后回退到第一个启用 provider。
 - roleplay 资产统一存放在 `roleplay/generated_agents.json` 与 `roleplay/generated_agent_traces/`，`active_agent_key` 决定 `SessionConfig` 使用哪份资产。
 - session store、token store、memory store、SKILL data store 都已经收敛到 workspace 语义下，修改这些层时必须同时检查路径文档。
@@ -77,9 +79,9 @@ description: "当你需要在不通读全部代码的情况下快速理解 Siriu
 ## 修改路由指南
 
 - 新增 provider：修改 `sirius_chat/providers/`、`sirius_chat/providers/routing.py`、`sirius_chat/api/providers.py`，并补测试与文档。
-- 修改对话主流程：优先检查 `sirius_chat/core/engine.py`、`core/chat_builder.py`、`core/memory_runner.py`、`core/engagement_pipeline.py`。
+- 修改对话主流程：优先检查 `sirius_chat/core/engine.py`、`core/chat_builder.py`、`core/memory_prompt.py`、`core/memory_runner.py`、`core/engagement_pipeline.py`。
 - 修改 workspace / session 持久化：同步检查 `sirius_chat/workspace/`、`sirius_chat/config/manager.py`、`sirius_chat/session/store.py`。
-- 修改识人或记忆逻辑：同步检查 `sirius_chat/memory/user/`、`sirius_chat/memory/event/`、`sirius_chat/memory/self/`、`sirius_chat/models/models.py` 与 `docs/external-usage.md`。
+- 修改识人或记忆逻辑：同步检查 `sirius_chat/memory/user/`、`sirius_chat/memory/event/`、`sirius_chat/memory/self/`、`sirius_chat/core/memory_prompt.py`、`sirius_chat/models/models.py` 与 `docs/external-usage.md`。
 - 修改外部 API：同步更新 `sirius_chat/api/`、README、`docs/external-usage.md` 与示例代码。
 - 修改 roleplay 资产流：同步更新 `sirius_chat/roleplay_prompting.py`、`workspace/roleplay_manager.py` 和架构文档。
 - `providers/*` 实现具体的 LLM 后端。

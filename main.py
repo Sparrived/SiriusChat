@@ -655,6 +655,18 @@ def _prompt_comma_values(raw: str) -> list[str]:
     return [item.strip() for item in raw.split(",") if item.strip()]
 
 
+def _prompt_yes_no(
+    *,
+    prompt: str,
+    input_func: InputFunc,
+    default: bool = True,
+) -> bool:
+    answer = input_func(prompt).strip().lower()
+    if not answer:
+        return default
+    return answer in {"y", "yes", "true", "1"}
+
+
 def _persist_primary_user(
     *,
     work_path: Path,
@@ -669,6 +681,7 @@ def _persist_primary_user(
         "persona": participant.persona,
         "aliases": participant.aliases,
         "traits": participant.traits,
+        "metadata": participant.metadata,
     }
     if transcript is not None and participant.user_id in transcript.user_memory.entries:
         runtime = transcript.user_memory.entries[participant.user_id].runtime
@@ -692,11 +705,17 @@ def _collect_primary_user_from_input(*, input_func: InputFunc, print_func: Print
     user_id = input_func("请输入用户ID（留空则与称呼一致）：").strip() or name
     persona = input_func("请输入你的角色/偏好描述（可留空）：").strip()
     aliases_raw = input_func("请输入别名（逗号分隔，可留空）：").strip()
+    is_developer = _prompt_yes_no(
+        prompt="是否将该用户标记为 developer（可调用受限内置 Skill，例如桌面截图）？[Y/n] ",
+        input_func=input_func,
+        default=True,
+    )
     return Participant(
         name=name,
         user_id=user_id,
         persona=persona,
         aliases=_prompt_comma_values(aliases_raw),
+        metadata={"is_developer": is_developer},
     )
 
 
@@ -709,12 +728,14 @@ def _bootstrap_primary_user(
     profile_path = work_path / PRIMARY_USER_FILE_NAME
     if profile_path.exists():
         payload = json.loads(profile_path.read_text(encoding="utf-8"))
+        metadata = payload.get("metadata", {})
         participant = Participant(
             name=str(payload.get("name", "用户")),
             user_id=str(payload.get("user_id", payload.get("name", "用户"))),
             persona=str(payload.get("persona", "")),
             aliases=list(payload.get("aliases", [])),
             traits=list(payload.get("traits", [])),
+            metadata=dict(metadata) if isinstance(metadata, dict) else {},
         )
         return participant
 

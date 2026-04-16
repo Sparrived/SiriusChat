@@ -18,7 +18,8 @@ from typing import Any
 
 import pytest
 
-from sirius_chat.skills.models import SkillDefinition, SkillParameter, SkillResult
+from sirius_chat.memory import UserProfile
+from sirius_chat.skills.models import SkillDefinition, SkillInvocationContext, SkillParameter, SkillResult
 from sirius_chat.skills.data_store import SkillDataStore
 from sirius_chat.skills.registry import SkillRegistry
 from sirius_chat.skills.executor import (
@@ -316,6 +317,32 @@ class TestSkillRegistry:
         assert "Say hello" in text
         assert "name" in text
 
+    def test_build_tool_descriptions_hides_developer_only_skills_for_non_developer(self):
+        registry = SkillRegistry()
+        registry.register(SkillDefinition(name="public", description="公开工具"))
+        registry.register(
+            SkillDefinition(
+                name="desktop_screenshot",
+                description="截图",
+                developer_only=True,
+            )
+        )
+
+        developer = UserProfile(user_id="dev-1", name="开发者", metadata={"is_developer": True})
+        user_ctx = SkillInvocationContext(
+            caller=UserProfile(user_id="user-1", name="普通用户"),
+            developer_profiles=[developer],
+        )
+        developer_ctx = SkillInvocationContext(caller=developer, developer_profiles=[developer])
+
+        hidden_text = registry.build_tool_descriptions(invocation_context=user_ctx)
+        visible_text = registry.build_tool_descriptions(invocation_context=developer_ctx)
+
+        assert "public" in hidden_text
+        assert "desktop_screenshot" not in hidden_text
+        assert "desktop_screenshot" in visible_text
+        assert "仅 developer 可调用" in visible_text
+
     def test_build_tool_descriptions_empty(self):
         registry = SkillRegistry()
         assert registry.build_tool_descriptions() == ""
@@ -343,6 +370,65 @@ class TestSkillRegistry:
         (skills_dir / "calc.py").unlink()
         assert registry.reload_from_directory(skills_dir, auto_install_deps=False) == 1
         assert registry.skill_names == ["greet"]
+
+    def test_load_from_directory_can_include_builtin_skills(self, tmp_path: Path):
+        registry = SkillRegistry()
+        count = registry.load_from_directory(
+            tmp_path / "skills",
+            auto_install_deps=False,
+            include_builtin=True,
+        )
+
+        assert count >= 1
+        assert "system_info" in registry.skill_names
+
+    def test_include_builtin_skills_resolves_dependencies(self, tmp_path: Path, monkeypatch):
+        import sirius_chat.skills.registry as registry_module
+
+        calls: list[str] = []
+
+        def _fake_resolve(skill_file: Path, *, auto_install: bool = True) -> list[str]:
+            calls.append(f"{skill_file.stem}:{auto_install}")
+            return []
+
+        monkeypatch.setattr(registry_module, "resolve_skill_dependencies", _fake_resolve)
+
+        registry = SkillRegistry()
+        registry.load_from_directory(
+            tmp_path / "skills",
+            auto_install_deps=True,
+            include_builtin=True,
+        )
+
+        assert any(call.startswith("system_info:") for call in calls)
+        assert any(call.startswith("desktop_screenshot:") for call in calls)
+
+    def test_workspace_skill_can_override_builtin(self, tmp_path: Path):
+        skills_dir = tmp_path / "skills"
+        skills_dir.mkdir()
+        (skills_dir / "system_info.py").write_text(
+            '''
+SKILL_META = {"name": "system_info", "description": "override", "parameters": {}}
+
+def run(**kwargs):
+    return {"source": "workspace"}
+'''.strip(),
+            encoding="utf-8",
+        )
+
+        registry = SkillRegistry()
+        registry.reload_from_directory(
+            skills_dir,
+            auto_install_deps=False,
+            include_builtin=True,
+        )
+        executor = SkillExecutor(tmp_path)
+
+        skill = registry.get("system_info")
+        assert skill is not None
+        result = executor.execute(skill, {})
+        assert result.success is True
+        assert result.data["source"] == "workspace"
 
 
 # ─────────────────────── Executor tests ───────────────────────
@@ -411,6 +497,48 @@ def run(data_store=None, **kwargs):
         assert store_path.exists()
         data = json.loads(store_path.read_text(encoding="utf-8"))
         assert data["count"] == 2
+
+    def test_execute_without_kwargs_still_succeeds(self, tmp_path: Path):
+        skills_dir = tmp_path / "skills"
+        skills_dir.mkdir()
+        (skills_dir / "plain.py").write_text(
+            '''
+SKILL_META = {"name": "plain", "description": "No kwargs"}
+
+def run():
+    return {"ok": True}
+'''.strip(),
+            encoding="utf-8",
+        )
+
+        registry = SkillRegistry()
+        registry.load_from_directory(skills_dir)
+        executor = SkillExecutor(tmp_path)
+
+        skill = registry.get("plain")
+        assert skill is not None
+
+        result = executor.execute(skill, {})
+        assert result.success is True
+        assert result.data == {"ok": True}
+
+    def test_execute_rejects_developer_only_skill_for_non_developer(self, tmp_path: Path):
+        skill = SkillDefinition(
+            name="restricted",
+            description="developer only",
+            developer_only=True,
+            _run_func=lambda **kwargs: {"ok": True},
+        )
+        executor = SkillExecutor(tmp_path)
+        developer = UserProfile(user_id="dev-1", name="开发者", metadata={"is_developer": True})
+        context = SkillInvocationContext(
+            caller=UserProfile(user_id="user-1", name="普通用户"),
+            developer_profiles=[developer],
+        )
+
+        result = executor.execute(skill, {}, invocation_context=context)
+        assert result.success is False
+        assert "仅允许 developer 调用" in result.error
 
     def test_execute_no_run_func(self, tmp_path: Path):
         skill = SkillDefinition(name="broken", description="No run func")
@@ -645,6 +773,7 @@ class TestSkillEngineIntegration:
             SkillDataStore,
             SkillDefinition,
             SkillExecutor,
+            SkillInvocationContext,
             SkillParameter,
             SkillRegistry,
             SkillResult,
@@ -652,6 +781,7 @@ class TestSkillEngineIntegration:
         # Basic smoke test
         assert SkillRegistry is not None
         assert SkillExecutor is not None
+        assert SkillInvocationContext is not None
 
 
 class TestExampleSkillSystemInfo:
@@ -710,6 +840,39 @@ class TestExampleSkillSystemInfo:
         result = executor.execute(skill, {"categories": ["os"]})
         assert result.success
         assert "os" in result.data
+
+
+class TestBuiltinDesktopScreenshot:
+    def test_run_returns_image_block_for_developer(self, tmp_path: Path, monkeypatch):
+        from sirius_chat.skills.builtin import desktop_screenshot
+
+        class _FakeImage:
+            def save(self, path, format="PNG") -> None:  # noqa: A002
+                Path(path).write_bytes(b"fake-png")
+
+        monkeypatch.setattr(
+            desktop_screenshot,
+            "_capture_desktop_image",
+            lambda *, all_screens: _FakeImage(),
+        )
+
+        developer = UserProfile(user_id="dev-1", name="开发者", metadata={"is_developer": True})
+        context = SkillInvocationContext(caller=developer, developer_profiles=[developer])
+        store = SkillDataStore(tmp_path / "skill_data" / "desktop_screenshot.json")
+
+        result = desktop_screenshot.run(data_store=store, invocation_context=context)
+
+        assert result["multimodal_blocks"][0]["mime_type"] == "image/png"
+        image_path = Path(result["multimodal_blocks"][0]["value"])
+        assert image_path.exists()
+        assert image_path.parent == store.artifact_dir
+        assert store.get("captures", [])[0]["caller_user_id"] == "dev-1"
+
+    def test_run_rejects_missing_developer_context(self):
+        from sirius_chat.skills.builtin import desktop_screenshot
+
+        with pytest.raises(PermissionError, match="仅允许 developer 调用"):
+            desktop_screenshot.run(invocation_context=None)
 
 
 class TestSkillExecutionTimeout:
@@ -999,8 +1162,36 @@ class TestDependencyResolver:
         pkgs = _extract_imported_packages(skill_file)
         assert "os" in pkgs
         assert "requests" in pkgs
-        assert "bs4" in pkgs
+        assert "beautifulsoup4" in pkgs
         assert "pathlib" in pkgs
+
+    def test_extract_imported_packages_normalizes_pillow(self, tmp_path: Path):
+        from sirius_chat.skills.dependency_resolver import _extract_imported_packages
+
+        skill_file = tmp_path / "shot.py"
+        skill_file.write_text(
+            'from PIL import ImageGrab\n'
+            'def run(**kw): pass\n',
+            encoding="utf-8",
+        )
+
+        pkgs = _extract_imported_packages(skill_file)
+        assert "Pillow" in pkgs
+
+    def test_find_missing_checks_package_probe_names(self, monkeypatch):
+        import importlib.util
+
+        from sirius_chat.skills.dependency_resolver import _find_missing
+
+        def _fake_find_spec(name: str):
+            if name == "PIL":
+                return object()
+            return None
+
+        monkeypatch.setattr(importlib.util, "find_spec", _fake_find_spec)
+
+        missing = _find_missing({"Pillow"})
+        assert missing == set()
 
     def test_find_missing_filters_stdlib(self):
         from sirius_chat.skills.dependency_resolver import _find_missing

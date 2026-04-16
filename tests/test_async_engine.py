@@ -136,7 +136,7 @@ def test_async_engine_does_not_block_event_loop_for_sync_provider() -> None:
     asyncio.run(_run())
 
 
-def test_async_engine_memory_extract_task_uses_aux_model() -> None:
+def test_async_engine_memory_extract_task_uses_aux_model(tmp_path: Path) -> None:
     class MultiModelProvider:
         def __init__(self) -> None:
             self.models: list[str] = []
@@ -160,7 +160,7 @@ def test_async_engine_memory_extract_task_uses_aux_model() -> None:
         provider = MultiModelProvider()
         engine = create_async_engine(provider)
         config = SessionConfig(
-            work_path=Path("data/tests/orchestration"),
+            work_path=tmp_path / "orchestration",
             preset=AgentPreset(
                 agent=Agent(name="主助手", persona="异步测试", model="main-model"),
                 global_system_prompt="测试系统提示词",
@@ -184,7 +184,8 @@ def test_async_engine_memory_extract_task_uses_aux_model() -> None:
 
         entry = transcript.user_memory.entries["小王"]
         assert entry.runtime.inferred_persona == "用户画像-运营"
-        assert "运营小王" in entry.profile.aliases
+        assert "运营小王" in entry.runtime.inferred_aliases
+        assert "运营小王" not in entry.profile.aliases
         assert "重视节奏" in entry.runtime.inferred_traits
         assert "偏好结构化信息" in entry.runtime.preference_tags
         assert "memory-model" in provider.models
@@ -243,6 +244,9 @@ def test_memory_extract_task_includes_recent_conversation_context() -> None:
 
         assert len(provider.memory_inputs) >= 2
         second_input = provider.memory_inputs[-1]
+        assert "strong_identity=none" in second_input
+        assert "trusted_labels=小王" in second_input
+        assert "alias_guardrails=" in second_input
         assert "latest_user_content=重点是灰度和回滚策略。" in second_input
         assert "conversation_context=" in second_input
         assert "[user][小王] 我们要做一个发布方案。" in second_input

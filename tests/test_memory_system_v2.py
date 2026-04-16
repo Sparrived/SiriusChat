@@ -128,6 +128,23 @@ class TestManagerMentionCount:
         fact = m.entries["u1"].runtime.memory_facts[0]
         assert fact.memory_category == "preference"
 
+    def test_inferred_aliases_are_weak_hints_only(self):
+        m = self._make_manager()
+        m.apply_ai_runtime_update(
+            user_id="u1",
+            inferred_aliases=["老王"],
+            source="memory_extract",
+            confidence=0.8,
+        )
+
+        entry = m.entries["u1"]
+        assert entry.runtime.inferred_aliases == ["老王"]
+        assert entry.profile.aliases == []
+        assert m.resolve_user_id(speaker="老王") is None
+
+        restored = UserMemoryManager.from_dict(m.to_dict())
+        assert restored.entries["u1"].runtime.inferred_aliases == ["老王"]
+
 
 # ---- Manager: get_rich_user_summary length control ----
 
@@ -166,12 +183,12 @@ class TestObservedSetCapping:
     """apply_event_insights 中 observed_* set 大小限制"""
 
     def test_cap_set_static_method(self):
-        s = set(range(200))
+        s = {str(i) for i in range(200)}
         UserMemoryManager._cap_set(s, 100)
         assert len(s) == 100
 
     def test_cap_set_no_change_under_limit(self):
-        s = {1, 2, 3}
+        s = {"1", "2", "3"}
         UserMemoryManager._cap_set(s, 100)
         assert len(s) == 3
 
@@ -179,7 +196,7 @@ class TestObservedSetCapping:
         m = UserMemoryManager()
         m.register_user(UserProfile(user_id="u1", name="A"))
         # Create event features with many items
-        features = {
+        features: dict[str, object] = {
             "emotion_tags": [f"emo_{i}" for i in range(150)],
             "keywords": [f"kw_{i}" for i in range(150)],
             "role_slots": [f"role_{i}" for i in range(150)],
@@ -195,7 +212,7 @@ class TestObservedSetCapping:
     def test_apply_event_insights_source_event_id(self):
         m = UserMemoryManager()
         m.register_user(UserProfile(user_id="u1", name="A"))
-        features = {"emotion_tags": ["happy"]}
+        features: dict[str, object] = {"emotion_tags": ["happy"]}
         m.apply_event_insights("u1", features, source_event_id="evt_42")
         fact = m.entries["u1"].runtime.memory_facts[0]
         assert fact.source_event_id == "evt_42"

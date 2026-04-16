@@ -4,6 +4,40 @@
 
 ## [Unreleased]
 
+## [0.27.11] - 2026-04-16
+
+### Added
+- **developer 元数据安全模型**：`UserProfile` / `Participant` 现在支持通过 `metadata["is_developer"]` 显式声明 developer，并新增 `SkillInvocationContext` 供受限 SKILL 做权限与审计判断。
+- **内置 `desktop_screenshot` SKILL**：新增桌面截图内置技能，返回图片工件路径给模型做内部视觉分析，仅 developer 可调用。
+- 新增迁移文档 `docs/migration-v0.27.11.md`，说明 developer 权限模型、内置截图技能与内置依赖自动安装语义。
+
+### Changed
+- **developer-only SKILL 改为双层权限防护**：非 developer 当前轮次不会在提示词中看到这些工具；即使模型强行调用，`SkillExecutor` 仍会在运行时拒绝。
+- **内置 SKILL 也进入统一依赖自动安装流程**：内置 `system_info` 现在显式声明 `psutil`，内置 `desktop_screenshot` 显式声明 `Pillow`，两者都会在加载前参与依赖解析。
+- **CLI 首次引导同步持久化 developer 身份**：`main.py` 会显式询问 primary user 是否为 developer，并将该元数据写入 `primary_user.json`。
+- **SKILL 注入改为按签名处理**：`data_store` 与 `invocation_context` 只会注入给显式接收这些参数的 `run()` 函数。
+
+### Documentation
+- 更新 README、架构文档、外部接入文档、Skill 编写指南与相关仓库级 SKILL，统一说明 developer 元数据约束、`desktop_screenshot`、`system_info` 依赖声明与迁移步骤。
+
+## [0.27.10] - 2026-04-16
+
+### Added
+- **内置 `system_info` SKILL**：框架现在会随 skill runtime 一起预加载包内置的本机状态技能，engine 与 `WorkspaceRuntime` 无需额外 workspace 文件即可直接调用。
+- 新增回归测试，覆盖弱别称不参与稳定识人绑定、聚焦参与者记忆提示词、内置 SKILL 加载与 workspace 覆盖等场景。
+- 新增迁移文档 `docs/migration-v0.27.10.md`，说明记忆防污染、聚焦提示词拼接与内置 SKILL 语义。
+
+### Changed
+- **主提示词的参与者记忆改为聚焦拼接**：只向主模型注入当前发言者、当前消息直接相关的参与者，以及尾部压缩后的 `session_summary`，不再整体注入所有参与者和原始近期消息。
+- **SKILL 发现顺序固定为内置优先、workspace 覆盖**：skill runtime 会先注册包内置 SKILL，再加载 workspace `skills/` 目录，同名文件按 workspace 版本生效。
+
+### Fixed
+- **识人记忆污染收紧**：`memory_extract` 推断出的昵称不再直接写入 `profile.aliases` 或稳定识人索引，而是只存入 `runtime.inferred_aliases` 作为弱线索。
+- **记忆提取 prompt 增加身份护栏**：辅助模型现在会显式收到 `strong_identity`、`trusted_labels`、`weak_labels` 与 alias guardrails，降低被第三方称呼、玩笑或上下文冒充污染的概率。
+
+### Documentation
+- 更新 README、架构文档、外部接入文档、Skill 编写指南与相关 SKILL，统一说明弱别称语义、聚焦记忆提示词与内置 `system_info` 的覆盖规则。
+
 ## [0.27.9] - 2026-04-16
 
 ### Added

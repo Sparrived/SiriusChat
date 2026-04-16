@@ -4,6 +4,7 @@ import uuid
 from dataclasses import dataclass, field, fields, MISSING
 from typing import Any
 
+from sirius_chat.developer_profiles import metadata_declares_developer
 from sirius_chat.mixins import JsonSerializable
 from sirius_chat.memory import UserMemoryEntry, UserMemoryManager, UserProfile
 from sirius_chat.config import TokenUsageRecord, OrchestrationPolicy
@@ -75,6 +76,10 @@ class Participant(JsonSerializable):
             # Generate UUID-based user_id for guaranteed uniqueness
             # Format: "user_<uuid>" for readability
             self.user_id = f"user_{uuid.uuid4().hex[:12]}"
+
+    @property
+    def is_developer(self) -> bool:
+        return metadata_declares_developer(self.metadata)
 
     def as_user_profile(self) -> UserProfile:
         return UserProfile(

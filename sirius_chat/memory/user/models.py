@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
+from sirius_chat.developer_profiles import metadata_declares_developer
 from sirius_chat.mixins import JsonSerializable
 
 
@@ -23,6 +24,10 @@ class UserProfile(JsonSerializable):
     aliases: list[str] = field(default_factory=list)
     traits: list[str] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def is_developer(self) -> bool:
+        return metadata_declares_developer(self.metadata)
 
 
 @dataclass(slots=True)
@@ -70,6 +75,7 @@ class UserRuntimeState:
     """Runtime state: continuously updated by system/AI during session."""
 
     inferred_persona: str = ""
+    inferred_aliases: list[str] = field(default_factory=list)
     inferred_traits: list[str] = field(default_factory=list)
     preference_tags: list[str] = field(default_factory=list)
     recent_messages: list[str] = field(default_factory=list)

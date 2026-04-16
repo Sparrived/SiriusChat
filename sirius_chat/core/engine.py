@@ -42,6 +42,7 @@ from sirius_chat.exceptions import OrchestrationConfigError
 from sirius_chat.skills.registry import SkillRegistry
 from sirius_chat.skills.executor import SkillExecutor, parse_skill_calls, strip_skill_calls
 from sirius_chat.skills.models import SkillChainContext
+from sirius_chat.skills.security import build_skill_invocation_context
 from sirius_chat.core.events import SessionEvent, SessionEventBus, SessionEventType
 from sirius_chat.core.intent_v2 import IntentAnalysis, IntentAnalyzer
 from sirius_chat.core.heat import HeatAnalysis, HeatAnalyzer
@@ -386,6 +387,7 @@ class AsyncRolePlayEngine:
                 loaded_count = registry.reload_from_directory(
                     skills_dir,
                     auto_install_deps=config.orchestration.auto_install_skill_deps,
+                    include_builtin=True,
                 )
                 created.subsystems.skill_registry = registry
                 if loaded_count > 0:
@@ -1045,6 +1047,7 @@ class AsyncRolePlayEngine:
         self,
         config: SessionConfig,
         transcript: Transcript,
+        participant: Participant | None = None,
         skill_registry: SkillRegistry | None = None,
         skill_executor: SkillExecutor | None = None,
         environment_context: str = "",
@@ -1060,8 +1063,15 @@ class AsyncRolePlayEngine:
         
         # Build skill descriptions if available
         skill_descriptions = ""
+        invocation_context = None
         if skill_registry is not None:
-            skill_descriptions = skill_registry.build_tool_descriptions()
+            invocation_context = build_skill_invocation_context(
+                transcript=transcript,
+                caller=participant,
+            )
+            skill_descriptions = skill_registry.build_tool_descriptions(
+                invocation_context=invocation_context,
+            )
 
         # 动态选择模型：有多模态输入时自动升级到多模态模型
         model = self._get_model_for_chat(config, transcript)
@@ -1159,8 +1169,9 @@ class AsyncRolePlayEngine:
                         skill_def,
                         skill_params,
                         timeout=float(config.orchestration.skill_execution_timeout),
+                        chain_context=chain_ctx,
+                        invocation_context=invocation_context,
                     )
-                    chain_ctx.store(skill_name, skill_result)
                     skill_executed = True
                     last_skill_name = skill_name
                     result_text = skill_result.to_display_text()
@@ -1936,6 +1947,7 @@ class AsyncRolePlayEngine:
                 assistant_message = await self._generate_assistant_message(
                     config,
                     transcript,
+                    participant=participant,
                     skill_registry=(
                         context.subsystems.skill_registry
                         if config.orchestration.enable_skills

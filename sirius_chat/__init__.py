@@ -76,6 +76,7 @@ from sirius_chat.api import (
     WorkspaceProviderManager,
     WorkspaceRuntime,
     SkillDefinition,
+    SkillInvocationContext,
     SkillParameter,
     SkillResult,
     SkillRegistry,
@@ -183,6 +184,7 @@ __all__ = [
     "AsyncRolePlayEngine",
     # Skill System
     "SkillDefinition",
+    "SkillInvocationContext",
     "SkillParameter",
     "SkillResult",
     "SkillRegistry",

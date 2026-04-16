@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING
 
+from sirius_chat.core.memory_prompt import build_memory_prompt_sections
 from sirius_chat.core.markers import PROMPT_SPLIT_MARKER, SKILL_CALL_MARKER
 
 if TYPE_CHECKING:
@@ -88,91 +89,17 @@ def build_system_prompt(
             f"<environment_context>\n{environment_context.strip()}\n</environment_context>"
         )
 
+    memory_sections = build_memory_prompt_sections(config=config, transcript=transcript)
+
     # --- Section 4: Session summary (long-term compressed history) ---
-    if transcript.session_summary and "session_summary" not in _skip:
+    if memory_sections.session_summary and "session_summary" not in _skip:
         sections.append(
-            f"<session_summary>\n{transcript.session_summary}\n</session_summary>"
+            f"<session_summary>\n{memory_sections.session_summary}\n</session_summary>"
         )
 
-    # --- Section 5: Participant memory (long-term knowledge) ---
-    if transcript.user_memory.entries and "participant_memory" not in _skip:
-        memory_lines: list[str] = []
-        memory_lines.append("以下为参与者历史记忆积累（非当前对话状态），仅供个性化参考。优先响应当前消息，不要主动回答记忆中的历史问题。禁止仿写字段格式。")
-        for user_id in transcript.user_memory.entries.keys():
-            summary = transcript.user_memory.get_rich_user_summary(user_id, include_transient=True)
-            if not summary:
-                continue
-
-            name = summary.get("name", "未知")
-            aliases = summary.get("aliases", [])
-            persona = summary.get("inferred_persona") or summary.get("persona") or ""
-            traits = summary.get("traits", [])
-            interests = summary.get("interests", [])
-            last_fact_at = summary.get("last_fact_at", "")
-            last_fact_rel = _relative_time_zh(last_fact_at)
-
-            header_parts = [f'id="{user_id}" name="{name}"']
-            if aliases:
-                header_parts.append(f'alias="{",".join(aliases[:3])}"')
-            if last_fact_rel:
-                header_parts.append(f'最后记录="{last_fact_rel}"')
-            memory_lines.append(f'<participant {" ".join(header_parts)}>')
-
-            entry = transcript.user_memory.entries.get(user_id)
-            recent_messages = entry.runtime.recent_messages[-2:] if entry else []
-
-            compact_parts: list[str] = []
-            if persona:
-                compact_parts.append(f"设定={persona}")
-            if traits:
-                compact_parts.append(f"特质={','.join(traits[:5])}")
-            if interests:
-                compact_parts.append(f"兴趣={','.join(interests[:5])}")
-            if recent_messages:
-                compact_parts.append(f"历史消息={'；'.join(recent_messages)}")
-            if compact_parts:
-                memory_lines.append("  " + " | ".join(compact_parts))
-
-            facts_by_type = summary.get("facts_by_type", {})
-            if facts_by_type:
-                category_map = {
-                    "identity": "身份", "preference": "偏好", "emotion": "情绪",
-                    "event": "事件", "summary": "摘要", "custom": "其他",
-                }
-                for fact_type, facts in sorted(facts_by_type.items()):
-                    display_name = category_map.get(fact_type, fact_type)
-                    fact_strs = []
-                    for fact_info in facts[:5]:
-                        value = fact_info.get("value", "")
-                        if not value:
-                            continue
-                        confidence = fact_info.get("confidence", 0.5)
-                        conf_tag = "?" if confidence < 0.6 else ("~" if confidence < 0.8 else "")
-                        # Prefer dynamic relative time from observed_at over static time_desc
-                        rel_time = _relative_time_zh(fact_info.get("observed_at", ""))
-                        time_tag = rel_time or fact_info.get("time_desc", "")
-                        if time_tag:
-                            fact_strs.append(f"({value}{conf_tag},{time_tag})")
-                        else:
-                            fact_strs.append(f"{value}{conf_tag}")
-                    if fact_strs:
-                        memory_lines.append(f"  {display_name}: {' / '.join(fact_strs)}")
-
-            channels = summary.get("channels", [])
-            entities = summary.get("observed_entities", [])
-            if channels or entities:
-                extra = []
-                if channels:
-                    extra.append(f"渠道={','.join(channels)}")
-                if entities:
-                    extra.append(f"实体={','.join(entities[:10])}")
-                memory_lines.append("  " + " | ".join(extra))
-
-            memory_lines.append("</participant>")
-
-        sections.append(
-            "<participant_memory>\n" + "\n".join(memory_lines) + "\n</participant_memory>"
-        )
+    # --- Section 5: Participant memory (compact identity-aware memory) ---
+    if memory_sections.participant_memory and "participant_memory" not in _skip:
+        sections.append(memory_sections.participant_memory)
 
     # --- Section 6: AI self-memory (diary + glossary) ---
     if diary_section.strip() and "self_diary" not in _skip:

@@ -27,6 +27,24 @@ _ALWAYS_AVAILABLE = frozenset({
     "uv",
 })
 
+_IMPORT_TO_PACKAGE_NAME = {
+    "PIL": "Pillow",
+    "bs4": "beautifulsoup4",
+    "cv2": "opencv-python",
+    "yaml": "PyYAML",
+    "skimage": "scikit-image",
+    "sklearn": "scikit-learn",
+}
+
+_PACKAGE_IMPORT_PROBES = {
+    "Pillow": ("PIL",),
+    "beautifulsoup4": ("bs4",),
+    "opencv-python": ("cv2",),
+    "PyYAML": ("yaml",),
+    "scikit-image": ("skimage",),
+    "scikit-learn": ("sklearn",),
+}
+
 
 def resolve_skill_dependencies(
     skill_file: Path,
@@ -95,7 +113,7 @@ def _parse_dependencies_from_ast(node: ast.expr) -> set[str]:
 
 
 def _extract_imported_packages(skill_file: Path) -> set[str]:
-    """Scan top-level ``import X`` / ``from X import ...`` statements."""
+    """Scan all ``import X`` / ``from X import ...`` statements in the module."""
     try:
         source = skill_file.read_text(encoding="utf-8")
         tree = ast.parse(source, filename=str(skill_file))
@@ -103,13 +121,13 @@ def _extract_imported_packages(skill_file: Path) -> set[str]:
         return set()
 
     packages: set[str] = set()
-    for node in ast.iter_child_nodes(tree):
+    for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
-                packages.add(alias.name.split(".")[0])
+                packages.add(_normalize_candidate(alias.name.split(".")[0]))
         elif isinstance(node, ast.ImportFrom):
             if node.module:
-                packages.add(node.module.split(".")[0])
+                packages.add(_normalize_candidate(node.module.split(".")[0]))
     return packages
 
 
@@ -170,10 +188,28 @@ def _find_missing(candidates: set[str]) -> set[str]:
     for pkg in candidates:
         if _is_stdlib(pkg) or pkg in _ALWAYS_AVAILABLE:
             continue
-        if importlib.util.find_spec(pkg) is not None:
+        if _package_is_importable(pkg):
             continue
         missing.add(pkg)
     return missing
+
+
+def _normalize_candidate(name: str) -> str:
+    value = str(name or "").strip()
+    if not value:
+        return value
+    return _IMPORT_TO_PACKAGE_NAME.get(value, value)
+
+
+def _package_is_importable(package_name: str) -> bool:
+    for probe_name in _package_import_names(package_name):
+        if importlib.util.find_spec(probe_name) is not None:
+            return True
+    return False
+
+
+def _package_import_names(package_name: str) -> tuple[str, ...]:
+    return _PACKAGE_IMPORT_PROBES.get(package_name, (package_name,))
 
 
 def _install_packages(packages: list[str], skill_name: str) -> list[str]:

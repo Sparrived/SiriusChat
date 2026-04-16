@@ -121,6 +121,7 @@ from sirius_chat.config import (
 )
 from sirius_chat.skills import (
     SkillDefinition,
+    SkillInvocationContext,
     SkillParameter,
     SkillResult,
     SkillRegistry,
@@ -233,6 +234,7 @@ __all__ = [
     "configure_full_orchestration",
     # Skill system
     "SkillDefinition",
+    "SkillInvocationContext",
     "SkillParameter",
     "SkillResult",
     "SkillRegistry",

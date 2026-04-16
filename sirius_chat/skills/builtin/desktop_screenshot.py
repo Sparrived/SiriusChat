@@ -1,0 +1,113 @@
+"""Built-in skill for capturing the host desktop as an image artifact."""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from pathlib import Path
+import tempfile
+from typing import Any
+
+from sirius_chat.skills.models import SkillInvocationContext
+from sirius_chat.skills.security import ensure_developer_access
+
+SKILL_META = {
+    "name": "desktop_screenshot",
+    "description": "捕获当前主机桌面截图并返回给模型进行内部分析",
+    "version": "1.0.0",
+    "developer_only": True,
+    "dependencies": ["Pillow"],
+    "parameters": {
+        "all_screens": {
+            "type": "bool",
+            "description": "是否尽量捕获所有显示器；部分平台可能只支持主屏幕",
+            "required": False,
+            "default": True,
+        },
+    },
+}
+
+
+def run(
+    all_screens: bool = True,
+    data_store: Any = None,
+    invocation_context: SkillInvocationContext | None = None,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    ensure_developer_access(
+        skill_name="desktop_screenshot",
+        invocation_context=invocation_context,
+    )
+
+    image = _capture_desktop_image(all_screens=all_screens)
+    output_path = _save_capture(image=image, data_store=data_store)
+    captured_at = datetime.now(timezone.utc).isoformat()
+
+    if data_store is not None:
+        history = data_store.get("captures", [])
+        history.append(
+            {
+                "captured_at": captured_at,
+                "path": str(output_path),
+                "caller_user_id": invocation_context.caller_user_id if invocation_context else "",
+            }
+        )
+        data_store.set("captures", history[-10:])
+
+    return {
+        "text_blocks": [
+            {
+                "type": "text",
+                "label": "summary",
+                "value": "已捕获当前主机桌面截图，请结合图像继续分析。",
+            }
+        ],
+        "multimodal_blocks": [
+            {
+                "type": "image",
+                "label": "desktop_screenshot",
+                "value": str(output_path),
+                "mime_type": "image/png",
+            }
+        ],
+        "internal_metadata": {
+            "captured_at": captured_at,
+            "artifact_path": str(output_path),
+            "caller_user_id": invocation_context.caller_user_id if invocation_context else "",
+            "caller_name": invocation_context.caller_name if invocation_context else "",
+        },
+    }
+
+
+def _capture_desktop_image(*, all_screens: bool) -> Any:
+    try:
+        from PIL import ImageGrab
+    except ImportError as exc:
+        raise RuntimeError(
+            "桌面截图需要 Pillow，请启用 auto_install_skill_deps 或手动安装 Pillow。"
+        ) from exc
+
+    try:
+        return ImageGrab.grab(all_screens=all_screens)
+    except TypeError:
+        return ImageGrab.grab()
+    except Exception as exc:
+        raise RuntimeError(f"桌面截图失败: {exc}") from exc
+
+
+def _save_capture(*, image: Any, data_store: Any) -> Path:
+    output_dir = _resolve_output_dir(data_store)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    output_path = output_dir / f"desktop_screenshot_{timestamp}.png"
+    image.save(output_path, format="PNG")
+    return output_path
+
+
+def _resolve_output_dir(data_store: Any) -> Path:
+    artifact_dir = getattr(data_store, "artifact_dir", None)
+    if isinstance(artifact_dir, Path):
+        return artifact_dir
+    if artifact_dir:
+        return Path(str(artifact_dir))
+    return Path(tempfile.gettempdir()) / "sirius_chat" / "skill_artifacts" / "desktop_screenshot"

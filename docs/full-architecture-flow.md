@@ -24,7 +24,7 @@ flowchart TD
   SessionCfg --> Engine["AsyncRolePlayEngine\n实现位于 sirius_chat/core/engine.py"]
   Provider --> Engine
 
-  Engine --> CoreHelpers["core/chat_builder.py\ncore/memory_runner.py\ncore/engagement_pipeline.py"]
+  Engine --> CoreHelpers["core/chat_builder.py\ncore/memory_prompt.py\ncore/memory_runner.py\ncore/engagement_pipeline.py"]
   Engine --> Memory["memory/\nuser + event + self"]
   Engine --> Skills["skills/\nSKILL 注册与执行"]
   Engine --> Token["token/\n记录、聚合、SQLite 持久化"]
@@ -39,6 +39,9 @@ flowchart TD
 - `WorkspaceLayout` 是路径的单一事实来源，决定配置资产与运行态数据分别落在哪里。
 - `AsyncRolePlayEngine` 的真实实现位于 `sirius_chat/core/engine.py`。
 - `sirius_chat/async_engine/` 现在承担兼容导出、提示词、任务编排和工具函数，不再承担文件所有权。
+- 主提示词里的用户记忆已收敛到 `core/memory_prompt.py`：只拼接当前发言者和直接相关参与者，不再把所有参与者的原始近期消息整体塞进主 prompt。
+- `UserMemoryManager` 里的 `profile.aliases` 属于可信身份锚点；`runtime.inferred_aliases` 只是弱线索，不参与稳定识人绑定。
+- SKILL runtime 会先加载包内置技能，再加载 workspace `skills/`；同名 workspace 文件覆盖内置实现。
 - 用户态记忆、事件记忆、自身记忆、session store、token store 都已经收敛到 workspace 语义下。
 
 ## 2. Workspace 启动与配置流
@@ -93,7 +96,7 @@ flowchart TD
     K2 --> L
     L --> M{"需要回复吗"}
     M -- 否 --> N["发出 REPLY_SKIPPED 事件\n保留记忆与 transcript 更新"]
-    M -- 是 --> O["build_system_prompt()\n注入 agent 身份\n用户记忆\n事件命中\nself memory\nsession_summary\nenvironment_context\n安全约束"]
+    M -- 是 --> O["build_system_prompt()\n注入 agent 身份\n聚焦用户记忆\n(当前发言者+直接相关者)\n事件命中\nself memory\n压缩 session_summary\nenvironment_context\n安全约束"]
     O --> P["构建主模型请求\n处理多模态输入与模型选择"]
     P --> Q["Provider.generate()\n显式 Provider 或 AutoRoutingProvider"]
     Q --> R["可选 SKILL 检测与执行循环\n最多 max_skill_rounds"]
@@ -126,7 +129,7 @@ flowchart TD
 | 入口层 | `main.py`、`sirius_chat/cli.py`、`sirius_chat/api/*` | 接收外部输入、暴露稳定 API、拼接最少的运行参数 |
 | Workspace 层 | `workspace/layout.py`、`workspace/runtime.py`、`workspace/config_watcher.py`、`workspace/roleplay_manager.py` | 路径布局、配置热刷新、session 队列与锁、静默批处理、participants 元数据、roleplay 资产与 workspace 默认值联动 |
 | 配置构建层 | `config/models.py`、`config/manager.py`、`config/jsonc.py`、`config/helpers.py` | `WorkspaceConfig` / `SessionConfig` 契约、JSON/JSONC 读写、workspace 默认值与 orchestration 构造 |
-| 编排核心层 | `core/engine.py`、`core/chat_builder.py`、`core/memory_runner.py`、`core/engagement_pipeline.py`、`core/heat.py`、`core/intent_v2.py`、`core/events.py` | 单轮消息编排、记忆任务、意图分析、参与决策、提示词上下文构造、事件总线 |
+| 编排核心层 | `core/engine.py`、`core/chat_builder.py`、`core/memory_prompt.py`、`core/memory_runner.py`、`core/engagement_pipeline.py`、`core/heat.py`、`core/intent_v2.py`、`core/events.py` | 单轮消息编排、记忆任务、意图分析、参与决策、提示词上下文构造、事件总线 |
 | 兼容与辅助层 | `async_engine/prompts.py`、`async_engine/orchestration.py`、`async_engine/utils.py`、`async_engine/__init__.py` | 提示词生成、任务常量与配置、辅助工具、向后兼容导出 |
 | 记忆层 | `memory/user/`、`memory/event/`、`memory/self/`、`memory/quality/` | 用户识别与事实记忆、事件记忆、自身记忆、离线质量评估能力 |
 | Provider 层 | `providers/base.py`、`providers/routing.py`、各 provider 文件、`providers/middleware/` | 统一请求协议、provider 注册表、自动路由、具体上游接入、中间件增强 |
@@ -147,7 +150,7 @@ flowchart TD
 | `providers/provider_keys.json` | config root | `WorkspaceProviderManager` | provider 注册表、healthcheck 与模型映射 |
 | `roleplay/generated_agents.json` | config root | `roleplay_prompting.py` | 已生成 agent 资产库与选中 agent |
 | `roleplay/generated_agent_traces/<agent_key>.json` | config root | `roleplay_prompting.py` | 提示词生成完整轨迹 |
-| `skills/` | config root | `SkillRegistry`、runtime 初始化 | SKILL 源文件与 README 引导 |
+| `skills/` | config root | `SkillRegistry`、runtime 初始化 | SKILL 源文件与 README 引导；同名 workspace 文件可覆盖内置 SKILL |
 | `sessions/<session_id>/session_state.db` | data root | `SqliteSessionStore` | 默认结构化会话存储 |
 | `sessions/<session_id>/session_state.json` | data root | `JsonSessionStore` | 可选 JSON store |
 | `sessions/<session_id>/participants.json` | data root | `WorkspaceRuntime` | 会话参与者与主用户元数据 |
@@ -214,7 +217,7 @@ flowchart TD
 | 产物 | 来源 | 被谁消费 |
 | --- | --- | --- |
 | `Transcript.messages` | `AsyncRolePlayEngine` | 对话展示、session store |
-| `Transcript.user_memory` | `UserMemoryManager` | 提示词注入、识人、participants 写回 |
+| `Transcript.user_memory` | `UserMemoryManager` | 提示词注入、识人、participants 写回；`profile.aliases` 为强绑定，`runtime.inferred_aliases` 为弱线索 |
 | `Transcript.reply_runtime` | 引擎运行时 | `reply_mode=auto` 节奏控制 |
 | `Transcript.session_summary` | 自动压缩逻辑 | 后续主模型上下文 |
 | `Transcript.orchestration_stats` | 各辅助任务 | 调试与统计 |

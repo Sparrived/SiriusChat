@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
+from sirius_chat.memory import UserProfile
+
 
 @dataclass(slots=True)
 class SkillContentBlock:
@@ -169,6 +171,7 @@ class SkillDefinition:
     description: str
     parameters: list[SkillParameter] = field(default_factory=list)
     version: str = "1.0.0"
+    developer_only: bool = False
     source_path: Path | None = None
     _run_func: Callable[..., Any] | None = field(default=None, repr=False)
 
@@ -186,6 +189,34 @@ class SkillDefinition:
                 entry["default"] = param.default
             schema.append(entry)
         return schema
+
+
+@dataclass(slots=True)
+class SkillInvocationContext:
+    """Per-call context injected into skills for authorization and auditing."""
+
+    caller: UserProfile | None = None
+    developer_profiles: list[UserProfile] = field(default_factory=list)
+
+    @property
+    def caller_is_developer(self) -> bool:
+        return bool(self.caller and self.caller.is_developer)
+
+    @property
+    def has_declared_developer(self) -> bool:
+        return bool(self.developer_profiles)
+
+    @property
+    def caller_name(self) -> str:
+        if self.caller is None:
+            return ""
+        return str(self.caller.name).strip()
+
+    @property
+    def caller_user_id(self) -> str:
+        if self.caller is None:
+            return ""
+        return str(self.caller.user_id).strip()
 
 
 class SkillChainContext:

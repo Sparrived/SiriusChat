@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import logging
 import re
@@ -10,7 +11,13 @@ from pathlib import Path
 from typing import Any
 
 from sirius_chat.skills.data_store import SkillDataStore
-from sirius_chat.skills.models import SkillDefinition, SkillResult, SkillChainContext
+from sirius_chat.skills.models import (
+    SkillChainContext,
+    SkillDefinition,
+    SkillInvocationContext,
+    SkillResult,
+)
+from sirius_chat.skills.security import validate_skill_access
 from sirius_chat.workspace.layout import WorkspaceLayout
 
 logger = logging.getLogger(__name__)
@@ -69,6 +76,7 @@ class SkillExecutor:
         skill: SkillDefinition,
         params: dict[str, Any],
         chain_context: SkillChainContext | None = None,
+        invocation_context: SkillInvocationContext | None = None,
     ) -> SkillResult:
         """Execute a skill synchronously with parameter validation.
 
@@ -105,9 +113,19 @@ class SkillExecutor:
             elif param_def.default is not None:
                 call_params[param_def.name] = param_def.default
 
-        # Inject data_store
+        access_error = validate_skill_access(skill=skill, invocation_context=invocation_context)
+        if access_error:
+            skill_result = SkillResult(success=False, error=access_error)
+            if chain_context is not None:
+                chain_context.store(skill.name, skill_result)
+            return skill_result
+
         data_store = self._get_data_store(skill.name)
-        call_params["data_store"] = data_store
+        injection_plan = _build_injection_plan(skill._run_func)
+        if injection_plan.accepts("data_store"):
+            call_params["data_store"] = data_store
+        if invocation_context is not None and injection_plan.accepts("invocation_context"):
+            call_params["invocation_context"] = invocation_context
 
         try:
             result = skill._run_func(**call_params)
@@ -131,6 +149,7 @@ class SkillExecutor:
         params: dict[str, Any],
         timeout: float = 0,
         chain_context: SkillChainContext | None = None,
+        invocation_context: SkillInvocationContext | None = None,
     ) -> SkillResult:
         """Execute a skill in a thread pool to avoid blocking the event loop.
 
@@ -144,7 +163,13 @@ class SkillExecutor:
         if timeout > 0:
             try:
                 return await asyncio.wait_for(
-                    asyncio.to_thread(self.execute, skill, params, chain_context),
+                    asyncio.to_thread(
+                        self.execute,
+                        skill,
+                        params,
+                        chain_context,
+                        invocation_context,
+                    ),
                     timeout=timeout,
                 )
             except asyncio.TimeoutError:
@@ -153,7 +178,13 @@ class SkillExecutor:
                     success=False,
                     error=f"SKILL执行超时（限制 {timeout:.0f} 秒），请稍后重试或联系管理员",
                 )
-        return await asyncio.to_thread(self.execute, skill, params, chain_context)
+        return await asyncio.to_thread(
+            self.execute,
+            skill,
+            params,
+            chain_context,
+            invocation_context,
+        )
 
     def save_all_stores(self) -> None:
         """Persist all dirty data stores."""
@@ -192,3 +223,32 @@ def _coerce_type(value: Any, type_hint: str) -> Any:
                 return [v.strip() for v in value.split(",") if v.strip()]
         return value
     return value
+
+
+class _InjectionPlan:
+    def __init__(self, *, accepts_kwargs: bool, keyword_params: set[str]) -> None:
+        self._accepts_kwargs = accepts_kwargs
+        self._keyword_params = keyword_params
+
+    def accepts(self, param_name: str) -> bool:
+        return self._accepts_kwargs or param_name in self._keyword_params
+
+
+def _build_injection_plan(run_func: Any) -> _InjectionPlan:
+    try:
+        signature = inspect.signature(run_func)
+    except (TypeError, ValueError):
+        return _InjectionPlan(accepts_kwargs=True, keyword_params=set())
+
+    accepts_kwargs = False
+    keyword_params: set[str] = set()
+    for name, param in signature.parameters.items():
+        if param.kind == inspect.Parameter.VAR_KEYWORD:
+            accepts_kwargs = True
+            continue
+        if param.kind in (
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            inspect.Parameter.KEYWORD_ONLY,
+        ):
+            keyword_params.add(name)
+    return _InjectionPlan(accepts_kwargs=accepts_kwargs, keyword_params=keyword_params)
