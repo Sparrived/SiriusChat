@@ -686,6 +686,7 @@ SKILL 系统支持可扩展任务编排：
 
 - 自动初始化 `skills/` 目录；默认位于 `work_path`，双根布局时位于 `config_root`
 - 内置 `system_info` 与 developer-only 的 `desktop_screenshot` 默认可用；若放置同名 workspace skill，workspace 文件会覆盖内置实现
+- `desktop_screenshot` 会把“判断主机当前在做什么、屏幕上显示什么”的分析提示一并回传给模型，便于模型在需要时主动截图后再回答
 - 若要使用受限技能，外部至少应显式标记一名 developer：`UserProfile.metadata["is_developer"] = True`
 - 支持外部 Python 技能文件
 - 链式调用与迭代反馈
@@ -708,6 +709,7 @@ SKILL 系统支持可扩展任务编排：
 | [📋 full-architecture-flow.md](docs/full-architecture-flow.md) | 详细数据流图解 |
 | [🎬 external-usage.md](docs/external-usage.md) | 库调用指南与集成文档 |
 | [🗂️ migration-v0.27.md](docs/migration-v0.27.md) | v0.27 破坏性变更迁移指南 |
+| [🗂️ migration-v0.27.12.md](docs/migration-v0.27.12.md) | v0.27.12 桌面截图自动调用语义迁移说明 |
 | [🗂️ migration-v0.27.11.md](docs/migration-v0.27.11.md) | v0.27.11 developer 安全模型与桌面截图 Skill 迁移说明 |
 | [🗂️ migration-v0.27.10.md](docs/migration-v0.27.10.md) | v0.27.10 记忆防污染与内置 Skill 迁移说明 |
 | [🗂️ migration-v0.27.9.md](docs/migration-v0.27.9.md) | v0.27.9 意图分析与 Skill 内部通道迁移说明 |
@@ -750,17 +752,15 @@ python -m pytest tests/test_engine.py::test_roleplay_engine_multi_human_single_a
 ## 🆕 最新变更
 
 ### ✨ **新增**
-- **developer 元数据安全模型**：`UserProfile` / `Participant` 现在支持通过 `metadata["is_developer"]` 显式声明 developer，并基于该档案信息控制受限 SKILL。
-- **内置 `desktop_screenshot` SKILL**：新增受限桌面截图技能，仅 developer 可调用；结果会作为图片块返回给模型做内部分析。
-- **v0.27.11 迁移说明**：新增 `docs/migration-v0.27.11.md`，集中说明 developer 安全模型、桌面截图 SKILL 与内置依赖自动安装语义。
+- **截图后自动观察当前桌面状态**：`desktop_screenshot` 现在会明确告诉模型这张图适合判断主机当前在做什么、前台窗口/页面/应用是什么，并支持传入本次观察重点。
+- **v0.27.12 迁移说明**：新增 `docs/migration-v0.27.12.md`，集中说明桌面截图自动调用提示与新的 `focus` 语义。
 
 ### 🚀 **改进**
-- **内置 SKILL 也进入自动依赖解析路径**：内置 `system_info` 现在显式声明 `psutil`，`desktop_screenshot` 显式声明 `Pillow`，两者都会在加载前走统一的依赖安装逻辑。
-- **受限技能改为双层防护**：非 developer 当前轮次看不到 developer-only 工具；若模型仍强行调用，runtime 会返回明确的权限错误。
-- **CLI 首次引导会显式询问 developer 身份**：`primary_user.json` 现在会持久化 developer 元数据，避免本地入口绕过权限模型。
+- **系统提示词会更明确鼓励截图再回答**：当 developer 可见的 SKILL 列表中包含 `desktop_screenshot` 时，主提示词会明确要求模型在判断主机当前状态前优先截图，而不是直接猜测。
+- **截图结果自带分析护栏**：桌面截图返回的内部文本会强调优先观察前台窗口、可见应用和页面标题；无法从截图确认的后台动作需要明确标注不确定。
 
 **迁移提示：**
-> 若你的外部接入需要受限内置 SKILL，请先把至少一名可信用户显式标记为 developer，并阅读 `docs/migration-v0.27.11.md`。
+> 若你希望模型能更稳定地通过截图判断主机当前在做什么，请阅读 `docs/migration-v0.27.12.md`，并确认当前发言者具备 developer 权限。
 
 更多信息见 [CHANGELOG.md](CHANGELOG.md)。
 

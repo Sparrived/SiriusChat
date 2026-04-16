@@ -1265,6 +1265,8 @@ def test_developer_only_skill_visible_to_developer_prompt(tmp_path) -> None:
         assert provider.requests
         assert "desktop_screenshot" in provider.requests[0].system_prompt
         assert "仅 developer 可调用" in provider.requests[0].system_prompt
+        assert "主机当前在做什么" in provider.requests[0].system_prompt
+        assert "不要在未截图前猜测" in provider.requests[0].system_prompt
 
     asyncio.run(_run())
 

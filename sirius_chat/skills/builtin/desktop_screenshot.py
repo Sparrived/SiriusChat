@@ -12,8 +12,8 @@ from sirius_chat.skills.security import ensure_developer_access
 
 SKILL_META = {
     "name": "desktop_screenshot",
-    "description": "捕获当前主机桌面截图并返回给模型进行内部分析",
-    "version": "1.0.0",
+    "description": "当需要判断主机当前在做什么、屏幕上打开了哪些窗口、应用或页面时，捕获当前主机桌面截图并返回给模型进行内部分析",
+    "version": "1.1.0",
     "developer_only": True,
     "dependencies": ["Pillow"],
     "parameters": {
@@ -23,12 +23,19 @@ SKILL_META = {
             "required": False,
             "default": True,
         },
+        "focus": {
+            "type": "str",
+            "description": "本次截图关注点，例如 判断主机当前在做什么、确认前台窗口、查看当前页面",
+            "required": False,
+            "default": "",
+        },
     },
 }
 
 
 def run(
     all_screens: bool = True,
+    focus: str = "",
     data_store: Any = None,
     invocation_context: SkillInvocationContext | None = None,
     **kwargs: Any,
@@ -41,6 +48,7 @@ def run(
     image = _capture_desktop_image(all_screens=all_screens)
     output_path = _save_capture(image=image, data_store=data_store)
     captured_at = datetime.now(timezone.utc).isoformat()
+    analysis_focus = _normalize_focus(focus)
 
     if data_store is not None:
         history = data_store.get("captures", [])
@@ -48,6 +56,8 @@ def run(
             {
                 "captured_at": captured_at,
                 "path": str(output_path),
+                "analysis_focus": analysis_focus,
+                "all_screens": bool(all_screens),
                 "caller_user_id": invocation_context.caller_user_id if invocation_context else "",
             }
         )
@@ -58,7 +68,16 @@ def run(
             {
                 "type": "text",
                 "label": "summary",
-                "value": "已捕获当前主机桌面截图，请结合图像继续分析。",
+                "value": "已捕获当前主机桌面截图。这张图像适合判断主机当前在做什么，以及前台窗口、应用、页面或编辑器/终端状态。",
+            },
+            {
+                "type": "text",
+                "label": "analysis_hint",
+                "value": (
+                    f"分析重点：{analysis_focus}。"
+                    "优先观察前台窗口、可见应用、页面标题、编辑器或终端内容；"
+                    "如果截图不足以确认后台任务或隐含动作，请明确说明不确定，不要臆测。"
+                ),
             }
         ],
         "multimodal_blocks": [
@@ -72,10 +91,19 @@ def run(
         "internal_metadata": {
             "captured_at": captured_at,
             "artifact_path": str(output_path),
+            "analysis_focus": analysis_focus,
+            "all_screens": bool(all_screens),
             "caller_user_id": invocation_context.caller_user_id if invocation_context else "",
             "caller_name": invocation_context.caller_name if invocation_context else "",
         },
     }
+
+
+def _normalize_focus(focus: str) -> str:
+    value = str(focus or "").strip()
+    if value:
+        return value
+    return "判断主机当前在做什么，以及前台窗口、应用、页面和任务状态"
 
 
 def _capture_desktop_image(*, all_screens: bool) -> Any:

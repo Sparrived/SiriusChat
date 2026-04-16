@@ -860,13 +860,20 @@ class TestBuiltinDesktopScreenshot:
         context = SkillInvocationContext(caller=developer, developer_profiles=[developer])
         store = SkillDataStore(tmp_path / "skill_data" / "desktop_screenshot.json")
 
-        result = desktop_screenshot.run(data_store=store, invocation_context=context)
+        result = desktop_screenshot.run(
+            focus="判断主机当前在做什么",
+            data_store=store,
+            invocation_context=context,
+        )
 
         assert result["multimodal_blocks"][0]["mime_type"] == "image/png"
+        assert "主机当前在做什么" in result["text_blocks"][1]["value"]
         image_path = Path(result["multimodal_blocks"][0]["value"])
         assert image_path.exists()
         assert image_path.parent == store.artifact_dir
         assert store.get("captures", [])[0]["caller_user_id"] == "dev-1"
+        assert store.get("captures", [])[0]["analysis_focus"] == "判断主机当前在做什么"
+        assert result["internal_metadata"]["analysis_focus"] == "判断主机当前在做什么"
 
     def test_run_rejects_missing_developer_context(self):
         from sirius_chat.skills.builtin import desktop_screenshot

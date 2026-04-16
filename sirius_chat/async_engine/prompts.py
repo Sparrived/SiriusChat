@@ -130,6 +130,12 @@ def build_system_prompt(
     # --- Section 8: Skill system ---
     if config.orchestration.enable_skills and skill_descriptions:
         marker = SKILL_CALL_MARKER
+        desktop_observation_hint = ""
+        if "desktop_screenshot" in skill_descriptions:
+            desktop_observation_hint = (
+                "当用户询问主机当前在做什么、当前屏幕显示什么、打开了哪些窗口或页面，"
+                "或你需要先观察桌面才能判断状态时，应优先调用 `desktop_screenshot`，不要在未截图前猜测。\n"
+            )
         sections.append(
             f"<available_skills>\n"
             f"## 调用格式\n"
@@ -144,6 +150,7 @@ def build_system_prompt(
             f"  * 再次调用同一SKILL（传入新参数）\n"
             f"  * 直接给出最终自然语言回复\n"
             f"\n"
+            f"{desktop_observation_hint}"
             f"可用SKILL：\n{skill_descriptions}\n"
             f"\n"
             f"规则：仅用列出的SKILL；参数JSON；每轮只放一个调用；考虑SKILL之间的协同作用拿到更详细的内容；拿到结果后自然叙述最终答复。\n"

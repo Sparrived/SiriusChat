@@ -98,6 +98,8 @@ asyncio.run(main())
 
 若你需要保留 developer-only 内置 SKILL（例如 `desktop_screenshot`）的使用能力，请至少为一个可信用户显式设置 `UserProfile.metadata["is_developer"] = True`。非 developer 当前轮次不会在提示词中看到这些技能，模型即使强行调用也会被 runtime 拒绝。
 
+当 developer 当前轮次可见 `desktop_screenshot` 时，系统提示词会额外提醒模型：如果用户是在问“主机当前在做什么”“屏幕上现在是什么”“打开了哪些窗口/页面”，应先截图再回答，而不是直接猜测。
+
 若你使用智谱 BigModel 的 `glm-4.6v`，可以直接改用：
 
 ```python
@@ -361,10 +363,11 @@ orchestration = OrchestrationPolicy(
 - SKILL 加载顺序：先加载包内置 SKILL（当前包含 `system_info` 与 developer-only 的 `desktop_screenshot`），再加载 workspace `skills/`；同名 workspace 文件会覆盖内置实现
 - developer-only SKILL 会依据当前发言者的 developer 档案决定是否出现在提示词中；执行时 runtime 也会再次校验权限
 - 内置与 workspace SKILL 都会参与同一条依赖自动安装路径；`system_info` 会声明 `psutil`，`desktop_screenshot` 会声明 `Pillow`
+- `desktop_screenshot` 返回结果时会附带面向模型的观察提示，强调该图像主要用于判断主机当前在做什么、前台窗口/应用/页面是什么；如果仅凭截图无法确认后台动作，模型应明确说明不确定
 - 提示词分割：当 `enable_prompt_driven_splitting=True` 时，系统提示会带分割指令，AI 会在适当位置输出内置的 `<MSG_SPLIT>` 标记；外部不再配置 `split_marker`
 - 当前配置统一通过 `task_enabled/task_models/task_temperatures/task_max_tokens/task_retries` 管理 `intent_analysis` 与 `memory_manager`
 - 旧配置文件若仍包含 `enable_intent_analysis` / `intent_analysis_model`，加载时会自动映射到任务配置，但新的模板与持久化输出不再写出这两个字段
-- 旧配置文件若仍包含 `message_debounce_seconds` 或 `memory_manager_*`，加载时会自动映射到新任务配置；若需要理解 `min_reply_interval_seconds`、长上下文触发、多 AI 自动回复抑制、记忆防污染与内置 SKILL 的配合方式，见 `docs/migration-v0.27.md`、`docs/migration-v0.27.1.md`、`docs/migration-v0.27.2.md`、`docs/migration-v0.27.3.md`、`docs/migration-v0.27.4.md`、`docs/migration-v0.27.5.md`、`docs/migration-v0.27.6.md`、`docs/migration-v0.27.7.md`、`docs/migration-v0.27.8.md`、`docs/migration-v0.27.9.md`、`docs/migration-v0.27.10.md` 与 `docs/migration-v0.27.11.md`
+- 旧配置文件若仍包含 `message_debounce_seconds` 或 `memory_manager_*`，加载时会自动映射到新任务配置；若需要理解 `min_reply_interval_seconds`、长上下文触发、多 AI 自动回复抑制、记忆防污染与内置 SKILL 的配合方式，见 `docs/migration-v0.27.md`、`docs/migration-v0.27.1.md`、`docs/migration-v0.27.2.md`、`docs/migration-v0.27.3.md`、`docs/migration-v0.27.4.md`、`docs/migration-v0.27.5.md`、`docs/migration-v0.27.6.md`、`docs/migration-v0.27.7.md`、`docs/migration-v0.27.8.md`、`docs/migration-v0.27.9.md`、`docs/migration-v0.27.10.md`、`docs/migration-v0.27.11.md` 与 `docs/migration-v0.27.12.md`
 
 若使用 SiliconFlow，可直接替换 provider：
 
