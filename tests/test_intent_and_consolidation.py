@@ -249,9 +249,9 @@ class TestParseResponse:
         assert result is not None
         assert result.intent_type == "question"
         assert result.directed_at_ai is True
-        assert result.directed_at_current_ai is True
+        assert result.directed_at_current_ai is False
         assert result.target == "ai"
-        assert result.target_scope == "self_ai"
+        assert result.target_scope == "unknown"
         assert "participant_memory" in result.skip_sections
         assert "session_summary" not in result.skip_sections
         assert result.reason == "用户在询问天气"
@@ -262,7 +262,8 @@ class TestParseResponse:
         result = IntentAnalyzer._parse_response(raw)
         assert result is not None
         assert result.intent_type == "request"
-        assert result.target_scope == "self_ai"
+        assert result.target_scope == "unknown"
+        assert result.directed_at_current_ai is False
         assert "session_summary" in result.skip_sections
 
     def test_invalid_json_returns_none(self):
@@ -333,9 +334,9 @@ class TestParseResponse:
         directed_result = IntentAnalyzer._parse_response(directed_raw)
         assert directed_result is not None
         assert directed_result.directed_at_ai is True
-        assert directed_result.directed_at_current_ai is True
+        assert directed_result.directed_at_current_ai is False
         assert directed_result.target == "ai"
-        assert directed_result.target_scope == "self_ai"
+        assert directed_result.target_scope == "unknown"
 
     def test_parse_other_ai_scope(self):
         raw = json.dumps({
@@ -349,6 +350,29 @@ class TestParseResponse:
         assert result.target == "ai"
         assert result.target_scope == "other_ai"
         assert result.directed_at_ai is True
+        assert result.directed_at_current_ai is False
+
+    def test_post_process_downgrades_self_ai_without_name_or_context_evidence(self):
+        result = IntentAnalyzer.post_process_analysis(
+            IntentAnalysis(
+                intent_type="question",
+                target="ai",
+                target_scope="self_ai",
+                confidence=0.9,
+                directed_at_ai=True,
+                directed_at_current_ai=True,
+                importance=0.9,
+            ),
+            content="你觉得呢？",
+            agent_name="助手",
+            agent_alias="",
+            participant_names=["小王"],
+            recent_messages=[{"role": "user", "speaker": "小王", "content": "刚刚在聊排期。"}],
+        )
+
+        assert result.target == "unknown"
+        assert result.target_scope == "unknown"
+        assert result.directed_at_ai is False
         assert result.directed_at_current_ai is False
 
 
@@ -382,6 +406,8 @@ class TestAnalyzeLLM:
         )
 
         prompt = str(request.messages[0]["content"])
+        assert "当前助手名称: 月白" in prompt
+        assert "当前模型" not in prompt
         assert "最近交互链摘要:" in prompt
         assert "近期对话:" not in prompt
         assert "first dropped context" not in prompt
@@ -448,6 +474,7 @@ class TestAnalyzeLLM:
             response = json.dumps({
                 "intent_type": "question",
                 "target": "ai",
+                "target_scope": "self_ai",
                 "importance": 0.7,
                 "needs_memory": True,
                 "needs_summary": False,
@@ -458,7 +485,7 @@ class TestAnalyzeLLM:
                 return await provider.generate_async(req)
 
             result = await IntentAnalyzer.analyze(
-                content="你知道明天什么天气吗？",
+                content="助手，你知道明天什么天气吗？",
                 agent_name="助手",
                 agent_alias="",
                 participant_names=["小王"],

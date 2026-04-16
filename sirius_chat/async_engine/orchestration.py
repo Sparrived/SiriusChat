@@ -43,6 +43,7 @@ TASK_INTENT_ANALYSIS_SYSTEM_PROMPT = (
     "{\n"
     '  "intent_type": "question|request|chat|reaction|information_share|command",\n'
     '  "target": "ai|others|everyone|unknown",\n'
+    '  "target_scope": "self_ai|other_ai|human|everyone|unknown",\n'
     '  "importance": float(0-1),\n'
     '  "needs_memory": bool,\n'
     '  "needs_summary": bool,\n'
@@ -50,14 +51,18 @@ TASK_INTENT_ANALYSIS_SYSTEM_PROMPT = (
     '  "evidence_span": "从原消息中摘取的关键短语"\n'
     "}\n\n"
     "判断指南：\n"
-    "- target=ai：消息明确指向AI（提及AI名字/别名、使用\"你\"且上下文指向AI、对AI说话）\n"
-    "- target=others：消息明确指向群内其他人（提及其他人名字、@其他人、回复其他人话题）\n"
+    "- target=ai 且 target_scope=self_ai：只有在消息明确点名当前助手名字/别名，或有非常强的上下文承接证据表明用户正在直接回应当前助手上一轮发言时，才可使用 self_ai\n"
+    "- target=ai 且 target_scope=other_ai：消息明确指向群内其他 AI，或点名了名字上带明显 AI 线索的其他对象\n"
+    "- target=others 且 target_scope=human：消息明确指向群内其他参与者\n"
     "- target=everyone：消息面向全体（公告、一般感叹、分享信息）\n"
     "- target=unknown：无法确定指向\n\n"
     "重要规则：\n"
     "- 仅凭\"你\"字不能判定指向AI，必须结合上下文确认\n"
+    "- 判断 self_ai 时，当前助手名字/别名命中是最强依据；不要把泛指 AI/机器人/助手 的话自动算成 self_ai\n"
+    "- 如果只知道消息指向某个 AI，但不能可靠区分是当前助手还是其他 AI，target_scope 应优先返回 other_ai 或 unknown，不要勉强写 self_ai\n"
     "- 如果上一条消息是某个人说的，当前消息可能在回复那个人而非AI\n"
     "- 当群聊中有多人对话时，要根据话题连续性判断说话对象\n"
+    "- 当证据不足时，宁可给出 other_ai 或 unknown，也不要轻易判成 self_ai\n"
     "- 不要输出任何额外文字\n"
 )
 

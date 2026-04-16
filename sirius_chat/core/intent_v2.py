@@ -51,21 +51,24 @@ _INTENT_SYSTEM_PROMPT = (
     '  "evidence_span": "从原消息中摘取的关键短语"\n'
     "}\n\n"
     "判断指南：\n"
-    "- target=ai 且 target_scope=self_ai：消息明确指向当前模型自身（提及当前模型名字/别名、使用\"你\"且上下文指向当前模型、直接回复当前模型）\n"
-    "- target=ai 且 target_scope=other_ai：消息明确指向群内其他 AI，而不是当前模型\n"
+    "- target=ai 且 target_scope=self_ai：只有在消息明确点名当前助手名字/别名，或有非常强的上下文承接证据表明用户正在直接回应当前助手上一轮发言时，才可使用 self_ai\n"
+    "- target=ai 且 target_scope=other_ai：消息明确指向群内其他 AI，或点名了名字上带明显 AI 线索的其他对象\n"
     "- target=others 且 target_scope=human：消息明确指向群内其他参与者，但现有证据更像人类对象\n"
     "- target=everyone：消息面向全体（公告、一般感叹、分享信息）\n"
     "- target=unknown：无法确定指向\n\n"
     "重要规则：\n"
     "- 仅凭\"你\"字不能判定指向AI，必须结合上下文确认\n"
-    "- 群聊里可能有多个 AI，必须优先判断消息是指向当前模型自身，还是指向其他 AI\n"
+    "- 群聊里可能有多个 AI，必须优先判断消息是指向当前助手，还是指向其他 AI\n"
+    "- 判断 self_ai 时，当前助手名字/别名命中是最强依据；不要因为系统里存在当前助手就默认把 target=ai 等价成 self_ai\n"
     "- 不能预设群内其他对象天然是人类或 AI。除非对象名称、别称里含有 AI/BOT/机器人/智能体/助手/GPT/Claude/Qwen 等明确线索，否则应先把它视为\"可能为AI的对象\"，再结合上下文判定\n"
-    "- 如果当前消息命中了其他对象名字、且这些对象带有明显 AI 线索，而没有命中当前模型名字，通常不能判定为 self_ai\n"
+    "- 如果当前消息命中了其他对象名字，而没有命中当前助手名字/别名，通常不能判定为 self_ai\n"
+    "- 如果只知道消息指向某个 AI，但不能可靠区分是当前助手还是其他 AI，target_scope 应优先返回 other_ai 或 unknown，不要勉强写 self_ai\n"
     "- 对没有明显 AI 线索的对象，不要因为它近期由 assistant 说过话就武断判成人类或 AI，要根据最近交互链、代词承接、内容风格一起判断\n"
-    "- 群控/停用类命令（如关闭本群AI、禁用机器人、别让bot说话）如果没有明确点名当前模型，不应判定为 self_ai，也不应触发当前模型回复\n"
+    "- 群控/停用类命令（如关闭本群AI、禁用机器人、别让bot说话）如果没有明确点名当前助手，不应判定为 self_ai，也不应触发当前助手回复\n"
     "- 如果上一条消息是某个人说的，当前消息可能在回复那个人而非AI\n"
     "- 当群聊中有多人对话时，要根据话题连续性判断说话对象\n"
     "- 当证据不足时，宁可给出 other_ai 或 unknown，也不要轻易判成 self_ai\n"
+    "- 任何明确带有机械指令风格的消息，如关闭本群AI、禁用机器人等，不认为是self_ai\n"
     "- 不要输出任何额外文字\n"
 )
 
@@ -245,7 +248,7 @@ class IntentAnalyzer:
             )
             if participant_names else ""
         )
-        current_ai_info = f"当前模型自身：{', '.join(current_ai_names)}" if current_ai_names else ""
+        current_ai_info = f"当前助手名字/别名：{', '.join(current_ai_names)}" if current_ai_names else ""
         other_ai_info = (
             "近期其他AI发言者："
             + ", ".join(
@@ -309,14 +312,14 @@ class IntentAnalyzer:
             )
             if recent_human_speakers else ""
         )
-        self_hit_info = f"当前消息命中的当前模型名字：{', '.join(self_hits)}" if self_hits else ""
+        self_hit_info = f"当前消息命中的当前助手名字/别名：{', '.join(self_hits)}" if self_hits else ""
         other_ai_hit_info = f"当前消息命中的其他AI名字：{', '.join(other_ai_hits)}" if other_ai_hits else ""
         ai_evidence_hit_info = f"当前消息命中的名称含AI线索对象：{', '.join(ai_evidence_hits)}" if ai_evidence_hits else ""
         possible_ai_hit_info = f"当前消息命中的可能为AI对象：{', '.join(possible_ai_hits)}" if possible_ai_hits else ""
         participant_hit_info = f"当前消息命中的其它对象名字：{', '.join(participant_hits)}" if participant_hits else ""
 
         user_prompt = (
-            f"AI名称: {agent_name}"
+            f"当前助手名称: {agent_name}"
             + (f" (别名: {agent_alias})" if agent_alias else "")
             + (f"\n{current_ai_info}" if current_ai_info else "")
             + (f"\n{other_ai_info}" if other_ai_info else "")
@@ -419,7 +422,7 @@ class IntentAnalyzer:
     ) -> IntentAnalysis:
         """关键词快速回退分析（零 LLM 开销）。
 
-        增强版：区分当前模型自身、其他 AI 与其他参与者。
+        增强版：区分当前助手自身、其他 AI 与其他参与者。
         """
         text = content.strip().lower()
         original_text = content.strip()
@@ -547,7 +550,7 @@ class IntentAnalyzer:
                     break
 
         if target_scope == "other_ai":
-            reason = f"消息更像是在对其他AI说话，而不是当前模型。{reason}"
+            reason = f"消息更像是在对其他AI说话，而不是当前助手。{reason}"
         elif not directed_at_ai and target == "others":
             reason = f"消息指向其他参与者，非 AI 对话。{reason}"
         elif not evidence_span and original_text:
@@ -631,7 +634,7 @@ class IntentAnalyzer:
             analysis.directed_at_current_ai = False
             analysis.importance = min(analysis.importance, 0.05)
             analysis.confidence = max(analysis.confidence, 0.7)
-            analysis.reason = "消息是群控/停用类命令，未明确点名当前模型，不触发当前模型回复。"
+            analysis.reason = "消息是群控/停用类命令，未明确点名当前助手，不触发当前助手回复。"
             if not analysis.evidence_span:
                 analysis.evidence_span = content.strip()[:24]
 
@@ -642,9 +645,48 @@ class IntentAnalyzer:
             analysis.directed_at_current_ai = False
             analysis.importance = min(analysis.importance, 0.2)
             analysis.confidence = max(analysis.confidence, 0.7)
-            analysis.reason = "消息命中了其他AI或名称上带明确AI线索的对象，且没有命中当前模型自身，回退为 other_ai 以减少抢答。"
+            analysis.reason = "消息命中了其他AI或名称上带明确AI线索的对象，且没有命中当前助手名字/别名，回退为 other_ai 以减少抢答。"
             if not analysis.evidence_span:
                 analysis.evidence_span = (other_ai_hits or ai_evidence_hits)[0]
+
+        if analysis.target_scope == "self_ai" and not self_ai_hits:
+            inferred_scope = IntentAnalyzer._infer_pronoun_target_scope(
+                recent_messages=recent_messages or [],
+                current_ai_names={name.lower() for name in current_ai_names},
+                other_ai_names={name.lower() for name in other_ai_identity_map.keys()},
+                human_names={name.lower() for name in human_identity_map.keys()},
+            )
+
+            if other_human_hits:
+                analysis.target = "others"
+                analysis.target_scope = "human"
+                analysis.directed_at_ai = False
+                analysis.directed_at_current_ai = False
+                analysis.importance = min(analysis.importance, 0.2)
+                analysis.confidence = max(analysis.confidence, 0.7)
+                analysis.reason = "消息没有命中当前助手名字/别名，却命中了其他参与者名字，不判定为 self_ai。"
+                if not analysis.evidence_span:
+                    analysis.evidence_span = other_human_hits[0]
+            elif possible_ai_hits:
+                analysis.target = "unknown"
+                analysis.target_scope = "unknown"
+                analysis.directed_at_ai = False
+                analysis.directed_at_current_ai = False
+                analysis.importance = min(analysis.importance, 0.2)
+                analysis.confidence = max(analysis.confidence, 0.65)
+                analysis.reason = "消息没有命中当前助手名字/别名，却命中了其他待判定对象，证据不足，不判定为 self_ai。"
+                if not analysis.evidence_span:
+                    analysis.evidence_span = possible_ai_hits[0]
+            elif inferred_scope != "self_ai":
+                analysis.target = "unknown"
+                analysis.target_scope = "unknown"
+                analysis.directed_at_ai = False
+                analysis.directed_at_current_ai = False
+                analysis.importance = min(analysis.importance, 0.2)
+                analysis.confidence = max(analysis.confidence, 0.65)
+                analysis.reason = "消息没有明确命中当前助手名字/别名，且上下文不足以稳定指向当前助手，不判定为 self_ai。"
+                if not analysis.evidence_span:
+                    analysis.evidence_span = content.strip()[:24]
 
         return analysis
 
@@ -670,7 +712,7 @@ class IntentAnalyzer:
 
         if normalized_scope not in TARGET_SCOPES:
             if normalized_target == "ai":
-                normalized_scope = "self_ai"
+                normalized_scope = "unknown"
             elif normalized_target == "others":
                 normalized_scope = "human"
             elif normalized_target == "everyone":

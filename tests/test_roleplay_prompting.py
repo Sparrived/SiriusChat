@@ -30,6 +30,7 @@ from sirius_chat.api import (
 )
 from sirius_chat.config import OrchestrationPolicy
 from sirius_chat.providers.mock import MockProvider
+from sirius_chat.roleplay_prompting import _build_generation_system_prompt, _build_generation_user_prompt
 from sirius_chat.workspace.layout import WorkspaceLayout
 
 
@@ -368,6 +369,36 @@ def test_agenerate_from_persona_spec_tag_based() -> None:
         assert "北辰" in preset.global_system_prompt
 
     asyncio.run(_run())
+
+
+def test_generation_system_prompt_requires_structured_global_prompt() -> None:
+    prompt = _build_generation_system_prompt([])
+
+    assert "global_system_prompt：完整的角色扮演指南，必须详细、结构化、可直接落地" in prompt
+    assert "<role_profile>" in prompt
+    assert "<response_strategy>" in prompt
+    assert "<safety>" in prompt
+
+
+def test_generation_user_prompt_includes_structured_prompt_skeleton() -> None:
+    prompt = _build_generation_user_prompt(
+        agent_name="北辰",
+        agent_alias="小星",
+        trait_keywords=["沉稳", "共情"],
+        answers=[RolePlayAnswer(question="风格", answer="先听完再给方案")],
+        background="做过长期照护工作",
+        dependency_prompt="",
+        prompt_enhancements=[],
+        base_temperature=0.7,
+        base_max_tokens=512,
+        output_language="zh-CN",
+    )
+
+    assert "[Structured Prompt Skeleton]" in prompt
+    assert "global_system_prompt 必须写成详细、结构化、可执行的人格提示词" in prompt
+    assert "如果输入较少，也要在不违背输入的前提下补出可信细节" in prompt
+    assert "<role_profile>角色定位、社会位置、人物原型、第一印象</role_profile>" in prompt
+    assert "<behavior_boundaries>边界、拒绝方式、不能做的事</behavior_boundaries>" in prompt
 
 
 def test_agenerate_from_persona_spec_allows_timeout_override() -> None:

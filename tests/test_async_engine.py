@@ -791,6 +791,7 @@ def test_reply_mode_auto_uses_intent_analysis_task_model() -> None:
                     {
                         "intent_type": "question",
                         "target": "ai",
+                        "target_scope": "self_ai",
                         "importance": 0.9,
                         "needs_memory": True,
                         "needs_summary": True,
@@ -1071,6 +1072,209 @@ def test_chat_main_request_context_injects_hidden_skill_text_and_image() -> None
     assert "{\"trace_id\"" not in text_part["text"]
     image_part = next(part for part in hidden_skill_message["content"] if part["type"] == "image_url")
     assert image_part["image_url"]["url"] == "https://example.com/sky.png"
+
+
+def test_chat_main_request_context_keeps_recent_skill_hidden_message_for_follow_up_turn() -> None:
+    from sirius_chat.core.chat_builder import build_chat_main_request_context
+    from sirius_chat.core.markers import SKILL_RESULT_CHANNEL_MARKER
+
+    config = SessionConfig(
+        work_path=Path("data/tests/chat_main_skill_follow_up"),
+        preset=AgentPreset(
+            agent=Agent(name="主助手", persona="异步测试", model="mock-model"),
+            global_system_prompt="测试系统提示词",
+        ),
+        orchestration=OrchestrationPolicy(
+            unified_model="mock-model",
+            enable_skills=True,
+            task_enabled={
+                "memory_extract": False,
+                "event_extract": False,
+                "memory_manager": False,
+            },
+            pending_message_threshold=0.0,
+        ),
+    )
+    transcript = Transcript()
+    transcript.add(Message(role="user", speaker="小王", content="帮我看看图片里有什么。"))
+    transcript.add(Message(role="assistant", speaker="主助手", content="我先调用技能分析。"))
+
+    payload = {
+        "skill_name": "vision_lookup",
+        "display_text": "图片里主要是蓝天。",
+        "text_blocks": [
+            {"type": "text", "value": "检测到蓝天和少量白云。", "label": "summary"},
+        ],
+    }
+    transcript.add(
+        Message(
+            role="system",
+            content=(
+                "[SKILL执行结果: vision_lookup]\n"
+                "图片里主要是蓝天。\n"
+                f"{SKILL_RESULT_CHANNEL_MARKER} vision_lookup]\n"
+                f"{json.dumps(payload, ensure_ascii=False)}"
+            ),
+        )
+    )
+    transcript.add(Message(role="assistant", speaker="主助手", content="图里主要是蓝天。"))
+    transcript.add(Message(role="user", speaker="小王", content="基于刚才结果，再总结一下。"))
+
+    _, chat_history = build_chat_main_request_context(
+        config=config,
+        transcript=transcript,
+    )
+
+    hidden_skill_messages = [
+        item for item in chat_history
+        if item.get("role") == "user"
+        and ((isinstance(item.get("content"), str) and "检测到蓝天和少量白云。" in str(item.get("content")))
+             or (
+                 isinstance(item.get("content"), list)
+                 and any(
+                     part.get("type") == "text" and "检测到蓝天和少量白云。" in str(part.get("text", ""))
+                     for part in item.get("content", [])
+                     if isinstance(part, dict)
+                 )
+             ))
+    ]
+    assert hidden_skill_messages
+
+
+def test_chat_main_request_context_expires_old_skill_hidden_message_after_window() -> None:
+    from sirius_chat.core.chat_builder import build_chat_main_request_context
+    from sirius_chat.core.markers import SKILL_RESULT_CHANNEL_MARKER
+
+    config = SessionConfig(
+        work_path=Path("data/tests/chat_main_skill_follow_up_expired"),
+        preset=AgentPreset(
+            agent=Agent(name="主助手", persona="异步测试", model="mock-model"),
+            global_system_prompt="测试系统提示词",
+        ),
+        orchestration=OrchestrationPolicy(
+            unified_model="mock-model",
+            enable_skills=True,
+            task_enabled={
+                "memory_extract": False,
+                "event_extract": False,
+                "memory_manager": False,
+            },
+            pending_message_threshold=0.0,
+        ),
+    )
+    transcript = Transcript()
+    transcript.add(Message(role="user", speaker="小王", content="帮我看看图片里有什么。"))
+    transcript.add(Message(role="assistant", speaker="主助手", content="我先调用技能分析。"))
+    payload = {
+        "skill_name": "vision_lookup",
+        "display_text": "图片里主要是蓝天。",
+        "text_blocks": [
+            {"type": "text", "value": "检测到蓝天和少量白云。", "label": "summary"},
+        ],
+    }
+    transcript.add(
+        Message(
+            role="system",
+            content=(
+                "[SKILL执行结果: vision_lookup]\n"
+                "图片里主要是蓝天。\n"
+                f"{SKILL_RESULT_CHANNEL_MARKER} vision_lookup]\n"
+                f"{json.dumps(payload, ensure_ascii=False)}"
+            ),
+        )
+    )
+    transcript.add(Message(role="assistant", speaker="主助手", content="图里主要是蓝天。"))
+    transcript.add(Message(role="user", speaker="小王", content="第一轮追问。"))
+    transcript.add(Message(role="assistant", speaker="主助手", content="第一轮答复。"))
+    transcript.add(Message(role="user", speaker="小王", content="第二轮追问。"))
+    transcript.add(Message(role="assistant", speaker="主助手", content="第二轮答复。"))
+    transcript.add(Message(role="user", speaker="小王", content="第三轮追问。"))
+    transcript.add(Message(role="assistant", speaker="主助手", content="第三轮答复。"))
+    transcript.add(Message(role="user", speaker="小王", content="现在再问一次。"))
+
+    _, chat_history = build_chat_main_request_context(
+        config=config,
+        transcript=transcript,
+    )
+
+    assert all(
+        "检测到蓝天和少量白云。" not in json.dumps(item, ensure_ascii=False)
+        for item in chat_history
+    )
+
+
+def test_follow_up_turn_request_keeps_recent_skill_result_hidden_context(tmp_path: Path) -> None:
+    async def _run() -> None:
+        work_path = tmp_path / "skill_follow_up_context"
+        skills_dir = work_path / "skills"
+        skills_dir.mkdir(parents=True, exist_ok=True)
+        (skills_dir / "echo.py").write_text(
+            """
+SKILL_META = {
+    "name": "echo",
+    "description": "Return the given text",
+    "parameters": {
+        "text": {"type": "str", "description": "text to return", "required": True}
+    },
+}
+
+def run(text: str, **kwargs):
+    return {
+        "text_blocks": [{"type": "text", "value": f"技能观察：{text}", "label": "summary"}],
+        "internal_metadata": {"trace_id": "hidden-trace"},
+    }
+""".strip(),
+            encoding="utf-8",
+        )
+
+        provider = MockProvider(
+            responses=[
+                '[SKILL_CALL: echo | {"text": "苹果"}]',
+                '我已经记住刚才的技能结果了。',
+                '继续基于刚才结果回答。',
+            ]
+        )
+        engine = create_async_engine(provider)
+        config = SessionConfig(
+            work_path=work_path,
+            preset=AgentPreset(
+                agent=Agent(name="主助手", persona="技能上下文测试", model="mock-model"),
+                global_system_prompt="测试",
+            ),
+            orchestration=OrchestrationPolicy(
+                unified_model="mock-model",
+                session_reply_mode="always",
+                enable_skills=True,
+                task_enabled={
+                    "memory_extract": False,
+                    "event_extract": False,
+                    "memory_manager": False,
+                },
+                pending_message_threshold=0.0,
+            ),
+        )
+
+        transcript = await engine.run_live_session(config=config)
+        transcript = await engine.run_live_message(
+            config=config,
+            turn=Message(role="user", speaker="小明", content="先调用技能"),
+            transcript=transcript,
+        )
+        await engine.run_live_message(
+            config=config,
+            turn=Message(role="user", speaker="小明", content="沿用刚才的结果继续说"),
+            transcript=transcript,
+        )
+
+        follow_up_request = provider.requests[-1]
+        assert any(
+            message.get("role") == "user"
+            and "技能观察：苹果" in json.dumps(message, ensure_ascii=False)
+            and "hidden-trace" not in json.dumps(message, ensure_ascii=False)
+            for message in follow_up_request.messages
+        )
+
+    asyncio.run(_run())
 
 
 def test_engagement_boosts_when_directly_addressed() -> None:

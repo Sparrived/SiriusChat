@@ -130,6 +130,11 @@ def build_system_prompt(
     # --- Section 8: Skill system ---
     if config.orchestration.enable_skills and skill_descriptions:
         marker = SKILL_CALL_MARKER
+        proactive_skill_hint = (
+            "当回答依赖当前环境、主机状态、系统信息、屏幕内容或其他尚未掌握的事实，且这些事实可以通过某个 SKILL 获取时，应主动先调用对应 SKILL 取证，再给结论。\n"
+            "不要把可以通过 SKILL 验证的信息留给猜测；若已有合适 SKILL，就不要先向用户追问你本可自行获取的事实。\n"
+            "如果一次调用不够，就继续迭代调用；默认采用“先获取证据，再总结结论”的策略。\n"
+        )
         desktop_observation_hint = ""
         if "desktop_screenshot" in skill_descriptions:
             desktop_observation_hint = (
@@ -150,10 +155,11 @@ def build_system_prompt(
             f"  * 再次调用同一SKILL（传入新参数）\n"
             f"  * 直接给出最终自然语言回复\n"
             f"\n"
+            f"{proactive_skill_hint}"
             f"{desktop_observation_hint}"
             f"可用SKILL：\n{skill_descriptions}\n"
             f"\n"
-            f"规则：仅用列出的SKILL；参数JSON；每轮只放一个调用；考虑SKILL之间的协同作用拿到更详细的内容；拿到结果后自然叙述最终答复。\n"
+            f"规则：仅用列出的SKILL；参数JSON；每轮只放一个调用；优先选择能直接获取第一手证据的 SKILL；考虑SKILL之间的协同作用拿到更详细的内容；拿到结果后自然叙述最终答复。\n"
             f"如果系统注入了技能内部结果，你只能提炼用户可见结论，不得复述 text_blocks、multimodal_blocks、internal_metadata、mime_type、label、路径、URL、JSON 键名或其他技能元信息。\n"
             f"</available_skills>"
         )

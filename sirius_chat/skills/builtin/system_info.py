@@ -9,7 +9,7 @@ from typing import Any
 
 SKILL_META = {
     "name": "system_info",
-    "description": "获取本机基本系统信息，包括CPU、内存、磁盘、操作系统等",
+    "description": "当需要确认本机当前系统状态、资源占用、磁盘、网络或操作系统事实信息时，获取本机系统信息供模型内部分析",
     "version": "1.0.0",
     "dependencies": ["psutil"],
     "parameters": {

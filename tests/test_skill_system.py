@@ -739,6 +739,9 @@ class TestSkillEngineIntegration:
         assert "internal_metadata" in prompt
         assert "mime_type" in prompt
         assert "label" in prompt
+        assert "先获取证据，再总结结论" in prompt
+        assert "不要把可以通过 SKILL 验证的信息留给猜测" in prompt
+        assert "不要先向用户追问你本可自行获取的事实" in prompt
 
     def test_skill_system_prompt_not_included_when_disabled(self):
         """Verify skills are NOT in prompt when disabled."""

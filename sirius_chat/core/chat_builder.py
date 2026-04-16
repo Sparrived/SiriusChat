@@ -21,6 +21,8 @@ from sirius_chat.core.markers import SKILL_RESULT_CHANNEL_MARKER
 
 logger = logging.getLogger(__name__)
 
+_RECENT_SKILL_RESULT_ASSISTANT_TURN_WINDOW = 2
+
 # ── Regex patterns for internal memory metadata line detection ──
 
 _MEMORY_METADATA_LINE_PATTERNS = (
@@ -206,6 +208,19 @@ def _build_skill_hidden_message(skill_channel: dict[str, object]) -> dict[str, o
     return None
 
 
+def _assistant_turns_after_index(transcript: Transcript, start_index: int) -> int:
+    count = 0
+    for message in transcript.messages[start_index + 1:]:
+        if str(message.role or "").strip().lower() == "assistant":
+            count += 1
+    return count
+
+
+def _should_inject_skill_hidden_context(transcript: Transcript, index: int) -> bool:
+    """Keep detailed SKILL result context visible for a few recent assistant turns."""
+    return _assistant_turns_after_index(transcript, index) <= _RECENT_SKILL_RESULT_ASSISTANT_TURN_WINDOW
+
+
 def collect_internal_system_notes(transcript: Transcript) -> str:
     """Collect all system-role messages from transcript as internal notes."""
     notes: list[str] = []
@@ -301,12 +316,11 @@ def build_chat_main_request_context(
     for index, message in enumerate(transcript.messages):
         role = str(message.role or "").strip().lower()
         if role == "system":
-            if index > _last_assistant_idx:
-                skill_channel = _extract_skill_result_channel(message.content)
-                if skill_channel is not None:
-                    hidden_message = _build_skill_hidden_message(skill_channel)
-                    if hidden_message is not None:
-                        chat_history.append(hidden_message)
+            skill_channel = _extract_skill_result_channel(message.content)
+            if skill_channel is not None and _should_inject_skill_hidden_context(transcript, index):
+                hidden_message = _build_skill_hidden_message(skill_channel)
+                if hidden_message is not None:
+                    chat_history.append(hidden_message)
             continue
         speaker_prefix = f"[{message.speaker}] " if message.speaker else ""
         text_content = f"{speaker_prefix}{message.content}"
