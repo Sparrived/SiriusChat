@@ -85,6 +85,8 @@ _GROUP_CONTROL_ACTION_MARKERS = (
 _GROUP_CONTROL_SCOPE_MARKERS = ("本群", "群里", "群内", "这个群", "该群", "全群")
 _GROUP_CONTROL_AI_OBJECT_MARKERS = ("ai", "bot", "机器人", "助手", "智能体", "BOT")
 _GROUP_CONTROL_TARGET_MARKERS = ("回复", "发言", "说话", "开口", "功能", "模式")
+_DIRECT_ADDRESS_FOLLOW_CHARS = "你您呢呀啊啦嘛吧哈哦喔"
+_DIRECT_ADDRESS_BOUNDARY_PATTERN = r"[\s,，:：;；!！?？。、“”\"'‘’()（）\[\]【】<>《》/@]"
 
 
 @dataclass(slots=True)
@@ -458,9 +460,12 @@ class IntentAnalyzer:
         ai_evidence_hits = IntentAnalyzer._extract_identity_hits(content, ai_evidence_identity_map)
         other_human_hits = IntentAnalyzer._extract_identity_hits(content, human_identity_map)
         possible_ai_hits = IntentAnalyzer._extract_identity_hits(content, possible_ai_identity_map)
+        other_ai_direct_hits = IntentAnalyzer._extract_direct_identity_hits(content, other_ai_identity_map)
+        ai_evidence_direct_hits = IntentAnalyzer._extract_direct_identity_hits(content, ai_evidence_identity_map)
+        other_human_direct_hits = IntentAnalyzer._extract_direct_identity_hits(content, human_identity_map)
         self_ai_directed = bool(self_ai_hits)
-        other_ai_directed = bool(other_ai_hits or ai_evidence_hits)
-        other_human_directed = bool(other_human_hits)
+        other_ai_directed = bool(other_ai_direct_hits or ai_evidence_direct_hits)
+        other_human_directed = bool(other_human_direct_hits)
 
         # @ 提及检测
         if "@" in text:
@@ -616,6 +621,10 @@ class IntentAnalyzer:
         ai_evidence_hits = IntentAnalyzer._extract_identity_hits(content, ai_evidence_identity_map)
         other_human_hits = IntentAnalyzer._extract_identity_hits(content, human_identity_map)
         possible_ai_hits = IntentAnalyzer._extract_identity_hits(content, possible_ai_identity_map)
+        other_ai_direct_hits = IntentAnalyzer._extract_direct_identity_hits(content, other_ai_identity_map)
+        ai_evidence_direct_hits = IntentAnalyzer._extract_direct_identity_hits(content, ai_evidence_identity_map)
+        other_human_direct_hits = IntentAnalyzer._extract_direct_identity_hits(content, human_identity_map)
+        possible_ai_direct_hits = IntentAnalyzer._extract_direct_identity_hits(content, possible_ai_identity_map)
 
         if IntentAnalyzer._looks_like_group_ai_control_command(content) and not self_ai_hits:
             analysis.force_no_reply = True
@@ -638,16 +647,16 @@ class IntentAnalyzer:
             if not analysis.evidence_span:
                 analysis.evidence_span = content.strip()[:24]
 
-        if analysis.target_scope == "self_ai" and not self_ai_hits and (other_ai_hits or ai_evidence_hits):
+        if analysis.target_scope == "self_ai" and not self_ai_hits and (other_ai_direct_hits or ai_evidence_direct_hits):
             analysis.target = "ai"
             analysis.target_scope = "other_ai"
             analysis.directed_at_ai = True
             analysis.directed_at_current_ai = False
             analysis.importance = min(analysis.importance, 0.2)
             analysis.confidence = max(analysis.confidence, 0.7)
-            analysis.reason = "消息命中了其他AI或名称上带明确AI线索的对象，且没有命中当前助手名字/别名，回退为 other_ai 以减少抢答。"
+            analysis.reason = "消息直接称呼了其他AI或名称上带明确AI线索的对象，且没有命中当前助手名字/别名，回退为 other_ai 以减少抢答。"
             if not analysis.evidence_span:
-                analysis.evidence_span = (other_ai_hits or ai_evidence_hits)[0]
+                analysis.evidence_span = (other_ai_direct_hits or ai_evidence_direct_hits)[0]
 
         if analysis.target_scope == "self_ai" and not self_ai_hits:
             inferred_scope = IntentAnalyzer._infer_pronoun_target_scope(
@@ -656,28 +665,36 @@ class IntentAnalyzer:
                 other_ai_names={name.lower() for name in other_ai_identity_map.keys()},
                 human_names={name.lower() for name in human_identity_map.keys()},
             )
+            has_recent_self_ai_context = (
+                inferred_scope == "self_ai"
+                or IntentAnalyzer._has_recent_self_ai_reply_chain(
+                    recent_messages=recent_messages or [],
+                    current_ai_names={name.lower() for name in current_ai_names},
+                    other_ai_names={name.lower() for name in other_ai_identity_map.keys()},
+                )
+            )
 
-            if other_human_hits:
+            if other_human_direct_hits:
                 analysis.target = "others"
                 analysis.target_scope = "human"
                 analysis.directed_at_ai = False
                 analysis.directed_at_current_ai = False
                 analysis.importance = min(analysis.importance, 0.2)
                 analysis.confidence = max(analysis.confidence, 0.7)
-                analysis.reason = "消息没有命中当前助手名字/别名，却命中了其他参与者名字，不判定为 self_ai。"
+                analysis.reason = "消息没有命中当前助手名字/别名，却直接称呼了其他参与者，不判定为 self_ai。"
                 if not analysis.evidence_span:
-                    analysis.evidence_span = other_human_hits[0]
-            elif possible_ai_hits:
+                    analysis.evidence_span = other_human_direct_hits[0]
+            elif possible_ai_direct_hits and not has_recent_self_ai_context:
                 analysis.target = "unknown"
                 analysis.target_scope = "unknown"
                 analysis.directed_at_ai = False
                 analysis.directed_at_current_ai = False
                 analysis.importance = min(analysis.importance, 0.2)
                 analysis.confidence = max(analysis.confidence, 0.65)
-                analysis.reason = "消息没有命中当前助手名字/别名，却命中了其他待判定对象，证据不足，不判定为 self_ai。"
+                analysis.reason = "消息没有命中当前助手名字/别名，却直接称呼了其他待判定对象，证据不足，不判定为 self_ai。"
                 if not analysis.evidence_span:
-                    analysis.evidence_span = possible_ai_hits[0]
-            elif inferred_scope != "self_ai":
+                    analysis.evidence_span = possible_ai_direct_hits[0]
+            elif not has_recent_self_ai_context:
                 analysis.target = "unknown"
                 analysis.target_scope = "unknown"
                 analysis.directed_at_ai = False
@@ -687,6 +704,11 @@ class IntentAnalyzer:
                 analysis.reason = "消息没有明确命中当前助手名字/别名，且上下文不足以稳定指向当前助手，不判定为 self_ai。"
                 if not analysis.evidence_span:
                     analysis.evidence_span = content.strip()[:24]
+            else:
+                analysis.target = "ai"
+                analysis.target_scope = "self_ai"
+                analysis.directed_at_ai = True
+                analysis.directed_at_current_ai = True
 
         return analysis
 
@@ -736,11 +758,9 @@ class IntentAnalyzer:
         agent_name: str,
         agent_alias: str,
     ) -> dict[str, list[str]]:
-        current_ai_names = {
-            str(name).strip().lower()
-            for name in (agent_name, agent_alias)
-            if str(name).strip()
-        }
+        current_ai_variants = IntentAnalyzer._collect_identity_variants([
+            name for name in (agent_name, agent_alias) if str(name).strip()
+        ])
         other_ai_names: dict[str, list[str]] = {}
         seen: set[str] = set()
         for msg in recent_messages:
@@ -749,7 +769,7 @@ class IntentAnalyzer:
             if role != "assistant" or not speaker:
                 continue
             lowered = speaker.lower()
-            if lowered in current_ai_names or lowered in seen:
+            if IntentAnalyzer._matches_identity_variants(speaker, current_ai_variants) or lowered in seen:
                 continue
             seen.add(lowered)
             other_ai_names[speaker] = IntentAnalyzer._extract_alias_cues_from_speaker(speaker)
@@ -1040,6 +1060,21 @@ class IntentAnalyzer:
         return hits
 
     @staticmethod
+    def _extract_direct_name_hits(content: str, names: list[str]) -> list[str]:
+        lowered_content = str(content).strip().lower()
+        hits: list[str] = []
+        for name in names:
+            variants = sorted(
+                IntentAnalyzer._name_variants(name),
+                key=len,
+                reverse=True,
+            )
+            if any(IntentAnalyzer._has_direct_address_variant(lowered_content, variant) for variant in variants):
+                if name not in hits:
+                    hits.append(name)
+        return hits
+
+    @staticmethod
     def _extract_identity_hits(content: str, identity_map: dict[str, list[str]]) -> list[str]:
         lowered_content = str(content).strip().lower()
         hits: list[str] = []
@@ -1050,6 +1085,56 @@ class IntentAnalyzer:
             if any(variant in lowered_content for variant in variants):
                 hits.append(display_name)
         return hits
+
+    @staticmethod
+    def _extract_direct_identity_hits(content: str, identity_map: dict[str, list[str]]) -> list[str]:
+        lowered_content = str(content).strip().lower()
+        hits: list[str] = []
+        for display_name, aliases in identity_map.items():
+            variants: set[str] = set()
+            for candidate in [display_name, *aliases]:
+                variants.update(IntentAnalyzer._name_variants(candidate))
+            ordered_variants = sorted(variants, key=len, reverse=True)
+            if any(IntentAnalyzer._has_direct_address_variant(lowered_content, variant) for variant in ordered_variants):
+                hits.append(display_name)
+        return hits
+
+    @staticmethod
+    def _has_direct_address_variant(content: str, variant: str) -> bool:
+        normalized_content = str(content).strip().lower()
+        normalized_variant = str(variant).strip().lower()
+        if not normalized_content or not normalized_variant:
+            return False
+        escaped_variant = re.escape(normalized_variant)
+        after_pattern = rf"(?=$|{_DIRECT_ADDRESS_BOUNDARY_PATTERN}|[{_DIRECT_ADDRESS_FOLLOW_CHARS}])"
+        leading_match = re.match(rf"^@?{escaped_variant}", normalized_content)
+        if leading_match is not None:
+            trailing_text = normalized_content[leading_match.end():].lstrip()
+            if not trailing_text:
+                return True
+            if re.match(rf"^(?:{_DIRECT_ADDRESS_BOUNDARY_PATTERN}|[{_DIRECT_ADDRESS_FOLLOW_CHARS}])", trailing_text):
+                return True
+            trailing_segment = re.split(r"[\s,，:：;；!！?？。、“”\"'‘’()（）\[\]【】<>《》]", trailing_text, maxsplit=1)[0]
+            if 0 < len(trailing_segment) <= 3:
+                return True
+        patterns = (
+            rf"^@?{escaped_variant}{after_pattern}",
+            rf"(?:{_DIRECT_ADDRESS_BOUNDARY_PATTERN})@?{escaped_variant}{after_pattern}",
+        )
+        return any(re.search(pattern, normalized_content) is not None for pattern in patterns)
+
+    @staticmethod
+    def _collect_identity_variants(values: list[str] | set[str]) -> set[str]:
+        variants: set[str] = set()
+        for value in values:
+            variants.update(IntentAnalyzer._name_variants(str(value)))
+        return variants
+
+    @staticmethod
+    def _matches_identity_variants(value: str, identity_variants: set[str]) -> bool:
+        if not str(value).strip() or not identity_variants:
+            return False
+        return bool(IntentAnalyzer._name_variants(value).intersection(identity_variants))
 
     @staticmethod
     def _contains_marker(text: str, marker: str) -> bool:
@@ -1092,6 +1177,9 @@ class IntentAnalyzer:
         if not distinct_turns:
             return "unknown"
 
+        current_ai_variants = IntentAnalyzer._collect_identity_variants(current_ai_names)
+        other_ai_variants = IntentAnalyzer._collect_identity_variants(other_ai_names)
+        human_variants = IntentAnalyzer._collect_identity_variants(human_names)
         scores = {
             "self_ai": 0.0,
             "other_ai": 0.0,
@@ -1103,16 +1191,16 @@ class IntentAnalyzer:
             speaker = str(msg.get("speaker", "")).strip().lower()
             weight = recency_weights[index] if index < len(recency_weights) else 0.2
             if role == "assistant":
-                if not speaker or speaker in current_ai_names:
+                if not speaker or IntentAnalyzer._matches_identity_variants(speaker, current_ai_variants):
                     scores["self_ai"] += weight * 1.25
                     continue
-                if speaker in other_ai_names:
+                if IntentAnalyzer._matches_identity_variants(speaker, other_ai_variants):
                     scores["other_ai"] += weight * 1.25
                     continue
                 scores["other_ai"] += weight * 1.1
                 continue
             if role == "user":
-                if speaker in human_names or speaker:
+                if IntentAnalyzer._matches_identity_variants(speaker, human_variants) or speaker:
                     scores["human"] += weight * 0.55
 
         ranked = sorted(scores.items(), key=lambda item: item[1], reverse=True)
@@ -1123,6 +1211,39 @@ class IntentAnalyzer:
         if second_score > 0 and top_score < second_score * 1.15:
             return "unknown"
         return top_label
+
+    @staticmethod
+    def _has_recent_self_ai_reply_chain(
+        *,
+        recent_messages: list[dict[str, str]],
+        current_ai_names: set[str],
+        other_ai_names: set[str],
+    ) -> bool:
+        distinct_turns = IntentAnalyzer._recent_distinct_turns(
+            recent_messages,
+            limit=_PRONOUN_CONTEXT_TURN_LIMIT,
+        )
+        if not distinct_turns:
+            return False
+
+        current_ai_variants = IntentAnalyzer._collect_identity_variants(current_ai_names)
+        other_ai_variants = IntentAnalyzer._collect_identity_variants(other_ai_names)
+        user_turns_after_last_assistant = 0
+        for msg in reversed(distinct_turns):
+            role = str(msg.get("role", "")).strip().lower()
+            speaker = str(msg.get("speaker", "")).strip().lower()
+            if role == "user":
+                user_turns_after_last_assistant += 1
+                if user_turns_after_last_assistant > 2:
+                    return False
+                continue
+            if role != "assistant":
+                continue
+            if not speaker or IntentAnalyzer._matches_identity_variants(speaker, current_ai_variants):
+                return True
+            if IntentAnalyzer._matches_identity_variants(speaker, other_ai_variants) or speaker:
+                return False
+        return False
 
 
 __all__ = [

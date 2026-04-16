@@ -152,6 +152,21 @@ class TestFallbackAnalysis:
         assert result.target_scope == "self_ai"
         assert result.directed_at_current_ai is True
 
+    def test_pronoun_follow_up_does_not_switch_target_only_because_message_mentions_human(self):
+        result = IntentAnalyzer.fallback_analysis(
+            "你帮我问问小王这个排期。",
+            "助手",
+            "",
+            ["小王", "小李"],
+            [
+                {"role": "assistant", "speaker": "助手", "content": "你现在最想先推进哪一块？"},
+                {"role": "user", "speaker": "小李", "content": "我补一句，这里还卡着预算。"},
+            ],
+        )
+        assert result.target == "ai"
+        assert result.target_scope == "self_ai"
+        assert result.directed_at_current_ai is True
+
     def test_pronoun_still_tracks_other_ai_after_human_interjection(self):
         result = IntentAnalyzer.fallback_analysis(
             "你刚才那个思路不错。",
@@ -374,6 +389,57 @@ class TestParseResponse:
         assert result.target_scope == "unknown"
         assert result.directed_at_ai is False
         assert result.directed_at_current_ai is False
+
+    def test_post_process_keeps_self_ai_for_recent_follow_up_context_without_name_hit(self):
+        result = IntentAnalyzer.post_process_analysis(
+            IntentAnalysis(
+                intent_type="question",
+                target="ai",
+                target_scope="self_ai",
+                confidence=0.9,
+                directed_at_ai=True,
+                directed_at_current_ai=True,
+                importance=0.9,
+            ),
+            content="你看看我现在在干啥",
+            agent_name="月白",
+            agent_alias="Sirius",
+            participant_names=["临雀。"],
+            recent_messages=[
+                {"role": "assistant", "speaker": "月白/Sirius", "content": "那你先告诉我你现在在干什么？"},
+            ],
+        )
+
+        assert result.target == "ai"
+        assert result.target_scope == "self_ai"
+        assert result.directed_at_ai is True
+        assert result.directed_at_current_ai is True
+
+    def test_post_process_keeps_self_ai_when_other_name_is_only_indirectly_mentioned(self):
+        result = IntentAnalyzer.post_process_analysis(
+            IntentAnalysis(
+                intent_type="request",
+                target="ai",
+                target_scope="self_ai",
+                confidence=0.88,
+                directed_at_ai=True,
+                directed_at_current_ai=True,
+                importance=0.82,
+            ),
+            content="你帮我问问小王这个排期。",
+            agent_name="助手",
+            agent_alias="",
+            participant_names=["小王", "小李"],
+            recent_messages=[
+                {"role": "assistant", "speaker": "助手", "content": "你现在最想先推进哪一块？"},
+                {"role": "user", "speaker": "小李", "content": "我补一句，这里还卡着预算。"},
+            ],
+        )
+
+        assert result.target == "ai"
+        assert result.target_scope == "self_ai"
+        assert result.directed_at_ai is True
+        assert result.directed_at_current_ai is True
 
 
 # ── IntentAnalyzer.analyze LLM integration ──────────────────────────

@@ -841,6 +841,74 @@ def test_reply_mode_auto_uses_intent_analysis_task_model() -> None:
     asyncio.run(_run())
 
 
+def test_reply_mode_auto_keeps_self_ai_follow_up_without_name_hit() -> None:
+    async def _run() -> None:
+        provider = MockProvider(
+            responses=[
+                json.dumps(
+                    {
+                        "intent_type": "question",
+                        "target": "ai",
+                        "target_scope": "self_ai",
+                        "importance": 0.9,
+                        "needs_memory": True,
+                        "needs_summary": True,
+                        "reason": "用户正在直接承接当前助手上一轮提问。",
+                        "evidence_span": "你看看我现在在干啥",
+                    },
+                    ensure_ascii=False,
+                ),
+                "这是跟进回复",
+            ]
+        )
+        engine = create_async_engine(provider)
+        config = SessionConfig(
+            work_path=Path("data/tests/intent_analysis_follow_up_context"),
+            preset=AgentPreset(
+                agent=Agent(name="主助手", persona="异步测试", model="mock-model"),
+                global_system_prompt="测试系统提示词",
+            ),
+            orchestration=OrchestrationPolicy(
+                unified_model="",
+                task_models={"intent_analysis": "intent-model"},
+                task_enabled={
+                    "memory_extract": False,
+                    "event_extract": False,
+                    "intent_analysis": True,
+                    "memory_manager": False,
+                },
+                session_reply_mode="auto",
+                pending_message_threshold=0.0,
+            ),
+        )
+
+        transcript = await engine.run_live_session(config=config)
+        transcript.messages.append(
+            Message(
+                role="assistant",
+                speaker="主助手/Sirius",
+                content="那你先告诉我你现在在干什么？",
+            )
+        )
+
+        transcript = await engine.run_live_message(
+            config=config,
+            turn=Message(role="user", speaker="小王", content="你看看我现在在干啥", reply_mode="auto"),
+            transcript=transcript,
+            session_reply_mode="auto",
+            finalize_and_persist=True,
+        )
+
+        assert [request.purpose for request in provider.requests] == ["intent_analysis", "chat_main"]
+        assert provider.requests[0].model == "intent-model"
+        assert transcript.orchestration_stats["intent_analysis"]["attempted"] == 1
+        assert transcript.orchestration_stats["intent_analysis"]["succeeded"] == 1
+        assistant_messages = [msg for msg in transcript.messages if msg.role == "assistant"]
+        assert assistant_messages[-1].content == "这是跟进回复"
+
+    asyncio.run(_run())
+
+
 def test_reply_mode_auto_can_disable_intent_analysis_task() -> None:
     async def _run() -> None:
         provider = MockProvider(responses=["这是回退路径的回复"])
