@@ -46,7 +46,7 @@
 ### 🚀 **性能与扩展**
 - **智能缓存框架**：内存 LRU + TTL 缓存，支持 LLM 响应缓存
 - **性能监控**：完整的 Token 消耗追踪、基准测试工具、执行指标分析
-- **SKILL 系统**：可扩展的任务编排，支持链式调用与迭代反馈
+- **SKILL 系统**：可扩展的任务编排，支持链式调用、结构化内部文本/多模态结果传输与迭代反馈
 - **高并发支持**：会话积压静默批处理、LLM 并发限流、后台任务隔离
 
 ### 🔌 **多模型协同**
@@ -680,6 +680,7 @@ SKILL 系统支持可扩展任务编排：
 - 在 `work_path` 下自动初始化 `skills/` 目录
 - 支持外部 Python 技能文件
 - 链式调用与迭代反馈
+- SKILL 可返回结构化文本块与图片块，框架会把它们作为内部推理通道注入下一轮生成，同时隐藏 `internal_metadata` 等元信息
 - 会话事件流仅暴露 SKILL 状态，不直接暴露内部技能结果正文；外部投递应消费 assistant 回复
 
 详见 [`docs/skill-authoring.md`](docs/skill-authoring.md)。
@@ -696,6 +697,7 @@ SKILL 系统支持可扩展任务编排：
 | [📋 full-architecture-flow.md](docs/full-architecture-flow.md) | 详细数据流图解 |
 | [🎬 external-usage.md](docs/external-usage.md) | 库调用指南与集成文档 |
 | [🗂️ migration-v0.27.md](docs/migration-v0.27.md) | v0.27 破坏性变更迁移指南 |
+| [🗂️ migration-v0.27.9.md](docs/migration-v0.27.9.md) | v0.27.9 意图分析与 Skill 内部通道迁移说明 |
 | [🗂️ migration-v0.23.md](docs/migration-v0.23.md) | workspace 持久化接管迁移档案 |
 | [🗂️ migration-v0.24.md](docs/migration-v0.24.md) | JSONC 配置与 watcher 热刷新迁移档案 |
 | [🔄 migration-roleplay-v0.20.md](docs/migration-roleplay-v0.20.md) | 外部人格生成能力迁移指南 |
@@ -735,15 +737,15 @@ python -m pytest tests/test_engine.py::test_roleplay_engine_multi_human_single_a
 ## 🆕 最新变更
 
 ### ✨ **新增**
-- **积压计数批处理**：`WorkspaceRuntime` 现在按待处理消息数而不是时间窗口决定是否进入静默批处理；当积压超过 `pending_message_threshold` 时，会合并同一说话人的连续消息并只发起一次模型调用。
-- **外部迁移指南**：新增 `docs/migration-v0.27.md`，集中说明 v0.27 的配置键变更、意图分析语义变化与外部接入迁移步骤。
+- **SKILL 结构化内部通道**：SKILL 现在可以返回文本块和图片块；框架会把这些结果以隐藏内部通道注入下一轮生成，而不是把原始结构直接抛给用户回复。
+- **v0.27.9 迁移说明**：新增 `docs/migration-v0.27.9.md`，集中说明 AI 证据 / possible-AI 语义与 Skill 结构化返回约定。
 
 ### 🚀 **改进**
-- **intent_analysis 改为严格模型路径**：任务启用后，意图结论必须来自模型；预算不足、调用失败或解析失败时，不再回退关键词意图推断。
-- **人格生成更克制**：新的角色生成提示词会默认产出更偏短句、纯文本、少 markdown 的角色行为约束，减少长段落和说明书式回复。
+- **意图分析改为证据优先**：提示词不再一开始把其它对象硬标为人类；名字/别称里的 `AI`、`bot`、`助手` 等线索会被单独提取，无明确线索的对象则交给模型结合上下文判别。
+- **高热群聊里更克制**：`hot` / `overheated` 情况下，环境插话的 engagement 惩罚略微增强，减少多人高频聊天时的抢答。
 
 **迁移提示：**
-> 若你此前依赖 `message_debounce_seconds` 或依赖 `intent_analysis` 在失败时自动回退关键词路径，请先阅读 `docs/migration-v0.27.md`。
+> 若你依赖意图分析里“人类参与者”硬标签，或正在编写返回图片/结构化元数据的 SKILL，请先阅读 `docs/migration-v0.27.9.md`。
 
 更多信息见 [CHANGELOG.md](CHANGELOG.md)。
 

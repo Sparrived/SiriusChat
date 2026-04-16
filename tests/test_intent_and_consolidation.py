@@ -100,6 +100,18 @@ class TestFallbackAnalysis:
         assert result.directed_at_ai is True
         assert result.directed_at_current_ai is False
 
+    def test_target_other_ai_when_participant_name_has_ai_evidence(self):
+        result = IntentAnalyzer.fallback_analysis(
+            "AlphaBot 你怎么看？",
+            "助手",
+            "",
+            ["AlphaBot", "小王"],
+            participant_alias_map={"AlphaBot": ["Alpha AI"], "小王": ["老王"]},
+        )
+        assert result.target == "ai"
+        assert result.target_scope == "other_ai"
+        assert result.directed_at_current_ai is False
+
     def test_pronoun_follows_recent_other_ai_context(self):
         result = IntentAnalyzer.fallback_analysis(
             "你刚刚那句不太对。",
@@ -373,15 +385,34 @@ class TestAnalyzeLLM:
         assert "近期对话:" not in prompt
         assert "first dropped context" not in prompt
         assert "second dropped context" in prompt
-        assert "群内人类参与者：砂狼 白子 (别称: 白子), 小桃" in prompt
+        assert "群内其它已知对象：砂狼 白子 (别称: 白子), 小桃" in prompt
         assert "环境线索：当前群名: AI 协作群" in prompt
         assert "最近AI发言者（近到远）：" in prompt
         assert "月白" in prompt
         assert "Claude" in prompt
-        assert "最近人类发言者（近到远）：老师" in prompt
-        assert "当前消息命中的人类名字：砂狼 白子" in prompt
+        assert "最近用户侧发言者（近到远）：老师" in prompt
+        assert "当前消息命中的其它对象名字：砂狼 白子" in prompt
         assert "当前消息命中的其他AI名字：Claude" in prompt
         assert "TAIL-MARKER" not in prompt
+
+    def test_build_request_separates_ai_evidence_from_possible_ai_objects(self):
+        request = IntentAnalyzer.build_request(
+            content="AlphaBot 和 小王 都说说看。",
+            agent_name="助手",
+            agent_alias="",
+            participant_names=["AlphaBot", "小王"],
+            participant_alias_map={"AlphaBot": ["Alpha AI"], "小王": ["老王"]},
+            recent_messages=[
+                {"role": "user", "speaker": "老师", "content": "先听大家意见。"},
+            ],
+            model="mock-model",
+        )
+
+        prompt = str(request.messages[0]["content"])
+        assert "名称上带明确AI线索的对象：AlphaBot" in prompt
+        assert "名称上暂无法确定、需结合上下文判断的对象：小王 (别称: 老王)" in prompt
+        assert "当前消息命中的名称含AI线索对象：AlphaBot" in prompt
+        assert "当前消息命中的可能为AI对象：小王" in prompt
 
     def test_build_request_keeps_interjection_chain_context(self):
         request = IntentAnalyzer.build_request(
@@ -408,7 +439,7 @@ class TestAnalyzeLLM:
         assert "最近AI发言者（近到远）：" in prompt
         assert "Claude" in prompt
         assert "助手" in prompt
-        assert "最近人类发言者（近到远）：" in prompt
+        assert "最近用户侧发言者（近到远）：" in prompt
         assert "小王 (别称: 老王)" in prompt
 
     def test_analyze_returns_parsed_result(self):

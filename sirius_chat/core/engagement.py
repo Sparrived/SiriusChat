@@ -214,11 +214,15 @@ def _compute_ambient_engagement(
     # 热度惩罚
     heat_penalties = {
         "cold": 0.0,
-        "warm": -0.05,
-        "hot": -0.15,
-        "overheated": -0.30,
+        "warm": -0.06,
+        "hot": -0.20,
+        "overheated": -0.35,
     }
     base += heat_penalties.get(heat.heat_level, -0.10)
+
+    # 热度高位时追加一小段连续惩罚，进一步压制群聊里无明确指向的插话。
+    if heat.heat_score >= 0.60:
+        base -= min(0.05, (heat.heat_score - 0.60) * 0.25)
 
     # 意图加分
     if intent is not None:

@@ -113,7 +113,8 @@ class SkillExecutor:
             result = skill._run_func(**call_params)
             # Persist data store after execution
             data_store.save()
-            skill_result = SkillResult(success=True, data=result)
+            skill_result = SkillResult.from_raw_result(result)
+            skill_result.success = True if skill_result.error == "" else skill_result.success
         except Exception as exc:
             logger.error("SKILL '%s' 执行异常: %s", skill.name, exc)
             skill_result = SkillResult(success=False, error=str(exc))

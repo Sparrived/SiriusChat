@@ -47,7 +47,7 @@ from sirius_chat.core.intent_v2 import IntentAnalysis, IntentAnalyzer
 from sirius_chat.core.heat import HeatAnalysis, HeatAnalyzer
 from sirius_chat.core.engagement import EngagementCoordinator, EngagementDecision
 from sirius_chat.background_tasks import BackgroundTaskConfig, BackgroundTaskManager
-from sirius_chat.core.markers import PROMPT_SPLIT_MARKER
+from sirius_chat.core.markers import PROMPT_SPLIT_MARKER, SKILL_RESULT_CHANNEL_MARKER
 from sirius_chat.core.memory_runner import (
     run_memory_extract_task,
     run_self_memory_extract_task,
@@ -1175,9 +1175,18 @@ class AsyncRolePlayEngine:
                         ))
 
                     # Inject result as system message; model reads it on the next generation.
+                    internal_payload = {
+                        "skill_name": skill_name,
+                        "display_text": result_text,
+                        **skill_result.to_internal_payload(),
+                    }
                     transcript.add(Message(
                         role="system",
-                        content=f"[SKILL执行结果: {skill_name}]\n{result_text}",
+                        content=(
+                            f"[SKILL执行结果: {skill_name}]\n{result_text}\n"
+                            f"{SKILL_RESULT_CHANNEL_MARKER} {skill_name}]\n"
+                            f"{json.dumps(internal_payload, ensure_ascii=False)}"
+                        ),
                     ))
 
                 # Emit any non-SKILL text from this round as an intermediate partial message.

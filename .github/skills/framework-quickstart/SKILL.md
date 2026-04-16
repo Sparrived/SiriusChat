@@ -55,7 +55,7 @@ description: "当你需要在不通读全部代码的情况下快速理解 Siriu
 26. `tests/test_workspace_runtime.py`
 27. `tests/test_engine.py`
 - `models/models.py` ✨ **（包重构）** 定义数据契约（多人用户 + 单 AI 主助手）。
-- `OrchestrationPolicy` 用于任务路由与任务级参数控制，支持 `memory_extract`、`event_extract`、`intent_analysis`、`memory_manager` 等任务的模型配置。`reply_mode=auto` 下的 LLM 意图分析已纳入 `intent_analysis` 任务；关闭该任务时才会走关键词回退，任务启用后若调用失败或解析失败，本轮不会再回退关键词意图推断。多 AI 群聊里，`intent_analysis` 还会区分消息是在叫当前模型自身还是其他 AI，并在后者场景下抑制当前模型自动回复；为降低误判，发给模型的上下文已改为最近交互链摘要，并会额外暴露最近 AI / 人类发言者、近期发言人的 aliases、`environment_context` 环境线索，以及当前消息命中的当前模型/其他 AI/人类名字线索。对未明确点名当前模型的群控/停用类命令，还会在 engagement 前做硬抑制。同时支持提示词驱动的内容分割（`enable_prompt_driven_splitting=True`）、基于 `pending_message_threshold` 的 runtime 积压静默批处理，以及基于 `min_reply_interval_seconds` 的最小回复间隔冷却。✨ `memory_manager` 是标准 LLM 任务，用于汇聚、去重、标注、冲突检测记忆，并为后台归纳与长上下文下的即时整理提供模型参数。
+- `OrchestrationPolicy` 用于任务路由与任务级参数控制，支持 `memory_extract`、`event_extract`、`intent_analysis`、`memory_manager` 等任务的模型配置。`reply_mode=auto` 下的 LLM 意图分析已纳入 `intent_analysis` 任务；关闭该任务时才会走关键词回退，任务启用后若调用失败或解析失败，本轮不会再回退关键词意图推断。多 AI 群聊里，`intent_analysis` 会先从名字/别称中提取 AI 证据（如 `AI`、`bot`、`助手`、`Claude` 等），再把无明确证据的对象作为 possible-AI 候选交给模型结合最近交互链、aliases 和 `environment_context` 判断，从而减少把其他对象误判成当前模型自身。对未明确点名当前模型的群控/停用类命令，还会在 engagement 前做硬抑制。同时支持提示词驱动的内容分割（`enable_prompt_driven_splitting=True`）、基于 `pending_message_threshold` 的 runtime 积压静默批处理，以及基于 `min_reply_interval_seconds` 的最小回复间隔冷却。✨ `memory_manager` 是标准 LLM 任务，用于汇聚、去重、标注、冲突检测记忆，并为后台归纳与长上下文下的即时整理提供模型参数。
 - 兼容层面，旧 `enable_intent_analysis` / `intent_analysis_model` 仅作为读取时的映射入口存在；当前模板、workspace 持久化与示例应统一使用 `task_enabled/task_models`。
 - ✨ **(v0.13.0)** `OrchestrationPolicy` 新增 AI 自身记忆配置（`enable_self_memory`、`self_memory_extract_batch_size`、`self_memory_max_diary_prompt_entries`、`self_memory_max_glossary_prompt_terms`）。
 ## 心智模型
@@ -63,6 +63,7 @@ description: "当你需要在不通读全部代码的情况下快速理解 Siriu
 - 当前推荐入口是 `WorkspaceRuntime`；它负责文件布局、session 恢复、participants 写回、watcher 热刷新和 provider 注册表联动。
 - `WorkspaceRuntime.run_live_message(...)` 先按 session 入队，再由单会话 processor 决定逐条处理、按 `pending_message_threshold` 执行静默批处理，或在 `min_reply_interval_seconds` 冷却窗口结束后强制合并同一说话人的连续消息再进入下一次回复判断。
 - `WorkspaceRuntime.initialize()` 会预先初始化共享 SKILL runtime，并在 `skills/` 目录变化时通过 watcher 触发全量 reload，不再在消息路径按次扫描目录。
+- SKILL 执行结果现在支持结构化 `text_blocks` / `multimodal_blocks` / `internal_metadata`；`core/engine.py` 负责把结果注入 transcript，`core/chat_builder.py` 负责把可用文本与图片转成隐藏模型上下文，并避免把元信息泄露到用户回复中。
 - 会话事件流里的 `SKILL_COMPLETED` 仅表示技能执行状态，技能结果正文不会直接通过该事件暴露；只有落成 assistant 回复后才会进入外部消息流或 `on_reply`。
 - `WorkspaceRuntime` 会把 `WorkspaceBootstrap` 的签名记入 `workspace.json`；同一份 bootstrap 只在首次命中时持久化一次，后续重启会保留用户在 config root 下的手工修改。
 - `WorkspaceLayout` 是路径语义的单一事实来源：config root 放配置与资产，data root 放运行态数据。

@@ -33,6 +33,9 @@ INTENT_TYPES = frozenset({
 
 TARGET_TYPES = frozenset({"ai", "others", "everyone", "unknown"})
 TARGET_SCOPES = frozenset({"self_ai", "other_ai", "human", "everyone", "unknown"})
+_AI_EVIDENCE_TOKENS = (
+    "ai", "bot", "机器人", "智能体", "助手", "agent", "llm", "gpt", "claude", "gemini", "deepseek", "qwen", "chatgpt",
+)
 
 _INTENT_SYSTEM_PROMPT = (
     "你是一个对话意图分析器。你的任务是分析群聊中的每条消息，判断说话者在跟谁对话、意图是什么。\n"
@@ -50,16 +53,19 @@ _INTENT_SYSTEM_PROMPT = (
     "判断指南：\n"
     "- target=ai 且 target_scope=self_ai：消息明确指向当前模型自身（提及当前模型名字/别名、使用\"你\"且上下文指向当前模型、直接回复当前模型）\n"
     "- target=ai 且 target_scope=other_ai：消息明确指向群内其他 AI，而不是当前模型\n"
-    "- target=others 且 target_scope=human：消息明确指向群内其他人类参与者（提及其他人名字、@其他人、回复其他人话题）\n"
+    "- target=others 且 target_scope=human：消息明确指向群内其他参与者，但现有证据更像人类对象\n"
     "- target=everyone：消息面向全体（公告、一般感叹、分享信息）\n"
     "- target=unknown：无法确定指向\n\n"
     "重要规则：\n"
     "- 仅凭\"你\"字不能判定指向AI，必须结合上下文确认\n"
     "- 群聊里可能有多个 AI，必须优先判断消息是指向当前模型自身，还是指向其他 AI\n"
-    "- 如果当前消息命中了人类名字或其他AI名字，且没有命中当前模型名字，通常不能判定为 self_ai\n"
+    "- 不能预设群内其他对象天然是人类或 AI。除非对象名称、别称里含有 AI/BOT/机器人/智能体/助手/GPT/Claude/Qwen 等明确线索，否则应先把它视为\"可能为AI的对象\"，再结合上下文判定\n"
+    "- 如果当前消息命中了其他对象名字、且这些对象带有明显 AI 线索，而没有命中当前模型名字，通常不能判定为 self_ai\n"
+    "- 对没有明显 AI 线索的对象，不要因为它近期由 assistant 说过话就武断判成人类或 AI，要根据最近交互链、代词承接、内容风格一起判断\n"
     "- 群控/停用类命令（如关闭本群AI、禁用机器人、别让bot说话）如果没有明确点名当前模型，不应判定为 self_ai，也不应触发当前模型回复\n"
     "- 如果上一条消息是某个人说的，当前消息可能在回复那个人而非AI\n"
     "- 当群聊中有多人对话时，要根据话题连续性判断说话对象\n"
+    "- 当证据不足时，宁可给出 other_ai 或 unknown，也不要轻易判成 self_ai\n"
     "- 不要输出任何额外文字\n"
 )
 
@@ -189,18 +195,32 @@ class IntentAnalyzer:
         """Build a GenerationRequest for the intent analysis task."""
 
         current_ai_names = [name for name in (agent_name, agent_alias) if str(name).strip()]
-        human_identity_map = IntentAnalyzer._build_human_identity_map(
-            participant_names,
-            participant_alias_map,
-        )
         other_ai_identity_map = IntentAnalyzer._build_other_ai_identity_map(
             recent_messages=recent_messages,
             agent_name=agent_name,
             agent_alias=agent_alias,
         )
+        participant_identity_map = IntentAnalyzer._build_human_identity_map(
+            participant_names,
+            participant_alias_map,
+        )
+        ai_evidence_identity_map = IntentAnalyzer._build_ai_evidence_identity_map(
+            participant_names,
+            participant_alias_map,
+            current_ai_names=current_ai_names,
+            other_ai_identity_map=other_ai_identity_map,
+        )
+        possible_ai_identity_map = IntentAnalyzer._build_possible_ai_identity_map(
+            participant_names,
+            participant_alias_map,
+            current_ai_names=current_ai_names,
+            other_ai_identity_map=other_ai_identity_map,
+        )
         self_hits = IntentAnalyzer._extract_name_hits(content, current_ai_names)
         other_ai_hits = IntentAnalyzer._extract_identity_hits(content, other_ai_identity_map)
-        human_hits = IntentAnalyzer._extract_identity_hits(content, human_identity_map)
+        ai_evidence_hits = IntentAnalyzer._extract_identity_hits(content, ai_evidence_identity_map)
+        participant_hits = IntentAnalyzer._extract_identity_hits(content, participant_identity_map)
+        possible_ai_hits = IntentAnalyzer._extract_identity_hits(content, possible_ai_identity_map)
         context_lines = IntentAnalyzer._summarize_recent_messages(recent_messages)
         recent_ai_speakers = IntentAnalyzer._extract_recent_speakers(
             recent_messages=recent_messages,
@@ -215,11 +235,11 @@ class IntentAnalyzer:
         environment_info = IntentAnalyzer._format_environment_context(environment_context)
 
         participants_info = (
-            "群内人类参与者："
+            "群内其它已知对象："
             + ", ".join(
                 IntentAnalyzer._format_identity_summary(
                     name,
-                    human_identity_map.get(name, []),
+                    participant_identity_map.get(name, []),
                 )
                 for name in participant_names[:8]
             )
@@ -238,6 +258,30 @@ class IntentAnalyzer:
             )
             if other_ai_identity_map else ""
         )
+        ai_evidence_info = (
+            "名称上带明确AI线索的对象："
+            + ", ".join(
+                IntentAnalyzer._format_identity_summary(
+                    speaker,
+                    ai_evidence_identity_map.get(speaker, []),
+                    alias_label="AI线索",
+                )
+                for speaker in list(ai_evidence_identity_map.keys())[:_IDENTITY_SUMMARY_LIMIT]
+            )
+            if ai_evidence_identity_map else ""
+        )
+        possible_ai_info = (
+            "名称上暂无法确定、需结合上下文判断的对象："
+            + ", ".join(
+                IntentAnalyzer._format_identity_summary(
+                    speaker,
+                    possible_ai_identity_map.get(speaker, []),
+                    alias_label="别称",
+                )
+                for speaker in list(possible_ai_identity_map.keys())[:_IDENTITY_SUMMARY_LIMIT]
+            )
+            if possible_ai_identity_map else ""
+        )
         recent_ai_info = (
             "最近AI发言者（近到远）："
             + ", ".join(
@@ -255,11 +299,11 @@ class IntentAnalyzer:
             if recent_ai_speakers else ""
         )
         recent_human_info = (
-            "最近人类发言者（近到远）："
+            "最近用户侧发言者（近到远）："
             + ", ".join(
                 IntentAnalyzer._format_identity_summary(
                     speaker,
-                    human_identity_map.get(speaker, []),
+                    participant_identity_map.get(speaker, []),
                 )
                 for speaker in recent_human_speakers
             )
@@ -267,20 +311,26 @@ class IntentAnalyzer:
         )
         self_hit_info = f"当前消息命中的当前模型名字：{', '.join(self_hits)}" if self_hits else ""
         other_ai_hit_info = f"当前消息命中的其他AI名字：{', '.join(other_ai_hits)}" if other_ai_hits else ""
-        human_hit_info = f"当前消息命中的人类名字：{', '.join(human_hits)}" if human_hits else ""
+        ai_evidence_hit_info = f"当前消息命中的名称含AI线索对象：{', '.join(ai_evidence_hits)}" if ai_evidence_hits else ""
+        possible_ai_hit_info = f"当前消息命中的可能为AI对象：{', '.join(possible_ai_hits)}" if possible_ai_hits else ""
+        participant_hit_info = f"当前消息命中的其它对象名字：{', '.join(participant_hits)}" if participant_hits else ""
 
         user_prompt = (
             f"AI名称: {agent_name}"
             + (f" (别名: {agent_alias})" if agent_alias else "")
             + (f"\n{current_ai_info}" if current_ai_info else "")
             + (f"\n{other_ai_info}" if other_ai_info else "")
+            + (f"\n{ai_evidence_info}" if ai_evidence_info else "")
+            + (f"\n{possible_ai_info}" if possible_ai_info else "")
             + (f"\n{participants_info}" if participants_info else "")
             + (f"\n{environment_info}" if environment_info else "")
             + (f"\n{recent_ai_info}" if recent_ai_info else "")
             + (f"\n{recent_human_info}" if recent_human_info else "")
             + (f"\n{self_hit_info}" if self_hit_info else "")
             + (f"\n{other_ai_hit_info}" if other_ai_hit_info else "")
-            + (f"\n{human_hit_info}" if human_hit_info else "")
+            + (f"\n{ai_evidence_hit_info}" if ai_evidence_hit_info else "")
+            + (f"\n{possible_ai_hit_info}" if possible_ai_hit_info else "")
+            + (f"\n{participant_hit_info}" if participant_hit_info else "")
             + (f"\n\n最近交互链摘要:\n" + "\n".join(context_lines) if context_lines else "")
             + f"\n\n当前消息: {content[:400]}"
         )
@@ -379,19 +429,34 @@ class IntentAnalyzer:
             agent_name=agent_name,
             agent_alias=agent_alias,
         )
+        ai_evidence_identity_map = IntentAnalyzer._build_ai_evidence_identity_map(
+            participant_names or [],
+            participant_alias_map,
+            current_ai_names=current_ai_names,
+            other_ai_identity_map=other_ai_identity_map,
+        )
         other_ai_names = list(other_ai_identity_map.keys())
         human_identity_map = IntentAnalyzer._build_human_identity_map(
             participant_names or [],
             participant_alias_map,
+            exclude_names=set(ai_evidence_identity_map.keys()),
+        )
+        possible_ai_identity_map = IntentAnalyzer._build_possible_ai_identity_map(
+            participant_names or [],
+            participant_alias_map,
+            current_ai_names=current_ai_names,
+            other_ai_identity_map=other_ai_identity_map,
         )
         human_names = list(human_identity_map.keys())
 
         # ── 判断 target ──
         self_ai_hits = IntentAnalyzer._extract_name_hits(content, current_ai_names)
         other_ai_hits = IntentAnalyzer._extract_identity_hits(content, other_ai_identity_map)
+        ai_evidence_hits = IntentAnalyzer._extract_identity_hits(content, ai_evidence_identity_map)
         other_human_hits = IntentAnalyzer._extract_identity_hits(content, human_identity_map)
+        possible_ai_hits = IntentAnalyzer._extract_identity_hits(content, possible_ai_identity_map)
         self_ai_directed = bool(self_ai_hits)
-        other_ai_directed = bool(other_ai_hits)
+        other_ai_directed = bool(other_ai_hits or ai_evidence_hits)
         other_human_directed = bool(other_human_hits)
 
         # @ 提及检测
@@ -526,19 +591,34 @@ class IntentAnalyzer:
             agent_name=agent_name,
             agent_alias=agent_alias,
         )
+        ai_evidence_identity_map = IntentAnalyzer._build_ai_evidence_identity_map(
+            participant_names or [],
+            participant_alias_map,
+            current_ai_names=current_ai_names,
+            other_ai_identity_map=other_ai_identity_map,
+        )
         human_identity_map = IntentAnalyzer._build_human_identity_map(
             participant_names or [],
             participant_alias_map,
+            exclude_names=set(ai_evidence_identity_map.keys()),
+        )
+        possible_ai_identity_map = IntentAnalyzer._build_possible_ai_identity_map(
+            participant_names or [],
+            participant_alias_map,
+            current_ai_names=current_ai_names,
+            other_ai_identity_map=other_ai_identity_map,
         )
         self_ai_hits = IntentAnalyzer._extract_name_hits(content, current_ai_names)
         other_ai_hits = IntentAnalyzer._extract_identity_hits(content, other_ai_identity_map)
+        ai_evidence_hits = IntentAnalyzer._extract_identity_hits(content, ai_evidence_identity_map)
         other_human_hits = IntentAnalyzer._extract_identity_hits(content, human_identity_map)
+        possible_ai_hits = IntentAnalyzer._extract_identity_hits(content, possible_ai_identity_map)
 
         if IntentAnalyzer._looks_like_group_ai_control_command(content) and not self_ai_hits:
             analysis.force_no_reply = True
             analysis.intent_type = "command"
             if analysis.target_scope == "self_ai":
-                if other_ai_hits:
+                if other_ai_hits or ai_evidence_hits:
                     analysis.target = "ai"
                     analysis.target_scope = "other_ai"
                 elif other_human_hits:
@@ -554,6 +634,17 @@ class IntentAnalyzer:
             analysis.reason = "消息是群控/停用类命令，未明确点名当前模型，不触发当前模型回复。"
             if not analysis.evidence_span:
                 analysis.evidence_span = content.strip()[:24]
+
+        if analysis.target_scope == "self_ai" and not self_ai_hits and (other_ai_hits or ai_evidence_hits):
+            analysis.target = "ai"
+            analysis.target_scope = "other_ai"
+            analysis.directed_at_ai = True
+            analysis.directed_at_current_ai = False
+            analysis.importance = min(analysis.importance, 0.2)
+            analysis.confidence = max(analysis.confidence, 0.7)
+            analysis.reason = "消息命中了其他AI或名称上带明确AI线索的对象，且没有命中当前模型自身，回退为 other_ai 以减少抢答。"
+            if not analysis.evidence_span:
+                analysis.evidence_span = (other_ai_hits or ai_evidence_hits)[0]
 
         return analysis
 
@@ -639,18 +730,77 @@ class IntentAnalyzer:
     def _build_human_identity_map(
         participant_names: list[str],
         participant_alias_map: dict[str, list[str]] | None,
+        exclude_names: set[str] | None = None,
     ) -> dict[str, list[str]]:
         alias_map = participant_alias_map or {}
         identity_map: dict[str, list[str]] = {}
+        excluded = {name.strip().lower() for name in (exclude_names or set()) if str(name).strip()}
         for name in participant_names:
             normalized_name = str(name).strip()
             if not normalized_name:
+                continue
+            if normalized_name.lower() in excluded:
                 continue
             aliases = [
                 alias for alias in alias_map.get(normalized_name, [])
                 if alias.strip() and alias.strip().lower() != normalized_name.lower()
             ]
             identity_map[normalized_name] = IntentAnalyzer._dedupe_names(aliases)
+        return identity_map
+
+    @staticmethod
+    def _build_ai_evidence_identity_map(
+        participant_names: list[str],
+        participant_alias_map: dict[str, list[str]] | None,
+        *,
+        current_ai_names: list[str],
+        other_ai_identity_map: dict[str, list[str]],
+    ) -> dict[str, list[str]]:
+        alias_map = participant_alias_map or {}
+        current_name_set = {name.strip().lower() for name in current_ai_names if str(name).strip()}
+        known_other_ai_set = {name.strip().lower() for name in other_ai_identity_map.keys()}
+        identity_map: dict[str, list[str]] = {}
+        for name in participant_names:
+            normalized_name = str(name).strip()
+            if not normalized_name:
+                continue
+            lowered = normalized_name.lower()
+            if lowered in current_name_set or lowered in known_other_ai_set:
+                continue
+            raw_aliases = [alias for alias in alias_map.get(normalized_name, []) if alias.strip()]
+            evidence = IntentAnalyzer._extract_ai_evidence_terms([normalized_name, *raw_aliases])
+            if evidence:
+                identity_map[normalized_name] = evidence
+        return identity_map
+
+    @staticmethod
+    def _build_possible_ai_identity_map(
+        participant_names: list[str],
+        participant_alias_map: dict[str, list[str]] | None,
+        *,
+        current_ai_names: list[str],
+        other_ai_identity_map: dict[str, list[str]],
+    ) -> dict[str, list[str]]:
+        alias_map = participant_alias_map or {}
+        current_name_set = {name.strip().lower() for name in current_ai_names if str(name).strip()}
+        known_other_ai_set = {name.strip().lower() for name in other_ai_identity_map.keys()}
+        identity_map: dict[str, list[str]] = {}
+        for name in participant_names:
+            normalized_name = str(name).strip()
+            if not normalized_name:
+                continue
+            lowered = normalized_name.lower()
+            if lowered in current_name_set or lowered in known_other_ai_set:
+                continue
+            raw_aliases = [alias for alias in alias_map.get(normalized_name, []) if alias.strip()]
+            evidence = IntentAnalyzer._extract_ai_evidence_terms([normalized_name, *raw_aliases])
+            if evidence:
+                continue
+            candidates = IntentAnalyzer._dedupe_names(raw_aliases)
+            if candidates:
+                identity_map[normalized_name] = candidates
+            else:
+                identity_map[normalized_name] = [normalized_name]
         return identity_map
 
     @staticmethod
@@ -797,6 +947,23 @@ class IntentAnalyzer:
             cues.append("机器人")
             seen.add("机器人")
         return cues[:4]
+
+    @staticmethod
+    def _extract_ai_evidence_terms(values: list[str]) -> list[str]:
+        evidence: list[str] = []
+        seen: set[str] = set()
+        for value in values:
+            lowered = str(value).strip().lower()
+            if not lowered:
+                continue
+            for token in _AI_EVIDENCE_TOKENS:
+                token_lower = token.lower()
+                if token_lower in seen:
+                    continue
+                if IntentAnalyzer._contains_marker(lowered, token_lower):
+                    seen.add(token_lower)
+                    evidence.append(token)
+        return evidence[:4]
 
     @staticmethod
     def _name_variants(name: str) -> set[str]:

@@ -4,6 +4,23 @@
 
 ## [Unreleased]
 
+## [0.27.9] - 2026-04-16
+
+### Added
+- **SKILL 结构化内部结果通道**：SKILL 现在可以通过 `text_blocks`、`multimodal_blocks` 和 `internal_metadata` 返回结构化结果；engine 会把可用文本与图片作为隐藏内部上下文注入下一轮生成，而不是把原始结构直接暴露到用户侧。
+- 新增回归测试，覆盖名称 AI 证据对象 / possible-AI 对象分流、Skill 结构化结果提取、隐藏图片通道注入，以及高热群聊下的环境插话抑制。
+
+### Changed
+- **意图分析提示词改为证据优先**：名称或别称中带有 `AI`、`bot`、`助手`、`Claude` 等明显线索的对象会被明确标为 AI 证据对象；没有这类线索的对象则作为“需结合上下文判断”的 possible-AI 候选交给模型判别，不再在提示词里先行硬标记为人类。
+- **群聊热度对 ambient reply 更克制**：`hot` / `overheated` 场景下的环境插话惩罚略微增强，并叠加高热度连续惩罚，减少多人高频聊天中的抢答。
+
+### Fixed
+- **减少误把其他对象当成当前模型自身**：post-process 现在只会在命中其他 AI 或明确 AI 线索对象时，把误判的 `self_ai` 回退为 `other_ai`，避免仅凭普通对象名字就强行改写目标。
+- **Skill 元信息不再混入最终回答语义**：系统提示词和内部技能通道现在都会显式要求模型只提炼结果结论，不复述 `internal_metadata`、`mime_type`、`label`、路径、URL 或 JSON 字段名。
+
+### Documentation
+- 更新 README、架构文档、Skill 编写指南与相关 SKILL，统一说明意图分析的 AI 证据 / possible-AI 语义，以及 SKILL 的内部文本/多模态结果通道。
+
 ## [0.27.8] - 2026-04-16
 
 ### Changed

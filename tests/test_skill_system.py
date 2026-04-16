@@ -69,6 +69,52 @@ class TestSkillResult:
         assert "section:" in text
         assert "list_val:" in text
 
+    def test_from_raw_result_extracts_internal_text_and_multimodal_blocks(self):
+        result = SkillResult.from_raw_result(
+            {
+                "summary": "会显示在展示文本里",
+                "text_blocks": [
+                    {"type": "text", "value": "检测到蓝天", "label": "summary"},
+                ],
+                "multimodal_blocks": [
+                    {
+                        "type": "image",
+                        "value": "https://example.com/sky.png",
+                        "mime_type": "image/png",
+                        "label": "source",
+                    }
+                ],
+                "internal_metadata": {"trace_id": "abc123"},
+            }
+        )
+
+        assert result.success is True
+        assert len(result.text_blocks) == 1
+        assert result.text_blocks[0].value == "检测到蓝天"
+        assert len(result.multimodal_blocks) == 1
+        assert result.multimodal_blocks[0].mime_type == "image/png"
+        assert result.internal_metadata == {"trace_id": "abc123"}
+
+        payload = result.to_internal_payload()
+        assert payload["text_blocks"][0]["value"] == "检测到蓝天"
+        assert payload["multimodal_blocks"][0]["value"] == "https://example.com/sky.png"
+        assert payload["internal_metadata"]["trace_id"] == "abc123"
+
+    def test_display_text_hides_internal_metadata_fields(self):
+        result = SkillResult.from_raw_result(
+            {
+                "status": "ok",
+                "internal_metadata": {"trace_id": "abc123"},
+                "metadata": {"debug": True},
+                "attachments": [{"value": "https://example.com/a.png"}],
+            }
+        )
+
+        text = result.to_display_text()
+        assert "status: ok" in text
+        assert "trace_id" not in text
+        assert "attachments" not in text
+
 
 class TestSkillDefinition:
     def test_parameter_schema(self):
@@ -562,6 +608,9 @@ class TestSkillEngineIntegration:
         assert "available_skills" in prompt
         assert "system_info" in prompt
         assert "SKILL_CALL" in prompt
+        assert "internal_metadata" in prompt
+        assert "mime_type" in prompt
+        assert "label" in prompt
 
     def test_skill_system_prompt_not_included_when_disabled(self):
         """Verify skills are NOT in prompt when disabled."""

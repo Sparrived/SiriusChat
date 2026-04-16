@@ -9,6 +9,7 @@ Provides pure functions for:
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 
@@ -16,6 +17,7 @@ from sirius_chat.config import SessionConfig
 from sirius_chat.memory import SelfMemoryManager
 from sirius_chat.models import Transcript
 from sirius_chat.async_engine.prompts import build_system_prompt
+from sirius_chat.core.markers import SKILL_RESULT_CHANNEL_MARKER
 
 logger = logging.getLogger(__name__)
 
@@ -117,13 +119,100 @@ def sanitize_assistant_content(content: str) -> str:
     return "收到。"
 
 
+def _extract_skill_result_channel(message_content: str) -> dict[str, object] | None:
+    text = str(message_content or "").strip()
+    marker_index = text.find(SKILL_RESULT_CHANNEL_MARKER)
+    if marker_index == -1:
+        return None
+
+    payload_text = text[marker_index:]
+    first_line, _, remainder = payload_text.partition("\n")
+    if not first_line.startswith(SKILL_RESULT_CHANNEL_MARKER):
+        return None
+    closing = first_line.find("]", len(SKILL_RESULT_CHANNEL_MARKER))
+    if closing == -1:
+        return None
+    skill_name = first_line[len(SKILL_RESULT_CHANNEL_MARKER):closing].strip()
+    if not skill_name or not remainder.strip():
+        return None
+    try:
+        parsed = json.loads(remainder)
+    except (json.JSONDecodeError, ValueError):
+        logger.warning("SKILL_RESULT_CHANNEL 解析失败: %s", skill_name)
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    parsed.setdefault("skill_name", skill_name)
+    return parsed
+
+
+def _strip_skill_result_channel(message_content: str) -> str:
+    text = str(message_content or "").strip()
+    marker_index = text.find(SKILL_RESULT_CHANNEL_MARKER)
+    if marker_index == -1:
+        return text
+    return text[:marker_index].strip()
+
+
+def _build_skill_hidden_message(skill_channel: dict[str, object]) -> dict[str, object] | None:
+    skill_name = str(skill_channel.get("skill_name", "SKILL")).strip() or "SKILL"
+    display_text = str(skill_channel.get("display_text", "")).strip()
+    text_blocks = skill_channel.get("text_blocks", [])
+    multimodal_blocks = skill_channel.get("multimodal_blocks", [])
+
+    instructions = [
+        f"以下内容来自技能 {skill_name} 的内部结果，仅供你内部推理。",
+        "最终回复中不要暴露内部 JSON 字段名、mime_type、label、internal_metadata、路径、URL 或其他工具元信息。",
+        "只提炼对用户有帮助的结论、观察和结果。",
+    ]
+    text_fragments = ["\n".join(instructions)]
+
+    if display_text:
+        text_fragments.append(display_text)
+
+    if isinstance(text_blocks, list):
+        for item in text_blocks:
+            if not isinstance(item, dict):
+                continue
+            value = str(item.get("value", "")).strip()
+            if value and value not in text_fragments:
+                text_fragments.append(value)
+
+    content_parts: list[dict[str, object]] = [
+        {"type": "text", "text": "\n\n".join(fragment for fragment in text_fragments if fragment.strip())}
+    ]
+    has_image = False
+    if isinstance(multimodal_blocks, list):
+        for item in multimodal_blocks:
+            if not isinstance(item, dict):
+                continue
+            value = str(item.get("value", "")).strip()
+            if not value:
+                continue
+            block_type = str(item.get("type", "")).strip().lower()
+            mime_type = str(item.get("mime_type", "")).strip().lower()
+            if block_type == "image" or mime_type.startswith("image/"):
+                has_image = True
+                content_parts.append(
+                    {"type": "image_url", "image_url": {"url": value}}
+                )
+
+    if has_image:
+        return {"role": "user", "content": content_parts}
+
+    text_only = str(content_parts[0]["text"]).strip()
+    if text_only:
+        return {"role": "user", "content": text_only}
+    return None
+
+
 def collect_internal_system_notes(transcript: Transcript) -> str:
     """Collect all system-role messages from transcript as internal notes."""
     notes: list[str] = []
     for message in transcript.messages:
         if message.role != "system":
             continue
-        text = message.content.strip()
+        text = _strip_skill_result_channel(message.content)
         if text:
             notes.append(text)
     if not notes:
@@ -209,9 +298,15 @@ def build_chat_main_request_context(
         if current_batch_has_images:
             break
 
-    for message in transcript.messages:
+    for index, message in enumerate(transcript.messages):
         role = str(message.role or "").strip().lower()
         if role == "system":
+            if index > _last_assistant_idx:
+                skill_channel = _extract_skill_result_channel(message.content)
+                if skill_channel is not None:
+                    hidden_message = _build_skill_hidden_message(skill_channel)
+                    if hidden_message is not None:
+                        chat_history.append(hidden_message)
             continue
         speaker_prefix = f"[{message.speaker}] " if message.speaker else ""
         text_content = f"{speaker_prefix}{message.content}"

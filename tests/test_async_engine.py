@@ -994,6 +994,81 @@ def test_run_live_session_reply_mode_auto_probability_fallback_can_trigger_reply
     asyncio.run(_run())
 
 
+def test_chat_main_request_context_injects_hidden_skill_text_and_image() -> None:
+    from sirius_chat.core.chat_builder import build_chat_main_request_context
+    from sirius_chat.core.markers import SKILL_RESULT_CHANNEL_MARKER
+
+    config = SessionConfig(
+        work_path=Path("data/tests/chat_main_skill_channel"),
+        preset=AgentPreset(
+            agent=Agent(name="主助手", persona="异步测试", model="mock-model"),
+            global_system_prompt="测试系统提示词",
+        ),
+        orchestration=OrchestrationPolicy(
+            unified_model="mock-model",
+            enable_skills=True,
+            task_enabled={
+                "memory_extract": False,
+                "event_extract": False,
+                "memory_manager": False,
+            },
+            pending_message_threshold=0.0,
+        ),
+    )
+    transcript = Transcript()
+    transcript.add(Message(role="user", speaker="小王", content="帮我看看图片里有什么。"))
+    transcript.add(Message(role="assistant", speaker="主助手", content="我先调用技能分析。"))
+
+    payload = {
+        "skill_name": "vision_lookup",
+        "display_text": "图片里主要是蓝天。",
+        "text_blocks": [
+            {"type": "text", "value": "检测到蓝天和少量白云。", "label": "summary"},
+        ],
+        "multimodal_blocks": [
+            {
+                "type": "image",
+                "value": "https://example.com/sky.png",
+                "mime_type": "image/png",
+                "label": "source",
+            }
+        ],
+        "internal_metadata": {"trace_id": "abc123"},
+    }
+    transcript.add(
+        Message(
+            role="system",
+            content=(
+                "[SKILL执行结果: vision_lookup]\n"
+                "图片里主要是蓝天。\n"
+                f"{SKILL_RESULT_CHANNEL_MARKER} vision_lookup]\n"
+                f"{json.dumps(payload, ensure_ascii=False)}"
+            ),
+        )
+    )
+
+    system_prompt, chat_history = build_chat_main_request_context(
+        config=config,
+        transcript=transcript,
+    )
+
+    assert "会话内部系统补充" in system_prompt
+    assert "[SKILL执行结果: vision_lookup]" in system_prompt
+    assert "SKILL_RESULT_CHANNEL" not in system_prompt
+    assert "internal_metadata" not in system_prompt
+
+    hidden_skill_message = chat_history[-1]
+    assert hidden_skill_message["role"] == "user"
+    assert isinstance(hidden_skill_message["content"], list)
+    text_part = next(part for part in hidden_skill_message["content"] if part["type"] == "text")
+    assert "内部结果" in text_part["text"]
+    assert "检测到蓝天和少量白云。" in text_part["text"]
+    assert "abc123" not in text_part["text"]
+    assert "{\"trace_id\"" not in text_part["text"]
+    image_part = next(part for part in hidden_skill_message["content"] if part["type"] == "image_url")
+    assert image_part["image_url"]["url"] == "https://example.com/sky.png"
+
+
 def test_engagement_boosts_when_directly_addressed() -> None:
     """Verify that directly addressing the AI results in higher engagement than ambient chat."""
     from sirius_chat.core.heat import HeatAnalyzer
@@ -1018,6 +1093,34 @@ def test_engagement_boosts_when_directly_addressed() -> None:
     assert addressed_intent.directed_at_ai is True
     assert addressed_intent.directed_at_current_ai is True
     assert plain_intent.directed_at_ai is False
+
+
+def test_hot_group_heat_more_strongly_suppresses_ambient_reply() -> None:
+    from sirius_chat.core.heat import HeatAnalyzer
+    from sirius_chat.core.intent_v2 import IntentAnalyzer
+    from sirius_chat.core.engagement import EngagementCoordinator
+
+    cold_heat = HeatAnalyzer.analyze(
+        group_recent_count=1,
+        window_seconds=60.0,
+        active_participant_ids={"小王"},
+        assistant_reply_count_in_window=0,
+    )
+    hot_heat = HeatAnalyzer.analyze(
+        group_recent_count=5,
+        window_seconds=60.0,
+        active_participant_ids={"小王", "小李", "小赵", "小陈", "小孙"},
+        assistant_reply_count_in_window=1,
+    )
+
+    ambient_intent = IntentAnalyzer.fallback_analysis("记录一下", "月白", "", ["小王", "小李"])
+
+    cold_decision = EngagementCoordinator.decide(heat=cold_heat, intent=ambient_intent, sensitivity=1.0)
+    hot_decision = EngagementCoordinator.decide(heat=hot_heat, intent=ambient_intent, sensitivity=1.0)
+
+    assert cold_decision.should_reply is True
+    assert hot_decision.should_reply is False
+    assert hot_decision.engagement_score < cold_decision.engagement_score
 
 
 def test_reply_mode_auto_does_not_reply_to_other_ai_mentions() -> None:

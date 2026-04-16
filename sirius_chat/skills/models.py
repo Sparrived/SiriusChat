@@ -8,6 +8,16 @@ from typing import Any, Callable
 
 
 @dataclass(slots=True)
+class SkillContentBlock:
+    """Internal content block returned by a skill for model-side consumption."""
+
+    type: str
+    value: str
+    mime_type: str = ""
+    label: str = ""
+
+
+@dataclass(slots=True)
 class SkillParameter:
     """Definition of a single skill parameter."""
 
@@ -25,14 +35,23 @@ class SkillResult:
     success: bool
     data: Any = None
     error: str = ""
+    text_blocks: list[SkillContentBlock] = field(default_factory=list)
+    multimodal_blocks: list[SkillContentBlock] = field(default_factory=list)
+    internal_metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_display_text(self) -> str:
         """Convert result to a human-readable text for AI consumption."""
         if not self.success:
             return f"[SKILL执行失败] {self.error}"
+        if self.text_blocks:
+            lines = [block.value.strip() for block in self.text_blocks if block.value.strip()]
+            if lines:
+                return "\n".join(lines)
         if isinstance(self.data, dict):
             lines: list[str] = []
             for key, value in self.data.items():
+                if key in {"_meta", "metadata", "internal_metadata", "text_blocks", "multimodal_blocks", "multimodal", "attachments"}:
+                    continue
                 if isinstance(value, dict):
                     lines.append(f"{key}:")
                     for k, v in value.items():
@@ -41,8 +60,94 @@ class SkillResult:
                     lines.append(f"{key}: {', '.join(str(v) for v in value)}")
                 else:
                     lines.append(f"{key}: {value}")
-            return "\n".join(lines)
+            if lines:
+                return "\n".join(lines)
         return str(self.data) if self.data is not None else "执行完成（无返回数据）"
+
+    def to_internal_payload(self) -> dict[str, Any]:
+        """Build a structured internal payload for prompt injection."""
+        return {
+            "success": self.success,
+            "text_blocks": [
+                {
+                    "type": block.type,
+                    "value": block.value,
+                    "mime_type": block.mime_type,
+                    "label": block.label,
+                }
+                for block in self.text_blocks
+            ],
+            "multimodal_blocks": [
+                {
+                    "type": block.type,
+                    "value": block.value,
+                    "mime_type": block.mime_type,
+                    "label": block.label,
+                }
+                for block in self.multimodal_blocks
+            ],
+            "internal_metadata": dict(self.internal_metadata),
+        }
+
+    @staticmethod
+    def from_raw_result(value: Any) -> "SkillResult":
+        """Normalize a raw skill return value into SkillResult."""
+        if isinstance(value, SkillResult):
+            return value
+        if not isinstance(value, dict):
+            return SkillResult(success=True, data=value)
+
+        text_blocks = SkillResult._extract_content_blocks(
+            value.get("text_blocks") or value.get("text") or value.get("texts"),
+            default_type="text",
+        )
+        multimodal_blocks = SkillResult._extract_content_blocks(
+            value.get("multimodal_blocks") or value.get("multimodal") or value.get("attachments"),
+            default_type="image",
+        )
+        internal_metadata = value.get("internal_metadata")
+        if not isinstance(internal_metadata, dict):
+            internal_metadata = {}
+
+        return SkillResult(
+            success=bool(value.get("success", True)),
+            data=value,
+            error=str(value.get("error", "")).strip(),
+            text_blocks=text_blocks,
+            multimodal_blocks=multimodal_blocks,
+            internal_metadata=dict(internal_metadata),
+        )
+
+    @staticmethod
+    def _extract_content_blocks(raw: Any, *, default_type: str) -> list[SkillContentBlock]:
+        blocks: list[SkillContentBlock] = []
+        if isinstance(raw, str):
+            value = raw.strip()
+            if value:
+                blocks.append(SkillContentBlock(type=default_type, value=value))
+            return blocks
+        if not isinstance(raw, list):
+            return blocks
+        for item in raw:
+            if isinstance(item, str):
+                value = item.strip()
+                if value:
+                    blocks.append(SkillContentBlock(type=default_type, value=value))
+                continue
+            if not isinstance(item, dict):
+                continue
+            value = str(item.get("value", "")).strip()
+            if not value:
+                continue
+            blocks.append(
+                SkillContentBlock(
+                    type=str(item.get("type", default_type)).strip() or default_type,
+                    value=value,
+                    mime_type=str(item.get("mime_type", "")).strip(),
+                    label=str(item.get("label", "")).strip(),
+                )
+            )
+        return blocks
 
     def get_field(self, key: str, default: Any = None) -> Any:
         """Extract a field from dict/list data by key or index."""

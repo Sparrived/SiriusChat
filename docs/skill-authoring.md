@@ -116,9 +116,42 @@ def run(
 - `data_store` 由框架自动注入，无需在 `parameters` 中声明
 - `**kwargs` 建议始终保留
 - 返回值推荐使用 `dict`，便于 AI 理解结构化结果
+- 若需要向模型内部传递更细的文本或图片结果，可在返回字典中使用 `text_blocks`、`multimodal_blocks` 与 `internal_metadata`
 - 若返回 `None`，AI 会收到"执行完成（无返回数据）"
 - 抛出异常会被捕获，AI 会收到 `[SKILL执行失败] {异常信息}`
 - **执行超时**：框架有最大执行时间限制（默认 30 秒），超时后 SKILL 会被终止，AI 和用户都会收到超时提示。避免在 `run()` 中执行长时间阻塞操作
+
+## 结构化结果通道（v0.27.9）
+
+当普通 `dict` 不足以表达技能结果时，可返回以下结构化字段：
+
+```python
+def run(**kwargs: Any) -> dict[str, Any]:
+    return {
+        "summary": "可选的普通字段，仍会出现在展示文本里",
+        "text_blocks": [
+            {"type": "text", "value": "检测到蓝天和少量白云。", "label": "summary"},
+        ],
+        "multimodal_blocks": [
+            {
+                "type": "image",
+                "value": "https://example.com/sky.png",
+                "mime_type": "image/png",
+                "label": "source",
+            }
+        ],
+        "internal_metadata": {
+            "trace_id": "debug-only",
+        },
+    }
+```
+
+语义说明：
+
+- `text_blocks`：供模型内部推理使用的附加文本块；会优先作为技能展示文本的一部分。
+- `multimodal_blocks`：当前主要用于图片输入；框架会把可识别图片隐藏注入下一轮模型请求。
+- `internal_metadata`：仅供内部链路使用，不应面向用户输出；框架会在系统提示词中明确要求模型不要复述这些元信息。
+- 若同时提供普通字段和 `text_blocks`，最终展示文本优先采用 `text_blocks`，其余普通字段仍可作为兜底摘要。
 
 ## data_store 持久化存储
 
@@ -156,7 +189,7 @@ AI 在回复中使用标记符调用 SKILL，框架自动检测并执行：
 [SKILL_CALL: skill_name]
 ```
 
-调用结果会作为系统消息注入上下文，AI 随后根据结果生成最终回复。
+调用结果会先被框架规范化为内部文本/多模态通道，再注入上下文；AI 随后根据这些内部结果生成最终回复。
 
 ## 完整示例：天气查询 SKILL
 
