@@ -523,9 +523,35 @@ class EmotionalGroupChatEngine:
             effective_max_tokens = cfg.max_tokens
             effective_temperature = cfg.temperature
 
-        # TODO: Wire to actual provider with effective_max_tokens / effective_temperature / cfg.model_name
-        _ = effective_max_tokens, effective_temperature, cfg.model_name  # used when provider wired
-        return "[ generated response placeholder ]"
+        # Build GenerationRequest
+        from sirius_chat.providers.base import GenerationRequest, LLMProvider
+
+        # Split prompt: everything before the last [消息] section is system context
+        if "[消息]" in prompt:
+            system_prompt, _, user_content = prompt.rpartition("[消息] ")
+        else:
+            system_prompt = prompt
+            user_content = ""
+
+        request = GenerationRequest(
+            model=cfg.model_name,
+            system_prompt=system_prompt.strip(),
+            messages=[{"role": "user", "content": user_content.strip()}],
+            temperature=effective_temperature,
+            max_tokens=effective_max_tokens,
+            timeout_seconds=cfg.timeout,
+            purpose=task_name,
+        )
+
+        # Call provider (async or sync via thread)
+        if hasattr(self.provider_async, "generate_async"):
+            reply = await self.provider_async.generate_async(request)
+        elif isinstance(self.provider_async, LLMProvider):
+            reply = await asyncio.to_thread(self.provider_async.generate, request)
+        else:
+            raise RuntimeError("配置的提供商未实现 generate/generate_async 方法。")
+
+        return reply
 
     # ==================================================================
     # Helpers
