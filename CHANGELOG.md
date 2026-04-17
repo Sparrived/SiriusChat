@@ -4,6 +4,38 @@
 
 ## [Unreleased]
 
+### Added (Persona System)
+
+- **`PersonaProfile` 数据模型**：结构化角色人格，覆盖身份、性格、表达、情绪、行为、运行时偏好六大维度。
+- **`PersonaGenerator`**：三条生成路径——
+  - `from_template()`：6 个内置 archetype（warm_friend / sarcastic_techie / gentle_caregiver / chaotic_jester / stoic_observer / protective_elder），零 LLM 成本。
+  - `from_keywords()`：关键词规则映射 + 可选 LLM 精炼。
+  - `from_interview()`：问卷回答 → LLM 生成完整角色设定。
+- **`PersonaStore`**：JSON 持久化到 `{work_path}/engine_state/persona.json`。
+- **Roleplay 预设桥接**：`PersonaGenerator.from_roleplay_preset()` 将 legacy `AgentPreset` → `PersonaProfile`；`WorkspaceRuntime.create_emotional_engine()` 自动从 active agent preset 加载 persona。
+- **引擎深度集成**：
+  - `AssistantEmotionState` 使用 `persona.emotional_baseline` 初始化。
+  - `ThresholdEngine` 按 `persona.reply_frequency` 动态调整回复阈值（high×0.8 / low×1.3 / selective×1.6）。
+  - `StyleAdapter` 读取 `max_tokens_preference`、`temperature_preference`、`communication_style` 调整生成参数。
+  - `ResponseAssembler` 将 persona 身份注入系统提示词，替代硬编码身份。
+- **CLI `--persona` 参数**：`python main.py --engine emotional --persona sarcastic_techie`。
+- **集成测试**：`tests/test_persona_integration.py`，16 个测试覆盖序列化、模板生成、关键词映射、提示词注入、阈值偏移、风格适配、持久化。
+- **文档**：新增 `docs/persona-system.md`。
+
+### Changed (Documentation Overhaul)
+
+- **删除 29 个过时文档**：包括 v0.8~v0.25 的全部迁移文档、v0.27.x 的 12 个补丁迁移文档、旧 roleplay 迁移文档、`skill-sync-policy.md`、`integration-sync-guide.md`、37KB 的开发过程文档 `refactoring-v0.28-emotional-group-chat.md`。
+- **重写 `docs/persona-system.md`**：从 AI/真人二元对立转向"用户自定义上位背景"的中性设计哲学；`build_system_prompt()` 从标签罗列改为叙事化角色剧本；`ResponseAssembler` 加入场景定位层。
+- **新增 7 个模块系统详解文档**：
+  - `docs/engine-emotional.md` — 情感化群聊引擎：四层认知管线、后台任务、事件总线
+  - `docs/engine-legacy.md` — Legacy AsyncRolePlayEngine 定位、与 Emotional 引擎对比、迁移路径
+  - `docs/memory-system.md` — 三层记忆底座：工作/情景/语义记忆的数据流、激活度衰减、检索机制
+  - `docs/emotion-intent-analysis.md` — 情感分析（2D valence-arousal + 19 种情绪映射）与意图分析 v3（目的驱动分类）
+  - `docs/skill-system.md` — SKILL 插件机制：文件格式、AI 自主调用、依赖自动安装、数据存储
+  - `docs/workspace-runtime.md` — 工作空间运行时：目录结构、配置热刷新、会话管理、引擎生命周期
+  - `docs/provider-system.md` — 模型提供者系统：统一接口、自动路由、模型选择、健康检查
+- **新增 `docs/README.md`**：文档导航中心，按快速开始、模块详解、配置策略、架构 API、迁移文档分层索引。
+
 ## [0.28.0] - 2026-04-17
 
 ### Added (v0.28 Emotional Group Chat Engine)

@@ -51,9 +51,29 @@ class EmotionalGroupChatEngine:
         work_path: Any,
         provider_async: Any | None = None,
         config: dict[str, Any] | None = None,
+        persona: Any | None = None,
     ) -> None:
         self.config = dict(config or {})
         self.provider_async = provider_async
+        self.work_path = work_path
+
+        # Persona loading
+        from sirius_chat.core.persona_store import PersonaStore
+        from sirius_chat.core.persona_generator import PersonaGenerator
+        from sirius_chat.models.persona import PersonaProfile
+
+        if persona is not None:
+            self.persona = persona if isinstance(persona, PersonaProfile) else PersonaProfile.from_dict(dict(persona))
+        else:
+            # Try load from disk
+            loaded = PersonaStore.load(work_path)
+            if loaded:
+                self.persona = loaded
+            else:
+                # Create default warm_friend persona
+                self.persona = PersonaGenerator.from_template("warm_friend")
+                PersonaStore.save(work_path, self.persona)
+                logger.info("Created default persona: %s", self.persona.name)
 
         # Memory foundation
         self.working_memory = WorkingMemoryManager(
@@ -83,8 +103,8 @@ class EmotionalGroupChatEngine:
         )
         self.rhythm_analyzer = RhythmAnalyzer()
 
-        # Execution layer
-        self.response_assembler = ResponseAssembler()
+        # Execution layer (persona-injected)
+        self.response_assembler = ResponseAssembler(persona=self.persona)
         self.style_adapter = StyleAdapter()
         self.model_router = ModelRouter(
             overrides=self.config.get("task_model_overrides"),
@@ -94,8 +114,12 @@ class EmotionalGroupChatEngine:
         from sirius_chat.core.engine_persistence import EngineStateStore
         self._state_store = EngineStateStore(work_path)
 
-        # Assistant state
-        self.assistant_emotion = AssistantEmotionState()
+        # Assistant state (persona emotional baseline)
+        baseline = self.persona.emotional_baseline
+        self.assistant_emotion = AssistantEmotionState(
+            valence=baseline.get("valence", 0.2),
+            arousal=baseline.get("arousal", 0.3),
+        )
 
         # Group runtime state
         self._group_last_message_at: dict[str, str] = {}
@@ -419,6 +443,10 @@ class EmotionalGroupChatEngine:
             token_usage_records=[r.to_dict() for r in self.token_usage_records],
         )
 
+        # Save persona
+        from sirius_chat.core.persona_store import PersonaStore
+        PersonaStore.save(self.work_path, self.persona)
+
     def load_state(self) -> None:
         """Restore runtime state from disk."""
         state = self._state_store.load_all()
@@ -451,6 +479,14 @@ class EmotionalGroupChatEngine:
                 self.token_usage_records.append(TokenUsageRecord.from_dict(rec_data))
             except Exception:
                 pass
+
+        # Load persona
+        from sirius_chat.core.persona_store import PersonaStore
+        loaded = PersonaStore.load(self.work_path)
+        if loaded:
+            self.persona = loaded
+            self.response_assembler.persona = loaded
+            logger.info("Persona loaded: %s", loaded.name)
 
         logger.info("Engine state loaded | groups=%d", len(state.get("working_memories", {})))
 
@@ -536,6 +572,18 @@ class EmotionalGroupChatEngine:
             messages_per_minute=msg_rate,
             relationship_state=relationship_state,
         )
+
+        # Persona reply frequency bias
+        freq = self.persona.reply_frequency
+        if freq == "high":
+            threshold *= 0.8
+        elif freq == "low":
+            threshold *= 1.3
+        elif freq == "selective":
+            # Only reply when mentioned or high urgency
+            if not intent.directed_at_current_ai and intent.urgency_score < 70:
+                threshold *= 2.0
+
         intent.threshold = threshold
         intent.activity_factor = self.threshold_engine._activity_factor(rhythm.heat_level, msg_rate)
         intent.time_factor = self.threshold_engine._time_factor(None)

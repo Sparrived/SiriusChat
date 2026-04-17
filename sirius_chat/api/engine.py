@@ -30,12 +30,14 @@ def create_emotional_engine(
     work_path,
     *,
     provider: LLMProvider | AsyncLLMProvider | None = None,
+    persona=None,
 ) -> EmotionalGroupChatEngine:
     """Create a new EmotionalGroupChatEngine (v0.28+).
 
     Args:
         work_path: Workspace path for persistence.
         provider: Optional LLM provider for async generation tasks.
+        persona: Optional PersonaProfile or string archetype name.
 
     Returns:
         Configured EmotionalGroupChatEngine instance.
@@ -44,6 +46,7 @@ def create_emotional_engine(
     return EmotionalGroupChatEngine(
         work_path=work_path,
         provider_async=provider_async,
+        persona=persona,
     )
 
 

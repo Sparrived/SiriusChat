@@ -99,6 +99,12 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         choices=["legacy", "emotional"],
         help="选择引擎类型：legacy（AsyncRolePlayEngine，默认）或 emotional（EmotionalGroupChatEngine，v0.28+）",
     )
+    parser.add_argument(
+        "--persona",
+        type=str,
+        default="",
+        help="选择人格模板（仅 emotional 引擎有效）：warm_friend, sarcastic_techie, gentle_caregiver, chaotic_jester, stoic_observer, protective_elder, 或 generated（从 roleplay 资产加载）",
+    )
     return parser
 
 
@@ -987,12 +993,24 @@ def main(
         asyncio.run(runtime.set_primary_user(session_config.session_id, primary_user))
 
         if args.engine == "emotional":
+            persona = None
+            if args.persona:
+                if args.persona == "generated":
+                    persona = "generated"  # Will be resolved by WorkspaceRuntime
+                else:
+                    from sirius_chat.core.persona_generator import PersonaGenerator
+                    try:
+                        persona = PersonaGenerator.from_template(args.persona)
+                        print_func(f"已加载人格模板：{persona.name}")
+                    except ValueError as e:
+                        print_func(f"未知人格模板：{e}")
             transcript = _run_emotional_interactive_session(
                 work_path=work_path,
                 primary_user=primary_user,
                 provider_factory=lambda: _build_provider(providers_config, config_root, provider_factory) if provider_factory is not None else None,
                 input_func=input_func,
                 print_func=print_func,
+                persona=persona,
             )
         else:
             transcript = run_interactive_session(
@@ -1032,6 +1050,7 @@ def _run_emotional_interactive_session(
     provider_factory: Callable[[], LLMProvider | None],
     input_func: InputFunc,
     print_func: PrintFunc,
+    persona: Any | None = None,
 ) -> Transcript:
     """Run an interactive session using EmotionalGroupChatEngine (v0.28+).
 
@@ -1039,7 +1058,7 @@ def _run_emotional_interactive_session(
     and print assistant replies.
     """
     provider = provider_factory()
-    engine = create_emotional_engine(work_path, provider=provider)
+    engine = create_emotional_engine(work_path, provider=provider, persona=persona)
 
     print_func("\n=== Emotional Group Chat Engine (v0.28+) ===")
     print_func("输入消息与 AI 交互，输入 /exit 或 /quit 退出。\n")

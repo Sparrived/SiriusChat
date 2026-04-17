@@ -15,6 +15,7 @@ from typing import Any
 from sirius_chat.models.emotion import AssistantEmotionState, EmotionState, EmpathyStrategy
 from sirius_chat.models.intent_v3 import IntentAnalysisV3
 from sirius_chat.models.models import Message
+from sirius_chat.models.persona import PersonaProfile
 from sirius_chat.memory.semantic.models import GroupSemanticProfile, UserSemanticProfile
 
 
@@ -58,6 +59,7 @@ class StyleAdapter:
         pace: str,
         user_communication_style: str = "",
         topic_stability: float = 0.5,
+        persona: PersonaProfile | None = None,
     ) -> StyleParams:
         """Compute style parameters for the current response context."""
         # Base limit = most restrictive of heat and pace
@@ -75,21 +77,49 @@ class StyleAdapter:
         tone_instruction = "保持自然友好"
         length_instruction = ""
 
-        # User style override
-        style = (user_communication_style or "").strip().lower()
-        if style == "concise":
-            max_tokens = min(max_tokens, 80)
-            length_instruction = "请用1-2句话简洁回复。"
-            temperature = 0.5
-        elif style == "detailed":
-            length_instruction = "可以给出较详细的解释。"
-            temperature = 0.7
-        elif style == "formal":
-            tone_instruction = "保持礼貌正式的语气"
-            temperature = 0.5
-        elif style == "casual":
-            tone_instruction = "保持轻松随意的语气，可以用表情"
-            temperature = 0.8
+        # Persona style override (highest priority)
+        if persona:
+            if persona.max_tokens_preference:
+                max_tokens = min(max_tokens, persona.max_tokens_preference)
+            if persona.temperature_preference:
+                temperature = persona.temperature_preference
+            if persona.communication_style:
+                style = persona.communication_style.strip().lower()
+                if style == "concise":
+                    max_tokens = min(max_tokens, 80)
+                    length_instruction = "请用1-2句话简洁回复。"
+                elif style == "detailed":
+                    length_instruction = "可以给出较详细的解释。"
+                elif style == "formal":
+                    tone_instruction = "保持礼貌正式的语气"
+                elif style == "casual":
+                    tone_instruction = "保持轻松随意的语气，可以用表情"
+                elif style == "humorous":
+                    tone_instruction = "保持幽默风趣的语气"
+                # Persona-specific tone overrides generic
+                if persona.humor_style:
+                    tone_instruction += f"，{persona.humor_style}式幽默"
+                if persona.emoji_preference == "heavy":
+                    tone_instruction += "，多用表情包和emoji"
+                elif persona.emoji_preference == "none":
+                    tone_instruction += "，不用表情包"
+
+        # User style override (second priority, if no persona or persona has no style)
+        if not persona or not persona.communication_style:
+            style = (user_communication_style or "").strip().lower()
+            if style == "concise":
+                max_tokens = min(max_tokens, 80)
+                length_instruction = "请用1-2句话简洁回复。"
+                temperature = 0.5
+            elif style == "detailed":
+                length_instruction = "可以给出较详细的解释。"
+                temperature = 0.7
+            elif style == "formal":
+                tone_instruction = "保持礼貌正式的语气"
+                temperature = 0.5
+            elif style == "casual":
+                tone_instruction = "保持轻松随意的语气，可以用表情"
+                temperature = 0.8
 
         return StyleParams(
             max_tokens=max_tokens,
@@ -106,8 +136,9 @@ class StyleAdapter:
 class ResponseAssembler:
     """Assembles LLM prompts with emotion, empathy, memory, and group context."""
 
-    def __init__(self, style_adapter: StyleAdapter | None = None) -> None:
+    def __init__(self, style_adapter: StyleAdapter | None = None, persona: PersonaProfile | None = None) -> None:
         self.style_adapter = style_adapter or StyleAdapter()
+        self.persona = persona
 
     def assemble(
         self,
@@ -128,11 +159,11 @@ class ResponseAssembler:
         """Build a complete prompt string for response generation.
 
         Sections (in order):
-        1. System identity
+        1. System identity (persona-driven)
         2. Emotional context summary
         3. Empathy strategy instruction
         4. Relevant memory references
-        5. Group style parameters
+        5. Group style parameters + persona style
         6. User message
         """
         if style_params is None:
@@ -141,30 +172,37 @@ class ResponseAssembler:
                 pace=pace,
                 user_communication_style=getattr(user_profile, "communication_style", ""),
                 topic_stability=topic_stability,
+                persona=self.persona,
             )
 
         sections: list[str] = []
 
-        # 1. System identity
-        sections.append("你是一位温暖的群聊伙伴，不是冷冰冰的工具。")
+        # 1. Role script (persona-driven narrative brief + scene anchor)
+        if self.persona:
+            sections.append(self.persona.build_system_prompt())
+        else:
+            sections.append(
+                "[场景定位]\n"
+                "你在一个多人聊天场景里。看到消息时，按自己的性格和情绪决定是否回应。\n"
+                "回应时用自然口语，短句优先，不解释、不总结、不机械关怀。"
+            )
 
         # 2. Emotional context
         sections.append(
             self._build_emotion_context(emotion, assistant_emotion, group_profile)
         )
 
-        # 3. Empathy strategy
+        # 3. Empathy strategy (persona-aware)
         sections.append(self._build_empathy_instruction(empathy_strategy))
 
         # 4. Memory references
         if memories:
             sections.append(self._build_memory_context(memories))
 
-        # 5. Group style
+        # 5. Group style + persona style
         if group_profile:
             sections.append(self._build_group_style(group_profile, style_params))
         else:
-            # Still inject length/tone even without group profile
             sections.append(self._build_style_fallback(style_params))
 
         # 6. User message
@@ -182,14 +220,14 @@ class ResponseAssembler:
         assistant_emotion: AssistantEmotionState,
         group_profile: GroupSemanticProfile | None,
     ) -> str:
-        lines = ["[情感上下文]"]
+        lines = ["[当下的感觉]"]
 
-        basic = user_emotion.basic_emotion.name if user_emotion.basic_emotion else "中性"
+        basic = user_emotion.basic_emotion.name if user_emotion.basic_emotion else "平静"
         lines.append(
-            f"用户当前情绪：{basic}"
+            f"对方现在大概{basic}"
             f"（愉悦度{user_emotion.valence:.1f}，"
-            f"唤醒度{user_emotion.arousal:.1f}，"
-            f"强度{user_emotion.intensity:.1f}）"
+            f"紧张度{user_emotion.arousal:.1f}，"
+            f"强烈程度{user_emotion.intensity:.1f}）"
         )
 
         # Group atmosphere from latest snapshot
@@ -197,16 +235,16 @@ class ResponseAssembler:
         if group_profile and group_profile.atmosphere_history:
             group_valence = group_profile.atmosphere_history[-1].group_valence
         mood_desc = (
-            "积极" if group_valence > 0.2
-            else "消极" if group_valence < -0.2
-            else "中性"
+            "挺热络" if group_valence > 0.2
+            else "有点低沉" if group_valence < -0.2
+            else "一般"
         )
-        lines.append(f"群体氛围：{mood_desc}（群体愉悦度{group_valence:.1f}）")
+        lines.append(f"群里氛围{mood_desc}（群体愉悦度{group_valence:.1f}）")
 
         lines.append(
-            f"助手情感状态："
-            f"关切（愉悦度{assistant_emotion.valence:.1f}，"
-            f"唤醒度{assistant_emotion.arousal:.1f}）"
+            f"你现在的感觉："
+            f"愉悦度{assistant_emotion.valence:.1f}，"
+            f"紧张度{assistant_emotion.arousal:.1f}"
         )
         return "\n".join(lines)
 
@@ -273,6 +311,34 @@ class ResponseAssembler:
             lines.append(f"语气要求：{style_params.tone_instruction}")
         return "\n".join(lines)
 
+    @staticmethod
+    def _build_persona_context(persona: PersonaProfile) -> str:
+        """Build persona-specific behavioral instructions."""
+        lines: list[str] = ["[角色行为指引]"]
+
+        if persona.catchphrases:
+            cp = "，".join(f'"{c}"' for c in persona.catchphrases[:3])
+            lines.append(f"你偶尔会说：{cp}")
+
+        if persona.boundaries:
+            bounds = "；".join(persona.boundaries[:3])
+            lines.append(f"行为边界：{bounds}")
+
+        if persona.taboo_topics:
+            taboos = "、".join(persona.taboo_topics[:3])
+            lines.append(f"避免谈论：{taboos}")
+
+        if persona.preferred_topics:
+            topics = "、".join(persona.preferred_topics[:3])
+            lines.append(f"擅长话题：{topics}")
+
+        if persona.stress_response:
+            lines.append(f"压力下你会：{persona.stress_response}")
+
+        if not lines[1:]:
+            return ""
+        return "\n".join(lines)
+
     # ------------------------------------------------------------------
     # Convenience helpers for non-immediate strategies
     # ------------------------------------------------------------------
@@ -289,11 +355,15 @@ class ResponseAssembler:
         """Build prompt for a delayed response (topic-gap trigger)."""
         if style_params is None:
             style_params = self.style_adapter.adapt(
-                heat_level=heat_level, pace=pace
+                heat_level=heat_level, pace=pace, persona=self.persona
             )
+        identity = (
+            self.persona.build_system_prompt() if self.persona
+            else "[场景定位]\n你在一个多人聊天场景里。"
+        )
         sections = [
-            "你是一位温暖的群聊伙伴。",
-            "[场景] 群里的话题有了自然间隙，你决定自然地参与讨论。",
+            identity,
+            "[当前场景] 群里的话题有了自然间隙，你决定插一句。",
         ]
         if group_profile:
             style = group_profile.typical_interaction_style or "balanced"
@@ -312,10 +382,10 @@ class ResponseAssembler:
     ) -> str:
         """Build prompt for proactive initiation."""
         sections = [
-            "你是一位温暖的群聊伙伴。",
-            "[场景] 群里一段时间没人说话，你决定自然地开启一个话题。",
+            "[场景定位]\n你在一个多人聊天场景里。",
+            "[当前场景] 群里一段时间没人说话，你决定开口说点什么。",
             f"[触发原因] {trigger_reason}",
-            f"[语气] {suggested_tone}，不要显得程序触发",
+            f"[语气] {suggested_tone}",
         ]
         if group_profile and group_profile.interest_topics:
             topics = ", ".join(group_profile.interest_topics[:3])

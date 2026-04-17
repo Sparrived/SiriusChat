@@ -639,6 +639,7 @@ class WorkspaceRuntime:
         self,
         *,
         config: dict[str, Any] | None = None,
+        persona: Any | None = None,
     ) -> EmotionalGroupChatEngine:
         """Create an EmotionalGroupChatEngine bound to this workspace.
 
@@ -652,10 +653,26 @@ class WorkspaceRuntime:
             if providers:
                 provider = AutoRoutingProvider(providers)
         provider_async = provider if provider is None or hasattr(provider, "generate_async") else None
+
+        # Auto-load persona from roleplay assets if not provided
+        if persona is None:
+            try:
+                from sirius_chat.core.persona_generator import PersonaGenerator
+                from sirius_chat.config.models import AgentPreset
+                agent_key = getattr(self._workspace_config, "active_agent_key", None)
+                if agent_key:
+                    preset = self._load_roleplay_preset(agent_key)
+                    if preset:
+                        persona = PersonaGenerator.from_roleplay_preset(preset)
+                        logger.info("Loaded persona from roleplay preset: %s", persona.name)
+            except Exception as exc:
+                logger.debug("Failed to load persona from roleplay assets: %s", exc)
+
         engine = EmotionalGroupChatEngine(
             work_path=self.work_path,
             provider_async=provider_async,
             config=config,
+            persona=persona,
         )
         # Inject skill runtime if available
         if self._skill_registry is not None and self._skill_executor is not None:
@@ -664,6 +681,27 @@ class WorkspaceRuntime:
                 skill_executor=self._skill_executor,
             )
         return engine
+
+    def _load_roleplay_preset(self, agent_key: str) -> Any | None:
+        """Load roleplay preset from generated_agents.json."""
+        try:
+            import json
+            agents_path = self.layout.config_root / "roleplay" / "generated_agents.json"
+            if not agents_path.exists():
+                return None
+            data = json.loads(agents_path.read_text(encoding="utf-8"))
+            agents = data.get("generated_agents", {})
+            agent_data = agents.get(agent_key)
+            if agent_data:
+                from sirius_chat.config.models import Agent, AgentPreset
+                agent = Agent(**agent_data.get("agent", {}))
+                return AgentPreset(
+                    agent=agent,
+                    global_system_prompt=agent_data.get("global_system_prompt", ""),
+                )
+        except Exception:
+            pass
+        return None
 
     def _get_engine(self) -> AsyncRolePlayEngine:
         if self._engine is not None:

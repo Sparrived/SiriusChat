@@ -67,8 +67,8 @@ class TestResponseAssembler:
             assistant_emotion=assistant,
         )
 
-        assert "温暖的群聊伙伴" in prompt
-        assert "情感上下文" in prompt
+        assert "你在一个多人聊天场景里" in prompt
+        assert "当下的感觉" in prompt
         assert "心情不好" in prompt
         assert "共情策略" in prompt
         assert "confirm_action" in prompt
