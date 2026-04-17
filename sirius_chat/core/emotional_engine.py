@@ -707,7 +707,7 @@ class EmotionalGroupChatEngine:
         norms["emoji_usage_rate"] = emoji_total / new_count if new_count else 0.0
 
         # 3. @mention rate
-        has_mention = "@" in content or "@" in content
+        has_mention = "@" in content
         mention_total = norms.get("mention_total", 0)
         if has_mention:
             mention_total += 1
