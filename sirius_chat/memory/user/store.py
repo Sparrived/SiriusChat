@@ -99,7 +99,20 @@ class UserMemoryFileStore:
     # ------------------------------------------------------------------
 
     def load_all(self) -> UserMemoryManager:
-        """Load all user memories from group-isolated layout."""
+        """Load all user memories from group-isolated layout.
+
+        Automatically triggers v0.28 migration if old-format files are detected.
+        """
+        from sirius_chat.memory.migration.v0_28_group_isolation import (
+            migrate_workspace,
+            detect_old_format,
+        )
+
+        # Auto-migrate old format on first load
+        if detect_old_format(self._base_dir):
+            work_path = self._base_dir.parent
+            migrate_workspace(work_path)
+
         manager = UserMemoryManager()
         groups_dir = self._base_dir / "groups"
         if not groups_dir.exists():

@@ -39,6 +39,7 @@ def migrate_workspace(work_path: Path | str) -> dict[str, Any]:
     """
     work_path = Path(work_path)
     user_memory_dir = work_path / "user_memory"
+    user_memory_dir.mkdir(parents=True, exist_ok=True)
     marker_path = user_memory_dir / _MIGRATION_MARKER
 
     # Already migrated?
