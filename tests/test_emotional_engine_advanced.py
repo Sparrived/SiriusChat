@@ -480,3 +480,66 @@ class TestConsolidation:
         # No profile should be created (event is older than 7 days)
         profile = engine.semantic_memory.get_user_profile(group_id, "bob")
         assert profile is None
+
+
+
+# ============================================================================
+# EmotionAnalyzer group sentiment & emotion islands
+# ============================================================================
+
+class TestEmotionAnalyzerGroupSentiment:
+    def test_update_group_sentiment_ema_smoothing(self):
+        from sirius_chat.core.emotion import EmotionAnalyzer
+        from sirius_chat.models.emotion import EmotionState
+
+        ea = EmotionAnalyzer()
+        # First update sets initial value
+        ea.update_group_sentiment("g1", EmotionState(valence=0.5, arousal=0.6))
+        assert ea.group_cache["g1"].valence == pytest.approx(0.5, 0.01)
+
+        # Second update smooths toward new value
+        ea.update_group_sentiment("g1", EmotionState(valence=0.8, arousal=0.7))
+        # EMA with alpha=0.3: 0.5*0.7 + 0.8*0.3 = 0.59
+        assert ea.group_cache["g1"].valence == pytest.approx(0.59, 0.01)
+
+    def test_detect_emotion_islands_finds_outlier(self):
+        from sirius_chat.core.emotion import EmotionAnalyzer
+        from sirius_chat.models.emotion import EmotionState
+
+        ea = EmotionAnalyzer()
+        # Group sentiment: mildly positive
+        ea.update_group_sentiment("g1", EmotionState(valence=0.2, arousal=0.3))
+
+        recent = {
+            "alice": EmotionState(valence=0.2, arousal=0.3),   # normal
+            "bob": EmotionState(valence=0.3, arousal=0.35),    # normal
+            "charlie": EmotionState(valence=-0.9, arousal=0.8), # outlier
+        }
+        islands = ea.detect_emotion_islands("g1", recent)
+        assert len(islands) == 1
+        assert islands[0]["user_id"] == "charlie"
+        assert islands[0]["deviation_score"] > 1.5
+
+    def test_detect_emotion_islands_no_outliers(self):
+        from sirius_chat.core.emotion import EmotionAnalyzer
+        from sirius_chat.models.emotion import EmotionState
+
+        ea = EmotionAnalyzer()
+        recent = {
+            "alice": EmotionState(valence=0.1, arousal=0.2),
+            "bob": EmotionState(valence=0.15, arousal=0.25),
+            "charlie": EmotionState(valence=0.12, arousal=0.22),
+        }
+        islands = ea.detect_emotion_islands("g1", recent)
+        assert len(islands) == 0
+
+    def test_detect_emotion_islands_insufficient_data(self):
+        from sirius_chat.core.emotion import EmotionAnalyzer
+        from sirius_chat.models.emotion import EmotionState
+
+        ea = EmotionAnalyzer()
+        islands = ea.detect_emotion_islands("g1", {})
+        assert islands == []
+
+        islands = ea.detect_emotion_islands("g1", {"alice": EmotionState(valence=0.5, arousal=0.5)})
+        assert islands == []
