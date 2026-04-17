@@ -64,8 +64,8 @@ class EmotionalGroupChatEngine:
         self.activation_engine = ActivationEngine()
 
         # Cognitive layer
-        self.emotion_analyzer = EmotionAnalyzer()
-        self.intent_analyzer = IntentAnalyzerV3()
+        self.emotion_analyzer = EmotionAnalyzer(provider_async=provider_async)
+        self.intent_analyzer = IntentAnalyzerV3(provider_async=provider_async)
         self.memory_retriever = MemoryRetriever(
             working_mgr=self.working_memory,
             episodic_mgr=self.episodic_memory,
@@ -102,6 +102,10 @@ class EmotionalGroupChatEngine:
 
         # Event bus
         self.event_bus = SessionEventBus()
+
+        # Background tasks
+        self._bg_tasks: set[asyncio.Task] = set()
+        self._bg_running = False
 
     # ==================================================================
     # Public API
@@ -171,6 +175,77 @@ class EmotionalGroupChatEngine:
         self._background_update(group_id, message, emotion, intent)
 
         return result
+
+    # ==================================================================
+    # Background tasks
+    # ==================================================================
+
+    def start_background_tasks(self) -> None:
+        """Start periodic background tasks for delayed queue, proactive triggers,
+        and memory promotion. Idempotent: safe to call multiple times.
+        """
+        if self._bg_running:
+            return
+        self._bg_running = True
+
+        tasks = [
+            asyncio.create_task(self._bg_delayed_queue_ticker(), name="delayed_queue"),
+            asyncio.create_task(self._bg_proactive_checker(), name="proactive_check"),
+            asyncio.create_task(self._bg_memory_promoter(), name="memory_promote"),
+        ]
+        for t in tasks:
+            self._bg_tasks.add(t)
+            t.add_done_callback(self._bg_tasks.discard)
+
+    def stop_background_tasks(self) -> None:
+        """Cancel all background tasks."""
+        self._bg_running = False
+        for t in list(self._bg_tasks):
+            t.cancel()
+        self._bg_tasks.clear()
+
+    async def _bg_delayed_queue_ticker(self) -> None:
+        """Periodically tick delayed queue for all active groups."""
+        interval = self.config.get("delayed_queue_tick_interval_seconds", 10)
+        while self._bg_running:
+            await asyncio.sleep(interval)
+            for group_id in list(self._group_last_message_at.keys()):
+                try:
+                    await self.tick_delayed_queue(group_id)
+                except Exception as exc:
+                    logger.warning("Delayed queue tick failed for %s: %s", group_id, exc)
+
+    async def _bg_proactive_checker(self) -> None:
+        """Periodically check proactive triggers for all active groups."""
+        interval = self.config.get("proactive_check_interval_seconds", 60)
+        while self._bg_running:
+            await asyncio.sleep(interval)
+            for group_id in list(self._group_last_message_at.keys()):
+                try:
+                    await self.proactive_check(group_id)
+                except Exception as exc:
+                    logger.warning("Proactive check failed for %s: %s", group_id, exc)
+
+    async def _bg_memory_promoter(self) -> None:
+        """Periodically promote high-importance working memory entries to episodic."""
+        interval = self.config.get("memory_promote_interval_seconds", 300)
+        threshold = self.config.get("working_memory_promote_threshold", 0.3)
+        while self._bg_running:
+            await asyncio.sleep(interval)
+            try:
+                for group_id in self.working_memory.list_groups():
+                    entries = self.working_memory.get_recent_entries(group_id, n=100)
+                    for entry in entries:
+                        if entry.importance >= threshold:
+                            self.episodic_memory.add_event(
+                                group_id=group_id,
+                                user_id=entry.user_id,
+                                content=entry.content,
+                                emotion_valence=0.0,
+                                importance=entry.importance,
+                            )
+            except Exception as exc:
+                logger.warning("Memory promotion failed: %s", exc)
 
     async def proactive_check(self, group_id: str) -> dict[str, Any] | None:
         """Check if proactive trigger should fire for a group."""

@@ -159,3 +159,54 @@ class TestE2EAtmosphereShift:
         group_profile = engine.semantic_memory.get_group_profile("work_group")
         assert group_profile is not None
         assert len(group_profile.atmosphere_history) >= 2
+
+
+
+class TestE2EBackgroundTasks:
+    @pytest.mark.asyncio
+    async def test_background_tasks_start_stop(self, tmp_path):
+        engine = EmotionalGroupChatEngine(work_path=tmp_path)
+        engine.start_background_tasks()
+        assert engine._bg_running is True
+        assert len(engine._bg_tasks) == 3
+
+        engine.stop_background_tasks()
+        assert engine._bg_running is False
+        assert len(engine._bg_tasks) == 0
+
+    @pytest.mark.asyncio
+    async def test_background_delayed_queue_tick(self, tmp_path):
+        engine = EmotionalGroupChatEngine(
+            work_path=tmp_path,
+            config={"delayed_queue_tick_interval_seconds": 0.1},
+        )
+        p = Participant(name="alice", user_id="alice")
+
+        # Enqueue a delayed item manually
+        from sirius_chat.models.response_strategy import StrategyDecision, ResponseStrategy
+        engine.delayed_queue.enqueue(
+            group_id="test_group",
+            user_id="alice",
+            message_content="这个话题很有意思",
+            strategy_decision=StrategyDecision(strategy=ResponseStrategy.DELAYED, urgency=50),
+            emotion_state={},
+            candidate_memories=[],
+        )
+
+        # Start background tasks
+        engine.start_background_tasks()
+
+        # Wait for tick
+        await asyncio.sleep(0.2)
+
+        engine.stop_background_tasks()
+
+    @pytest.mark.asyncio
+    async def test_background_idempotent(self, tmp_path):
+        engine = EmotionalGroupChatEngine(work_path=tmp_path)
+        engine.start_background_tasks()
+        first_tasks = list(engine._bg_tasks)
+        engine.start_background_tasks()  # idempotent
+        second_tasks = list(engine._bg_tasks)
+        assert first_tasks == second_tasks
+        engine.stop_background_tasks()
