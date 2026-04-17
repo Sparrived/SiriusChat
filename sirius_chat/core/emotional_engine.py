@@ -21,6 +21,7 @@ from sirius_chat.core.proactive_trigger import ProactiveTrigger
 from sirius_chat.core.response_strategy import ResponseStrategyEngine
 from sirius_chat.core.delayed_response_queue import DelayedResponseQueue
 from sirius_chat.core.rhythm import RhythmAnalyzer
+from sirius_chat.core.model_router import ModelRouter, TaskConfig
 from sirius_chat.core.response_assembler import ResponseAssembler, StyleAdapter, StyleParams
 from sirius_chat.core.threshold_engine import ThresholdEngine
 
@@ -83,6 +84,9 @@ class EmotionalGroupChatEngine:
         # Execution layer
         self.response_assembler = ResponseAssembler()
         self.style_adapter = StyleAdapter()
+        self.model_router = ModelRouter(
+            overrides=self.config.get("task_model_overrides"),
+        )
 
         # Assistant state
         self.assistant_emotion = AssistantEmotionState()
@@ -380,6 +384,8 @@ class EmotionalGroupChatEngine:
         prompt: str,
         group_id: str,
         style_params: StyleParams | None = None,
+        task_name: str = "response_generate",
+        urgency: int = 0,
     ) -> str:
         """Call LLM provider to generate response.
 
@@ -387,11 +393,31 @@ class EmotionalGroupChatEngine:
             prompt: The assembled prompt text.
             group_id: Target group identifier.
             style_params: Optional style parameters (max_tokens, temperature).
+            task_name: Cognitive task type for model routing.
+            urgency: Urgency score (0-100) for dynamic escalation.
         """
         if self.provider_async is None:
             return "[未配置 provider]"
-        # TODO: Wire to actual provider with style_params.max_tokens / temperature
-        _ = style_params  # used when provider is wired
+
+        # Model routing
+        recent = self._get_recent_messages(group_id, n=5)
+        rhythm = self.rhythm_analyzer.analyze(group_id, recent)
+        cfg = self.model_router.resolve(
+            task_name,
+            urgency=urgency,
+            heat_level=rhythm.heat_level,
+        )
+
+        # Apply style params if provided (override router's max_tokens)
+        if style_params:
+            effective_max_tokens = min(cfg.max_tokens, style_params.max_tokens)
+            effective_temperature = style_params.temperature
+        else:
+            effective_max_tokens = cfg.max_tokens
+            effective_temperature = cfg.temperature
+
+        # TODO: Wire to actual provider with effective_max_tokens / effective_temperature / cfg.model_name
+        _ = effective_max_tokens, effective_temperature, cfg.model_name  # used when provider wired
         return "[ generated response placeholder ]"
 
     # ==================================================================

@@ -13,6 +13,7 @@ from sirius_chat.core.rhythm import RhythmAnalysis, RhythmAnalyzer
 from sirius_chat.core.response_strategy import ResponseStrategyEngine
 from sirius_chat.core.delayed_response_queue import DelayedResponseQueue
 from sirius_chat.core.proactive_trigger import ProactiveTrigger
+from sirius_chat.core.model_router import ModelRouter, TaskConfig
 from sirius_chat.core.response_assembler import ResponseAssembler, StyleAdapter, StyleParams
 from sirius_chat.core.threshold_engine import ThresholdEngine
 
@@ -27,6 +28,8 @@ __all__ = [
     "DelayedResponseQueue",
     "ProactiveTrigger",
     "ThresholdEngine",
+    "ModelRouter",
+    "TaskConfig",
     "ResponseAssembler",
     "StyleAdapter",
     "StyleParams",
