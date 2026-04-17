@@ -271,6 +271,7 @@ class EmotionalGroupChatEngine:
     async def _consolidate_group(self, group_id: str) -> None:
         """Consolidate episodic events into semantic user profiles for a group."""
         from datetime import datetime, timedelta, timezone
+        from sirius_chat.memory.semantic.models import UserSemanticProfile
 
         # Read recent episodic events (last 7 days)
         entries = self.episodic_memory.get_entries(group_id, limit=500)

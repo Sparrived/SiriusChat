@@ -409,3 +409,74 @@ class TestUserMemoryManagerGroupIsolation:
         # "社交" is in the Social category keywords
         assert mgr._normalize_trait("社交") != "社交"  # should map to taxonomy category
         assert mgr._normalize_trait("xyz_unknown_trait_xyz") == "xyz_unknown_trait_xyz"
+
+
+
+# ============================================================================
+# Consolidation (episodic → semantic)
+# ============================================================================
+
+class TestConsolidation:
+    @pytest.mark.asyncio
+    async def test_consolidate_group_updates_user_profiles(self, tmp_path):
+        from sirius_chat.core.emotional_engine import EmotionalGroupChatEngine
+        from sirius_chat.memory.semantic.models import UserSemanticProfile
+
+        engine = EmotionalGroupChatEngine(work_path=tmp_path)
+        group_id = "test_g"
+
+        # Seed some episodic events for a user
+        for i in range(5):
+            engine.episodic_memory.add_event(
+                group_id=group_id,
+                user_id="alice",
+                content=f"message {i}",
+                importance=0.6,
+            )
+        # Add one help-seeking event
+        engine.episodic_memory.add_event(
+            group_id=group_id,
+            user_id="alice",
+            content="求助，怎么办",
+            importance=0.7,
+        )
+
+        # Run consolidation
+        await engine._consolidate_group(group_id)
+
+        # Verify semantic profile was created and updated
+        profile = engine.semantic_memory.get_user_profile(group_id, "alice")
+        assert profile is not None
+        assert profile.user_id == "alice"
+        # interaction_frequency_7d = 6 messages / 7 days
+        assert profile.relationship_state.interaction_frequency_7d == pytest.approx(6 / 7.0, 0.01)
+        # Familiarity should be computed
+        assert profile.relationship_state.familiarity > 0.0
+        # dependency_score should reflect the help-seeking event
+        assert profile.relationship_state.dependency_score > 0.0
+
+    @pytest.mark.asyncio
+    async def test_consolidate_group_skips_old_events(self, tmp_path):
+        from sirius_chat.core.emotional_engine import EmotionalGroupChatEngine
+        from sirius_chat.memory.event.models import EventMemoryEntry
+        from datetime import datetime, timezone, timedelta
+
+        engine = EmotionalGroupChatEngine(work_path=tmp_path)
+        group_id = "test_g"
+
+        # Add a very old event directly (bypassing add_event to control timestamp)
+        old_entry = EventMemoryEntry(
+            event_id="old-1",
+            user_id="bob",
+            group_id=group_id,
+            summary="ancient event",
+            created_at=(datetime.now(timezone.utc) - timedelta(days=30)).isoformat(),
+        )
+        engine.episodic_memory.add_entry(old_entry)
+
+        # Run consolidation
+        await engine._consolidate_group(group_id)
+
+        # No profile should be created (event is older than 7 days)
+        profile = engine.semantic_memory.get_user_profile(group_id, "bob")
+        assert profile is None
