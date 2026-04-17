@@ -12,6 +12,7 @@ Scoring:
 
 from __future__ import annotations
 
+import logging
 import math
 from datetime import datetime, timezone
 from typing import Any
@@ -21,9 +22,23 @@ from sirius_chat.memory.episodic.manager import EpisodicMemoryManager
 from sirius_chat.memory.semantic.manager import SemanticMemoryManager
 from sirius_chat.memory.working.manager import WorkingMemoryManager
 
+logger = logging.getLogger(__name__)
+
+# Optional sentence-transformers for semantic search
+try:
+    from sentence_transformers import SentenceTransformer, util
+
+    _ST_AVAILABLE = True
+except Exception:  # pragma: no cover
+    _ST_AVAILABLE = False
+
 
 class MemoryRetriever:
-    """Unified memory retrieval interface."""
+    """Unified memory retrieval interface.
+
+    Semantic search requires ``sentence-transformers`` (optional dependency).
+    If not installed, semantic tier gracefully falls back to keyword search.
+    """
 
     def __init__(
         self,
@@ -31,11 +46,27 @@ class MemoryRetriever:
         episodic_mgr: EpisodicMemoryManager | None = None,
         semantic_mgr: SemanticMemoryManager | None = None,
         activation_engine: ActivationEngine | None = None,
+        semantic_model_name: str = "all-MiniLM-L6-v2",
     ) -> None:
         self.working = working_mgr
         self.episodic = episodic_mgr
         self.semantic = semantic_mgr
         self.activation = activation_engine or ActivationEngine()
+
+        # Lazy-load sentence-transformers model
+        self._semantic_model_name = semantic_model_name
+        self._semantic_model: Any | None = None
+        if _ST_AVAILABLE:
+            try:
+                self._semantic_model = SentenceTransformer(semantic_model_name)
+                logger.info("Semantic search enabled with model: %s", semantic_model_name)
+            except Exception as exc:
+                logger.warning("Failed to load sentence-transformers model: %s", exc)
+
+    @property
+    def semantic_available(self) -> bool:
+        """Whether semantic similarity search is available."""
+        return self._semantic_model is not None
 
     async def retrieve(
         self,
@@ -138,13 +169,59 @@ class MemoryRetriever:
         user_id: str | None,
         top_k: int,
     ) -> list[dict[str, Any]]:
-        """Placeholder for semantic similarity search.
+        """Semantic similarity search using sentence-transformers embeddings.
 
-        Requires sentence-transformers. MVP falls back to keyword search.
+        Falls back to empty list if sentence-transformers is unavailable.
         """
-        # TODO: Implement vector embedding + cosine similarity when
-        # sentence-transformers is available.
-        return []
+        if self._semantic_model is None or self.episodic is None:
+            return []
+
+        # Load all events for the group
+        events = self.episodic.list_events(group_id)
+        if not events:
+            return []
+
+        # Filter by user if specified
+        if user_id:
+            events = [e for e in events if getattr(e, "user_id", "") == user_id]
+
+        if not events:
+            return []
+
+        # Build candidate texts
+        texts = []
+        for e in events:
+            content = getattr(e, "content", "")
+            summary = getattr(e, "summary", "")
+            texts.append(f"{summary} {content}".strip() or "event")
+
+        # Encode query and candidates
+        try:
+            query_embedding = self._semantic_model.encode(query, convert_to_tensor=True)
+            event_embeddings = self._semantic_model.encode(texts, convert_to_tensor=True)
+            similarities = util.cos_sim(query_embedding, event_embeddings)[0]
+        except Exception as exc:
+            logger.warning("Semantic encoding failed: %s", exc)
+            return []
+
+        # Collect results above threshold
+        threshold = 0.35
+        results = []
+        for idx, score in enumerate(similarities.tolist()):
+            if score < threshold:
+                continue
+            event = events[idx]
+            results.append({
+                "source": "semantic",
+                "content": getattr(event, "content", ""),
+                "score": float(score),
+                "timestamp": getattr(event, "timestamp", ""),
+                "user_id": getattr(event, "user_id", ""),
+            })
+
+        # Sort by similarity score descending
+        results.sort(key=lambda x: x["score"], reverse=True)
+        return results[:top_k]
 
     def _search_user_profile(
         self,
