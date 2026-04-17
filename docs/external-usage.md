@@ -96,7 +96,133 @@ asyncio.run(main())
 >
 > `WorkspaceBootstrap` 适合“首次打开时注入默认值”。runtime 会把 bootstrap payload 的签名写入 `workspace.json`；同一份 bootstrap 在后续重启时不会再次覆盖你已经手工修改过的 workspace 默认值或 provider 注册表。若要更新已存在 workspace 的配置，请优先使用 `apply_workspace_updates()` / `set_provider_entries()`，或显式修改 bootstrap payload 让其作为一次新的初始化输入。
 
-若你需要保留 developer-only 内置 SKILL（例如 `desktop_screenshot`）的使用能力，请至少为一个可信用户显式设置 `UserProfile.metadata["is_developer"] = True`。非 developer 当前轮次不会在提示词中看到这些技能，模型即使强行调用也会被 runtime 拒绝。
+若你需要保留 developer-only 内置 SKILL（例如 `desktop_screenshot`）的使用能力，请至少为一个可信用户显式设置 `UserProfile.metadata["is_developer"] = True`。非 developer 当前轮次不会在提示词中看不到这些技能，模型即使强行调用也会被 runtime 拒绝。
+
+---
+
+### 方式二：v0.28 EmotionalGroupChatEngine（情感化群聊引擎）
+
+从 `v0.28.0` 开始，新增 `EmotionalGroupChatEngine`，专为情感化群聊场景设计。与 legacy `AsyncRolePlayEngine` 相比，新引擎具有以下特点：
+
+- **四层认知架构**：感知 → 认知（并行） → 决策 → 执行
+- **三层记忆底座**：工作记忆 → 情景记忆 → 语义记忆
+- **群聊隔离**：所有用户记忆按 `group_id` 隔离存储
+- **情感分析**：2D valence-arousal 模型，支持情感孤岛检测
+- **四种响应策略**：IMMEDIATE / DELAYED / SILENT / PROACTIVE
+- **后台任务**：延迟队列、主动触发、记忆晋升、语义整合
+
+#### 通过 WorkspaceRuntime 创建（推荐）
+
+```python
+import asyncio
+from pathlib import Path
+
+from sirius_chat.api import (
+    Message, Participant,
+    open_workspace_runtime,
+)
+
+
+async def main() -> None:
+    runtime = open_workspace_runtime(Path("data/emotional_demo"))
+
+    # 创建 emotional engine（自动绑定 workspace provider 与 work_path）
+    engine = runtime.create_emotional_engine()
+
+    # 启动后台任务（延迟队列、主动触发、记忆晋升、语义整合）
+    engine.start_background_tasks()
+
+    # 订阅事件流监控 pipeline 状态
+    async def event_listener():
+        async for event in engine.event_bus.subscribe():
+            print(f"[事件] {event.type.value} | {event.data}")
+
+    listener_task = asyncio.create_task(event_listener())
+
+    group_id = "demo_group"
+    participants = [
+        Participant(name="Alice", user_id="alice"),
+        Participant(name="Bob", user_id="bob"),
+    ]
+
+    # 处理消息
+    result = await engine.process_message(
+        Message(role="human", content="大家好！", speaker="alice"),
+        participants,
+        group_id,
+    )
+    print(f"策略: {result['strategy']}, 回复: {result.get('reply')}")
+
+    # 保存引擎状态
+    engine.save_state()
+
+    # 清理
+    engine.stop_background_tasks()
+    listener_task.cancel()
+    await runtime.close()
+
+
+asyncio.run(main())
+```
+
+#### 独立创建（无需 WorkspaceRuntime）
+
+```python
+import asyncio
+from pathlib import Path
+
+from sirius_chat.api import (
+    EmotionalGroupChatEngine,
+    Message, Participant,
+)
+from sirius_chat.providers import MockProvider
+
+
+async def main() -> None:
+    provider = MockProvider(responses=["收到！", " interesting", "稍等我想想..."])
+    engine = EmotionalGroupChatEngine(
+        work_path=Path("data/emotional_standalone"),
+        provider_async=provider,
+        config={
+            "enable_semantic_retrieval": False,  # MVP 默认关闭，需要 sentence-transformers
+            "proactive_silence_minutes": 30,
+            "delayed_queue_tick_interval_seconds": 10,
+        },
+    )
+
+    engine.start_background_tasks()
+
+    result = await engine.process_message(
+        Message(role="human", content="这个项目报错了，怎么排查啊？", speaker="alice"),
+        [Participant(name="Alice", user_id="alice")],
+        "group_1",
+    )
+    print(f"策略: {result['strategy']}, urgency: {result['intent']['urgency_score']}")
+
+    engine.stop_background_tasks()
+
+
+asyncio.run(main())
+```
+
+#### Emotional 引擎与 Legacy 引擎对比
+
+| 维度 | Legacy (`AsyncRolePlayEngine`) | v0.28 (`EmotionalGroupChatEngine`) |
+| --- | --- | --- |
+| 入口 | `run_live_message(...)` | `process_message(message, participants, group_id)` |
+| 记忆隔离 | 无（所有群共享 `entries`） | 群隔离（`entries[group_id][user_id]`） |
+| 情感分析 | 无 | 2D valence-arousal + 共情策略 |
+| 意图分析 | v2（二元分类） | v3（目的驱动 + urgency/relevance） |
+| 响应策略 | `should_reply: bool` | IMMEDIATE / DELAYED / SILENT / PROACTIVE |
+| 后台任务 | `BackgroundTaskManager`（归纳循环） | 延迟队列 + 主动触发 + 记忆晋升 + 语义整合 |
+| 状态持久化 | `finalize_and_persist` | `save_state()` / `load_state()` |
+| CLI 切换 | 默认 | `--engine emotional` |
+
+> **注意**：两个引擎不共享内部状态。同一 workspace 可同时存在 legacy session 和 emotional engine，但它们的记忆数据格式不同（legacy 使用 `sessions/` 下的 transcript，emotional 使用 `user_memory/groups/`、`episodic/`、`semantic/`、`engine_state/`）。
+
+---
+
+### 低层入口：AsyncRolePlayEngine + SessionConfig
 
 当 developer 当前轮次可见 `desktop_screenshot` 时，系统提示词会额外提醒模型：如果用户是在问“主机当前在做什么”“屏幕上现在是什么”“打开了哪些窗口/页面”，应先截图再回答，而不是直接猜测。
 
