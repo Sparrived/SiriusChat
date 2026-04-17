@@ -150,7 +150,8 @@ scripts/                     # 开发脚本
 | `python main.py` | `main.py`（~1008 行） | 仓库级交互入口：持续会话、provider 管理、主用户档案、transcript 输出、首次引导向导 |
 | `sirius-chat` | `sirius_chat/cli.py` | 库内薄 CLI：单轮消息、角色模板导出、legacy session JSON bootstrap |
 | `open_workspace_runtime()` | `sirius_chat/api/engine.py` | **推荐生产入口**：自动恢复 workspace、热刷新、会话恢复、参与者元数据、store 回写 |
-| `EmotionalGroupChatEngine` | `sirius_chat/core/emotional_engine.py` | **v0.28 默认引擎**：群聊情感化编排、四层响应策略、三层记忆底座 |
+| `create_emotional_engine()` | `sirius_chat/api/engine.py` | **v0.28 推荐工厂**：创建 EmotionalGroupChatEngine 并注入 provider |
+| `EmotionalGroupChatEngine` | `sirius_chat/core/emotional_engine.py` | **v0.28 默认引擎**：群聊情感化编排、四层响应策略、三层记忆底座、事件流、ModelRouter |
 | `AsyncRolePlayEngine` | `sirius_chat/core/_legacy/engine.py` | 底层引擎（legacy，已归档） |
 
 ---
@@ -268,6 +269,10 @@ python scripts/ci_check.py
 | `test_emotional_engine_basic.py` | v0.28 引擎基础冒烟测试（9 项） |
 | `test_emotional_engine_advanced.py` | v0.28 子系统测试（激活引擎、检索引擎、阈值引擎、用户记忆群隔离，34 项） |
 | `test_response_assembler.py` | 执行层测试（StyleAdapter + ResponseAssembler，12 项） |
+| `test_model_router.py` | 模型路由层（任务感知选择、urgency 升级、heat 适配，18 项） |
+| `test_engine_persistence.py` | 引擎状态持久化（group-isolated save/load，9 项） |
+| `test_engine_event_stream.py` | 事件流集成（PERCEPTION/COGNITION/DECISION/EXECUTION 事件，4 项） |
+| `test_engine_e2e.py` | 端到端集成测试（立即/延迟/沉默/主动/多群/氛围变化，7 项） |
 | `test_intent_and_consolidation.py` / `test_orchestration_config.py` / `test_dynamic_model_routing.py` | 多模型编排与意图分析 |
 | `test_providers.py` / `test_provider_routing.py` | Provider 实现与路由 |
 | `test_config_manager.py` / `test_cli_*.py` | 配置与 CLI |

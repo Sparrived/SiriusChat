@@ -1,11 +1,12 @@
 """Emotion analyzer: 2D valence-arousal model with empathy strategy selection.
 
-Rule-based engine (zero LLM cost) with optional LLM refinement.
-Aligned with paper §3.
+Hybrid architecture: rule-based engine (zero LLM cost) + optional LLM fallback
+for ambiguous or complex emotional content. Aligned with paper §3.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 import re
@@ -15,6 +16,20 @@ from typing import Any
 from sirius_chat.models.emotion import BasicEmotion, EmotionState, EmpathyStrategy
 
 logger = logging.getLogger(__name__)
+
+_LLM_EMOTION_PROMPT = """分析以下消息的情感状态，输出结构化 JSON。
+
+消息：{message}
+
+要求输出 JSON：
+{{
+  "valence": -1.0 到 1.0（愉悦度，负值负面，正值正面）,
+  "arousal": 0.0 到 1.0（唤醒度，0平静，1激动）,
+  "intensity": 0.0 到 1.0（情感强度）,
+  "basic_emotion": "joy|anger|sadness|anxiety|loneliness|neutral"
+}}
+
+只输出 JSON，不要其他内容。"""
 
 # Built-in sentiment lexicon (Chinese + internet slang)
 _DEFAULT_LEXICON: dict[str, float] = {
@@ -38,10 +53,19 @@ _DEFAULT_LEXICON: dict[str, float] = {
 
 
 class EmotionAnalyzer:
-    """Analyzes emotional content of messages using 2D valence-arousal model."""
+    """Analyzes emotional content of messages using 2D valence-arousal model.
 
-    def __init__(self, lexicon: dict[str, float] | None = None) -> None:
+    Hybrid: rule engine (fast, zero cost) + optional LLM fallback for
+    complex or ambiguous emotional content.
+    """
+
+    def __init__(
+        self,
+        lexicon: dict[str, float] | None = None,
+        provider_async: Any | None = None,
+    ) -> None:
         self.lexicon = lexicon or dict(_DEFAULT_LEXICON)
+        self.provider_async = provider_async
         # User emotion trajectories: user_id -> list of (timestamp, EmotionState)
         self.trajectories: dict[str, list[tuple[str, EmotionState]]] = {}
         # Group emotion cache: group_id -> EmotionState
@@ -53,7 +77,7 @@ class EmotionAnalyzer:
     # Public API
     # ------------------------------------------------------------------
 
-    def analyze(
+    async def analyze(
         self,
         message: str,
         user_id: str,
@@ -62,17 +86,79 @@ class EmotionAnalyzer:
         """Analyze emotion of a message.
 
         1. Text sentiment analysis (rule-based)
-        2. Context inference (trajectory trend)
-        3. Group sentiment perception (cache)
-        4. Fuse with weighted average
+        2. LLM fallback for ambiguous cases (confidence < 0.6)
+        3. Context inference (trajectory trend)
+        4. Group sentiment perception (cache)
+        5. Fuse with weighted average
         """
         text_emotion = self._text_analysis(message)
+
+        # LLM fallback for low-confidence rule results
+        if text_emotion.confidence < 0.6 and self.provider_async is not None:
+            try:
+                llm_result = await self._llm_analyze(message)
+                if llm_result is not None:
+                    text_emotion = llm_result
+            except Exception as exc:
+                logger.warning("LLM emotion analysis failed: %s", exc)
+
         context_emotion = self._context_inference(user_id)
         group_emotion = self.group_cache.get(group_id) if group_id else None
 
         final = self._fuse(text_emotion, context_emotion, group_emotion)
         self._update_trajectory(user_id, final)
         return final
+
+    async def _llm_analyze(self, message: str) -> EmotionState | None:
+        """Call LLM for high-precision emotion analysis."""
+        from sirius_chat.providers.base import GenerationRequest, LLMProvider
+        import asyncio
+
+        prompt = _LLM_EMOTION_PROMPT.format(message=message)
+        request = GenerationRequest(
+            model="gpt-4o-mini",
+            system_prompt=prompt,
+            messages=[],
+            temperature=0.2,
+            max_tokens=256,
+            purpose="emotion_analyze",
+        )
+
+        if hasattr(self.provider_async, "generate_async"):
+            raw = await self.provider_async.generate_async(request)
+        elif isinstance(self.provider_async, LLMProvider):
+            raw = await asyncio.to_thread(self.provider_async.generate, request)
+        else:
+            return None
+
+        try:
+            if "```json" in raw:
+                raw = raw.split("```json")[1].split("```")[0]
+            elif "```" in raw:
+                raw = raw.split("```")[1].split("```")[0]
+            data = json.loads(raw.strip())
+            return EmotionState(
+                valence=max(-1.0, min(1.0, float(data.get("valence", 0)))),
+                arousal=max(0.0, min(1.0, float(data.get("arousal", 0.3)))),
+                intensity=max(0.0, min(1.0, float(data.get("intensity", 0.5)))),
+                confidence=0.85,
+                basic_emotion=self._parse_basic_emotion(data.get("basic_emotion", "neutral")),
+            )
+        except (json.JSONDecodeError, ValueError, KeyError) as exc:
+            logger.warning("Failed to parse LLM emotion JSON: %s | raw=%r", exc, raw)
+            return None
+
+    @staticmethod
+    def _parse_basic_emotion(emotion_str: str) -> BasicEmotion | None:
+        mapping = {
+            "joy": BasicEmotion.JOY,
+            "anger": BasicEmotion.ANGER,
+            "sadness": BasicEmotion.SADNESS,
+            "anxiety": BasicEmotion.ANXIETY,
+            "loneliness": BasicEmotion.LONELINESS,
+            "neutral": None,
+        }
+        return mapping.get(emotion_str.lower())
 
     def update_group_emotion(
         self,

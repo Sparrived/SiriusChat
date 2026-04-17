@@ -40,7 +40,11 @@ def create_emotional_engine(
     Returns:
         Configured EmotionalGroupChatEngine instance.
     """
-    return EmotionalGroupChatEngine(work_path=work_path)
+    provider_async = provider if provider is None or hasattr(provider, "generate_async") else None
+    return EmotionalGroupChatEngine(
+        work_path=work_path,
+        provider_async=provider_async,
+    )
 
 
 # ── Workspace runtime ──

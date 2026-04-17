@@ -322,7 +322,7 @@ class EmotionalGroupChatEngine:
     ) -> tuple[IntentAnalysisV3, EmotionState, list[dict[str, Any]]]:
         """Cognitive layer: parallel intent + emotion + memory retrieval."""
         # Emotion analysis
-        emotion = self.emotion_analyzer.analyze(content, user_id, group_id)
+        emotion = await self.emotion_analyzer.analyze(content, user_id, group_id)
 
         # Intent analysis
         intent = await self.intent_analyzer.analyze(
