@@ -22,6 +22,7 @@ from sirius_chat.api import (
     Transcript,
     RolePlayAnswer,
     abuild_roleplay_prompt_from_answers_and_apply,
+    create_emotional_engine,
     create_session_config_from_selected_agent,
     setup_multimodel_config,
     ensure_provider_platform_supported,
@@ -90,6 +91,13 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         type=str,
         default="",
         help="检查配置文件（指定配置路径）",
+    )
+    parser.add_argument(
+        "--engine",
+        type=str,
+        default="legacy",
+        choices=["legacy", "emotional"],
+        help="选择引擎类型：legacy（AsyncRolePlayEngine，默认）或 emotional（EmotionalGroupChatEngine，v0.28+）",
     )
     return parser
 
@@ -978,22 +986,34 @@ def main(
             transcript = asyncio.run(runtime.get_transcript(session_config.session_id))
         asyncio.run(runtime.set_primary_user(session_config.session_id, primary_user))
 
-        transcript = run_interactive_session(
-            session_config,
-            primary_user,
-            runtime,
-            work_path,
-            provider_registry,
-            lambda: _build_provider(providers_config, config_root, provider_factory) if provider_factory is not None else None,
-            transcript,
-            input_func=input_func,
-            print_func=print_func,
-        )
+        if args.engine == "emotional":
+            transcript = _run_emotional_interactive_session(
+                work_path=work_path,
+                primary_user=primary_user,
+                provider_factory=lambda: _build_provider(providers_config, config_root, provider_factory) if provider_factory is not None else None,
+                input_func=input_func,
+                print_func=print_func,
+            )
+        else:
+            transcript = run_interactive_session(
+                session_config,
+                primary_user,
+                runtime,
+                work_path,
+                provider_registry,
+                lambda: _build_provider(providers_config, config_root, provider_factory) if provider_factory is not None else None,
+                transcript,
+                input_func=input_func,
+                print_func=print_func,
+            )
 
-        output_path = Path(args.output) if args.output else Path("transcript.json")
-        if not output_path.is_absolute():
-            output_path = work_path / output_path
-        _write_transcript_output(transcript, output_path)
+        if args.engine == "emotional":
+            print_func("\n[emotional engine 会话结束]")
+        else:
+            output_path = Path(args.output) if args.output else Path("transcript.json")
+            if not output_path.is_absolute():
+                output_path = work_path / output_path
+            _write_transcript_output(transcript, output_path)
 
         return 0
     except KeyboardInterrupt:
@@ -1003,6 +1023,60 @@ def main(
         logger.error(f"会话中遇到预查误误：{e}", exc_info=True)
         print_func(f"会话执行过程中发生错误：{e}")
         return 1
+
+
+def _run_emotional_interactive_session(
+    *,
+    work_path: Path,
+    primary_user: Participant,
+    provider_factory: Callable[[], LLMProvider | None],
+    input_func: InputFunc,
+    print_func: PrintFunc,
+) -> Transcript:
+    """Run an interactive session using EmotionalGroupChatEngine (v0.28+).
+
+    Simplified loop: process user messages through the emotional engine
+    and print assistant replies.
+    """
+    provider = provider_factory()
+    engine = create_emotional_engine(work_path, provider=provider)
+
+    print_func("\n=== Emotional Group Chat Engine (v0.28+) ===")
+    print_func("输入消息与 AI 交互，输入 /exit 或 /quit 退出。\n")
+
+    group_id = "default"
+    participants = [primary_user]
+
+    async def _loop() -> None:
+        while True:
+            try:
+                user_input = input_func("你: ")
+            except EOFError:
+                break
+            user_input = user_input.strip()
+            if not user_input:
+                continue
+            if user_input.lower() in ("/exit", "/quit"):
+                break
+
+            msg = Message(
+                role="human",
+                content=user_input,
+                speaker=primary_user.user_id or primary_user.name,
+            )
+            result = await engine.process_message(msg, participants, group_id)
+
+            strategy = result.get("strategy", "unknown")
+            reply = result.get("reply")
+            if reply:
+                print_func(f"AI [{strategy}]: {reply}")
+            else:
+                print_func(f"AI [{strategy}]: (未回复)")
+
+    asyncio.run(_loop())
+    engine.save_state()
+    print_func("引擎状态已保存。")
+    return Transcript()
 
 
 if __name__ == "__main__":

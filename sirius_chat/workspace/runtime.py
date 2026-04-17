@@ -14,6 +14,7 @@ from typing import Awaitable, Callable
 
 from sirius_chat.async_engine import AsyncRolePlayEngine
 from sirius_chat.config import SessionConfig, WorkspaceConfig
+from sirius_chat.core.emotional_engine import EmotionalGroupChatEngine
 from sirius_chat.config.manager import ConfigManager
 from sirius_chat.config.models import SessionDefaults, WorkspaceBootstrap
 from sirius_chat.memory import UserProfile
@@ -633,6 +634,29 @@ class WorkspaceRuntime:
         return hashlib.sha256(
             json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
         ).hexdigest()
+
+    def create_emotional_engine(
+        self,
+        *,
+        config: dict[str, Any] | None = None,
+    ) -> EmotionalGroupChatEngine:
+        """Create an EmotionalGroupChatEngine bound to this workspace.
+
+        The engine shares the workspace's work_path and provider.
+        Background tasks are NOT started automatically—call
+        ``engine.start_background_tasks()`` after creation if desired.
+        """
+        provider = self.provider
+        if self._prefer_workspace_registry_provider:
+            providers = self._provider_manager.load()
+            if providers:
+                provider = AutoRoutingProvider(providers)
+        provider_async = provider if provider is None or hasattr(provider, "generate_async") else None
+        return EmotionalGroupChatEngine(
+            work_path=self.work_path,
+            provider_async=provider_async,
+            config=config,
+        )
 
     def _get_engine(self) -> AsyncRolePlayEngine:
         if self._engine is not None:
