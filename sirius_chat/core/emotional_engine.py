@@ -325,7 +325,7 @@ class EmotionalGroupChatEngine:
         emotion = self.emotion_analyzer.analyze(content, user_id, group_id)
 
         # Intent analysis
-        intent = self.intent_analyzer.analyze(
+        intent = await self.intent_analyzer.analyze(
             content, user_id, group_id, emotion_state=emotion
         )
 

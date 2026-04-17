@@ -4,10 +4,15 @@ Extends v2 behavior classification with social-intent taxonomy:
     HELP_SEEKING | EMOTIONAL | SOCIAL | SILENT
 
 Urgency (0-100) and relevance (0-1) scoring per paper §2.2.
+
+Hybrid architecture:
+    - Rule engine (zero LLM cost) for clear signals
+    - LLM fallback when rule confidence < 0.8
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from typing import Any
@@ -47,15 +52,40 @@ _URGENCY_KEYWORDS = {
     "low": {"想问问", "好奇", "了解一下", "有空的话", "方便时", "wondering", "curious", "when you have time"},
 }
 
+_LLM_INTENT_PROMPT = """分析以下群聊消息，输出结构化意图分析。
+
+消息：{message}
+
+要求输出 JSON：
+{{
+  "social_intent": "help_seeking|emotional|social|silent",
+  "intent_subtype": "tech_help|info_query|venting|seeking_empathy|topic_discussion|filler",
+  "urgency_score": 0-100,
+  "relevance_score": 0.0-1.0,
+  "confidence": 0.0-1.0
+}}
+
+定义：
+- help_seeking: 求助、提问、报错
+- emotional: 表达情绪、寻求安慰
+- social: 闲聊、讨论、分享
+- silent: 无意义 filler（哈哈、确实、+1）
+
+只输出 JSON，不要其他内容。"""
+
 
 class IntentAnalyzerV3:
-    """Purpose-driven intent analyzer with urgency/relevance scoring."""
+    """Purpose-driven intent analyzer with urgency/relevance scoring.
 
-    def __init__(self) -> None:
+    Hybrid: rule engine (fast, zero cost) + optional LLM fallback for ambiguous cases.
+    """
+
+    def __init__(self, provider_async: Any | None = None) -> None:
+        self.provider_async = provider_async
         self.group_activity_history: dict[str, list[tuple[float, float]]] = {}
         self.user_response_prefs: dict[str, dict[str, Any]] = {}
 
-    def analyze(
+    async def analyze(
         self,
         message: str,
         user_id: str,
@@ -64,19 +94,30 @@ class IntentAnalyzerV3:
         emotion_state: EmotionState | None = None,
     ) -> IntentAnalysisV3:
         """Main analysis pipeline."""
-        # 1. Classify social intent
+        # 1. Classify social intent (rule engine)
         social_intent, subtype, confidence = self._classify_intent(message)
 
-        # 2. Calculate urgency
+        # 2. LLM fallback for ambiguous cases
+        if confidence < 0.8 and self.provider_async is not None:
+            try:
+                llm_result = await self._llm_classify(message)
+                if llm_result is not None:
+                    social_intent = llm_result.get("social_intent", social_intent)
+                    subtype = self._parse_subtype(llm_result.get("intent_subtype", subtype.value))
+                    confidence = llm_result.get("confidence", confidence)
+            except Exception as exc:
+                logger.warning("LLM intent classification failed: %s", exc)
+
+        # 3. Calculate urgency
         urgency = self._calculate_urgency(message, user_id, group_id, emotion_state)
 
-        # 3. Calculate relevance
+        # 4. Calculate relevance
         relevance = self._calculate_relevance(message, social_intent, user_id, group_id)
 
-        # 4. Dynamic threshold
+        # 5. Dynamic threshold
         threshold = self._dynamic_threshold(group_id, user_id)
 
-        # 5. Decide strategy
+        # 6. Decide strategy
         strategy, priority, response_time = self._decide_strategy(
             social_intent, urgency, relevance, threshold
         )
@@ -92,6 +133,52 @@ class IntentAnalyzerV3:
             estimated_response_time=response_time,
             threshold=threshold,
         )
+
+    async def _llm_classify(self, message: str) -> dict[str, Any] | None:
+        """Call LLM for high-precision intent classification."""
+        from sirius_chat.providers.base import GenerationRequest, LLMProvider
+        import asyncio
+
+        prompt = _LLM_INTENT_PROMPT.format(message=message)
+        request = GenerationRequest(
+            model="gpt-4o-mini",
+            system_prompt=prompt,
+            messages=[],
+            temperature=0.2,
+            max_tokens=256,
+            purpose="intent_analyze",
+        )
+
+        if hasattr(self.provider_async, "generate_async"):
+            raw = await self.provider_async.generate_async(request)
+        elif isinstance(self.provider_async, LLMProvider):
+            raw = await asyncio.to_thread(self.provider_async.generate, request)
+        else:
+            return None
+
+        # Extract JSON from response
+        try:
+            # Look for JSON block or raw JSON
+            if "```json" in raw:
+                raw = raw.split("```json")[1].split("```")[0]
+            elif "```" in raw:
+                raw = raw.split("```")[1].split("```")[0]
+            return json.loads(raw.strip())
+        except (json.JSONDecodeError, IndexError) as exc:
+            logger.warning("Failed to parse LLM intent JSON: %s | raw=%r", exc, raw)
+            return None
+
+    @staticmethod
+    def _parse_subtype(subtype_str: str) -> Any:
+        mapping = {
+            "tech_help": HelpSubtype.TECH_HELP,
+            "info_query": HelpSubtype.INFO_QUERY,
+            "venting": EmotionalSubtype.VENTING,
+            "seeking_empathy": EmotionalSubtype.SEEKING_EMPATHY,
+            "topic_discussion": SocialSubtype.TOPIC_DISCUSSION,
+            "filler": SilentSubtype.FILLER,
+        }
+        return mapping.get(subtype_str, SocialSubtype.TOPIC_DISCUSSION)
 
     # ------------------------------------------------------------------
     # Classification
