@@ -8,7 +8,7 @@
 
 **Sirius Chat**（PyPI 包名 `sirius-chat`）是一个为**多人 RPG 对话场景**设计的 Python LLM 编排框架。它以异步优先（Async-First）架构为核心，支持多人用户与一个 AI 主助手之间的实时交互，具备结构化记忆系统、角色扮演资产生成、多 Provider 自动路由、可扩展 SKILL 任务编排、Token 消耗追踪与性能监控等能力。
 
-- **版本**：`0.27.14`
+- **版本**：`0.28.0-dev`
 - **Python 要求**：`>=3.12`
 - **许可证**：MIT
 - **仓库**：`https://github.com/Sparrived/SiriusChat`
@@ -64,20 +64,39 @@ sirius_chat/
 ├── cache/                   # 可扩展缓存框架（LRU + TTL）
 ├── config/                  # 配置模型、JSONC 管理、WorkspaceConfig / SessionConfig
 ├── configs/                 # 内置配置模板
-├── core/                    # 编排核心真实实现
-│   ├── engine.py            # AsyncRolePlayEngine（主引擎，~2000 行）
-│   ├── chat_builder.py      # 主模型请求构造
-│   ├── memory_runner.py     # 记忆相关辅助任务
-│   ├── engagement_pipeline.py # 热度/意图/参与协调流水线
-│   ├── heat.py              # 群聊热度分析
-│   ├── intent_v2.py         # 意图分析
-│   └── events.py            # 会话事件流
-├── memory/                  # 记忆子包
-│   ├── user/                # 用户记忆管理（UserMemoryManager / UserMemoryEntry / MemoryFact）
+├── core/                    # 编排核心（v0.28 新架构）
+│   ├── emotional_engine.py  # EmotionalGroupChatEngine（主引擎，v0.28+）
+│   ├── response_assembler.py # 执行层：Prompt 组装 + 风格适配
+│   ├── emotion.py           # 情感分析（二维模型 + 19 种基础情绪）
+│   ├── intent_v3.py         # 意图分析 v3（目的驱动：求助/情感/社交/沉默）
+│   ├── response_strategy.py # 四层响应策略（立即/延迟/沉默/主动）
+│   ├── delayed_response_queue.py # 延迟响应队列（话题间隙检测）
+│   ├── proactive_trigger.py # 主动触发器（时间/记忆/情感触发）
+│   ├── rhythm.py            # 对话节奏分析（热度/速度/注意力窗口）
+│   ├── threshold_engine.py  # 动态阈值引擎（Base × Activity × Relationship × Time）
+│   ├── events.py            # 会话事件流
+│   ├── chat_builder.py      # 主模型请求构造（legacy 兼容）
+│   └── _legacy/             # 旧引擎归档（不删除，供参考）
+│       ├── engine.py        # AsyncRolePlayEngine（legacy）
+│       ├── engagement.py    # EngagementCoordinator（legacy）
+│       ├── heat.py          # HeatAnalyzer（legacy）
+│       ├── intent_v2.py     # IntentAnalyzer v2（legacy）
+│       └── memory_runner.py # 记忆辅助任务（legacy）
+├── memory/                  # 记忆子包（v0.28 三层记忆底座）
+│   ├── user/                # 用户记忆管理（UserMemoryManager，已群隔离）
 │   ├── event/               # 事件记忆 V2（observation-based、批量提取、去重）
+│   ├── working/             # 工作记忆（按群滑动窗口，重要性加权）
+│   ├── episodic/            # 情景记忆（结构化事件，按群存储，激活度管理）
+│   ├── semantic/            # 语义记忆（用户画像 + 群体画像 + 兴趣图谱）
 │   ├── self/                # AI 自身记忆（Diary + Glossary）
-│   └── quality/             # 记忆质量评估与遗忘引擎
+│   ├── quality/             # 记忆质量评估与遗忘引擎
+│   ├── activation_engine.py # 激活度引擎（遗忘曲线 + 访问增强 + 分类衰减）
+│   └── retrieval_engine.py  # 统一检索引擎（三层检索 + 打分排序）
 ├── models/                  # 核心数据模型（dataclass）
+│   ├── emotion.py           # EmotionState / AssistantEmotionState / EmpathyStrategy
+│   ├── intent_v3.py         # IntentAnalysisV3 / SocialIntent
+│   ├── response_strategy.py # StrategyDecision / ResponseStrategy
+│   └── models.py            # Message / Participant / Transcript / User 等
 ├── performance/             # 性能分析与基准测试
 ├── providers/               # Provider 实现、路由、中间件
 │   ├── routing.py           # 自动路由与 ProviderRegistry
@@ -131,7 +150,8 @@ scripts/                     # 开发脚本
 | `python main.py` | `main.py`（~1008 行） | 仓库级交互入口：持续会话、provider 管理、主用户档案、transcript 输出、首次引导向导 |
 | `sirius-chat` | `sirius_chat/cli.py` | 库内薄 CLI：单轮消息、角色模板导出、legacy session JSON bootstrap |
 | `open_workspace_runtime()` | `sirius_chat/api/engine.py` | **推荐生产入口**：自动恢复 workspace、热刷新、会话恢复、参与者元数据、store 回写 |
-| `AsyncRolePlayEngine` | `sirius_chat/core/engine.py` | 底层引擎：单轮消息编排、辅助任务、prompt 构造、事件流、SKILL 循环 |
+| `EmotionalGroupChatEngine` | `sirius_chat/core/emotional_engine.py` | **v0.28 默认引擎**：群聊情感化编排、四层响应策略、三层记忆底座 |
+| `AsyncRolePlayEngine` | `sirius_chat/core/_legacy/engine.py` | 底层引擎（legacy，已归档） |
 
 ---
 
@@ -245,6 +265,9 @@ python scripts/ci_check.py
 | `test_skill_system.py` | SKILL 注册、执行、链式调用、权限 |
 | `test_roleplay_prompting.py` | 人格问卷、资产生成、选择与轨迹 |
 | `test_self_memory.py` / `test_memory_system_v2.py` / `test_event_user_memory_integration.py` | 记忆各子系统 |
+| `test_emotional_engine_basic.py` | v0.28 引擎基础冒烟测试（9 项） |
+| `test_emotional_engine_advanced.py` | v0.28 子系统测试（激活引擎、检索引擎、阈值引擎、用户记忆群隔离，34 项） |
+| `test_response_assembler.py` | 执行层测试（StyleAdapter + ResponseAssembler，12 项） |
 | `test_intent_and_consolidation.py` / `test_orchestration_config.py` / `test_dynamic_model_routing.py` | 多模型编排与意图分析 |
 | `test_providers.py` / `test_provider_routing.py` | Provider 实现与路由 |
 | `test_config_manager.py` / `test_cli_*.py` | 配置与 CLI |
@@ -288,11 +311,25 @@ python scripts/ci_check.py
 3. **Workspace 配置**：`workspace.json` 持久化活跃 agent key、session defaults、orchestration defaults、provider policy。
 
 ### 记忆架构要点
-- **用户记忆**：按 `memory_category`（identity / preference / emotion / event / custom）组织；区分可信身份锚点与弱别称线索。
+
+**三层记忆底座（v0.28 新增）**：
+- **工作记忆（Working）**：按 `group_id` 维护内存中的对话滑动窗口（默认 20 条），按 `(importance, timestamp)` 排序截断，高重要性消息自动晋升到情景记忆。
+- **情景记忆（Episodic）**：按群存储为 `{group_id}.jsonl`，包含情绪标签、重要性、激活度；支持关键词搜索与批量归档（激活度低于阈值时移入 archive）。
+- **语义记忆（Semantic）**：用户语义画像（兴趣图谱、关系状态、禁忌边界）+ 群体语义画像（氛围历史、群体规范、典型交互风格）。
+
+**用户记忆（已群隔离）**：
+- `UserMemoryManager.entries` 结构：`{group_id: {user_id: UserMemoryEntry}}`
+- 按 `memory_category`（identity / preference / emotion / event / custom）组织。
 - **事实置信度分层**：`transient_confidence_threshold`（默认 0.85）将事实分为 *RESIDENT*（持久化）与 *TRANSIENT*（会话级，30 分钟后自动清理）。
 - **智能上限**：当 `memory_facts` 超过 `MAX_MEMORY_FACTS`（50）时，删除置信度最低的 10%，而非简单 FIFO。
-- **事件记忆 V2**：基于 observation、按用户缓冲、批量提取；去重使用字符集 Jaccard 相似度（阈值 0.55）。
-- **AI 自身记忆**：日记（Diary，最多 100 条）+ 名词解释（Glossary，最多 200 条），支持遗忘曲线与衰减。
+
+**激活度与遗忘（v0.28 新增）**：
+- 公式：`activation = importance × exp(-λ × hours) × (1 + γ × access_count)`
+- 分类衰减：`identity/preference`（λ=0.001，几乎永久）、`emotion/transient`（λ=0.05，数周衰减）、`event/timely`（λ=0.1，事件后快速衰减）。
+
+**事件记忆 V2**：基于 observation、按用户缓冲、批量提取；去重使用字符集 Jaccard 相似度（阈值 0.55）。
+
+**AI 自身记忆**：日记（Diary，最多 100 条）+ 名词解释（Glossary，最多 200 条），支持遗忘曲线与衰减。
 
 ### Provider 与路由
 - 支持平台：`openai-compatible`、`deepseek`、`aliyun-bailian`、`bigmodel`（智谱）、`siliconflow`、`volcengine-ark`、`ytea`。
@@ -306,6 +343,44 @@ python scripts/ci_check.py
 - **必须导出**：`SKILL_META`（dict）与 `run()` 函数。
 - **结构化返回**：支持 `summary`、`text_blocks`、`multimodal_blocks`、`internal_metadata`；`internal_metadata` 不得泄露到用户可见输出。
 - **AI 调用语法**：`[SKILL_CALL: skill_name | {"param": "value"}]`
+
+### v0.28 认知架构
+
+运行时数据流（四层）：
+
+```
+群消息进入（感知层）
+    │
+    ├─ 注册参与者 → user_memory (group-isolated)
+    ├─ 写入工作记忆 → working_memory
+    └─ 更新 group_last_message_at
+    │
+    ▼
+认知层（并行）
+    ├─ IntentAnalyzer v3 → social_intent + urgency + relevance
+    ├─ EmotionAnalyzer → EmotionState(valence, arousal, basic_emotion)
+    └─ MemoryRetriever → 3-tier memory retrieval (working → episodic → semantic)
+    │
+    ▼
+决策层
+    ├─ RhythmAnalyzer → heat_level + pace + topic_stability
+    ├─ ThresholdEngine → dynamic engagement threshold
+    └─ ResponseStrategyEngine → IMMEDIATE / DELAYED / SILENT / PROACTIVE
+    │
+    ▼
+执行层
+    ├─ ResponseAssembler → 情感上下文 + 共情策略 + 记忆引用 + 群风格
+    ├─ StyleAdapter → max_tokens / temperature / tone 动态适配
+    └─ LLM 生成回复
+```
+
+四层响应策略：
+- **IMMEDIATE**：高 urgency / 被直接@ → 立即生成回复
+- **DELAYED**：中等 relevance → 进入延迟队列，等待话题间隙后回复
+- **SILENT**：低 relevance / 日常闲聊 → 不回复，仅更新记忆
+- **PROACTIVE**：长时间沉默 / 记忆触发 / 情感触发 → AI 主动开启话题
+
+---
 
 ### 文档同步义务
 当架构、命令或 API 发生变更时，**必须**同步更新以下文件：
