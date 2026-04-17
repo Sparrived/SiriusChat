@@ -54,7 +54,12 @@ def build_memory_extract_task_input(
     max_context_chars: int = 1200,
 ) -> str:
     """Build the user-content string fed to the memory-extract LLM task."""
-    entry = transcript.user_memory.entries.get(participant.user_id)
+    # Group-isolated lookup: search across all groups for this user
+    entry = None
+    for group_entries in transcript.user_memory.entries.values():
+        entry = group_entries.get(participant.user_id)
+        if entry is not None:
+            break
     trusted_labels = [participant.name, *participant.aliases]
     weak_labels = entry.runtime.inferred_aliases if entry is not None else []
     identity_lines: list[str] = []

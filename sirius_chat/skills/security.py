@@ -33,14 +33,15 @@ def collect_declared_developer_profiles(
     developers: list[UserProfile] = []
     seen: set[str] = set()
 
-    for entry in transcript.user_memory.entries.values():
-        profile = entry.profile
-        if not profile.is_developer:
-            continue
-        if profile.user_id in seen:
-            continue
-        developers.append(profile)
-        seen.add(profile.user_id)
+    for group_entries in transcript.user_memory.entries.values():
+        for entry in group_entries.values():
+            profile = entry.profile
+            if not profile.is_developer:
+                continue
+            if profile.user_id in seen:
+                continue
+            developers.append(profile)
+            seen.add(profile.user_id)
 
     if caller is not None and caller.is_developer and caller.user_id not in seen:
         developers.append(caller)

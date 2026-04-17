@@ -108,7 +108,7 @@ def _select_prompt_user_ids(
     def _append(user_id: str) -> None:
         if user_id in seen:
             return
-        if user_id not in transcript.user_memory.entries:
+        if transcript.user_memory.get_user_by_id(user_id) is None:
             return
         selected.append(user_id)
         seen.add(user_id)
@@ -129,8 +129,14 @@ def _select_prompt_user_ids(
     if selected:
         return selected[:_MAX_PROMPT_PARTICIPANTS]
 
+    # Flatten group-isolated entries for ranking
+    all_entries: list[tuple[str, UserMemoryEntry]] = []
+    for _gid, group_entries in transcript.user_memory.entries.items():
+        for user_id, entry in group_entries.items():
+            all_entries.append((user_id, entry))
+
     ranked = sorted(
-        transcript.user_memory.entries.items(),
+        all_entries,
         key=lambda item: _memory_richness(item[1]),
         reverse=True,
     )
@@ -147,19 +153,22 @@ def _find_mentioned_user_ids(
 ) -> list[str]:
     lowered = text.lower()
     scored: list[tuple[int, str]] = []
-    for user_id, entry in transcript.user_memory.entries.items():
-        if user_id in exclude:
-            continue
-        labels = [entry.profile.name, *entry.profile.aliases]
-        best = 0
-        for label in labels:
-            value = label.strip()
-            if len(value) < 2:
+    seen: set[str] = set()
+    for group_entries in transcript.user_memory.entries.values():
+        for user_id, entry in group_entries.items():
+            if user_id in exclude or user_id in seen:
                 continue
-            if value.lower() in lowered:
-                best = max(best, len(value))
-        if best > 0:
-            scored.append((best, user_id))
+            seen.add(user_id)
+            labels = [entry.profile.name, *entry.profile.aliases]
+            best = 0
+            for label in labels:
+                value = label.strip()
+                if len(value) < 2:
+                    continue
+                if value.lower() in lowered:
+                    best = max(best, len(value))
+            if best > 0:
+                scored.append((best, user_id))
     scored.sort(reverse=True)
     return [user_id for _score, user_id in scored]
 
@@ -182,7 +191,7 @@ def _build_participant_memory_section(
     ]
 
     for user_id in selected_user_ids:
-        entry = transcript.user_memory.entries.get(user_id)
+        entry = transcript.user_memory.get_user_by_id(user_id)
         if entry is None:
             continue
         role = "current_speaker" if user_id == focus_user_id else "related_participant"

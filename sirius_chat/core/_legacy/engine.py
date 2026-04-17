@@ -333,22 +333,23 @@ class AsyncRolePlayEngine:
 
         known_by_id: dict[str, Participant] = {}
         known_by_label: dict[str, str] = {}
-        for user_id, entry in transcript.user_memory.entries.items():
-            profile = entry.profile
-            participant = Participant(
-                name=profile.name,
-                user_id=profile.user_id,
-                persona=profile.persona,
-                identities=dict(profile.identities),
-                aliases=list(profile.aliases),
-                traits=list(profile.traits),
-                metadata=dict(profile.metadata),
-            )
-            known_by_id[user_id] = participant
-            labels = [participant.name, participant.user_id, *participant.aliases]
-            for label in labels:
-                if label:
-                    known_by_label[label.strip().lower()] = participant.user_id
+        for group_entries in transcript.user_memory.entries.values():
+            for user_id, entry in group_entries.items():
+                profile = entry.profile
+                participant = Participant(
+                    name=profile.name,
+                    user_id=profile.user_id,
+                    persona=profile.persona,
+                    identities=dict(profile.identities),
+                    aliases=list(profile.aliases),
+                    traits=list(profile.traits),
+                    metadata=dict(profile.metadata),
+                )
+                known_by_id[user_id] = participant
+                labels = [participant.name, participant.user_id, *participant.aliases]
+                for label in labels:
+                    if label:
+                        known_by_label[label.strip().lower()] = participant.user_id
 
         created = LiveSessionContext(
             stores=SessionStores(
@@ -495,9 +496,10 @@ class AsyncRolePlayEngine:
             )
             if mapped_user_id:
                 participant = context.known_by_id.get(mapped_user_id)
-                if participant is None and mapped_user_id in transcript.user_memory.entries:
-                    profile = transcript.user_memory.entries[mapped_user_id].profile
-                    participant = self._participant_from_profile(profile)
+                if participant is None:
+                    profile = transcript.user_memory.get_user_by_id(mapped_user_id)
+                    if profile is not None:
+                        participant = self._participant_from_profile(profile.profile)
                     context.known_by_id[participant.user_id] = participant
 
         resolved_id = context.known_by_label.get(normalized)
@@ -507,9 +509,10 @@ class AsyncRolePlayEngine:
             memory_user_id = transcript.user_memory.resolve_user_id(speaker=turn.speaker)
             if memory_user_id:
                 participant = context.known_by_id.get(memory_user_id)
-                if participant is None and memory_user_id in transcript.user_memory.entries:
-                    profile = transcript.user_memory.entries[memory_user_id].profile
-                    participant = self._participant_from_profile(profile)
+                if participant is None:
+                    profile = transcript.user_memory.get_user_by_id(memory_user_id)
+                    if profile is not None:
+                        participant = self._participant_from_profile(profile.profile)
                     context.known_by_id[participant.user_id] = participant
         if participant is None:
             identities = {}
@@ -716,12 +719,13 @@ class AsyncRolePlayEngine:
             if entry_counts[user_id] >= min_entries:
                 return True
 
-        for item in transcript.user_memory.entries.values():
-            runtime = item.runtime
-            if len(runtime.summary_notes) >= min_notes:
-                return True
-            if len(runtime.memory_facts) >= min_facts:
-                return True
+        for group_entries in transcript.user_memory.entries.values():
+            for item in group_entries.values():
+                runtime = item.runtime
+                if len(runtime.summary_notes) >= min_notes:
+                    return True
+                if len(runtime.memory_facts) >= min_facts:
+                    return True
 
         return False
 
@@ -755,9 +759,10 @@ class AsyncRolePlayEngine:
             )
             did_change = did_change or removed > 0
 
-        for uid in list(transcript.user_memory.entries.keys()):
-            removed_notes = await transcript.user_memory.consolidate_summary_notes(
-                user_id=uid,
+        for group_entries in transcript.user_memory.entries.values():
+            for uid in list(group_entries.keys()):
+                removed_notes = await transcript.user_memory.consolidate_summary_notes(
+                    user_id=uid,
                 provider_async=adapter,
                 model_name=model,
                 min_notes=min_notes,

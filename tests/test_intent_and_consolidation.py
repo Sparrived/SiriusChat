@@ -17,14 +17,14 @@ import pytest
 from datetime import datetime
 from pathlib import Path
 
-from sirius_chat.core.intent_v2 import IntentAnalysis, IntentAnalyzer, INTENT_TYPES
+from sirius_chat.core._legacy.intent_v2 import IntentAnalysis, IntentAnalyzer, INTENT_TYPES
 from sirius_chat.memory.event.manager import EventMemoryManager
 from sirius_chat.memory.event.models import EventMemoryEntry
 from sirius_chat.memory.user.manager import UserMemoryManager
 from sirius_chat.memory.user.models import MemoryFact, UserProfile
 from sirius_chat.background_tasks import BackgroundTaskConfig, BackgroundTaskManager
 from sirius_chat.async_engine.prompts import build_system_prompt
-from sirius_chat.core.memory_runner import build_memory_extract_task_input
+from sirius_chat.core._legacy.memory_runner import build_memory_extract_task_input
 from sirius_chat.config import OrchestrationPolicy
 from sirius_chat.config.models import Agent, AgentPreset, SessionConfig
 from sirius_chat.models.models import Message, Participant, Transcript
@@ -671,14 +671,14 @@ class TestUserMemoryConsolidation:
     def _make_manager_with_notes(self, user_id: str, notes: list[str]) -> UserMemoryManager:
         mgr = UserMemoryManager()
         mgr.register_user(UserProfile(user_id=user_id, name=user_id))
-        entry = mgr.entries[user_id]
+        entry = mgr.entries["default"][user_id]
         entry.runtime.summary_notes = list(notes)
         return mgr
 
     def _make_manager_with_facts(self, user_id: str, count: int) -> UserMemoryManager:
         mgr = UserMemoryManager()
         mgr.register_user(UserProfile(user_id=user_id, name=user_id))
-        entry = mgr.entries[user_id]
+        entry = mgr.entries["default"][user_id]
         entry.runtime.memory_facts = [
             MemoryFact(
                 fact_type="preference",
@@ -712,7 +712,7 @@ class TestUserMemoryConsolidation:
                 "u1", provider, "mock", min_notes=4
             )
             assert result == 4  # 6 - 2
-            assert len(mgr.entries["u1"].runtime.summary_notes) == 2
+            assert len(mgr.entries["default"]["u1"].runtime.summary_notes) == 2
 
         asyncio.run(_run())
 
@@ -741,7 +741,7 @@ class TestUserMemoryConsolidation:
                 "u1", provider, "mock", min_facts=15
             )
             assert result == 14  # 16 - 2
-            facts = mgr.entries["u1"].runtime.memory_facts
+            facts = mgr.entries["default"]["u1"].runtime.memory_facts
             assert len(facts) == 2
             assert facts[0].source == "consolidation"
             assert facts[0].validated is True
@@ -761,7 +761,7 @@ class TestUserMemoryConsolidation:
             )
             assert result == 0
             # Original facts should be preserved
-            assert len(mgr.entries["u1"].runtime.memory_facts) == 16
+            assert len(mgr.entries["default"]["u1"].runtime.memory_facts) == 16
 
         asyncio.run(_run())
 
@@ -846,7 +846,7 @@ class TestSkipSections:
         if participants_info:
             uid = "test_uid"
             transcript.user_memory.register_user(UserProfile(user_id=uid, name=uid))
-            entry = transcript.user_memory.entries[uid]
+            entry = transcript.user_memory.entries["default"][uid]
             entry.runtime.summary_notes = [participants_info]
         return build_system_prompt(config=config, transcript=transcript, skip_sections=skip_sections)
 
@@ -898,15 +898,15 @@ class TestSkipSections:
         transcript.user_memory.register_user(UserProfile(user_id="u2", name="小李"))
         transcript.user_memory.register_user(UserProfile(user_id="u3", name="无关人"))
 
-        entry_a = transcript.user_memory.entries["u1"]
+        entry_a = transcript.user_memory.entries["default"]["u1"]
         entry_a.runtime.recent_messages = ["这条历史消息不应该进入主 prompt"]
         entry_a.runtime.summary_notes = ["关注灰度发布"]
         entry_a.runtime.preference_tags = ["结构化沟通"]
 
-        entry_b = transcript.user_memory.entries["u2"]
+        entry_b = transcript.user_memory.entries["default"]["u2"]
         entry_b.runtime.summary_notes = ["负责预算控制"]
 
-        entry_c = transcript.user_memory.entries["u3"]
+        entry_c = transcript.user_memory.entries["default"]["u3"]
         entry_c.runtime.summary_notes = ["这段无关记忆不应出现"]
 
         transcript.add(

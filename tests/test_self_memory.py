@@ -25,7 +25,7 @@ from sirius_chat.config.models import (
     SessionConfig,
 )
 from sirius_chat.models.models import Message, ReplyRuntimeState, Transcript
-from sirius_chat.core.engine import AsyncRolePlayEngine
+from sirius_chat.core._legacy.engine import AsyncRolePlayEngine
 from sirius_chat.providers.mock import MockProvider
 
 
@@ -505,7 +505,7 @@ class TestReplyFrequencyLimiter:
         exempt_on_mention: bool = True,
         is_mentioned: bool = False,
     ) -> bool:
-        from sirius_chat.core.engagement import EngagementCoordinator
+        from sirius_chat.core._legacy.engagement import EngagementCoordinator
         return EngagementCoordinator.check_reply_frequency_limit(
             assistant_reply_timestamps=timestamps,
             now=now,
