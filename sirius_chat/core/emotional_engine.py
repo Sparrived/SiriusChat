@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Any
 
@@ -540,7 +541,93 @@ class EmotionalGroupChatEngine:
         ))
         if len(group_profile.atmosphere_history) > 1000:
             group_profile.atmosphere_history = group_profile.atmosphere_history[-1000:]
+
+        # Passive group norm learning
+        self._learn_group_norms(group_profile, message, intent)
+
         self.semantic_memory.save_group_profile(group_profile)
+
+    def _learn_group_norms(
+        self,
+        group_profile: Any,
+        message: Message,
+        intent: IntentAnalysisV3,
+    ) -> None:
+        """Passive learning of group interaction norms from observed messages.
+
+        Updates group_profile.group_norms with rolling statistics:
+        - avg_message_length, message_length_distribution
+        - emoji_usage_rate, mention_rate
+        - most_active_hours
+        - topic_switch_frequency
+        """
+        norms = group_profile.group_norms
+        content = message.content or ""
+
+        # 1. Message length rolling average
+        length = len(content)
+        old_avg = norms.get("avg_message_length", 0.0)
+        old_count = norms.get("message_count", 0)
+        new_count = old_count + 1
+        norms["avg_message_length"] = (old_avg * old_count + length) / new_count
+        norms["message_count"] = new_count
+
+        # Length distribution buckets
+        bucket = "short" if length < 20 else "medium" if length < 100 else "long"
+        dist = norms.get("length_distribution", {})
+        dist[bucket] = dist.get(bucket, 0) + 1
+        norms["length_distribution"] = dist
+
+        # 2. Emoji / emoticon usage
+        emoji_pattern = re.compile(
+            r"[\U0001F600-\U0001F64F\U0001F300-\U0001F5FF\U0001F680-\U0001F6FF"
+            r"\U0001F1E0-\U0001F1FF\U00002702-\U000027B0\U000024C2-\U0001F251"
+            r"\u4e00-\u9fff]{1,2}[\uD83C-\uDBFF\uDC00-\uDFFF]"
+            r"|[\u2600-\u26FF\u2700-\u27BF]"
+            r"|\[.+?\]|\(.+?\)"  # ASCII emoticons like [doge], (facepalm)
+        )
+        has_emoji = bool(emoji_pattern.search(content)) or any(
+            e in content for e in ("😀", "😂", "👍", "❤️", "🎉", "😭", "😡", "🙏", "😊", "😅")
+        )
+        emoji_total = norms.get("emoji_total", 0)
+        if has_emoji:
+            emoji_total += 1
+        norms["emoji_total"] = emoji_total
+        norms["emoji_usage_rate"] = emoji_total / new_count if new_count else 0.0
+
+        # 3. @mention rate
+        has_mention = "@" in content or "@" in content
+        mention_total = norms.get("mention_total", 0)
+        if has_mention:
+            mention_total += 1
+        norms["mention_total"] = mention_total
+        norms["mention_rate"] = mention_total / new_count if new_count else 0.0
+
+        # 4. Active hours histogram
+        hour = datetime.now(timezone.utc).hour
+        hours = norms.get("active_hours", {})
+        hours[str(hour)] = hours.get(str(hour), 0) + 1
+        norms["active_hours"] = hours
+
+        # 5. Topic switch tracking
+        topic_switches = norms.get("topic_switches", 0)
+        if intent.social_intent.value != norms.get("last_intent", ""):
+            topic_switches += 1
+        norms["topic_switches"] = topic_switches
+        norms["last_intent"] = intent.social_intent.value
+        norms["topic_switch_frequency"] = topic_switches / new_count if new_count else 0.0
+
+        # 6. Interaction style inference
+        short_ratio = dist.get("short", 0) / new_count if new_count else 0
+        if short_ratio > 0.6:
+            inferred_style = "active"
+        elif norms.get("emoji_usage_rate", 0) > 0.3:
+            inferred_style = "humorous"
+        elif norms.get("mention_rate", 0) > 0.2:
+            inferred_style = "formal"
+        else:
+            inferred_style = "balanced"
+        group_profile.typical_interaction_style = inferred_style
 
     # ==================================================================
     # Prompt builders & generation

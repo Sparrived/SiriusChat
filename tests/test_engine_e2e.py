@@ -210,3 +210,37 @@ class TestE2EBackgroundTasks:
         second_tasks = list(engine._bg_tasks)
         assert first_tasks == second_tasks
         engine.stop_background_tasks()
+
+
+
+class TestE2EGroupNormLearning:
+    @pytest.mark.asyncio
+    async def test_group_norms_updated_after_messages(self, tmp_path):
+        engine = EmotionalGroupChatEngine(work_path=tmp_path)
+        p = Participant(name="grace", user_id="grace")
+
+        # Send a few messages
+        await engine.process_message(
+            Message(role="human", content="大家好！今天天气真棒 🎉", speaker="grace"),
+            [p], "norm_group",
+        )
+        await engine.process_message(
+            Message(role="human", content="哈哈确实", speaker="grace"),
+            [p], "norm_group",
+        )
+        await engine.process_message(
+            Message(role="human", content="@所有人 记得开会", speaker="grace"),
+            [p], "norm_group",
+        )
+
+        profile = engine.semantic_memory.get_group_profile("norm_group")
+        assert profile is not None
+        norms = profile.group_norms
+
+        assert norms.get("message_count", 0) == 3
+        assert norms.get("emoji_usage_rate", 0) > 0
+        assert norms.get("mention_rate", 0) > 0
+        assert "avg_message_length" in norms
+        assert "length_distribution" in norms
+        assert "active_hours" in norms
+        assert profile.typical_interaction_style in ("active", "humorous", "balanced")
