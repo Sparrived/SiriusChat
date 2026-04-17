@@ -168,7 +168,7 @@ class TestE2EBackgroundTasks:
         engine = EmotionalGroupChatEngine(work_path=tmp_path)
         engine.start_background_tasks()
         assert engine._bg_running is True
-        assert len(engine._bg_tasks) == 3
+        assert len(engine._bg_tasks) == 4
 
         engine.stop_background_tasks()
         assert engine._bg_running is False

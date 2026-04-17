@@ -201,6 +201,7 @@ class EmotionalGroupChatEngine:
             asyncio.create_task(self._bg_delayed_queue_ticker(), name="delayed_queue"),
             asyncio.create_task(self._bg_proactive_checker(), name="proactive_check"),
             asyncio.create_task(self._bg_memory_promoter(), name="memory_promote"),
+            asyncio.create_task(self._bg_consolidator(), name="consolidator"),
         ]
         for t in tasks:
             self._bg_tasks.add(t)
@@ -255,6 +256,82 @@ class EmotionalGroupChatEngine:
                             )
             except Exception as exc:
                 logger.warning("Memory promotion failed: %s", exc)
+
+    async def _bg_consolidator(self) -> None:
+        """Periodically consolidate episodic memories into semantic profiles."""
+        interval = self.config.get("consolidation_interval_seconds", 600)
+        while self._bg_running:
+            await asyncio.sleep(interval)
+            try:
+                for group_id in self.working_memory.list_groups():
+                    await self._consolidate_group(group_id)
+            except Exception as exc:
+                logger.warning("Consolidation failed: %s", exc)
+
+    async def _consolidate_group(self, group_id: str) -> None:
+        """Consolidate episodic events into semantic user profiles for a group."""
+        from datetime import datetime, timedelta, timezone
+
+        # Read recent episodic events (last 7 days)
+        entries = self.episodic_memory.get_entries(group_id, limit=500)
+        if not entries:
+            return
+
+        cutoff = datetime.now(timezone.utc) - timedelta(days=7)
+        recent = [
+            e for e in entries
+            if e.created_at and datetime.fromisoformat(e.created_at.replace("Z", "+00:00")) > cutoff
+        ]
+        if not recent:
+            return
+
+        # Aggregate per user
+        user_stats: dict[str, dict[str, Any]] = {}
+        for e in recent:
+            uid = e.user_id or "unknown"
+            if uid not in user_stats:
+                user_stats[uid] = {
+                    "count": 0,
+                    "valence_sum": 0.0,
+                    "help_count": 0,
+                    "last_at": e.created_at,
+                }
+            user_stats[uid]["count"] += 1
+            # Approximate valence from confidence and summary sentiment
+            valence = 0.0
+            if e.summary:
+                s = e.summary.lower()
+                pos = sum(1 for w in ["开心", "高兴", "喜欢", "棒", "好"] if w in s)
+                neg = sum(1 for w in ["难受", "难过", "伤心", "烦", "累", "生气"] if w in s)
+                valence = (pos - neg) * 0.2
+            user_stats[uid]["valence_sum"] += valence
+            if "help" in e.summary.lower() or "求助" in e.summary or "怎么办" in e.summary:
+                user_stats[uid]["help_count"] += 1
+
+        # Update semantic profiles
+        for uid, stats in user_stats.items():
+            profile = self.semantic_memory.get_user_profile(group_id, uid)
+            if profile is None:
+                profile = UserSemanticProfile(user_id=uid)
+
+            # Update relationship state
+            rs = profile.relationship_state
+            rs.interaction_frequency_7d = stats["count"] / 7.0
+            avg_valence = stats["valence_sum"] / stats["count"] if stats["count"] > 0 else 0.0
+            # Smooth emotional intimacy update
+            rs.emotional_intimacy = round(
+                rs.emotional_intimacy * 0.7 + abs(avg_valence) * 0.3, 3
+            )
+            # Dependency score: how often they seek help
+            rs.dependency_score = round(
+                rs.dependency_score * 0.7 + min(1.0, stats["help_count"] / max(1, stats["count"])) * 0.3, 3
+            )
+            rs.compute_familiarity()
+            rs.last_interaction_at = stats["last_at"]
+            if not rs.first_interaction_at:
+                rs.first_interaction_at = stats["last_at"]
+
+            self.semantic_memory.save_user_profile(group_id, profile)
 
     async def proactive_check(self, group_id: str) -> dict[str, Any] | None:
         """Check if proactive trigger should fire for a group."""
