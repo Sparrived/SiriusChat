@@ -32,6 +32,7 @@ from sirius_chat.memory.semantic.manager import SemanticMemoryManager
 from sirius_chat.memory.user.manager import UserMemoryManager
 from sirius_chat.memory.working.manager import WorkingMemoryManager
 
+from sirius_chat.core.events import SessionEvent, SessionEventBus, SessionEventType
 from sirius_chat.models.emotion import AssistantEmotionState, EmotionState
 from sirius_chat.models.intent_v3 import IntentAnalysisV3
 from sirius_chat.models.models import Message, Participant, Transcript
@@ -99,6 +100,9 @@ class EmotionalGroupChatEngine:
         self._group_last_message_at: dict[str, str] = {}
         self._transcripts: dict[str, Transcript] = {}
 
+        # Event bus
+        self.event_bus = SessionEventBus()
+
     # ==================================================================
     # Public API
     # ==================================================================
@@ -122,17 +126,46 @@ class EmotionalGroupChatEngine:
 
         # 1. Perception
         self._perception(group_id, message, participants)
+        await self.event_bus.emit(SessionEvent(
+            type=SessionEventType.PERCEPTION_COMPLETED,
+            data={"group_id": group_id, "user_id": user_id},
+        ))
 
         # 2. Cognition (parallel)
         intent, emotion, memories = await self._cognition(
             content, user_id, group_id
         )
+        await self.event_bus.emit(SessionEvent(
+            type=SessionEventType.COGNITION_COMPLETED,
+            data={
+                "group_id": group_id,
+                "user_id": user_id,
+                "intent": intent.to_dict(),
+                "emotion": emotion.to_dict(),
+            },
+        ))
 
         # 3. Decision
         decision = self._decision(intent, emotion, group_id, user_id)
+        await self.event_bus.emit(SessionEvent(
+            type=SessionEventType.DECISION_COMPLETED,
+            data={
+                "group_id": group_id,
+                "strategy": decision.strategy.value,
+                "priority": getattr(decision, "priority", None),
+            },
+        ))
 
         # 4. Execution
         result = await self._execution(decision, message, intent, emotion, memories, group_id)
+        await self.event_bus.emit(SessionEvent(
+            type=SessionEventType.EXECUTION_COMPLETED,
+            data={
+                "group_id": group_id,
+                "strategy": result.get("strategy"),
+                "has_reply": result.get("reply") is not None,
+            },
+        ))
 
         # 5. Background memory updates
         self._background_update(group_id, message, emotion, intent)
@@ -159,6 +192,14 @@ class EmotionalGroupChatEngine:
         prompt = self._build_proactive_prompt(trigger, group_id)
         reply = await self._generate(prompt, group_id)
 
+        await self.event_bus.emit(SessionEvent(
+            type=SessionEventType.PROACTIVE_RESPONSE_TRIGGERED,
+            data={
+                "group_id": group_id,
+                "trigger_type": trigger["trigger_type"],
+            },
+        ))
+
         return {
             "strategy": "proactive",
             "trigger_type": trigger["trigger_type"],
@@ -178,6 +219,13 @@ class EmotionalGroupChatEngine:
                 "item_id": item.item_id,
                 "reply": reply,
             })
+            await self.event_bus.emit(SessionEvent(
+                type=SessionEventType.DELAYED_RESPONSE_TRIGGERED,
+                data={
+                    "group_id": group_id,
+                    "item_id": item.item_id,
+                },
+            ))
         return results
 
     # ==================================================================

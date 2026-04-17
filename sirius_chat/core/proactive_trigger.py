@@ -64,15 +64,23 @@ class ProactiveTrigger:
 
         # 1. Silence trigger
         if last_message_at:
-            last_msg_dt = datetime.fromisoformat(last_message_at.replace("Z", "+00:00"))
-            if now - last_msg_dt >= self.silence_threshold:
-                self._record(group_id, None)
-                return {
-                    "trigger_type": "silence",
-                    "group_id": group_id,
-                    "silence_minutes": (now - last_msg_dt).total_seconds() / 60,
-                    "suggested_tone": "casual",
-                }
+            raw = last_message_at.replace("Z", "+00:00")
+            try:
+                last_msg_dt = datetime.fromisoformat(raw)
+            except ValueError:
+                last_msg_dt = None
+            if last_msg_dt is not None:
+                # Ensure offset-aware for comparison with now (which is UTC)
+                if last_msg_dt.tzinfo is None:
+                    last_msg_dt = last_msg_dt.replace(tzinfo=timezone.utc)
+                if now - last_msg_dt >= self.silence_threshold:
+                    self._record(group_id, None)
+                    return {
+                        "trigger_type": "silence",
+                        "group_id": group_id,
+                        "silence_minutes": (now - last_msg_dt).total_seconds() / 60,
+                        "suggested_tone": "casual",
+                    }
 
         # 2. Atmosphere trigger
         if group_atmosphere:

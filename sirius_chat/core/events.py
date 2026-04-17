@@ -38,6 +38,14 @@ class SessionEventType(enum.Enum):
     # An error occurred during processing.
     ERROR = "error"
 
+    # v0.28+ Emotional Group Chat pipeline events
+    PERCEPTION_COMPLETED = "perception_completed"
+    COGNITION_COMPLETED = "cognition_completed"
+    DECISION_COMPLETED = "decision_completed"
+    EXECUTION_COMPLETED = "execution_completed"
+    DELAYED_RESPONSE_TRIGGERED = "delayed_response_triggered"
+    PROACTIVE_RESPONSE_TRIGGERED = "proactive_response_triggered"
+
 
 @dataclass(slots=True)
 class SessionEvent:
