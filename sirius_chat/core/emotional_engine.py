@@ -88,6 +88,10 @@ class EmotionalGroupChatEngine:
             overrides=self.config.get("task_model_overrides"),
         )
 
+        # Persistence
+        from sirius_chat.core.engine_persistence import EngineStateStore
+        self._state_store = EngineStateStore(work_path)
+
         # Assistant state
         self.assistant_emotion = AssistantEmotionState()
 
@@ -175,6 +179,61 @@ class EmotionalGroupChatEngine:
                 "reply": reply,
             })
         return results
+
+    # ==================================================================
+    # Persistence
+    # ==================================================================
+
+    def save_state(self) -> None:
+        """Persist all runtime state to disk."""
+        working_memories: dict[str, list[dict[str, Any]]] = {}
+        for group_id in self.working_memory.list_groups():
+            entries = self.working_memory.get_recent_entries(group_id, n=100)
+            working_memories[group_id] = [
+                {
+                    "user_id": e.user_id,
+                    "role": e.role,
+                    "content": e.content,
+                    "timestamp": e.timestamp,
+                    "importance": e.importance,
+                }
+                for e in entries
+            ]
+
+        import dataclasses
+        self._state_store.save_all(
+            working_memories=working_memories,
+            assistant_emotion=dataclasses.asdict(self.assistant_emotion),
+            delayed_queue=[],
+            group_timestamps=dict(self._group_last_message_at),
+        )
+
+    def load_state(self) -> None:
+        """Restore runtime state from disk."""
+        state = self._state_store.load_all()
+
+        # Working memory
+        for group_id, entries in state.get("working_memories", {}).items():
+            for e in entries:
+                self.working_memory.add_entry(
+                    group_id=group_id,
+                    user_id=e.get("user_id", "unknown"),
+                    role=e.get("role", "human"),
+                    content=e.get("content", ""),
+                    importance=e.get("importance", 0.5),
+                )
+
+        # Assistant emotion
+        ae = state.get("assistant_emotion")
+        if ae:
+            for key, value in ae.items():
+                if hasattr(self.assistant_emotion, key):
+                    setattr(self.assistant_emotion, key, value)
+
+        # Group timestamps
+        self._group_last_message_at = dict(state.get("group_timestamps", {}))
+
+        logger.info("Engine state loaded | groups=%d", len(state.get("working_memories", {})))
 
     # ==================================================================
     # Pipeline stages

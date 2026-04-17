@@ -76,6 +76,10 @@ class WorkingMemoryManager:
         """Get the working memory window for a group."""
         return list(self._windows.get(group_id or "default", []))
 
+    def list_groups(self) -> list[str]:
+        """Return all group IDs that have working memory entries."""
+        return list(self._windows.keys())
+
     def get_recent_entries(
         self,
         group_id: str,
