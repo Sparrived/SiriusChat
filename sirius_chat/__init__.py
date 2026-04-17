@@ -4,6 +4,7 @@ from sirius_chat.api import (
     AnalyticsReport,
     AsyncLLMProvider,
     AsyncRolePlayEngine,
+    EmotionalGroupChatEngine,
     BaselineDict,
     BucketDict,
     EventMemoryManager,
@@ -82,8 +83,15 @@ from sirius_chat.api import (
     SkillRegistry,
     SkillExecutor,
     SkillDataStore,
-    IntentAnalysis,
-    IntentAnalyzer,
+    IntentAnalyzerV3,
+    EmotionAnalyzer,
+    ResponseStrategyEngine,
+    DelayedResponseQueue,
+    ProactiveTrigger,
+    ThresholdEngine,
+    ResponseAssembler,
+    StyleAdapter,
+    StyleParams,
     BackgroundTaskConfig,
     BackgroundTaskManager,
 )
@@ -182,6 +190,7 @@ __all__ = [
     "CostMetricsMiddleware",
     # Engine
     "AsyncRolePlayEngine",
+    "EmotionalGroupChatEngine",
     # Skill System
     "SkillDefinition",
     "SkillInvocationContext",
@@ -190,9 +199,17 @@ __all__ = [
     "SkillRegistry",
     "SkillExecutor",
     "SkillDataStore",
-    # Intent Analysis & Background Tasks
-    "IntentAnalysis",
-    "IntentAnalyzer",
+    # v0.28+ cognitive layer
+    "IntentAnalyzerV3",
+    "EmotionAnalyzer",
+    "ResponseStrategyEngine",
+    "DelayedResponseQueue",
+    "ProactiveTrigger",
+    "ThresholdEngine",
+    "ResponseAssembler",
+    "StyleAdapter",
+    "StyleParams",
+    # Background Tasks
     "BackgroundTaskConfig",
     "BackgroundTaskManager",
     # API Functions

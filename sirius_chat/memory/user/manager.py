@@ -30,9 +30,18 @@ class UserMemoryManager:
     """Manages user memory entries, facts, and profiles."""
     
     def __init__(self):
-        self.entries: dict[str, UserMemoryEntry] = {}
+        # v0.28: group-isolated entries: {group_id: {user_id: UserMemoryEntry}}
+        self.entries: dict[str, dict[str, UserMemoryEntry]] = {}
+        # Legacy flat index (backward compat): {user_id: UserMemoryEntry}
+        # Populated lazily from default group when old callers access it.
         self.speaker_index: dict[str, str] = {}
         self.identity_index: dict[str, str] = {}
+
+    def _ensure_group(self, group_id: str) -> dict[str, UserMemoryEntry]:
+        """Get or create the user entry dict for a group."""
+        if group_id not in self.entries:
+            self.entries[group_id] = {}
+        return self.entries[group_id]
 
     @staticmethod
     def _normalize_label(label: str) -> str:
@@ -138,13 +147,15 @@ class UserMemoryManager:
         context_channel: str = "",
         context_topic: str = "",
         source_event_id: str = "",
+        group_id: str = "default",
     ) -> None:
         """Add memory fact with trait normalization and intelligent upper limit management.
         
         C1 approach: When exceeding max_facts, delete lowest-confidence facts rather than simple FIFO.
         B approach: Auto-apply trait normalization for certain fact_types.
         """
-        entry = self.entries.get(user_id)
+        group = self._ensure_group(group_id)
+        entry = group.get(user_id)
         if entry is None:
             return
         
@@ -190,6 +201,7 @@ class UserMemoryManager:
                 context_channel=context_channel,
                 context_topic=context_topic,
                 source_event_id=source_event_id,
+                mention_count=1,
             )
         )
         
@@ -205,14 +217,15 @@ class UserMemoryManager:
             # Keep top 90%
             entry.runtime.memory_facts = sorted_facts[num_to_delete:]
 
-    def register_user(self, profile: UserProfile) -> None:
-        """Register a user profile."""
+    def register_user(self, profile: UserProfile, group_id: str = "default") -> None:
+        """Register a user profile in a group."""
         if not profile.user_id:
             profile.user_id = profile.name
-        if profile.user_id not in self.entries:
-            self.entries[profile.user_id] = UserMemoryEntry(profile=profile)
+        group = self._ensure_group(group_id)
+        if profile.user_id not in group:
+            group[profile.user_id] = UserMemoryEntry(profile=profile)
         else:
-            existing = self.entries[profile.user_id].profile
+            existing = group[profile.user_id].profile
             if profile.name and not existing.name:
                 existing.name = profile.name
             if profile.persona and not existing.persona:
@@ -264,13 +277,19 @@ class UserMemoryManager:
         user_id = self.resolve_user_id_by_identity(channel=channel, external_user_id=external_user_id)
         if not user_id:
             return None
-        return self.entries.get(user_id)
+        # Search across all groups for this user
+        for group in self.entries.values():
+            entry = group.get(user_id)
+            if entry is not None:
+                return entry
+        return None
 
-    def ensure_user(self, *, speaker: str, persona: str = "") -> UserProfile:
+    def ensure_user(self, *, speaker: str, persona: str = "", group_id: str = "default") -> UserProfile:
         """Ensure user exists, creating if necessary."""
         resolved_user_id = self.resolve_user_id(speaker=speaker)
-        if resolved_user_id and resolved_user_id in self.entries:
-            entry = self.entries[resolved_user_id]
+        group = self._ensure_group(group_id)
+        if resolved_user_id and resolved_user_id in group:
+            entry = group[resolved_user_id]
             if persona and not entry.profile.persona:
                 entry.profile.persona = persona
             return entry.profile
@@ -287,11 +306,13 @@ class UserMemoryManager:
         max_recent_messages: int,
         channel: str | None = None,
         channel_user_id: str | None = None,
+        group_id: str = "default",
     ) -> None:
         """Remember a message from user."""
-        is_new_user = profile.user_id not in self.entries
-        self.register_user(profile)
-        entry = self.entries[profile.user_id]
+        group = self._ensure_group(group_id)
+        is_new_user = profile.user_id not in group
+        self.register_user(profile, group_id=group_id)
+        entry = group[profile.user_id]
         entry.runtime.recent_messages.append(content)
         if len(entry.runtime.recent_messages) > max_recent_messages:
             entry.runtime.recent_messages = entry.runtime.recent_messages[-max_recent_messages:]
@@ -326,9 +347,10 @@ class UserMemoryManager:
         summary_note: str | None = None,
         source: str = "unknown",
         confidence: float = 0.5,
+        group_id: str = "default",
     ) -> None:
         """Apply AI inferred runtime updates to user memory."""
-        entry = self.entries.get(user_id)
+        entry = self._ensure_group(group_id).get(user_id)
         if entry is None:
             return
         if inferred_persona:
@@ -355,9 +377,9 @@ class UserMemoryManager:
                     confidence=confidence,
                 )
 
-    def add_summary_note(self, *, user_id: str, note: str, max_notes: int = 8) -> None:
+    def add_summary_note(self, *, user_id: str, note: str, max_notes: int = 8, group_id: str = "default") -> None:
         """Add a summary note for user."""
-        entry = self.entries.get(user_id)
+        entry = self._ensure_group(group_id).get(user_id)
         if entry is None:
             return
         appended = self._append_summary_note(entry=entry, note=note, max_notes=max_notes)
@@ -372,56 +394,58 @@ class UserMemoryManager:
 
     def merge_from(self, other: "UserMemoryManager") -> None:
         """Merge another UserMemoryManager into this one."""
-        for user_id, incoming in other.entries.items():
-            incoming_profile = UserProfile(
-                user_id=incoming.profile.user_id,
-                name=incoming.profile.name,
-                persona=incoming.profile.persona,
-                identities=dict(incoming.profile.identities),
-                aliases=list(incoming.profile.aliases),
-                traits=list(incoming.profile.traits),
-                metadata=dict(incoming.profile.metadata),
-            )
-            self.register_user(incoming_profile)
-            current = self.entries[user_id]
-
-            if incoming.runtime.inferred_persona and not current.runtime.inferred_persona:
-                current.runtime.inferred_persona = incoming.runtime.inferred_persona
-
-            for trait in incoming.runtime.inferred_traits:
-                if trait not in current.runtime.inferred_traits:
-                    current.runtime.inferred_traits.append(trait)
-
-            for alias in incoming.runtime.inferred_aliases:
-                self._append_inferred_alias(entry=current, alias=alias)
-
-            for tag in incoming.runtime.preference_tags:
-                if tag not in current.runtime.preference_tags:
-                    current.runtime.preference_tags.append(tag)
-
-            for msg in incoming.runtime.recent_messages:
-                if msg not in current.runtime.recent_messages:
-                    current.runtime.recent_messages.append(msg)
-            if len(current.runtime.recent_messages) > 8:
-                current.runtime.recent_messages = current.runtime.recent_messages[-8:]
-
-            for note in incoming.runtime.summary_notes:
-                self._append_summary_note(entry=current, note=note, max_notes=8)
-
-            for fact in incoming.runtime.memory_facts:
-                self.add_memory_fact(
-                    user_id=user_id,
-                    fact_type=fact.fact_type,
-                    value=fact.value,
-                    source=fact.source,
-                    confidence=fact.confidence,
-                    observed_at=fact.observed_at,
+        for group_id, group_entries in other.entries.items():
+            for user_id, incoming in group_entries.items():
+                incoming_profile = UserProfile(
+                    user_id=incoming.profile.user_id,
+                    name=incoming.profile.name,
+                    persona=incoming.profile.persona,
+                    identities=dict(incoming.profile.identities),
+                    aliases=list(incoming.profile.aliases),
+                    traits=list(incoming.profile.traits),
+                    metadata=dict(incoming.profile.metadata),
                 )
+                self.register_user(incoming_profile, group_id=group_id)
+                current = self._ensure_group(group_id)[user_id]
 
-            if incoming.runtime.last_seen_channel and not current.runtime.last_seen_channel:
-                current.runtime.last_seen_channel = incoming.runtime.last_seen_channel
-            if incoming.runtime.last_seen_uid and not current.runtime.last_seen_uid:
-                current.runtime.last_seen_uid = incoming.runtime.last_seen_uid
+                if incoming.runtime.inferred_persona and not current.runtime.inferred_persona:
+                    current.runtime.inferred_persona = incoming.runtime.inferred_persona
+
+                for trait in incoming.runtime.inferred_traits:
+                    if trait not in current.runtime.inferred_traits:
+                        current.runtime.inferred_traits.append(trait)
+
+                for alias in incoming.runtime.inferred_aliases:
+                    self._append_inferred_alias(entry=current, alias=alias)
+
+                for tag in incoming.runtime.preference_tags:
+                    if tag not in current.runtime.preference_tags:
+                        current.runtime.preference_tags.append(tag)
+
+                for msg in incoming.runtime.recent_messages:
+                    if msg not in current.runtime.recent_messages:
+                        current.runtime.recent_messages.append(msg)
+                if len(current.runtime.recent_messages) > 8:
+                    current.runtime.recent_messages = current.runtime.recent_messages[-8:]
+
+                for note in incoming.runtime.summary_notes:
+                    self._append_summary_note(entry=current, note=note, max_notes=8)
+
+                for fact in incoming.runtime.memory_facts:
+                    self.add_memory_fact(
+                        user_id=user_id,
+                        fact_type=fact.fact_type,
+                        value=fact.value,
+                        source=fact.source,
+                        confidence=fact.confidence,
+                        observed_at=fact.observed_at,
+                        group_id=group_id,
+                    )
+
+                if incoming.runtime.last_seen_channel and not current.runtime.last_seen_channel:
+                    current.runtime.last_seen_channel = incoming.runtime.last_seen_channel
+                if incoming.runtime.last_seen_uid and not current.runtime.last_seen_uid:
+                    current.runtime.last_seen_uid = incoming.runtime.last_seen_uid
 
     def apply_scheduled_decay(self) -> dict[str, int]:
         """Apply scheduled decay to all user memories.
@@ -431,17 +455,20 @@ class UserMemoryManager:
         from sirius_chat.memory.quality.models import MemoryForgetEngine
         return MemoryForgetEngine.apply_scheduled_decay(self)
     
-    def cleanup_expired_memories(self, min_quality: float = 0.25) -> dict[str, int]:
+    def cleanup_expired_memories(self, min_quality: float = 0.25, group_id: str | None = None) -> dict[str, int]:
         """Clean up expired/low-quality memories for all users.
         
         Returns: {user_id: number of deleted memories}
         """
         from sirius_chat.memory.quality.models import MemoryForgetEngine
         cleanup_stats = {}
-        for user_id, entry in self.entries.items():
-            deleted_count = MemoryForgetEngine.cleanup_user_memories(entry, min_quality=min_quality)
-            if deleted_count > 0:
-                cleanup_stats[user_id] = deleted_count
+        groups_to_clean = [group_id] if group_id else list(self.entries.keys())
+        for gid in groups_to_clean:
+            group = self.entries.get(gid, {})
+            for user_id, entry in group.items():
+                deleted_count = MemoryForgetEngine.cleanup_user_memories(entry, min_quality=min_quality)
+                if deleted_count > 0:
+                    cleanup_stats[user_id] = deleted_count
         return cleanup_stats
 
     def apply_event_insights(
@@ -451,13 +478,14 @@ class UserMemoryManager:
         source: str = "event_extract",
         base_confidence: float = 0.65,
         source_event_id: str = "",
+        group_id: str = "default",
     ) -> None:
         """Convert event features to user memory facts and feature signals.
         
         Auto-converts event's emotion_tags, keywords, role_slots, time_hints etc.
         to corresponding user memory facts and updates observed feature sets.
         """
-        entry = self.entries.get(user_id)
+        entry = self._ensure_group(group_id).get(user_id)
         if entry is None:
             return
 
@@ -537,13 +565,13 @@ class UserMemoryManager:
         while len(s) > max_size:
             s.pop()
 
-    def get_resident_facts(self, user_id: str, threshold: float = 0.85) -> list[MemoryFact]:
+    def get_resident_facts(self, user_id: str, threshold: float = 0.85, group_id: str = "default") -> list[MemoryFact]:
         """Get high-confidence RESIDENT facts (only for persistence to user.json).
         
         RESIDENT: confidence > threshold, representing core, stable user traits and preferences.
         These facts should be persisted to storage.
         """
-        entry = self.entries.get(user_id)
+        entry = self._ensure_group(group_id).get(user_id)
         if entry is None:
             return []
         
@@ -552,13 +580,13 @@ class UserMemoryManager:
             if fact.confidence > threshold
         ]
 
-    def get_transient_facts(self, user_id: str, threshold: float = 0.85) -> list[MemoryFact]:
+    def get_transient_facts(self, user_id: str, threshold: float = 0.85, group_id: str = "default") -> list[MemoryFact]:
         """Get low-confidence TRANSIENT facts (stored in session memory).
         
         TRANSIENT: confidence <= threshold, representing recently observed uncertain information.
         These facts should be stored in session memory and auto-cleaned after 30 minutes.
         """
-        entry = self.entries.get(user_id)
+        entry = self._ensure_group(group_id).get(user_id)
         if entry is None:
             return []
         
@@ -567,44 +595,50 @@ class UserMemoryManager:
             if fact.confidence <= threshold
         ]
 
-    def get_user_by_id(self, user_id: str) -> UserMemoryEntry | None:
+    def get_user_by_id(self, user_id: str, group_id: str = "default") -> UserMemoryEntry | None:
         """Get user memory entry by exact user ID.
         
         Args:
             user_id: The user ID to look up
+            group_id: Group context (default: "default")
         
         Returns:
             UserMemoryEntry or None if not found
         """
-        return self.entries.get(user_id)
+        return self._ensure_group(group_id).get(user_id)
 
     def search_users_by_fact(
         self, 
         fact_type: str, 
         value: str | None = None,
+        group_id: str | None = None,
     ) -> dict[str, list[MemoryFact]]:
         """Search for users with specific fact types or values.
         
         Args:
             fact_type: The type of fact to search for (e.g., "job", "location", "hobby")
             value: Optional specific value to match. If None, returns all facts of that type.
+            group_id: If provided, search only this group; otherwise search all groups.
         
         Returns:
             Dict mapping user_id to list of matching MemoryFact objects
         """
         results: dict[str, list[MemoryFact]] = {}
         
-        for user_id, entry in self.entries.items():
-            matching_facts = []
-            for fact in entry.runtime.memory_facts:
-                if fact.fact_type != fact_type:
-                    continue
-                if value is not None and value.lower() not in fact.value.lower():
-                    continue
-                matching_facts.append(fact)
-            
-            if matching_facts:
-                results[user_id] = matching_facts
+        groups_to_search = [group_id] if group_id else list(self.entries.keys())
+        for gid in groups_to_search:
+            group = self.entries.get(gid, {})
+            for user_id, entry in group.items():
+                matching_facts = []
+                for fact in entry.runtime.memory_facts:
+                    if fact.fact_type != fact_type:
+                        continue
+                    if value is not None and value.lower() not in fact.value.lower():
+                        continue
+                    matching_facts.append(fact)
+                
+                if matching_facts:
+                    results[user_id] = matching_facts
         
         return results
 
@@ -613,6 +647,7 @@ class UserMemoryManager:
         user_id: str, 
         include_transient: bool = True,
         max_facts_per_type: int = 5,
+        group_id: str = "default",
     ) -> dict[str, Any]:
         """Generate a model-friendly user summary with rich context.
         
@@ -628,7 +663,7 @@ class UserMemoryManager:
             Dict with keys: profile, summary, traits, interests, recent_facts, 
                            identities, confidence_distribution, channels
         """
-        entry = self.get_user_by_id(user_id)
+        entry = self.get_user_by_id(user_id, group_id=group_id)
         if entry is None:
             return {}
         
@@ -636,8 +671,8 @@ class UserMemoryManager:
         runtime = entry.runtime
         
         # Separate facts by confidence
-        resident_facts = self.get_resident_facts(user_id)
-        transient_facts = self.get_transient_facts(user_id)
+        resident_facts = self.get_resident_facts(user_id, group_id=group_id)
+        transient_facts = self.get_transient_facts(user_id, group_id=group_id)
         
         # Build facts list based on include_transient flag
         facts_to_include = resident_facts
@@ -724,6 +759,7 @@ class UserMemoryManager:
         user_id: str,
         channel: str | None = None,
         topic: str | None = None,
+        group_id: str = "default",
     ) -> list[MemoryFact]:
         """Get facts filtered by communication channel and/or topic.
         
@@ -735,7 +771,7 @@ class UserMemoryManager:
         Returns:
             List of MemoryFact objects matching the filters
         """
-        entry = self.get_user_by_id(user_id)
+        entry = self.get_user_by_id(user_id, group_id=group_id)
         if entry is None:
             return []
         
@@ -762,13 +798,14 @@ class UserMemoryManager:
         user_id: str,
         max_age_minutes: int = 30,
         transient_threshold: float = 0.85,
+        group_id: str = "default",
     ) -> int:
         """Clean up expired TRANSIENT facts.
         
         TRANSIENT facts (confidence <= threshold) are deleted after max_age_minutes
         from their observed_at time. Returns number of deleted facts.
         """
-        entry = self.entries.get(user_id)
+        entry = self._ensure_group(group_id).get(user_id)
         if entry is None:
             return 0
         
@@ -812,6 +849,7 @@ class UserMemoryManager:
         min_notes: int = 4,
         temperature: float = 0.3,
         max_tokens: int = 256,
+        group_id: str = "default",
     ) -> int:
         """Consolidate summary notes for a user into fewer, more refined notes.
 
@@ -820,7 +858,7 @@ class UserMemoryManager:
         """
         from sirius_chat.providers.base import GenerationRequest
 
-        entry = self.entries.get(user_id)
+        entry = self._ensure_group(group_id).get(user_id)
         if entry is None:
             return 0
 
@@ -869,6 +907,7 @@ class UserMemoryManager:
         min_facts: int = 15,
         temperature: float = 0.3,
         max_tokens: int = 512,
+        group_id: str = "default",
     ) -> int:
         """Consolidate memory facts for a user using LLM-based merging.
 
@@ -877,7 +916,7 @@ class UserMemoryManager:
         """
         from sirius_chat.providers.base import GenerationRequest
 
-        entry = self.entries.get(user_id)
+        entry = self._ensure_group(group_id).get(user_id)
         if entry is None:
             return 0
 
@@ -986,6 +1025,7 @@ class UserMemoryManager:
         self,
         user_id: str,
         similarity_threshold: float = 0.8,
+        group_id: str = "default",
     ) -> int:
         """C3 approach: Dynamic memory facts compression.
         
@@ -998,7 +1038,7 @@ class UserMemoryManager:
         Returns:
             Number of compressed/deleted facts
         """
-        entry = self.entries.get(user_id)
+        entry = self._ensure_group(group_id).get(user_id)
         if entry is None:
             return 0
         
@@ -1046,43 +1086,46 @@ class UserMemoryManager:
         return deleted_count
 
     def to_dict(self) -> dict[str, Any]:
-        """Serialize to dictionary."""
+        """Serialize to dictionary with group isolation preserved."""
         return {
             "entries": {
-                user_id: {
-                    "profile": {
-                        "user_id": entry.profile.user_id,
-                        "name": entry.profile.name,
-                        "persona": entry.profile.persona,
-                        "identities": entry.profile.identities,
-                        "aliases": entry.profile.aliases,
-                        "traits": entry.profile.traits,
-                        "metadata": entry.profile.metadata,
-                    },
-                    "runtime": {
-                        "inferred_persona": entry.runtime.inferred_persona,
-                        "inferred_aliases": entry.runtime.inferred_aliases,
-                        "inferred_traits": entry.runtime.inferred_traits,
-                        "preference_tags": entry.runtime.preference_tags,
-                        "recent_messages": entry.runtime.recent_messages,
-                        "summary_notes": entry.runtime.summary_notes,
-                        # Use MemoryFact.to_dict() so any future fields are included automatically
-                        "memory_facts": [item.to_dict() for item in entry.runtime.memory_facts],
-                        "last_seen_channel": entry.runtime.last_seen_channel,
-                        "last_seen_uid": entry.runtime.last_seen_uid,
-                        "observed_keywords": list(entry.runtime.observed_keywords),
-                        "observed_roles": list(entry.runtime.observed_roles),
-                        "observed_emotions": list(entry.runtime.observed_emotions),
-                        "observed_entities": list(entry.runtime.observed_entities),
-                        # A1: Serialize timestamp
-                        "last_event_processed_at": (
-                            entry.runtime.last_event_processed_at.isoformat()
-                            if entry.runtime.last_event_processed_at is not None
-                            else None
-                        ),
-                    },
+                group_id: {
+                    user_id: {
+                        "profile": {
+                            "user_id": entry.profile.user_id,
+                            "name": entry.profile.name,
+                            "persona": entry.profile.persona,
+                            "identities": entry.profile.identities,
+                            "aliases": entry.profile.aliases,
+                            "traits": entry.profile.traits,
+                            "metadata": entry.profile.metadata,
+                        },
+                        "runtime": {
+                            "inferred_persona": entry.runtime.inferred_persona,
+                            "inferred_aliases": entry.runtime.inferred_aliases,
+                            "inferred_traits": entry.runtime.inferred_traits,
+                            "preference_tags": entry.runtime.preference_tags,
+                            "recent_messages": entry.runtime.recent_messages,
+                            "summary_notes": entry.runtime.summary_notes,
+                            # Use MemoryFact.to_dict() so any future fields are included automatically
+                            "memory_facts": [item.to_dict() for item in entry.runtime.memory_facts],
+                            "last_seen_channel": entry.runtime.last_seen_channel,
+                            "last_seen_uid": entry.runtime.last_seen_uid,
+                            "observed_keywords": list(entry.runtime.observed_keywords),
+                            "observed_roles": list(entry.runtime.observed_roles),
+                            "observed_emotions": list(entry.runtime.observed_emotions),
+                            "observed_entities": list(entry.runtime.observed_entities),
+                            # A1: Serialize timestamp
+                            "last_event_processed_at": (
+                                entry.runtime.last_event_processed_at.isoformat()
+                                if entry.runtime.last_event_processed_at is not None
+                                else None
+                            ),
+                        },
+                    }
+                    for user_id, entry in group_entries.items()
                 }
-                for user_id, entry in self.entries.items()
+                for group_id, group_entries in self.entries.items()
             },
             "speaker_index": self.speaker_index,
             "identity_index": self.identity_index,
@@ -1090,70 +1133,81 @@ class UserMemoryManager:
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "UserMemoryManager":
-        """Deserialize from dictionary."""
+        """Deserialize from group-isolated dictionary."""
         manager = cls()
         raw_entries = payload.get("entries", {})
-        for user_id, item in raw_entries.items():
-            profile_data = item.get("profile", {})
-            profile = UserProfile(
-                user_id=profile_data.get("user_id", user_id),
-                name=profile_data.get("name", user_id),
-                persona=profile_data.get("persona", ""),
-                identities=dict(profile_data.get("identities", {})),
-                aliases=list(profile_data.get("aliases", [])),
-                traits=list(profile_data.get("traits", [])),
-                metadata=dict(profile_data.get("metadata", {})),
-            )
-            runtime_data = item.get("runtime", {})
-            if not runtime_data:
-                # Backward compatibility for old entry fields.
-                runtime_data = {
-                    "recent_messages": list(item.get("recent_messages", [])),
-                    "summary_notes": list(item.get("summary_notes", [])),
-                }
-            manager.entries[user_id] = UserMemoryEntry(
-                profile=profile,
-                runtime=UserRuntimeState(
-                    inferred_persona=str(runtime_data.get("inferred_persona", "")),
-                    inferred_aliases=list(runtime_data.get("inferred_aliases", [])),
-                    inferred_traits=list(runtime_data.get("inferred_traits", [])),
-                    preference_tags=list(runtime_data.get("preference_tags", [])),
-                    recent_messages=list(runtime_data.get("recent_messages", [])),
-                    summary_notes=list(runtime_data.get("summary_notes", [])),
-                    # Use MemoryFact.from_dict() so any future fields are handled automatically
-                    memory_facts=[
-                        MemoryFact.from_dict(item)
-                        for item in list(runtime_data.get("memory_facts", []))
-                        if isinstance(item, dict) and str(item.get("value", "")).strip()
-                    ],
-                    last_seen_channel=str(runtime_data.get("last_seen_channel", "")),
-                    last_seen_uid=str(runtime_data.get("last_seen_uid", "")),
-                    observed_keywords=set(runtime_data.get("observed_keywords", [])),
-                    observed_roles=set(runtime_data.get("observed_roles", [])),
-                    observed_emotions=set(runtime_data.get("observed_emotions", [])),
-                    observed_entities=set(runtime_data.get("observed_entities", [])),
-                    # A1: Deserialize timestamp
-                    last_event_processed_at=(
-                        datetime.fromisoformat(str(runtime_data["last_event_processed_at"]))
-                        if isinstance(runtime_data.get("last_event_processed_at"), str)
-                        and str(runtime_data.get("last_event_processed_at", "")).strip()
-                        else None
-                    ),
-                ),
-            )
-            runtime = manager.entries[user_id].runtime
-
+        for group_id, group_entries in raw_entries.items():
+            if not isinstance(group_entries, dict):
+                continue
+            target_group = manager._ensure_group(group_id)
+            for user_id, item in group_entries.items():
+                _deserialize_entry(manager, user_id, item, target_group)
         manager.speaker_index = dict(payload.get("speaker_index", {}))
         manager.identity_index = dict(payload.get("identity_index", {}))
         if not manager.speaker_index:
-            for user_id, entry in manager.entries.items():
-                labels = [user_id, entry.profile.name, *entry.profile.aliases]
-                for label in labels:
-                    if label:
-                        manager.speaker_index[manager._normalize_label(label)] = user_id
+            for group in manager.entries.values():
+                for user_id, entry in group.items():
+                    labels = [user_id, entry.profile.name, *entry.profile.aliases]
+                    for label in labels:
+                        if label:
+                            manager.speaker_index[manager._normalize_label(label)] = user_id
         if not manager.identity_index:
-            for user_id, entry in manager.entries.items():
-                for channel, external_id in entry.profile.identities.items():
-                    if channel and external_id:
-                        manager.identity_index[manager._identity_key(channel, external_id)] = user_id
+            for group in manager.entries.values():
+                for user_id, entry in group.items():
+                    for channel, external_id in entry.profile.identities.items():
+                        if channel and external_id:
+                            manager.identity_index[manager._identity_key(channel, external_id)] = user_id
         return manager
+
+
+def _deserialize_entry(
+    manager: UserMemoryManager,
+    user_id: str,
+    item: dict[str, Any],
+    target_group: dict[str, UserMemoryEntry],
+) -> None:
+    profile_data = item.get("profile", {})
+    profile = UserProfile(
+        user_id=profile_data.get("user_id", user_id),
+        name=profile_data.get("name", user_id),
+        persona=profile_data.get("persona", ""),
+        identities=dict(profile_data.get("identities", {})),
+        aliases=list(profile_data.get("aliases", [])),
+        traits=list(profile_data.get("traits", [])),
+        metadata=dict(profile_data.get("metadata", {})),
+    )
+    runtime_data = item.get("runtime", {})
+    if not runtime_data:
+        # Backward compatibility for old entry fields.
+        runtime_data = {
+            "recent_messages": list(item.get("recent_messages", [])),
+            "summary_notes": list(item.get("summary_notes", [])),
+        }
+    target_group[user_id] = UserMemoryEntry(
+        profile=profile,
+        runtime=UserRuntimeState(
+            inferred_persona=str(runtime_data.get("inferred_persona", "")),
+            inferred_aliases=list(runtime_data.get("inferred_aliases", [])),
+            inferred_traits=list(runtime_data.get("inferred_traits", [])),
+            preference_tags=list(runtime_data.get("preference_tags", [])),
+            recent_messages=list(runtime_data.get("recent_messages", [])),
+            summary_notes=list(runtime_data.get("summary_notes", [])),
+            memory_facts=[
+                MemoryFact.from_dict(item)
+                for item in list(runtime_data.get("memory_facts", []))
+                if isinstance(item, dict) and str(item.get("value", "")).strip()
+            ],
+            last_seen_channel=str(runtime_data.get("last_seen_channel", "")),
+            last_seen_uid=str(runtime_data.get("last_seen_uid", "")),
+            observed_keywords=set(runtime_data.get("observed_keywords", [])),
+            observed_roles=set(runtime_data.get("observed_roles", [])),
+            observed_emotions=set(runtime_data.get("observed_emotions", [])),
+            observed_entities=set(runtime_data.get("observed_entities", [])),
+            last_event_processed_at=(
+                datetime.fromisoformat(str(runtime_data["last_event_processed_at"]))
+                if isinstance(runtime_data.get("last_event_processed_at"), str)
+                and str(runtime_data.get("last_event_processed_at", "")).strip()
+                else None
+            ),
+        ),
+    )

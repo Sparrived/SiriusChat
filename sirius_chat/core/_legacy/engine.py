@@ -44,19 +44,19 @@ from sirius_chat.skills.executor import SkillExecutor, parse_skill_calls, strip_
 from sirius_chat.skills.models import SkillChainContext
 from sirius_chat.skills.security import build_skill_invocation_context
 from sirius_chat.core.events import SessionEvent, SessionEventBus, SessionEventType
-from sirius_chat.core.intent_v2 import IntentAnalysis, IntentAnalyzer
-from sirius_chat.core.heat import HeatAnalysis, HeatAnalyzer
-from sirius_chat.core.engagement import EngagementCoordinator, EngagementDecision
+from sirius_chat.core._legacy.intent_v2 import IntentAnalysis, IntentAnalyzer
+from sirius_chat.core._legacy.heat import HeatAnalysis, HeatAnalyzer
+from sirius_chat.core._legacy.engagement import EngagementCoordinator, EngagementDecision
 from sirius_chat.background_tasks import BackgroundTaskConfig, BackgroundTaskManager
 from sirius_chat.core.markers import PROMPT_SPLIT_MARKER, SKILL_RESULT_CHANNEL_MARKER
-from sirius_chat.core.memory_runner import (
+from sirius_chat.core._legacy.memory_runner import (
     run_memory_extract_task,
     run_self_memory_extract_task,
     run_batch_event_extract,
     run_memory_manager_task,
     build_memory_extract_task_input,
 )
-from sirius_chat.core.engagement_pipeline import (
+from sirius_chat.core._legacy.engagement_pipeline import (
     build_heat_analysis,
     run_engagement_intent_analysis,
     should_reply_for_turn,

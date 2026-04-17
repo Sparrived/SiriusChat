@@ -28,7 +28,7 @@ from sirius_chat.memory import EventMemoryManager, SelfMemoryManager
 from sirius_chat.memory.self.models import DiaryEntry, GlossaryTerm
 
 if TYPE_CHECKING:
-    from sirius_chat.core.engine import LiveSessionContext
+    from sirius_chat.core._legacy.engine import LiveSessionContext
 
 logger = logging.getLogger(__name__)
 

@@ -13,8 +13,8 @@ from sirius_chat.models import Message, Participant, Transcript
 from sirius_chat.providers.base import GenerationRequest
 from sirius_chat.async_engine.utils import estimate_tokens, record_task_stat
 from sirius_chat.async_engine.orchestration import TASK_INTENT_ANALYSIS
-from sirius_chat.core.heat import HeatAnalysis, HeatAnalyzer
-from sirius_chat.core.intent_v2 import IntentAnalysis, IntentAnalyzer
+from sirius_chat.core._legacy.heat import HeatAnalysis, HeatAnalyzer
+from sirius_chat.core._legacy.intent_v2 import IntentAnalysis, IntentAnalyzer
 
 logger = logging.getLogger(__name__)
 

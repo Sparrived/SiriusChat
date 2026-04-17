@@ -58,6 +58,12 @@ class MemoryFact(JsonSerializable):
     context_channel: str = ""  # Source channel (qq, wechat, cli, etc.)
     context_topic: str = ""  # Conversation topic or domain
     context_metadata: dict[str, str] = field(default_factory=dict)  # Additional context
+    # Group isolation
+    group_id: str = ""  # Group/chat identifier for memory isolation
+    # Activation-based forgetting (paper §4.2.4)
+    activation: float = 1.0  # Dynamic activation score (0~1)
+    access_count: int = 0  # Retrieval access count for reinforcement
+    last_accessed: str = ""  # ISO 8601 timestamp of last retrieval
     # Activity tracking
     mention_count: int = 0  # Number of times this fact has been mentioned/reinforced
     source_event_id: str = ""  # Link back to originating event (if any)

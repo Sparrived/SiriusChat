@@ -1,15 +1,17 @@
 from sirius_chat.api.engine import (
     AsyncRolePlayEngine,
+    EmotionalGroupChatEngine,
     SessionEvent,
     SessionEventBus,
     SessionEventType,
     ainit_live_session,
-    open_workspace_runtime,
     arun_live_message,
     asubscribe,
     create_async_engine,
+    create_emotional_engine,
     extract_assistant_messages,
     find_user_by_channel_uid,
+    open_workspace_runtime,
 )
 from sirius_chat.api.memory import (
     EventMemoryManager,
@@ -34,7 +36,15 @@ from sirius_chat.api.models import (
     WorkspaceBootstrap,
     WorkspaceConfig,
 )
-from sirius_chat.core.intent_v2 import IntentAnalysis, IntentAnalyzer
+# v0.28+ new cognitive layer exports
+from sirius_chat.core.intent_v3 import IntentAnalyzerV3
+from sirius_chat.core.emotion import EmotionAnalyzer
+from sirius_chat.core.rhythm import RhythmAnalysis, RhythmAnalyzer
+from sirius_chat.core.response_strategy import ResponseStrategyEngine
+from sirius_chat.core.delayed_response_queue import DelayedResponseQueue
+from sirius_chat.core.proactive_trigger import ProactiveTrigger
+from sirius_chat.core.response_assembler import ResponseAssembler, StyleAdapter, StyleParams
+from sirius_chat.core.threshold_engine import ThresholdEngine
 from sirius_chat.background_tasks import BackgroundTaskConfig, BackgroundTaskManager
 from sirius_chat.api.prompting import (
     GENERATED_AGENTS_FILE_NAME,
@@ -130,6 +140,7 @@ from sirius_chat.skills import (
 )
 
 __all__ = [
+    # Models & config
     "Agent",
     "AgentPreset",
     "Message",
@@ -158,7 +169,12 @@ __all__ = [
     "JsonSessionStore",
     "SqliteSessionStore",
     "SessionStoreFactory",
+    # Engines (v0.28+ preferred)
+    "EmotionalGroupChatEngine",
+    "create_emotional_engine",
+    # Legacy engines (kept for reference)
     "AsyncRolePlayEngine",
+    "create_async_engine",
     "JsonPersistentSessionRunner",
     "RoleplayWorkspaceManager",
     "WorkspaceLayout",
@@ -188,7 +204,6 @@ __all__ = [
     "SessionEvent",
     "SessionEventBus",
     "SessionEventType",
-    "create_async_engine",
     "open_workspace_runtime",
     "ainit_live_session",
     "arun_live_message",
@@ -240,9 +255,19 @@ __all__ = [
     "SkillRegistry",
     "SkillExecutor",
     "SkillDataStore",
-    # Intent analysis & background tasks
-    "IntentAnalysis",
-    "IntentAnalyzer",
+    # v0.28+ cognitive layer
+    "IntentAnalyzerV3",
+    "EmotionAnalyzer",
+    "RhythmAnalysis",
+    "RhythmAnalyzer",
+    "ResponseStrategyEngine",
+    "DelayedResponseQueue",
+    "ProactiveTrigger",
+    "ThresholdEngine",
+    "ResponseAssembler",
+    "StyleAdapter",
+    "StyleParams",
+    # Background tasks
     "BackgroundTaskConfig",
     "BackgroundTaskManager",
 ]

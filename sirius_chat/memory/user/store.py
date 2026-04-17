@@ -1,4 +1,11 @@
-"""User memory file store implementation"""
+"""User memory file store with group-isolated layout (v0.28+).
+
+Layout:
+    {work_path}/user_memory/global/                  # Cross-group profiles (future)
+    {work_path}/user_memory/groups/{group_id}/
+        ├── {user_id}.json
+        └── group_state.json
+"""
 
 from __future__ import annotations
 
@@ -16,26 +23,24 @@ logger = logging.getLogger(__name__)
 
 
 class UserMemoryFileStore:
-    """File-based storage for user memory."""
-    
+    """File-based storage for group-isolated user memory."""
+
     def __init__(self, work_path: Path | WorkspaceLayout) -> None:
         layout = work_path if isinstance(work_path, WorkspaceLayout) else WorkspaceLayout(work_path)
-        self._dir = layout.user_memory_dir()
+        self._base_dir = layout.user_memory_dir()
 
     @property
     def directory(self) -> Path:
-        return self._dir
+        return self._base_dir
 
     @staticmethod
     def _safe_filename(user_id: str) -> str:
-        """Generate safe filename from user ID."""
         base = re.sub(r"[^a-zA-Z0-9_\-\u4e00-\u9fff]+", "_", user_id.strip())
         base = re.sub(r"_+", "_", base).strip("_")
         return base or "user"
 
     @staticmethod
     def _entry_to_payload(entry: UserMemoryEntry) -> dict[str, Any]:
-        """Convert entry to serializable payload."""
         return {
             "profile": entry.profile.to_dict(),
             "runtime": {
@@ -53,67 +58,125 @@ class UserMemoryFileStore:
             },
         }
 
+    # ------------------------------------------------------------------
+    # Save
+    # ------------------------------------------------------------------
+
     def save_all(self, manager: UserMemoryManager) -> None:
-        """Save all user memories to files."""
-        self._dir.mkdir(parents=True, exist_ok=True)
-        for user_id, entry in manager.entries.items():
+        """Save all user memories using group-isolated layout."""
+        for group_id, group_entries in manager.entries.items():
+            group_dir = self._base_dir / "groups" / group_id
+            group_dir.mkdir(parents=True, exist_ok=True)
+            for user_id, entry in group_entries.items():
+                file_name = f"{self._safe_filename(user_id)}.json"
+                target = group_dir / file_name
+                tmp = target.with_suffix(target.suffix + ".tmp")
+                tmp.write_text(
+                    json.dumps(self._entry_to_payload(entry), ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+                tmp.replace(target)
+
+    def save_group(self, manager: UserMemoryManager, group_id: str) -> None:
+        """Save a specific group's user memories."""
+        group_entries = manager.entries.get(group_id)
+        if not group_entries:
+            return
+        group_dir = self._base_dir / "groups" / group_id
+        group_dir.mkdir(parents=True, exist_ok=True)
+        for user_id, entry in group_entries.items():
             file_name = f"{self._safe_filename(user_id)}.json"
-            target = self._dir / file_name
+            target = group_dir / file_name
             tmp = target.with_suffix(target.suffix + ".tmp")
-            tmp.write_text(json.dumps(self._entry_to_payload(entry), ensure_ascii=False, indent=2), encoding="utf-8")
+            tmp.write_text(
+                json.dumps(self._entry_to_payload(entry), ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
             tmp.replace(target)
 
+    # ------------------------------------------------------------------
+    # Load
+    # ------------------------------------------------------------------
+
     def load_all(self) -> UserMemoryManager:
-        """Load all user memories from files."""
+        """Load all user memories from group-isolated layout."""
         manager = UserMemoryManager()
-        if not self._dir.exists():
+        groups_dir = self._base_dir / "groups"
+        if not groups_dir.exists():
             return manager
 
-        for file_path in self._dir.glob("*.json"):
-            try:
-                payload = json.loads(file_path.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError):
+        for group_dir in groups_dir.iterdir():
+            if not group_dir.is_dir():
                 continue
+            group_id = group_dir.name
+            for file_path in group_dir.glob("*.json"):
+                if file_path.name == "group_state.json":
+                    continue
+                self._load_file(file_path, manager, group_id)
 
-            if not isinstance(payload, dict):
-                continue
-
-            profile_data = payload.get("profile", {})
-            if not isinstance(profile_data, dict):
-                continue
-            user_id = str(profile_data.get("user_id", "")).strip()
-            if not user_id:
-                continue
-
-            from sirius_chat.memory.user.models import UserProfile
-            profile = UserProfile(
-                user_id=user_id,
-                name=str(profile_data.get("name", user_id)).strip() or user_id,
-                persona=str(profile_data.get("persona", "")).strip(),
-                identities=dict(profile_data.get("identities", {})),
-                aliases=list(profile_data.get("aliases", [])),
-                traits=list(profile_data.get("traits", [])),
-                metadata=dict(profile_data.get("metadata", {})),
-            )
-            manager.register_user(profile)
-
-            runtime_data = payload.get("runtime", {})
-            if not isinstance(runtime_data, dict):
-                continue
-            entry = manager.entries[user_id]
-            entry.runtime.inferred_persona = str(runtime_data.get("inferred_persona", "")).strip()
-            entry.runtime.inferred_traits = list(runtime_data.get("inferred_traits", []))
-            entry.runtime.preference_tags = list(runtime_data.get("preference_tags", []))
-            entry.runtime.recent_messages = list(runtime_data.get("recent_messages", []))
-            entry.runtime.summary_notes = list(runtime_data.get("summary_notes", []))
-            entry.runtime.memory_facts = [
-                MemoryFact.from_dict(item)
-                for item in list(runtime_data.get("memory_facts", []))
-                if isinstance(item, dict) and str(item.get("value", "")).strip()
-            ]
-            entry.runtime.last_seen_channel = str(runtime_data.get("last_seen_channel", "")).strip()
-            entry.runtime.last_seen_uid = str(runtime_data.get("last_seen_uid", "")).strip()
-
-        # Schema write-back: persist any new default fields to each user file.
-        self.save_all(manager)
         return manager
+
+    def load_group(self, group_id: str) -> dict[str, UserMemoryEntry]:
+        """Load a specific group's user memories."""
+        entries: dict[str, UserMemoryEntry] = {}
+        manager = UserMemoryManager()
+        group_dir = self._base_dir / "groups" / group_id
+        if not group_dir.exists():
+            return entries
+        for file_path in group_dir.glob("*.json"):
+            if file_path.name == "group_state.json":
+                continue
+            self._load_file(file_path, manager, group_id)
+        return manager.entries.get(group_id, {})
+
+    def _load_file(
+        self,
+        file_path: Path,
+        manager: UserMemoryManager,
+        group_id: str,
+    ) -> None:
+        try:
+            payload = json.loads(file_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return
+
+        if not isinstance(payload, dict):
+            return
+
+        profile_data = payload.get("profile", {})
+        if not isinstance(profile_data, dict):
+            return
+
+        user_id = str(profile_data.get("user_id", "")).strip()
+        if not user_id:
+            return
+
+        from sirius_chat.memory.user.models import UserProfile
+        profile = UserProfile(
+            user_id=user_id,
+            name=str(profile_data.get("name", user_id)).strip() or user_id,
+            persona=str(profile_data.get("persona", "")).strip(),
+            identities=dict(profile_data.get("identities", {})),
+            aliases=list(profile_data.get("aliases", [])),
+            traits=list(profile_data.get("traits", [])),
+            metadata=dict(profile_data.get("metadata", {})),
+        )
+        manager.register_user(profile, group_id=group_id)
+
+        runtime_data = payload.get("runtime", {})
+        if not isinstance(runtime_data, dict):
+            return
+
+        entry = manager.entries[group_id][user_id]
+        entry.runtime.inferred_persona = str(runtime_data.get("inferred_persona", "")).strip()
+        entry.runtime.inferred_traits = list(runtime_data.get("inferred_traits", []))
+        entry.runtime.preference_tags = list(runtime_data.get("preference_tags", []))
+        entry.runtime.recent_messages = list(runtime_data.get("recent_messages", []))
+        entry.runtime.summary_notes = list(runtime_data.get("summary_notes", []))
+        entry.runtime.memory_facts = [
+            MemoryFact.from_dict(item)
+            for item in list(runtime_data.get("memory_facts", []))
+            if isinstance(item, dict) and str(item.get("value", "")).strip()
+        ]
+        entry.runtime.last_seen_channel = str(runtime_data.get("last_seen_channel", "")).strip()
+        entry.runtime.last_seen_uid = str(runtime_data.get("last_seen_uid", "")).strip()

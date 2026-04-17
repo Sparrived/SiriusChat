@@ -16,8 +16,8 @@ import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-from sirius_chat.core.heat import HeatAnalysis, HeatAnalyzer
-from sirius_chat.core.intent_v2 import IntentAnalysis
+from sirius_chat.core._legacy.heat import HeatAnalysis, HeatAnalyzer
+from sirius_chat.core._legacy.intent_v2 import IntentAnalysis
 
 logger = logging.getLogger(__name__)
 

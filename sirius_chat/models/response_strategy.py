@@ -1,0 +1,60 @@
+"""Response strategy models: four-layer decision system."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Any
+
+
+class ResponseStrategy(Enum):
+    """Four-layer response strategy (paper §2.3 / §6)."""
+
+    IMMEDIATE = "immediate"
+    DELAYED = "delayed"
+    SILENT = "silent"
+    PROACTIVE = "proactive"
+
+
+@dataclass(slots=True)
+class StrategyDecision:
+    """Decision produced by ResponseStrategyEngine."""
+
+    strategy: ResponseStrategy = ResponseStrategy.SILENT
+    score: float = 0.0
+    threshold: float = 0.5
+    urgency: float = 0.0
+    relevance: float = 0.0
+    reason: str = ""
+    estimated_delay_seconds: float = 0.0
+    context: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class DelayedResponseItem:
+    """Item queued in DelayedResponseQueue."""
+
+    item_id: str = ""
+    group_id: str = ""
+    user_id: str = ""
+    message_content: str = ""
+    strategy_decision: StrategyDecision = field(default_factory=StrategyDecision)
+    emotion_state: dict[str, Any] = field(default_factory=dict)
+    candidate_memories: list[str] = field(default_factory=list)
+    enqueue_time: str = ""
+    window_seconds: float = 30.0
+    status: str = "pending"  # pending | triggered | cancelled | sent
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "item_id": self.item_id,
+            "group_id": self.group_id,
+            "user_id": self.user_id,
+            "message_content": self.message_content,
+            "strategy_decision": self.strategy_decision.__dict__,
+            "emotion_state": self.emotion_state,
+            "candidate_memories": self.candidate_memories,
+            "enqueue_time": self.enqueue_time,
+            "window_seconds": self.window_seconds,
+            "status": self.status,
+        }

@@ -32,6 +32,8 @@ class EventMemoryEntry(JsonSerializable):
 
     event_id: str
     user_id: str = ""
+    group_id: str = ""  # Group/chat identifier for memory isolation
+    user_ids: list[str] = field(default_factory=list)  # Multi-user events
     category: str = "custom"  # preference|trait|relationship|experience|emotion|goal|custom
     summary: str = ""
     confidence: float = 0.5
@@ -40,6 +42,10 @@ class EventMemoryEntry(JsonSerializable):
     updated_at: str = ""
     mention_count: int = 0
     verified: bool = False
+    # Activation-based forgetting (paper §4.2.4)
+    activation: float = 1.0
+    access_count: int = 0
+    last_accessed: str = ""
 
 
 # Kept for public API backward compatibility — unused in v2 production code.

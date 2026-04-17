@@ -50,6 +50,13 @@ from sirius_chat.memory.self import (
 # Trait taxonomy (originally from sirius_chat.trait_taxonomy)
 from sirius_chat.trait_taxonomy import TRAIT_TAXONOMY
 
+# New v0.28 modules
+from sirius_chat.memory.activation_engine import ActivationEngine, DecaySchedule
+from sirius_chat.memory.retrieval_engine import MemoryRetriever
+from sirius_chat.memory.working import WorkingMemoryManager
+from sirius_chat.memory.episodic import EpisodicMemoryManager
+from sirius_chat.memory.semantic import SemanticMemoryManager
+
 __all__ = [
     # Constants
     "MAX_MEMORY_FACTS",

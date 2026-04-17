@@ -17,6 +17,7 @@ class Message(JsonSerializable):
     speaker: str | None = None
     channel: str | None = None
     channel_user_id: str | None = None
+    group_id: str | None = None
     multimodal_inputs: list[dict[str, str]] = field(default_factory=list)
     # 回复策略：always(默认总是回复) / never(只记忆不回复) / auto(自动判断是否需要回复)
     reply_mode: str = "always"
@@ -68,6 +69,7 @@ class Participant(JsonSerializable):
     identities: dict[str, str] = field(default_factory=dict)
     aliases: list[str] = field(default_factory=list)
     traits: list[str] = field(default_factory=list)
+    group_memberships: dict[str, Any] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -121,6 +123,7 @@ class Transcript:
         max_recent_messages: int = 5,
         channel: str | None = None,
         channel_user_id: str | None = None,
+        group_id: str = "default",
     ) -> None:
         self.user_memory.remember_message(
             profile=participant.as_user_profile(),
@@ -128,9 +131,10 @@ class Transcript:
             max_recent_messages=max_recent_messages,
             channel=channel,
             channel_user_id=channel_user_id,
+            group_id=group_id,
         )
 
-    def find_user_by_channel_uid(self, *, channel: str, uid: str) -> UserMemoryEntry | None:
+    def find_user_by_channel_uid(self, *, channel: str, uid: str, group_id: str = "default") -> UserMemoryEntry | None:
         return self.user_memory.get_user_by_identity(channel=channel, external_user_id=uid)
 
     def _generate_summary(self, archived_messages: list[Message], max_items: int = 8) -> str:
