@@ -652,11 +652,18 @@ class WorkspaceRuntime:
             if providers:
                 provider = AutoRoutingProvider(providers)
         provider_async = provider if provider is None or hasattr(provider, "generate_async") else None
-        return EmotionalGroupChatEngine(
+        engine = EmotionalGroupChatEngine(
             work_path=self.work_path,
             provider_async=provider_async,
             config=config,
         )
+        # Inject skill runtime if available
+        if self._skill_registry is not None and self._skill_executor is not None:
+            engine.set_skill_runtime(
+                skill_registry=self._skill_registry,
+                skill_executor=self._skill_executor,
+            )
+        return engine
 
     def _get_engine(self) -> AsyncRolePlayEngine:
         if self._engine is not None:
