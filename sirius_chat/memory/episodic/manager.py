@@ -44,6 +44,31 @@ class EpisodicMemoryManager:
         with path.open("a", encoding="utf-8") as f:
             f.write(line + "\n")
 
+    def add_event(
+        self,
+        *,
+        group_id: str,
+        user_id: str,
+        content: str,
+        emotion_valence: float = 0.0,
+        importance: float = 0.5,
+    ) -> None:
+        """Convenience method: create and append a simple event entry."""
+        import uuid
+        from datetime import datetime, timezone
+        entry = EventMemoryEntry(
+            event_id=str(uuid.uuid4()),
+            user_id=user_id,
+            group_id=group_id,
+            summary=content,
+            category="custom",
+            confidence=min(1.0, max(0.0, importance)),
+            created_at=datetime.now(timezone.utc).isoformat(),
+            updated_at=datetime.now(timezone.utc).isoformat(),
+            activation=min(1.0, max(0.0, importance)),
+        )
+        self.add_entry(entry)
+
     def get_entries(
         self,
         group_id: str,
