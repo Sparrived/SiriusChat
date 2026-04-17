@@ -41,7 +41,7 @@
 项目采用**分层架构**：
 
 1. **API 层**（`sirius_chat/api/`）：稳定的公开 facade，所有外部调用应通过这里。
-2. **核心编排层**（`sirius_chat/core/`）：真实实现，包括 `AsyncRolePlayEngine`、`chat_builder`、`memory_runner`、`engagement_pipeline`。
+2. **核心编排层**（`sirius_chat/core/`）：v0.28+ 默认引擎 `EmotionalGroupChatEngine`，含四层认知架构（感知→认知→决策→执行）+ 三层记忆底座 + 事件流。旧 `AsyncRolePlayEngine` 已归档至 `core/_legacy/`。
 3. **兼容/辅助层**（`sirius_chat/async_engine/`）：历史兼容导出与 prompts/orchestration/utils 辅助。
 4. **Workspace 层**（`sirius_chat/workspace/`）：布局管理、运行时生命周期、文件监听与热刷新。
 5. **配置层**（`sirius_chat/config/`）：WorkspaceConfig / SessionConfig / JSONC 读写管理。
@@ -336,6 +336,25 @@ python scripts/ci_check.py
 
 **AI 自身记忆**：日记（Diary，最多 100 条）+ 名词解释（Glossary，最多 200 条），支持遗忘曲线与衰减。
 
+**模型路由层（v0.28 新增）**：
+- `ModelRouter` 按任务类型（`emotion_analyze` / `intent_analyze` / `response_generate` / `memory_extract`）自动选择模型、温度、token 上限。
+- Urgency 升级：`urgency ≥ 80` → 切换更强模型；`urgency ≥ 95` → 最大 token 上限。
+- Heat 适配：`hot` 减少 30% token，`overheated` 减半 token。
+- 用户风格覆盖：`concise` 限制 80 token，`detailed` 增加 20%。
+- 通过 `task_model_overrides` 配置可自定义映射。
+
+**后台任务（v0.28 新增）**：
+- `start_background_tasks()` / `stop_background_tasks()` 幂等启停。
+- 延迟队列 ticker：每 10 秒检查所有活跃群的延迟响应。
+- 主动触发 checker：每 60 秒检查长时间沉默群。
+- 记忆 promoter：每 5 分钟将 `importance ≥ 0.3` 的工作记忆条目晋升到情景记忆。
+
+**群级规范学习（v0.28 新增）**：
+- 被动学习：每处理一条消息自动更新群体统计。
+- 统计项：`avg_message_length`、`emoji_usage_rate`、`mention_rate`、`active_hours`、`topic_switch_frequency`。
+- `typical_interaction_style` 推断：`active`（短消息多）/`humorous`（emoji 多）/`formal`（@提及多）/`balanced`。
+- 数据写入 `GroupSemanticProfile.group_norms`，与 atmosphere_history 一起持久化。
+
 ### Provider 与路由
 - 支持平台：`openai-compatible`、`deepseek`、`aliyun-bailian`、`bigmodel`（智谱）、`siliconflow`、`volcengine-ark`、`ytea`。
 - `AutoRoutingProvider` 按 `models` 显式列表或 `healthcheck_model` 精确匹配选择后端；未命中时回退到第一个可用 provider。
@@ -351,7 +370,7 @@ python scripts/ci_check.py
 
 ### v0.28 认知架构
 
-运行时数据流（四层）：
+运行时数据流（四层 + 后台）：
 
 ```
 群消息进入（感知层）
@@ -361,9 +380,11 @@ python scripts/ci_check.py
     └─ 更新 group_last_message_at
     │
     ▼
-认知层（并行）
+认知层（并行 + 可选 LLM fallback）
     ├─ IntentAnalyzer v3 → social_intent + urgency + relevance
+    │     └─ 规则 confidence < 0.8 → LLM 高精度分类（JSON 输出）
     ├─ EmotionAnalyzer → EmotionState(valence, arousal, basic_emotion)
+    │     └─ 规则 confidence < 0.6 → LLM 高精度情感分析（JSON 输出）
     └─ MemoryRetriever → 3-tier memory retrieval (working → episodic → semantic)
     │
     ▼
@@ -376,7 +397,15 @@ python scripts/ci_check.py
 执行层
     ├─ ResponseAssembler → 情感上下文 + 共情策略 + 记忆引用 + 群风格
     ├─ StyleAdapter → max_tokens / temperature / tone 动态适配
-    └─ LLM 生成回复
+    ├─ ModelRouter → 任务感知模型选择（urgency / heat / 用户风格）
+    └─ LLM 生成回复（provider_async.generate_async / generate）
+    │
+    ▼
+后台更新层
+    ├─ 更新群氛围 → semantic_memory.atmosphere_history
+    ├─ 被动学习群规范 → semantic_memory.group_norms
+    ├─ 更新用户情感轨迹 → emotion_analyzer.trajectories
+    └─ 触发事件 → event_bus (PERCEPTION/COGNITION/DECISION/EXECUTION_COMPLETED)
 ```
 
 四层响应策略：
@@ -385,15 +414,21 @@ python scripts/ci_check.py
 - **SILENT**：低 relevance / 日常闲聊 → 不回复，仅更新记忆
 - **PROACTIVE**：长时间沉默 / 记忆触发 / 情感触发 → AI 主动开启话题
 
+**持久化与恢复**：
+- `save_state()` → 原子写入 `engine_state/`（working_memory.json、assistant_emotion.json、group_timestamps.json）
+- `load_state()` → 从磁盘恢复所有群的运行态
+- 语义记忆和情景记忆已自带文件持久化，无需额外处理
+
 ---
 
 ### 文档同步义务
 当架构、命令或 API 发生变更时，**必须**同步更新以下文件：
-1. `docs/architecture.md`
-2. `docs/full-architecture-flow.md`
-3. `README.md`（若涉及用户可见行为）
-4. `.github/skills/framework-quickstart/SKILL.md`
-5. 相关的 `.github/skills/` 文件
+1. `AGENTS.md`（本文档——agent 开发指南，最高优先级）
+2. `docs/architecture.md`
+3. `docs/full-architecture-flow.md`
+4. `README.md`（若涉及用户可见行为）
+5. `.github/skills/framework-quickstart/SKILL.md`
+6. 相关的 `.github/skills/` 文件
 
 **不要**在未明确要求的情况下，为新增功能自动生成额外的 markdown 文档（如独立指南、快速入门、参考手册），以保持文档集中化。
 
@@ -428,7 +463,8 @@ python scripts/ci_check.py
 | `pyproject.toml` | 项目元数据、依赖、pytest 配置、setuptools 配置 |
 | `Makefile` | 开发工作流快捷命令 |
 | `main.py` | 仓库级交互入口 |
-| `sirius_chat/core/engine.py` | 核心编排引擎 |
+| `sirius_chat/core/emotional_engine.py` | v0.28 核心情感群聊引擎 |
+| `sirius_chat/core/_legacy/engine.py` | legacy 核心编排引擎 |
 | `sirius_chat/api/__init__.py` | 公开 API 导出清单 |
 | `tests/conftest.py` | 测试最小 fixture |
 | `scripts/ci_check.py` | 统一 CI 检查脚本 |
