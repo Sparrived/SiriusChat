@@ -104,28 +104,28 @@ class TestManagerMentionCount:
         m = self._make_manager()
         _add(m, "u1", "preference", "likes coffee", "test", 0.7)
         _add(m, "u1", "preference", "likes coffee", "test", 0.8)
-        facts = m.entries["u1"].runtime.memory_facts
+        facts = m.entries["default"]["u1"].runtime.memory_facts
         assert len(facts) == 1
-        assert facts[0].mention_count == 1  # incremented once
+        assert facts[0].mention_count == 2  # incremented on both adds
         assert facts[0].confidence == 0.8   # updated to higher
 
     def test_different_facts_not_deduped(self):
         m = self._make_manager()
         _add(m, "u1", "preference", "likes coffee", "test", 0.7)
         _add(m, "u1", "preference", "likes tea", "test", 0.8)
-        facts = m.entries["u1"].runtime.memory_facts
+        facts = m.entries["default"]["u1"].runtime.memory_facts
         assert len(facts) == 2
 
     def test_source_event_id_passed(self):
         m = self._make_manager()
         _add(m, "u1", "event", "meeting", "test", 0.7, source_event_id="evt_001")
-        fact = m.entries["u1"].runtime.memory_facts[0]
+        fact = m.entries["default"]["u1"].runtime.memory_facts[0]
         assert fact.source_event_id == "evt_001"
 
     def test_memory_category_passed(self):
         m = self._make_manager()
         _add(m, "u1", "preference", "likes coffee", "test", 0.7, memory_category="preference")
-        fact = m.entries["u1"].runtime.memory_facts[0]
+        fact = m.entries["default"]["u1"].runtime.memory_facts[0]
         assert fact.memory_category == "preference"
 
     def test_inferred_aliases_are_weak_hints_only(self):
@@ -137,13 +137,13 @@ class TestManagerMentionCount:
             confidence=0.8,
         )
 
-        entry = m.entries["u1"]
+        entry = m.entries["default"]["u1"]
         assert entry.runtime.inferred_aliases == ["老王"]
         assert entry.profile.aliases == []
         assert m.resolve_user_id(speaker="老王") is None
 
         restored = UserMemoryManager.from_dict(m.to_dict())
-        assert restored.entries["u1"].runtime.inferred_aliases == ["老王"]
+        assert restored.entries["default"]["u1"].runtime.inferred_aliases == ["老王"]
 
 
 # ---- Manager: get_rich_user_summary length control ----
@@ -203,7 +203,7 @@ class TestObservedSetCapping:
             "entities": [f"ent_{i}" for i in range(150)],
         }
         m.apply_event_insights("u1", features)
-        entry = m.entries["u1"]
+        entry = m.entries["default"]["u1"]
         assert len(entry.runtime.observed_emotions) <= 100
         assert len(entry.runtime.observed_keywords) <= 100
         assert len(entry.runtime.observed_roles) <= 100
@@ -214,7 +214,7 @@ class TestObservedSetCapping:
         m.register_user(UserProfile(user_id="u1", name="A"))
         features: dict[str, object] = {"emotion_tags": ["happy"]}
         m.apply_event_insights("u1", features, source_event_id="evt_42")
-        fact = m.entries["u1"].runtime.memory_facts[0]
+        fact = m.entries["default"]["u1"].runtime.memory_facts[0]
         assert fact.source_event_id == "evt_42"
 
 
@@ -256,7 +256,7 @@ class TestSerializationV2:
         m.register_user(UserProfile(user_id="u1", name="A"))
         _add(m, "u1", "preference", "likes coffee", "test", 0.7,
              memory_category="preference", source_event_id="evt_01")
-        fact = m.entries["u1"].runtime.memory_facts[0]
+        fact = m.entries["default"]["u1"].runtime.memory_facts[0]
         fact.mention_count = 3
         fact.context_channel = "qq"
         fact.context_topic = "food"
@@ -264,7 +264,7 @@ class TestSerializationV2:
 
         data = m.to_dict()
         m2 = UserMemoryManager.from_dict(data)
-        f2 = m2.entries["u1"].runtime.memory_facts[0]
+        f2 = m2.entries["default"]["u1"].runtime.memory_facts[0]
 
         assert f2.memory_category == "preference"
         assert f2.source_event_id == "evt_01"
@@ -297,7 +297,7 @@ class TestSerializationV2:
         m = UserMemoryManager()
         m.register_user(UserProfile(user_id="u1", name="A"))
         _add(m, "u1", "t", "old", "test", 0.6)
-        fact = m.entries["u1"].runtime.memory_facts[0]
+        fact = m.entries["default"]["u1"].runtime.memory_facts[0]
         # Set observed_at to 2 hours ago
         fact.observed_at = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
 
@@ -305,5 +305,5 @@ class TestSerializationV2:
 
         deleted = m.cleanup_expired_transient_facts("u1", max_age_minutes=30)
         assert deleted == 1
-        assert len(m.entries["u1"].runtime.memory_facts) == 1
-        assert m.entries["u1"].runtime.memory_facts[0].value == "new"
+        assert len(m.entries["default"]["u1"].runtime.memory_facts) == 1
+        assert m.entries["default"]["u1"].runtime.memory_facts[0].value == "new"

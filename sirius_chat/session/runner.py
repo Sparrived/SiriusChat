@@ -125,11 +125,11 @@ class JsonPersistentSessionRunner:
         payload = _participant_to_payload(self.primary_user)
         runtime_entry = None
         if self.transcript is not None:
-            runtime_entry = self.transcript.user_memory.entries.get(self.primary_user.user_id)
+            runtime_entry = self.transcript.user_memory.get_user_by_id(self.primary_user.user_id)
             if runtime_entry is None:
                 resolved_user_id = self.transcript.user_memory.resolve_user_id(speaker=self.primary_user.name)
                 if resolved_user_id:
-                    runtime_entry = self.transcript.user_memory.entries.get(resolved_user_id)
+                    runtime_entry = self.transcript.user_memory.get_user_by_id(resolved_user_id)
 
         if runtime_entry is not None:
             runtime = runtime_entry.runtime

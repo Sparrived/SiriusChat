@@ -862,17 +862,18 @@ class WorkspaceRuntime:
             for item in participants_raw
             if isinstance(item, dict) and str(item.get("user_id", "")).strip()
         }
-        for entry in transcript.user_memory.entries.values():
-            participant = Participant(
-                name=entry.profile.name,
-                user_id=entry.profile.user_id,
-                persona=entry.profile.persona,
-                identities=dict(entry.profile.identities),
-                aliases=list(entry.profile.aliases),
-                traits=list(entry.profile.traits),
-                metadata=dict(entry.profile.metadata),
-            )
-            participants_by_id[participant.user_id] = participant.to_dict()
+        for group_entries in transcript.user_memory.entries.values():
+            for entry in group_entries.values():
+                participant = Participant(
+                    name=entry.profile.name,
+                    user_id=entry.profile.user_id,
+                    persona=entry.profile.persona,
+                    identities=dict(entry.profile.identities),
+                    aliases=list(entry.profile.aliases),
+                    traits=list(entry.profile.traits),
+                    metadata=dict(entry.profile.metadata),
+                )
+                participants_by_id[participant.user_id] = participant.to_dict()
         payload = {
             "session_id": session_id,
             "primary_user_id": resolved_primary_user_id,

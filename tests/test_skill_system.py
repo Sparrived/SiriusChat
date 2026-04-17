@@ -1018,7 +1018,7 @@ class TestEnvironmentContext:
         """Verify run_live_message signature includes environment_context."""
         import inspect
 
-        from sirius_chat.core.engine import AsyncRolePlayEngine
+        from sirius_chat.core._legacy.engine import AsyncRolePlayEngine
 
         sig = inspect.signature(AsyncRolePlayEngine.run_live_message)
         assert "environment_context" in sig.parameters

@@ -85,7 +85,7 @@ def _resolve_focus_user_id(*, transcript: Transcript, message: Message | None) -
     user_id = manager.resolve_user_id(speaker=speaker)
     if not user_id:
         return None, ""
-    entry = manager.entries.get(user_id)
+    entry = manager.get_user_by_id(user_id)
     if entry is None:
         return user_id, "trusted_label"
     normalized = speaker.lower()

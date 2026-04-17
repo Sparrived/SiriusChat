@@ -220,7 +220,7 @@ class TestEngineTokenStoreIntegration:
     """Verify that LiveSessionContext stores token_store in SessionStores."""
 
     def test_live_session_context_has_token_store_field(self) -> None:
-        from sirius_chat.core.engine import LiveSessionContext, SessionStores
+        from sirius_chat.core._legacy.engine import LiveSessionContext, SessionStores
         import dataclasses
         # token_store is now a field of SessionStores (the stores sub-object)
         store_field_names = [f.name for f in dataclasses.fields(SessionStores)]

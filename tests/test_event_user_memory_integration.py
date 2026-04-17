@@ -210,7 +210,7 @@ class TestEventV2UserMemoryBridge:
             source="event_extract",
             base_confidence=0.65,
         )
-        entry = manager.entries["user1"]
+        entry = manager.entries["default"]["user1"]
         assert "焦虑" in entry.runtime.observed_emotions
         assert len(entry.runtime.memory_facts) > 0
 
@@ -248,7 +248,7 @@ class TestEventV2UserMemoryBridge:
             source_event_id=observation.event_id,
         )
 
-        facts = manager.entries["user1"].runtime.memory_facts
+        facts = manager.entries["default"]["user1"].runtime.memory_facts
         assert len(facts) == 1
         assert facts[0].value == "喜欢喝拿铁咖啡"
         assert facts[0].source == "event_observation"

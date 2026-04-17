@@ -191,7 +191,7 @@ class TestAPIFunctionality:
         mgr.register_user(profile)
         
         # 验证用户已注册
-        assert "test" in mgr.entries
+        assert "test" in mgr.entries.get("default", {})
     
     def test_cannot_access_internal_functions(self):
         """测试：不应该能访问内部函数"""

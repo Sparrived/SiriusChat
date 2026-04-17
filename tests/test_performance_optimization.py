@@ -33,12 +33,12 @@ class TestPerformanceOptimization:
         manager.register_user(profile)
         
         # 初始时应该为None
-        assert manager.entries["user1"].runtime.last_event_processed_at is None
+        assert manager.entries["default"]["user1"].runtime.last_event_processed_at is None
         
         # 模拟更新时间戳
         now = datetime.now(timezone.utc)
-        manager.entries["user1"].runtime.last_event_processed_at = now
-        assert manager.entries["user1"].runtime.last_event_processed_at is not None
+        manager.entries["default"]["user1"].runtime.last_event_processed_at = now
+        assert manager.entries["default"]["user1"].runtime.last_event_processed_at is not None
         
     def test_A1_serialization_deserialization_timestamp(self):
         """测试A1: 验证时间戳的序列化和反序列化"""
@@ -48,15 +48,15 @@ class TestPerformanceOptimization:
         
         # 设置时间戳
         now = datetime.now(timezone.utc)
-        manager.entries["user1"].runtime.last_event_processed_at = now
+        manager.entries["default"]["user1"].runtime.last_event_processed_at = now
         
         # 序列化
         data = manager.to_dict()
-        assert "last_event_processed_at" in data["entries"]["user1"]["runtime"]
+        assert "last_event_processed_at" in data["entries"]["default"]["user1"]["runtime"]
         
         # 反序列化
         manager2 = UserMemoryManager.from_dict(data)
-        restored_time = manager2.entries["user1"].runtime.last_event_processed_at
+        restored_time = manager2.entries["default"]["user1"].runtime.last_event_processed_at
         assert restored_time is not None
         # 由于时间戳转换，检查它们足够接近（秒级精度）
         assert abs((restored_time - now).total_seconds()) < 1
@@ -137,7 +137,7 @@ class TestPerformanceOptimization:
             confidence=0.8,
         )
         
-        facts = manager.entries["user1"].runtime.memory_facts
+        facts = manager.entries["default"]["user1"].runtime.memory_facts
         assert len(facts) == 1
         # 值应该被规范化为Learning
         assert facts[0].value == "Learning" or facts[0].value == "学习"  # 取决于实现
@@ -162,7 +162,7 @@ class TestPerformanceOptimization:
                 confidence=0.5 + (i % 10) * 0.01,  # confidence: 0.5~0.59
             )
         
-        facts = manager.entries["user1"].runtime.memory_facts
+        facts = manager.entries["default"]["user1"].runtime.memory_facts
         # 应该被清理到MAX_MEMORY_FACTS（50）左右
         # 由于可能有去重，实际可能少于50
         assert len(facts) <= MAX_MEMORY_FACTS
@@ -186,7 +186,7 @@ class TestPerformanceOptimization:
                 confidence=float(i) / 10.0,  # 0.0, 0.1, 0.2, ..., 0.9
             )
         
-        facts_before = len(manager.entries["user1"].runtime.memory_facts)
+        facts_before = len(manager.entries["default"]["user1"].runtime.memory_facts)
         assert facts_before == 10
         
         # 添加11个更多的事实，触发清理
@@ -199,7 +199,7 @@ class TestPerformanceOptimization:
                 confidence=0.5,  # 所有新fact都是相同的中等confidence
             )
         
-        facts_after = manager.entries["user1"].runtime.memory_facts
+        facts_after = manager.entries["default"]["user1"].runtime.memory_facts
         # 应该被清理到~50
         assert len(facts_after) <= MAX_MEMORY_FACTS + 1  # +1容许浮动
         
@@ -225,7 +225,7 @@ class TestPerformanceOptimization:
                 max_facts=30,  # 自定义limit
             )
         
-        facts = manager.entries["user1"].runtime.memory_facts
+        facts = manager.entries["default"]["user1"].runtime.memory_facts
         assert len(facts) <= 30
 
     def test_combined_optimization_workflow(self):
@@ -262,7 +262,7 @@ class TestPerformanceOptimization:
             )
         
         # 验证结果
-        runtime = manager.entries["user1"].runtime
+        runtime = manager.entries["default"]["user1"].runtime
         
         # C1: 检查facts数量在合理范围
         assert len(runtime.memory_facts) <= MAX_MEMORY_FACTS
@@ -284,7 +284,7 @@ class TestPerformanceOptimization:
         
         # 设置一些优化字段的值
         now = datetime.now(timezone.utc)
-        manager.entries["user1"].runtime.last_event_processed_at = now
+        manager.entries["default"]["user1"].runtime.last_event_processed_at = now
         
         # 添加一些fact
         manager.add_memory_fact(
@@ -300,8 +300,8 @@ class TestPerformanceOptimization:
         manager2 = UserMemoryManager.from_dict(data)
         
         # 验证优化字段被保留
-        assert manager2.entries["user1"].runtime.last_event_processed_at is not None
-        assert len(manager2.entries["user1"].runtime.memory_facts) > 0
+        assert manager2.entries["default"]["user1"].runtime.last_event_processed_at is not None
+        assert len(manager2.entries["default"]["user1"].runtime.memory_facts) > 0
 
 
 if __name__ == "__main__":

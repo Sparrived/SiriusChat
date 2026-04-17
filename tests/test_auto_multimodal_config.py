@@ -144,7 +144,7 @@ class TestIntegrationWithDynamicRouting:
 
     def test_manually_configured_agent_works_with_routing(self):
         """Test that manually configured agent works with dynamic routing."""
-        from sirius_chat.core.engine import AsyncRolePlayEngine
+        from sirius_chat.core._legacy.engine import AsyncRolePlayEngine
         from sirius_chat.models.models import Message, Transcript
         from sirius_chat.config.models import AgentPreset, SessionConfig
         from sirius_chat.providers.mock import MockProvider
@@ -187,7 +187,7 @@ class TestIntegrationWithDynamicRouting:
 
     def test_create_agent_helper_with_dynamic_routing(self):
         """Test that create_agent_with_multimodal works with dynamic routing."""
-        from sirius_chat.core.engine import AsyncRolePlayEngine
+        from sirius_chat.core._legacy.engine import AsyncRolePlayEngine
         from sirius_chat.models.models import Message, Transcript
         from sirius_chat.config.models import AgentPreset, SessionConfig
         from sirius_chat.providers.mock import MockProvider

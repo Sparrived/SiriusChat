@@ -163,7 +163,7 @@ def test_sqlite_session_store_save_and_load(tmp_path: Path) -> None:
         confidence=0.9,
         context_channel="cli",
     )
-    transcript.user_memory.entries["user_a"].runtime.inferred_persona = "谨慎"
+    transcript.user_memory.entries["default"]["user_a"].runtime.inferred_persona = "谨慎"
     transcript.reply_runtime.user_last_turn_at["user_a"] = "2026-04-14T10:00:00"
     transcript.reply_runtime.group_recent_turn_timestamps = ["2026-04-14T10:00:00"]
     transcript.reply_runtime.last_assistant_reply_at = "2026-04-14T10:00:03"
@@ -192,11 +192,11 @@ def test_sqlite_session_store_save_and_load(tmp_path: Path) -> None:
     assert loaded.token_usage_records[0].retries_used == 1
     assert loaded.reply_runtime.user_last_turn_at["user_a"] == "2026-04-14T10:00:00"
     assert loaded.reply_runtime.last_assistant_reply_at == "2026-04-14T10:00:03"
-    assert loaded.user_memory.entries["user_a"].profile.name == "A"
-    assert loaded.user_memory.entries["user_a"].runtime.inferred_persona == "谨慎"
+    assert loaded.user_memory.entries["default"]["user_a"].profile.name == "A"
+    assert loaded.user_memory.entries["default"]["user_a"].runtime.inferred_persona == "谨慎"
     assert any(
         fact.value == "偏好茶饮"
-        for fact in loaded.user_memory.entries["user_a"].runtime.memory_facts
+        for fact in loaded.user_memory.entries["default"]["user_a"].runtime.memory_facts
     )
 
 

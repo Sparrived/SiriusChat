@@ -377,81 +377,82 @@ class SqliteSessionStore:
             ],
         )
 
-        for user_id, entry in transcript.user_memory.entries.items():
-            conn.execute(
-                """
-                INSERT INTO session_user_profiles(
-                    user_id, name, persona, identities, aliases, traits, metadata
-                ) VALUES(?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    user_id,
-                    entry.profile.name,
-                    entry.profile.persona,
-                    self._json_dumps(entry.profile.identities),
-                    self._json_dumps(entry.profile.aliases),
-                    self._json_dumps(entry.profile.traits),
-                    self._json_dumps(entry.profile.metadata),
-                ),
-            )
-            conn.execute(
-                """
-                INSERT INTO session_user_runtime(
-                    user_id, inferred_persona, inferred_traits, preference_tags,
-                    recent_messages, summary_notes, last_seen_channel, last_seen_uid,
-                    observed_keywords, observed_roles, observed_emotions,
-                    observed_entities, last_event_processed_at
-                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    user_id,
-                    entry.runtime.inferred_persona,
-                    self._json_dumps(entry.runtime.inferred_traits),
-                    self._json_dumps(entry.runtime.preference_tags),
-                    self._json_dumps(entry.runtime.recent_messages),
-                    self._json_dumps(entry.runtime.summary_notes),
-                    entry.runtime.last_seen_channel,
-                    entry.runtime.last_seen_uid,
-                    self._json_dumps(sorted(entry.runtime.observed_keywords)),
-                    self._json_dumps(sorted(entry.runtime.observed_roles)),
-                    self._json_dumps(sorted(entry.runtime.observed_emotions)),
-                    self._json_dumps(sorted(entry.runtime.observed_entities)),
-                    entry.runtime.last_event_processed_at.isoformat()
-                    if entry.runtime.last_event_processed_at is not None
-                    else None,
-                ),
-            )
-            conn.executemany(
-                """
-                INSERT INTO session_user_memory_facts(
-                    user_id, fact_index, fact_type, value, source, confidence,
-                    observed_at, observed_time_desc, memory_category, validated,
-                    conflict_with, context_channel, context_topic, context_metadata,
-                    mention_count, source_event_id
-                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                [
+        for group_entries in transcript.user_memory.entries.values():
+            for user_id, entry in group_entries.items():
+                conn.execute(
+                    """
+                    INSERT INTO session_user_profiles(
+                        user_id, name, persona, identities, aliases, traits, metadata
+                    ) VALUES(?, ?, ?, ?, ?, ?, ?)
+                    """,
                     (
                         user_id,
-                        index,
-                        fact.fact_type,
-                        fact.value,
-                        fact.source,
-                        fact.confidence,
-                        fact.observed_at,
-                        fact.observed_time_desc,
-                        fact.memory_category,
-                        1 if fact.validated else 0,
-                        self._json_dumps(fact.conflict_with),
-                        fact.context_channel,
-                        fact.context_topic,
-                        self._json_dumps(fact.context_metadata),
-                        fact.mention_count,
-                        fact.source_event_id,
-                    )
-                    for index, fact in enumerate(entry.runtime.memory_facts)
-                ],
-            )
+                        entry.profile.name,
+                        entry.profile.persona,
+                        self._json_dumps(entry.profile.identities),
+                        self._json_dumps(entry.profile.aliases),
+                        self._json_dumps(entry.profile.traits),
+                        self._json_dumps(entry.profile.metadata),
+                    ),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO session_user_runtime(
+                        user_id, inferred_persona, inferred_traits, preference_tags,
+                        recent_messages, summary_notes, last_seen_channel, last_seen_uid,
+                        observed_keywords, observed_roles, observed_emotions,
+                        observed_entities, last_event_processed_at
+                    ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        user_id,
+                        entry.runtime.inferred_persona,
+                        self._json_dumps(entry.runtime.inferred_traits),
+                        self._json_dumps(entry.runtime.preference_tags),
+                        self._json_dumps(entry.runtime.recent_messages),
+                        self._json_dumps(entry.runtime.summary_notes),
+                        entry.runtime.last_seen_channel,
+                        entry.runtime.last_seen_uid,
+                        self._json_dumps(sorted(entry.runtime.observed_keywords)),
+                        self._json_dumps(sorted(entry.runtime.observed_roles)),
+                        self._json_dumps(sorted(entry.runtime.observed_emotions)),
+                        self._json_dumps(sorted(entry.runtime.observed_entities)),
+                        entry.runtime.last_event_processed_at.isoformat()
+                        if entry.runtime.last_event_processed_at is not None
+                        else None,
+                    ),
+                )
+                conn.executemany(
+                    """
+                    INSERT INTO session_user_memory_facts(
+                        user_id, fact_index, fact_type, value, source, confidence,
+                        observed_at, observed_time_desc, memory_category, validated,
+                        conflict_with, context_channel, context_topic, context_metadata,
+                        mention_count, source_event_id
+                    ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    [
+                        (
+                            user_id,
+                            index,
+                            fact.fact_type,
+                            fact.value,
+                            fact.source,
+                            fact.confidence,
+                            fact.observed_at,
+                            fact.observed_time_desc,
+                            fact.memory_category,
+                            1 if fact.validated else 0,
+                            self._json_dumps(fact.conflict_with),
+                            fact.context_channel,
+                            fact.context_topic,
+                            self._json_dumps(fact.context_metadata),
+                            fact.mention_count,
+                            fact.source_event_id,
+                        )
+                        for index, fact in enumerate(entry.runtime.memory_facts)
+                    ],
+                )
 
         conn.executemany(
             """
@@ -563,7 +564,7 @@ class SqliteSessionStore:
                     "SELECT * FROM session_messages ORDER BY message_index"
                 ).fetchall()
             ],
-            "user_memory": {"entries": entries},
+            "user_memory": {"entries": {"default": entries}},
             "reply_runtime": {
                 "user_last_turn_at": {
                     str(row["user_id"]): str(row["last_turn_at"])

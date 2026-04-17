@@ -62,7 +62,7 @@ def test_async_engine_runs_live_session() -> None:
         )
 
         assert transcript.messages[-1].content == "异步回复"
-        entry = transcript.user_memory.entries["小王"]
+        entry = transcript.user_memory.entries["default"]["小王"]
         # TODO: Memory extraction after provider routing refactor needs validation
         # assert "成本敏感" in entry.runtime.preference_tags
         # assert "偏好渐进发布" in entry.runtime.preference_tags
@@ -92,7 +92,7 @@ def test_user_memory_summary_note_normalizes_duplicate_sources() -> None:
         confidence=0.7,
     )
 
-    entry = manager.entries["u1"]
+    entry = manager.entries["default"]["u1"]
     assert entry.runtime.summary_notes == ["我关注灰度发布节奏"]
     assert len(entry.runtime.memory_facts) == 1
     assert entry.runtime.memory_facts[0].source == "heuristic"
@@ -182,7 +182,7 @@ def test_async_engine_memory_extract_task_uses_aux_model(tmp_path: Path) -> None
             human_turns=[Message(role="user", speaker="小王", content="我是运营，关注灰度节奏")],
         )
 
-        entry = transcript.user_memory.entries["小王"]
+        entry = transcript.user_memory.entries["default"]["小王"]
         assert entry.runtime.inferred_persona == "用户画像-运营"
         assert "运营小王" in entry.runtime.inferred_aliases
         assert "运营小王" not in entry.profile.aliases
@@ -295,7 +295,7 @@ def test_async_engine_memory_extract_task_skips_when_disabled() -> None:
             human_turns=[Message(role="user", speaker="小王", content="我是产品经理，关注成本")],
         )
 
-        entry = transcript.user_memory.entries["小王"]
+        entry = transcript.user_memory.entries["default"]["小王"]
         assert entry.runtime.inferred_persona == ""
         assert "memory-model" not in provider.models
         assert "main-model" in provider.models
@@ -739,7 +739,7 @@ def test_run_live_session_reply_mode_never_updates_memory_without_reply() -> Non
             ],
         )
 
-        assert "小王" in transcript.user_memory.entries
+        assert "小王" in transcript.user_memory.entries.get("default", {})
         assert all(msg.role != "assistant" for msg in transcript.messages)
         assert all(request.purpose != "chat_main" for request in provider.requests)
 
@@ -1347,9 +1347,9 @@ def run(text: str, **kwargs):
 
 def test_engagement_boosts_when_directly_addressed() -> None:
     """Verify that directly addressing the AI results in higher engagement than ambient chat."""
-    from sirius_chat.core.heat import HeatAnalyzer
-    from sirius_chat.core.intent_v2 import IntentAnalyzer
-    from sirius_chat.core.engagement import EngagementCoordinator
+    from sirius_chat.core._legacy.heat import HeatAnalyzer
+    from sirius_chat.core._legacy.intent_v2 import IntentAnalyzer
+    from sirius_chat.core._legacy.engagement import EngagementCoordinator
 
     heat = HeatAnalyzer.analyze(
         group_recent_count=3,
@@ -1372,9 +1372,9 @@ def test_engagement_boosts_when_directly_addressed() -> None:
 
 
 def test_hot_group_heat_more_strongly_suppresses_ambient_reply() -> None:
-    from sirius_chat.core.heat import HeatAnalyzer
-    from sirius_chat.core.intent_v2 import IntentAnalyzer
-    from sirius_chat.core.engagement import EngagementCoordinator
+    from sirius_chat.core._legacy.heat import HeatAnalyzer
+    from sirius_chat.core._legacy.intent_v2 import IntentAnalyzer
+    from sirius_chat.core._legacy.engagement import EngagementCoordinator
 
     cold_heat = HeatAnalyzer.analyze(
         group_recent_count=1,

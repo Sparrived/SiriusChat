@@ -31,7 +31,7 @@ class TestC2ResidentTransientSeparation:
             confidence=0.8,
         )
         
-        fact = manager.entries["user1"].runtime.memory_facts[0]
+        fact = manager.entries["default"]["user1"].runtime.memory_facts[0]
         assert hasattr(fact, "is_transient")  # now a method
         assert hasattr(fact, "observed_at")
 
@@ -50,7 +50,7 @@ class TestC2ResidentTransientSeparation:
             confidence=0.95,
         )
         
-        fact = manager.entries["user1"].runtime.memory_facts[0]
+        fact = manager.entries["default"]["user1"].runtime.memory_facts[0]
         assert fact.is_transient() == False  # RESIDENT (high confidence)
 
     def test_fact_with_low_confidence_is_transient(self):
@@ -68,7 +68,7 @@ class TestC2ResidentTransientSeparation:
             confidence=0.7,
         )
         
-        fact = manager.entries["user1"].runtime.memory_facts[0]
+        fact = manager.entries["default"]["user1"].runtime.memory_facts[0]
         assert fact.is_transient() == True  # TRANSIENT (low confidence)
 
     def test_get_resident_facts(self):
@@ -138,7 +138,7 @@ class TestC2ResidentTransientSeparation:
             confidence=0.6,
         )
         
-        fact = manager.entries["user1"].runtime.memory_facts[0]
+        fact = manager.entries["default"]["user1"].runtime.memory_facts[0]
         # 修改observed_at为过期时间（1小时前）
         old_time = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
         fact.observed_at = old_time
@@ -152,14 +152,14 @@ class TestC2ResidentTransientSeparation:
             confidence=0.6,
         )
         
-        facts_before = len(manager.entries["user1"].runtime.memory_facts)
+        facts_before = len(manager.entries["default"]["user1"].runtime.memory_facts)
         assert facts_before == 2
         
         # 清理，max_age_minutes=30意味着1小时的fact会被删除
         deleted = manager.cleanup_expired_transient_facts("user1", max_age_minutes=30)
         
         assert deleted == 1
-        remaining_facts = manager.entries["user1"].runtime.memory_facts
+        remaining_facts = manager.entries["default"]["user1"].runtime.memory_facts
         assert len(remaining_facts) == 1
         assert remaining_facts[0].value == "New transient fact"
 
@@ -181,7 +181,7 @@ class TestC2ResidentTransientSeparation:
         data = manager.to_dict()
         manager2 = UserMemoryManager.from_dict(data)
         
-        fact = manager2.entries["user1"].runtime.memory_facts[0]
+        fact = manager2.entries["default"]["user1"].runtime.memory_facts[0]
         assert fact.is_transient() == True
         assert fact.observed_at != ""
 
@@ -205,13 +205,13 @@ class TestC3MemoryCompression:
                 confidence=0.5 + (i % 10) * 0.01,
             )
         
-        facts_before = len(manager.entries["user1"].runtime.memory_facts)
+        facts_before = len(manager.entries["default"]["user1"].runtime.memory_facts)
         assert facts_before == 20
         
         # 压缩：保留top 70%
         deleted = manager.compress_memory_facts("user1")
         
-        facts_after = len(manager.entries["user1"].runtime.memory_facts)
+        facts_after = len(manager.entries["default"]["user1"].runtime.memory_facts)
         assert deleted > 0
         assert facts_after < facts_before
         # 保留约70%（±2个的浮动）
@@ -238,7 +238,7 @@ class TestC3MemoryCompression:
         
         # 少于10个facts，不应该压缩
         assert deleted == 0
-        assert len(manager.entries["user1"].runtime.memory_facts) == 5
+        assert len(manager.entries["default"]["user1"].runtime.memory_facts) == 5
 
     def test_compress_maintains_order(self):
         """测试压缩保保留观察顺序"""
@@ -259,7 +259,7 @@ class TestC3MemoryCompression:
         manager.compress_memory_facts("user1")
         
         # 检查是否按observed_at倒序排列
-        facts = manager.entries["user1"].runtime.memory_facts
+        facts = manager.entries["default"]["user1"].runtime.memory_facts
         for i in range(len(facts) - 1):
             assert facts[i].observed_at >= facts[i + 1].observed_at
 
@@ -283,7 +283,7 @@ class TestC3MemoryCompression:
         manager.compress_memory_facts("user1")
         
         # 检查是否保留了高置信度facts
-        facts = manager.entries["user1"].runtime.memory_facts
+        facts = manager.entries["default"]["user1"].runtime.memory_facts
         high_confidence_count = sum(1 for f in facts if f.confidence >= 0.9)
         assert high_confidence_count >= 2  # 至少保留大部分高置信度facts
 

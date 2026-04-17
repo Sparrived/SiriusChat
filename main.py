@@ -683,8 +683,10 @@ def _persist_primary_user(
         "traits": participant.traits,
         "metadata": participant.metadata,
     }
-    if transcript is not None and participant.user_id in transcript.user_memory.entries:
-        runtime = transcript.user_memory.entries[participant.user_id].runtime
+    if transcript is not None:
+        user_entry = transcript.user_memory.get_user_by_id(participant.user_id)
+        if user_entry is not None:
+            runtime = user_entry.runtime
         payload["runtime"] = {
             "inferred_persona": runtime.inferred_persona,
             "inferred_traits": runtime.inferred_traits,

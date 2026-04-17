@@ -379,20 +379,21 @@ class MemoryForgetEngine:
         """
         decay_stats = {}
         
-        for user_id, entry in manager.entries.items():
-            decayed_count = 0
-            
-            for i, fact in enumerate(entry.runtime.memory_facts):
-                old_confidence = fact.confidence
-                decayed_fact = MemoryForgetEngine.apply_decay(fact)
+        for group_entries in manager.entries.values():
+            for user_id, entry in group_entries.items():
+                decayed_count = 0
                 
-                # 如果置信度下降超过10%，记录为衰退
-                if decayed_fact.confidence < old_confidence - 0.1:
-                    entry.runtime.memory_facts[i] = decayed_fact
-                    decayed_count += 1
-            
-            if decayed_count > 0:
-                decay_stats[user_id] = decayed_count
+                for i, fact in enumerate(entry.runtime.memory_facts):
+                    old_confidence = fact.confidence
+                    decayed_fact = MemoryForgetEngine.apply_decay(fact)
+                    
+                    # 如果置信度下降超过10%，记录为衰退
+                    if decayed_fact.confidence < old_confidence - 0.1:
+                        entry.runtime.memory_facts[i] = decayed_fact
+                        decayed_count += 1
+                
+                if decayed_count > 0:
+                    decay_stats[user_id] = decayed_count
         
         return decay_stats
 
@@ -455,18 +456,19 @@ class MemoryQualityReport:
         categories_distribution: dict[str, int] = {}
         source_distribution: dict[str, int] = {}
         
-        for entry in manager.entries.values():
-            report = MemoryQualityReport.generate_user_report(entry)
-            user_reports.append(report)
-            
-            for fact in entry.runtime.memory_facts:
-                total_facts += 1
-                total_quality += fact.confidence
+        for group_entries in manager.entries.values():
+            for entry in group_entries.values():
+                report = MemoryQualityReport.generate_user_report(entry)
+                user_reports.append(report)
                 
-                cat = fact.memory_category or "custom"
-                categories_distribution[cat] = categories_distribution.get(cat, 0) + 1
-                
-                source_distribution[fact.source] = source_distribution.get(fact.source, 0) + 1
+                for fact in entry.runtime.memory_facts:
+                    total_facts += 1
+                    total_quality += fact.confidence
+                    
+                    cat = fact.memory_category or "custom"
+                    categories_distribution[cat] = categories_distribution.get(cat, 0) + 1
+                    
+                    source_distribution[fact.source] = source_distribution.get(fact.source, 0) + 1
         
         avg_quality = total_quality / total_facts if total_facts > 0 else 0
         

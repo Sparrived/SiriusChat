@@ -168,13 +168,13 @@ def test_run_live_session_supports_dynamic_participants_and_memory() -> None:
         # 只有 3 个生成请求（没有事件验证，因为 mention_count < min_mentions=3）
         assert len(provider.requests) == 3
         assert "王PM" in provider.requests[0].system_prompt
-        assert "王PM" in transcript.user_memory.entries
-        assert "小李" in transcript.user_memory.entries
-        assert transcript.user_memory.entries["王PM"].recent_messages[-1] == "建议先在一个城市灰度。"
+        assert "王PM" in transcript.user_memory.entries.get("default", {})
+        assert "小李" in transcript.user_memory.entries.get("default", {})
+        assert transcript.user_memory.entries["default"]["王PM"].recent_messages[-1] == "建议先在一个城市灰度。"
         # TODO: Memory extraction preference tags being reviewed after routing refactor
-        # assert "偏好试点" in transcript.user_memory.entries["王PM"].runtime.preference_tags
-        assert transcript.user_memory.entries["王PM"].runtime.summary_notes
-        # assert "成本敏感" in transcript.user_memory.entries["小李"].runtime.preference_tags
+        # assert "偏好试点" in transcript.user_memory.entries.get("default", {})["default"]["王PM"].runtime.preference_tags
+        assert transcript.user_memory.entries["default"]["王PM"].runtime.summary_notes
+        # assert "成本敏感" in transcript.user_memory.entries.get("default", {})["default"]["小李"].runtime.preference_tags
 
     asyncio.run(_run())
 
@@ -291,7 +291,7 @@ def test_finalize_triggers_memory_consolidation_for_long_context() -> None:
         transcript = Transcript()
         transcript.add(Message(role="system", content=config.global_system_prompt))
         transcript.user_memory.register_user(UserProfile(user_id="u1", name="小王"))
-        transcript.user_memory.entries["u1"].runtime.summary_notes = [
+        transcript.user_memory.entries["default"]["u1"].runtime.summary_notes = [
             f"摘要{i}" for i in range(5)
         ]
 
@@ -307,7 +307,7 @@ def test_finalize_triggers_memory_consolidation_for_long_context() -> None:
         ]
         assert len(summary_requests) == 1
         assert summary_requests[0].model == "memory-manager-model"
-        assert transcript.user_memory.entries["u1"].runtime.summary_notes == [
+        assert transcript.user_memory.entries["default"]["u1"].runtime.summary_notes == [
             "综合摘要A",
             "综合摘要B",
         ]
@@ -358,9 +358,9 @@ def test_cross_environment_identity_mapping_resolves_same_user() -> None:
 
         assert len(provider.requests) == 2
         assert "微信昵称A" in provider.requests[-1].system_prompt
-        assert "微信昵称A" in transcript.user_memory.entries
-        assert transcript.user_memory.entries["微信昵称A"].recent_messages[-1] == "我在微信上继续发言。"
-        assert transcript.user_memory.entries["微信昵称A"].runtime.summary_notes
+        assert "微信昵称A" in transcript.user_memory.entries.get("default", {})
+        assert transcript.user_memory.entries["default"]["微信昵称A"].recent_messages[-1] == "我在微信上继续发言。"
+        assert transcript.user_memory.entries["default"]["微信昵称A"].runtime.summary_notes
         resolved = transcript.find_user_by_channel_uid(channel="wechat", uid="wx_zhangsan")
         assert resolved is not None
         assert resolved.profile.user_id == "微信昵称A"
@@ -396,7 +396,7 @@ def test_user_memory_is_persisted_per_user_file_across_new_sessions(tmp_path) ->
         )
 
         users_dir = WorkspaceLayout(work_path).user_memory_dir()
-        user_files = list(users_dir.glob("*.json"))
+        user_files = list(users_dir.glob("groups/default/*.json"))
         assert user_files
 
         await _run_live_turns(engine=engine, 
@@ -507,7 +507,7 @@ def test_user_profile_auto_registration() -> None:
             user_profile=profile,
         )
 
-        entry = transcript.user_memory.entries.get("qq_12345")
+        entry = transcript.user_memory.get_user_by_id("qq_12345")
         assert entry is not None
         assert entry.profile.name == "测试用户"
         assert entry.profile.persona == "产品经理"
