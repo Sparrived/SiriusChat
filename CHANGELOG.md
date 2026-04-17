@@ -4,6 +4,44 @@
 
 ## [Unreleased]
 
+## [0.28.0] - 2026-04-17
+
+### Added (v0.28 Emotional Group Chat Engine)
+
+- **全新引擎 `EmotionalGroupChatEngine`**：基于论文《AI记忆系统与情感化助手：群聊场景可落地方案框架》的四层认知架构（感知→认知→决策→执行）与三层记忆底座（工作→情景→语义）。
+- **群聊隔离**：`UserMemoryManager.entries` 改为 `{group_id: {user_id: Entry}}` 双层字典；所有记忆操作按 `group_id` 隔离。
+- **情感分析 `EmotionAnalyzer`**：2D valence-arousal 模型，19种基本情感映射，规则引擎为主 + LLM fallback；支持情感轨迹、群体情感聚合、情感孤岛检测。
+- **意图分析 v3 `IntentAnalyzerV3`**：目的驱动分类（help_seeking / emotional / social / silent）， urgency/relevance 量化评分，规则为主 + LLM fallback。
+- **响应策略引擎 `ResponseStrategyEngine`**：IMMEDIATE / DELAYED / SILENT / PROACTIVE 四层策略，替代二元 `should_reply`。
+- **动态阈值引擎 `ThresholdEngine`**：多因子动态阈值 = base × activity × relationship × time。
+- **对话节奏分析 `RhythmAnalyzer`**：heat_level + pace + topic_stability。
+- **共情生成 `ResponseAssembler`**：情感上下文 + 共情策略 + 记忆引用 + 群级风格注入 Prompt。
+- **风格适配 `StyleAdapter`**：按 heat/pace/user_style 动态调整 max_tokens、temperature、tone。
+- **延迟响应队列 `DelayedResponseQueue`**：等待话题间隙或合并后触发。
+- **主动触发器 `ProactiveTrigger`**：时间/记忆/情感三种触发类型，带冷却机制。
+- **模型路由 `ModelRouter`**：按任务类型自动选择模型、温度、token 上限；urgency 升级切换更强模型。
+- **三层记忆底座**：
+  - `WorkingMemoryManager`：按群滑动窗口，关键信息保护，自动晋升到情景记忆。
+  - `EpisodicMemoryManager`：结构化事件存储，激活度遗忘曲线，支持复合查询。
+  - `SemanticMemoryManager`：用户画像（兴趣图谱、关系状态）+ 群体画像（氛围历史、规范）。
+- **语义检索 `MemoryRetriever`**：关键词 + 语义相似度（可选 sentence-transformers）+ 用户画像检索。
+- **激活度引擎 `ActivationEngine`**：遗忘曲线 + 访问强化 + 差异化衰减 + 休眠归档。
+- **助手情感状态 `AssistantEmotionState`**：自身情感 + 惯性 + 恢复机制。
+- **后台任务**：延迟队列 ticker、主动触发 checker、记忆 promoter、语义整合 consolidator。
+- **群体规范学习**：被动学习 avg_message_length、emoji_usage_rate、mention_rate、active_hours、topic_switch_frequency、typical_interaction_style。
+- **Token 追踪**：`_generate()` 中估算 input/output tokens，随状态持久化。
+- **状态持久化 `EngineStateStore`**：持久化 working memory、assistant emotion、token usage 到 `engine_state/`。
+- **数据迁移脚本**：`sirius_chat/memory/migration/v0_28_group_isolation.py`，自动检测旧格式并迁移到群隔离布局。
+- **CLI 引擎切换**：`main.py --engine {legacy,emotional}`。
+- **WorkspaceRuntime 集成**：`create_emotional_engine()` 工厂方法，自动注入 skill runtime。
+- **完整文档更新**：`full-architecture-flow.md`、`architecture.md`、`external-usage.md` 全量重写。
+
+### Changed
+
+- 旧引擎 `AsyncRolePlayEngine` 迁移到 `core/_legacy/`，保留兼容导出。
+- `UserMemoryFileStore` 存储布局改为 `user_memory/groups/<group_id>/<user_id>.json`。
+- `EventMemoryFileStore` 存储布局改为 `event_memory/<group_id>/events.json`。
+
 ## [0.27.14] - 2026-04-16
 
 ### Fixed
