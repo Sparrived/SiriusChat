@@ -653,6 +653,9 @@ class EmotionalGroupChatEngine:
         if len(group_profile.atmosphere_history) > 1000:
             group_profile.atmosphere_history = group_profile.atmosphere_history[-1000:]
 
+        # Update group sentiment cache for emotion island detection
+        self.emotion_analyzer.update_group_sentiment(group_id, emotion)
+
         # Passive group norm learning
         self._learn_group_norms(group_profile, message, intent)
 
