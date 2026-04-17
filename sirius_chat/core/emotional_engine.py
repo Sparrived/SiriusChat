@@ -445,9 +445,24 @@ class EmotionalGroupChatEngine:
         recent_msgs = self._get_recent_messages(group_id, n=10)
         rhythm = self.rhythm_analyzer.analyze(group_id, recent_msgs)
 
-        # Update threshold with rhythm
-        intent.activity_factor = self._activity_factor(rhythm.heat_level)
-        intent.time_factor = self._time_factor()
+        # Compute dynamic threshold via ThresholdEngine
+        user_profile = self.semantic_memory.get_user_profile(group_id, user_id)
+        relationship_state = getattr(user_profile, "relationship_state", None) if user_profile else None
+
+        # Message rate (per minute) from recent messages
+        msg_rate = self._message_rate_per_minute(recent_msgs)
+
+        threshold = self.threshold_engine.compute(
+            sensitivity=self.config.get("sensitivity", 0.5),
+            heat_level=rhythm.heat_level,
+            messages_per_minute=msg_rate,
+            relationship_state=relationship_state,
+        )
+        intent.threshold = threshold
+        intent.activity_factor = self.threshold_engine._activity_factor(rhythm.heat_level, msg_rate)
+        intent.time_factor = self.threshold_engine._time_factor(None)
+        if relationship_state:
+            intent.relationship_factor = self.threshold_engine._relationship_factor(relationship_state)
 
         # Check if directly mentioned
         is_mentioned = intent.directed_at_current_ai
@@ -836,19 +851,27 @@ class EmotionalGroupChatEngine:
         ]
 
     @staticmethod
-    def _activity_factor(heat_level: str) -> float:
-        return {"cold": 0.8, "warm": 1.0, "hot": 1.3, "overheated": 1.6}.get(heat_level, 1.0)
-
-    @staticmethod
-    def _time_factor() -> float:
-        hour = datetime.now(timezone.utc).hour
-        if 0 <= hour < 6:
-            return 1.3
-        if 9 <= hour < 18:
-            return 1.1
-        if 19 <= hour < 23:
-            return 0.9
-        return 1.0
+    def _message_rate_per_minute(recent_msgs: list[dict[str, Any]]) -> float:
+        """Estimate messages per minute from recent message timestamps."""
+        if len(recent_msgs) < 2:
+            return 0.0
+        try:
+            from datetime import datetime
+            timestamps = []
+            for m in recent_msgs:
+                ts = m.get("timestamp")
+                if isinstance(ts, str):
+                    timestamps.append(datetime.fromisoformat(ts.replace("Z", "+00:00")))
+                elif hasattr(ts, "isoformat"):
+                    timestamps.append(ts)
+            if len(timestamps) < 2:
+                return 0.0
+            span_minutes = (max(timestamps) - min(timestamps)).total_seconds() / 60.0
+            if span_minutes <= 0:
+                return 0.0
+            return round((len(timestamps) - 1) / span_minutes, 2)
+        except Exception:
+            return 0.0
 
     def _describe_atmosphere(self, group_id: str) -> str:
         recent = self._get_recent_messages(group_id, n=5)
