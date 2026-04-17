@@ -62,6 +62,11 @@ class EngineStateStore:
         path = self._base / "group_timestamps.json"
         _atomic_write(path, timestamps)
 
+    def save_token_usage_records(self, records: list[dict[str, Any]]) -> None:
+        """Save token usage records."""
+        path = self._base / "token_usage_records.json"
+        _atomic_write(path, {"records": records})
+
     def save_all(
         self,
         *,
@@ -69,6 +74,7 @@ class EngineStateStore:
         assistant_emotion: dict[str, Any],
         delayed_queue: list[dict[str, Any]],
         group_timestamps: dict[str, str],
+        token_usage_records: list[dict[str, Any]] | None = None,
     ) -> None:
         """Convenience: save all state in one call."""
         for group_id, entries in working_memories.items():
@@ -76,6 +82,8 @@ class EngineStateStore:
         self.save_assistant_emotion(assistant_emotion)
         self.save_delayed_queue(delayed_queue)
         self.save_group_timestamps(group_timestamps)
+        if token_usage_records is not None:
+            self.save_token_usage_records(token_usage_records)
         logger.info("Engine state saved | groups=%d", len(working_memories))
 
     # ------------------------------------------------------------------

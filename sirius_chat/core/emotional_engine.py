@@ -104,6 +104,14 @@ class EmotionalGroupChatEngine:
         # Event bus
         self.event_bus = SessionEventBus()
 
+        # Token usage tracking
+        from sirius_chat.config import TokenUsageRecord
+        self.token_usage_records: list[TokenUsageRecord] = []
+
+        # SKILL system
+        self._skill_registry: Any | None = None
+        self._skill_executor: Any | None = None
+
         # Background tasks
         self._bg_tasks: set[asyncio.Task] = set()
         self._bg_running = False
@@ -330,6 +338,7 @@ class EmotionalGroupChatEngine:
             assistant_emotion=dataclasses.asdict(self.assistant_emotion),
             delayed_queue=[],
             group_timestamps=dict(self._group_last_message_at),
+            token_usage_records=[r.to_dict() for r in self.token_usage_records],
         )
 
     def load_state(self) -> None:
@@ -356,6 +365,14 @@ class EmotionalGroupChatEngine:
 
         # Group timestamps
         self._group_last_message_at = dict(state.get("group_timestamps", {}))
+
+        # Token usage records
+        from sirius_chat.config import TokenUsageRecord
+        for rec_data in state.get("token_usage_records", []):
+            try:
+                self.token_usage_records.append(TokenUsageRecord.from_dict(rec_data))
+            except Exception:
+                pass
 
         logger.info("Engine state loaded | groups=%d", len(state.get("working_memories", {})))
 
@@ -492,6 +509,7 @@ class EmotionalGroupChatEngine:
                 topic_stability=rhythm.topic_stability,
             )
             reply = await self._generate(prompt, group_id, style)
+            reply = await self._process_skill_calls(reply, group_id)
             return {
                 "strategy": "immediate",
                 "reply": reply,
@@ -705,6 +723,10 @@ class EmotionalGroupChatEngine:
             purpose=task_name,
         )
 
+        # Estimate input tokens
+        from sirius_chat.providers.base import estimate_generation_request_input_tokens
+        estimated_input_tokens = estimate_generation_request_input_tokens(request)
+
         # Call provider (async or sync via thread)
         if hasattr(self.provider_async, "generate_async"):
             reply = await self.provider_async.generate_async(request)
@@ -713,11 +735,94 @@ class EmotionalGroupChatEngine:
         else:
             raise RuntimeError("配置的提供商未实现 generate/generate_async 方法。")
 
+        # Record token usage
+        output_chars = len(reply)
+        estimated_output_tokens = max(1, (output_chars + 3) // 4)
+        from sirius_chat.config import TokenUsageRecord
+        self.token_usage_records.append(TokenUsageRecord(
+            actor_id="assistant",
+            task_name=task_name,
+            model=cfg.model_name,
+            prompt_tokens=estimated_input_tokens,
+            completion_tokens=estimated_output_tokens,
+            total_tokens=estimated_input_tokens + estimated_output_tokens,
+            input_chars=len(system_prompt) + len(user_content),
+            output_chars=output_chars,
+            estimation_method="char_div4",
+            retries_used=0,
+        ))
+
         return reply
 
     # ==================================================================
     # Helpers
     # ==================================================================
+
+    # ------------------------------------------------------------------
+    # SKILL integration
+    # ------------------------------------------------------------------
+
+    def set_skill_runtime(
+        self,
+        *,
+        skill_registry: Any | None = None,
+        skill_executor: Any | None = None,
+    ) -> None:
+        """Attach SKILL registry and executor to the engine."""
+        self._skill_registry = skill_registry
+        self._skill_executor = skill_executor
+
+    async def _process_skill_calls(self, reply: str, group_id: str) -> str:
+        """Parse and execute SKILL_CALL markers in the assistant reply.
+
+        If no skill runtime is attached, strips markers and returns clean text.
+        """
+        if self._skill_registry is None or self._skill_executor is None:
+            from sirius_chat.skills.executor import strip_skill_calls
+            return strip_skill_calls(reply)
+
+        from sirius_chat.skills.executor import parse_skill_calls
+        from sirius_chat.skills.models import SkillInvocationContext
+
+        calls = parse_skill_calls(reply)
+        if not calls:
+            return reply
+
+        # Strip markers from the reply text first
+        from sirius_chat.skills.executor import strip_skill_calls
+        clean_reply = strip_skill_calls(reply)
+
+        # Execute each skill and collect results
+        skill_results: list[str] = []
+        for skill_name, params in calls:
+            skill = self._skill_registry.get_skill(skill_name)
+            if skill is None:
+                skill_results.append(f"[SKILL '{skill_name}' 未找到]")
+                continue
+
+            ctx = SkillInvocationContext(
+                user_id="assistant",
+                group_id=group_id,
+                skill_registry=self._skill_registry,
+            )
+            try:
+                result = await self._skill_executor.execute_async(
+                    skill, params, invocation_context=ctx
+                )
+                if result.success:
+                    skill_results.append(
+                        f"[SKILL '{skill_name}' 结果] {result.summary or result.text or '完成'}"
+                    )
+                else:
+                    skill_results.append(f"[SKILL '{skill_name}' 失败] {result.error or '未知错误'}")
+            except Exception as exc:
+                skill_results.append(f"[SKILL '{skill_name}' 异常] {exc}")
+
+        # Append skill results to reply
+        if skill_results:
+            clean_reply += "\n\n" + "\n".join(skill_results)
+
+        return clean_reply
 
     def _get_recent_messages(self, group_id: str, n: int = 10) -> list[dict[str, Any]]:
         entries = self.working_memory.get_recent_entries(group_id, n=n)
