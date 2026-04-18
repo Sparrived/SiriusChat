@@ -423,7 +423,7 @@ class EventMemoryManager:
             total_removed += len(entries) - len(parsed)
 
         if total_removed > 0:
-            logger.info("事件归纳完成 | user=%s | 净减少=%d条", user_id, total_removed)
+            logger.info("给 %s 的事件笔记归纳了一下，净减少了 %d 条重复记录。", user_id, total_removed)
         return total_removed
 
     def get_all_user_ids(self) -> set[str]:

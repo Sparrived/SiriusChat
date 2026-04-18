@@ -327,7 +327,7 @@ class WorkspaceRuntime:
                 )
                 if cooldown_wait > 0:
                     logger.info(
-                        "会话 %s 回复冷却中，等待 %.2f 秒后再做下一次回复判断；期间消息继续排队并参与合并",
+                        "会话 %s 还在冷静期，我先等 %.2f 秒再开口；这期间消息先排着队呢",
                         session_id,
                         cooldown_wait,
                     )
@@ -350,7 +350,7 @@ class WorkspaceRuntime:
                     if len(batch) > 1:
                         merged_turn = self._get_engine()._merge_pending_turns([request.turn for request in batch])
                         logger.info(
-                            "会话 %s 待处理消息积压=%d，进入静默批处理：合并 %d 条来自 %s 的消息",
+                            "会话 %s 堆了 %d 条消息，我悄悄把 %d 条来自 %s 的话揉在一起处理",
                             session_id,
                             pending_count,
                             len(batch),
@@ -664,7 +664,7 @@ class WorkspaceRuntime:
                     preset = self._load_roleplay_preset(agent_key)
                     if preset:
                         persona = PersonaGenerator.from_roleplay_preset(preset)
-                        logger.info("Loaded persona from roleplay preset: %s", persona.name)
+                        logger.info("从角色模板里读到了 '%s' 的人格设定", persona.name)
             except Exception as exc:
                 logger.debug("Failed to load persona from roleplay assets: %s", exc)
 
@@ -880,7 +880,7 @@ class WorkspaceRuntime:
         task = self._watcher_refresh_task
         if task is not None and not task.done():
             return
-        logger.info("检测到配置文件变更，准备刷新 workspace 配置：%s", changed_path)
+        logger.info("察觉到配置文件有变化，准备更新 workspace 配置：%s", changed_path)
         self._watcher_refresh_task = asyncio.create_task(self._refresh_workspace_config_from_watch())
         self._watcher_refresh_task.add_done_callback(self._clear_watcher_refresh_task)
 

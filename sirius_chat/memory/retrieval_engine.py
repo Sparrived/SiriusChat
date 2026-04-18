@@ -59,7 +59,7 @@ class MemoryRetriever:
         if _ST_AVAILABLE:
             try:
                 self._semantic_model = SentenceTransformer(semantic_model_name)
-                logger.info("Semantic search enabled with model: %s", semantic_model_name)
+                logger.info("我的语义检索小助手上线啦，模型是 %s，以后找记忆会更准哦。", semantic_model_name)
             except Exception as exc:
                 logger.warning("Failed to load sentence-transformers model: %s", exc)
 

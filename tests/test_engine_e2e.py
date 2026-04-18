@@ -110,6 +110,7 @@ class TestE2EDelayedResponse:
 class TestE2EProactiveTrigger:
     @pytest.mark.asyncio
     async def test_long_silence_triggers_proactive(self, tmp_path):
+        from datetime import datetime, timezone
         engine = EmotionalGroupChatEngine(
             work_path=tmp_path,
             persona=PersonaProfile(name="TestBot"),
@@ -118,12 +119,115 @@ class TestE2EProactiveTrigger:
         # Set last message far in the past
         engine._group_last_message_at["quiet_group"] = "2026-04-01T00:00:00+00:00"
 
-        result = await engine.proactive_check("quiet_group")
+        # Inject 15:00 (inside active hours 12-21)
+        fixed_now = datetime(2026, 4, 18, 15, 0, 0, tzinfo=timezone.utc)
+        result = await engine.proactive_check("quiet_group", _now=fixed_now)
 
         # Should trigger after long silence
-        if result:
-            assert result["strategy"] == "proactive"
-            assert "trigger_type" in result
+        assert result is not None
+        assert result["strategy"] == "proactive"
+        assert "trigger_type" in result
+
+    @pytest.mark.asyncio
+    async def test_proactive_suppressed_outside_active_hours(self, tmp_path):
+        """Proactive should not fire outside configured active hours."""
+        from datetime import datetime, timezone
+        engine = EmotionalGroupChatEngine(
+            work_path=tmp_path,
+            persona=PersonaProfile(name="TestBot"),
+        )
+
+        # Set last message far in the past
+        engine._group_last_message_at["quiet_group"] = "2026-04-01T00:00:00+00:00"
+
+        # Inject 03:00 (outside active hours 12-21)
+        fixed_now = datetime(2026, 4, 18, 3, 0, 0, tzinfo=timezone.utc)
+        result = await engine.proactive_check("quiet_group", _now=fixed_now)
+
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_proactive_allowed_during_active_hours(self, tmp_path):
+        """Proactive should fire during configured active hours."""
+        from datetime import datetime, timezone
+        engine = EmotionalGroupChatEngine(
+            work_path=tmp_path,
+            persona=PersonaProfile(name="TestBot"),
+        )
+
+        # Set last message far in the past
+        engine._group_last_message_at["quiet_group"] = "2026-04-01T00:00:00+00:00"
+
+        # Inject 15:00 (inside active hours 12-21)
+        fixed_now = datetime(2026, 4, 18, 15, 0, 0, tzinfo=timezone.utc)
+        result = await engine.proactive_check("quiet_group", _now=fixed_now)
+
+        assert result is not None
+        assert result["strategy"] == "proactive"
+
+    @pytest.mark.asyncio
+    async def test_atmosphere_trigger_suppressed_when_recent_message(self, tmp_path):
+        """Atmosphere trigger should be suppressed if a message arrived recently."""
+        from datetime import datetime, timezone, timedelta
+        engine = EmotionalGroupChatEngine(
+            work_path=tmp_path,
+            persona=PersonaProfile(name="TestBot"),
+        )
+
+        # Set a very negative atmosphere via the manager API so it persists
+        from sirius_chat.memory.semantic.models import AtmosphereSnapshot
+        engine.semantic_memory.append_atmosphere(
+            "sad_group",
+            AtmosphereSnapshot(
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                group_valence=-0.8,
+                group_arousal=0.2,
+                heat_level="warm",
+            ),
+        )
+
+        # Inject 15:00 (inside active hours 12-21)
+        fixed_now = datetime(2026, 4, 18, 15, 0, 0, tzinfo=timezone.utc)
+        # Last message was only 30 seconds ago (relative to injected time)
+        recent = fixed_now - timedelta(seconds=30)
+        engine._group_last_message_at["sad_group"] = recent.isoformat()
+
+        result = await engine.proactive_check("sad_group", _now=fixed_now)
+        # Should be suppressed because of recent activity
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_atmosphere_trigger_fires_when_quiet(self, tmp_path):
+        """Atmosphere trigger should fire if group is quiet enough."""
+        from datetime import datetime, timezone, timedelta
+        engine = EmotionalGroupChatEngine(
+            work_path=tmp_path,
+            persona=PersonaProfile(name="TestBot"),
+        )
+
+        # Set a very negative atmosphere via the manager API so it persists
+        from sirius_chat.memory.semantic.models import AtmosphereSnapshot
+        engine.semantic_memory.append_atmosphere(
+            "sad_group",
+            AtmosphereSnapshot(
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                group_valence=-0.8,
+                group_arousal=0.2,
+                heat_level="warm",
+            ),
+        )
+
+        # Inject 15:00 (inside active hours 12-21)
+        fixed_now = datetime(2026, 4, 18, 15, 0, 0, tzinfo=timezone.utc)
+        # Last message was 10 minutes ago (relative to injected time)
+        past = fixed_now - timedelta(minutes=10)
+        engine._group_last_message_at["sad_group"] = past.isoformat()
+
+        result = await engine.proactive_check("sad_group", _now=fixed_now)
+        # Should trigger because group has been quiet
+        assert result is not None
+        assert result["strategy"] == "proactive"
+        assert result["trigger_type"] == "atmosphere"
 
 
 class TestE2EMultiGroupIsolation:

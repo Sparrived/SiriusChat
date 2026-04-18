@@ -40,10 +40,11 @@ class SiliconFlowProvider(LLMProvider):
         )
 
         logger.info(
-            f"[模型调用] {request.model} | Provider: {self._provider_name} | 温度: {request.temperature}, Token上限: {request.max_tokens} "
-            f"| 消息数: {debug_context['input_message_count']} | 调用目的: {request.purpose} | 超时: {timeout_seconds:.1f}s "
-            f"| 预计输入Token: {debug_context['estimated_input_tokens']} "
-            f"| 预计总Token上限: {debug_context['estimated_total_token_upper_bound']}"
+            f"正准备向 {self._provider_name} 的 {request.model} 请教问题，"
+            f"手头有 {debug_context['input_message_count']} 条消息想说，"
+            f"温度调到 {request.temperature}，Token 上限设了 {request.max_tokens}，"
+            f"预计要花 {debug_context['estimated_input_tokens']} 个 Token，"
+            f"超时 {timeout_seconds:.1f} 秒～"
         )
         payload = build_chat_completion_payload(request, provider_name=self._provider_name)
 
@@ -103,7 +104,7 @@ class SiliconFlowProvider(LLMProvider):
 
         content = extract_assistant_text(message)
         if content:
-            logger.info(f"[模型调用成功] {request.model} | Provider: {self._provider_name} | 字数: {len(content)}")
+            logger.info(f"{self._provider_name} 的 {request.model} 回复我了，写了 {len(content)} 个字～")
             logger.debug(
                 f"[模型输出] {request.model} | Provider: {self._provider_name} | URL: {url} | 响应内容:\n{content}"
             )

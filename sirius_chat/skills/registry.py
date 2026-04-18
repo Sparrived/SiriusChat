@@ -140,7 +140,7 @@ class SkillRegistry:
                 skill = self._load_skill_file(py_file)
                 if skill is not None:
                     self._skills[skill.name] = skill
-                    logger.info("已加载SKILL: %s (v%s) from %s", skill.name, skill.version, py_file.name)
+                    logger.info("新技能到手！%s v%s（从 %s 学来的）", skill.name, skill.version, py_file.name)
             except Exception as exc:
                 logger.warning("加载SKILL文件失败 (%s): %s", py_file.name, exc)
         return max(0, len(self._skills) - baseline)
@@ -167,7 +167,7 @@ class SkillRegistry:
                         skill = self._load_skill_file(py_file)
                         if skill is not None:
                             loaded_skills.append(skill)
-                            logger.info("已重载内置SKILL: %s (v%s) from %s", skill.name, skill.version, py_file.name)
+                            logger.info("内置技能 %s v%s 已重新加载（来源：%s）", skill.name, skill.version, py_file.name)
                     except Exception as exc:
                         logger.warning("重载内置SKILL失败 (%s): %s", py_file.name, exc)
 
@@ -180,7 +180,7 @@ class SkillRegistry:
                 skill = self._load_skill_file(py_file)
                 if skill is not None:
                     loaded_skills.append(skill)
-                    logger.info("已重载SKILL: %s (v%s) from %s", skill.name, skill.version, py_file.name)
+                    logger.info("技能 %s v%s 刷新完毕（来源：%s）", skill.name, skill.version, py_file.name)
             except Exception as exc:
                 logger.warning("重载SKILL文件失败 (%s): %s", py_file.name, exc)
 
@@ -308,4 +308,4 @@ class SkillRegistry:
 
         installed = resolve_skill_dependencies(py_file, auto_install=True)
         if installed:
-            logger.info("SKILL '%s': 已自动安装依赖: %s", py_file.stem, ", ".join(installed))
+            logger.info("顺手帮 '%s' 把依赖 %s 装好啦", py_file.stem, ", ".join(installed))

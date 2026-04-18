@@ -170,7 +170,7 @@ class EngagementCoordinator:
             return False
 
         logger.info(
-            "回复频率已达上限（%d/%d），稍作等待再开口",
+            "说太多话了，先歇会儿（%d/%d 已达上限）",
             recent_count, max_replies,
         )
         return True

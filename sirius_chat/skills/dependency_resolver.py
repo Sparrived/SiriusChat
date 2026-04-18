@@ -224,7 +224,7 @@ def _install_packages(packages: list[str], skill_name: str) -> list[str]:
     cmd = [*cmd_base, *packages]
 
     logger.info(
-        "SKILL '%s': 正在安装依赖 %s (使用 %s)",
+        "正在为 '%s' 准备环境，安装 %s（使用 %s）",
         skill_name,
         ", ".join(packages),
         installer,
@@ -238,7 +238,7 @@ def _install_packages(packages: list[str], skill_name: str) -> list[str]:
             timeout=120,
         )
         if result.returncode == 0:
-            logger.info("SKILL '%s': 依赖安装成功: %s", skill_name, ", ".join(packages))
+            logger.info("'%s' 的依赖 %s 已经装好了", skill_name, ", ".join(packages))
             # Invalidate import caches so the newly installed packages are visible
             importlib.invalidate_caches()
             return packages

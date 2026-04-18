@@ -186,7 +186,7 @@ class EpisodicMemoryManager:
                 for line in archived_lines:
                     f.write(line + "\n")
             logger.info(
-                "Group %s: archived %d low-activation entries",
+                "%s 群的往事有点沉了，我把 %d 条淡去的回忆轻轻收进了档案室。",
                 group_id,
                 len(archived_lines),
             )

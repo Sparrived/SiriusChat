@@ -31,9 +31,11 @@ class MockProvider(LLMProvider):
         estimated_total_upper = estimated_input_tokens + max(0, int(request.max_tokens))
 
         logger.info(
-            f"[模型调用] mock-{request.model} | 温度: {request.temperature}, Token上限: {request.max_tokens} "
-            f"| 消息数: {msg_count} | 调用目的: {request.purpose} "
-            f"| 预计输入Token: {estimated_input_tokens} | 预计总Token上限: {estimated_total_upper}"
+            f"正准备向模拟的 {request.model} 请教问题，"
+            f"手头有 {msg_count} 条消息想说，"
+            f"温度调到 {request.temperature}，Token 上限设了 {request.max_tokens}，"
+            f"预计要花 {estimated_input_tokens} 个 Token，"
+            f"预计总 Token 上限 {estimated_total_upper}～"
         )
         debug_input = {
             "system_prompt": request.system_prompt,
@@ -60,12 +62,12 @@ class MockProvider(LLMProvider):
                 "time_hints": ["时间"],
                 "emotion_tags": ["情绪"]
             }"""
-            logger.info(f"[模型调用成功] mock-{request.model} | 字数: {len(response)}")
+            logger.info(f"模拟的 {request.model} 回复我了，写了 {len(response)} 个字～")
             logger.debug(f"[模型输出] mock-{request.model} | 响应内容:\n{response}")
             return response
         if self._queue:
             response = self._queue.popleft()
-            logger.info(f"[模型调用成功] mock-{request.model} | 字数: {len(response)}")
+            logger.info(f"模拟的 {request.model} 回复我了，写了 {len(response)} 个字～")
             logger.debug(f"[模型输出] mock-{request.model} | 响应内容:\n{response}")
             return response
         logger.warning(f"[模型调用] mock-{request.model} | 无配置响应")

@@ -84,7 +84,7 @@ class EngineStateStore:
         self.save_group_timestamps(group_timestamps)
         if token_usage_records is not None:
             self.save_token_usage_records(token_usage_records)
-        logger.info("Engine state saved | groups=%d", len(working_memories))
+        logger.info("把现在的状态记下来啦，%d 个群的上下文都好好存着呢。", len(working_memories))
 
     # ------------------------------------------------------------------
     # Load

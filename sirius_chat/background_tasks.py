@@ -119,7 +119,7 @@ class BackgroundTaskManager:
             return
         
         self._running = True
-        logger.info("记忆整理任务已静默启动。")
+        logger.info("嗯... 后台的记忆整理小管家开始工作了，我会悄悄整理一下脑海里的东西。")
         
         if self.config.compression_enabled:
             task = asyncio.create_task(
@@ -154,7 +154,7 @@ class BackgroundTaskManager:
             return
         
         self._running = False
-        logger.info("记忆整理任务已停止。")
+        logger.info("记忆整理任务先告一段落啦，小管家去休息一会儿～")
         
         # 取消所有任务
         for task_name, task in self.tasks.items():

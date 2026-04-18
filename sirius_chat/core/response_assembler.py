@@ -60,6 +60,7 @@ class StyleAdapter:
         user_communication_style: str = "",
         topic_stability: float = 0.5,
         persona: PersonaProfile | None = None,
+        is_group_chat: bool = False,
     ) -> StyleParams:
         """Compute style parameters for the current response context."""
         # Base limit = most restrictive of heat and pace
@@ -76,6 +77,11 @@ class StyleAdapter:
         temperature = 0.7
         tone_instruction = "保持自然友好"
         length_instruction = ""
+
+        # Group chat short-sentence preference (3-10 Chinese chars)
+        if is_group_chat:
+            max_tokens = min(max_tokens, 256)
+            length_instruction = "群聊请用 不多于30 字的短句回复，像真实群友一样自然接话。"
 
         # Persona style override (highest priority)
         if persona:
@@ -141,10 +147,12 @@ class ResponseAssembler:
         style_adapter: StyleAdapter | None = None,
         persona: PersonaProfile | None = None,
         enable_dual_output: bool = True,
+        skill_registry: Any | None = None,
     ) -> None:
         self.style_adapter = style_adapter or StyleAdapter()
         self.persona = persona
         self.enable_dual_output = enable_dual_output
+        self.skill_registry = skill_registry
 
     def assemble(
         self,
@@ -161,6 +169,9 @@ class ResponseAssembler:
         heat_level: str = "warm",
         pace: str = "steady",
         topic_stability: float = 0.5,
+        is_group_chat: bool = False,
+        recent_participants: list[dict[str, Any]] | None = None,
+        caller_is_developer: bool = False,
     ) -> str:
         """Build a complete prompt string for response generation.
 
@@ -179,6 +190,7 @@ class ResponseAssembler:
                 user_communication_style=getattr(user_profile, "communication_style", ""),
                 topic_stability=topic_stability,
                 persona=self.persona,
+                is_group_chat=is_group_chat,
             )
 
         sections: list[str] = []
@@ -192,6 +204,14 @@ class ResponseAssembler:
                 "你在一个多人聊天场景里。看到消息时，按自己的性格和情绪决定是否回应。\n"
                 "回应时用自然口语，短句优先，不解释、不总结、不机械关怀。"
             )
+
+        # 1b. Identity verification note (anti-spoofing)
+        sections.append(
+            "[身份识别]\n"
+            "每条消息都标注了发送者的「群名片」和「QQ号」。\n"
+            "注意：群名片可以被用户随意修改，QQ号是固定不变的唯一标识。\n"
+            "如果有人改了群名片冒充别人，请以QQ号为准。"
+        )
 
         # 2. Emotional context
         sections.append(
@@ -211,18 +231,54 @@ class ResponseAssembler:
         else:
             sections.append(self._build_style_fallback(style_params))
 
-        # 6. Dual-output format (inner monologue + spoken reply)
+        # 6. Recent participants context (group members)
+        if recent_participants:
+            sections.append(self._build_participants_context(recent_participants))
+
+        # 7. Available skills
+        if self.skill_registry is not None:
+            skill_desc = self._build_skill_descriptions(caller_is_developer=caller_is_developer)
+            if skill_desc:
+                sections.append(skill_desc)
+
+        # 8. Dual-output format (inner monologue + spoken reply)
         if self.enable_dual_output:
             sections.append(self._build_output_format())
 
-        # 7. User message
-        sections.append(f"[消息] {message.content}")
+        # 9. Sender context + user message
+        sender_info = self._build_sender_line(message)
+        sections.append(f"{sender_info}{message.content}")
 
         return "\n\n".join(sections)
 
     # ------------------------------------------------------------------
     # Section builders
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _build_participants_context(participants: list[dict[str, Any]]) -> str:
+        """Build a section listing recent/active group members with their IDs."""
+        lines = ["[群里的人]"]
+        for p in participants[:5]:
+            name = p.get("name") or "有人"
+            aliases = p.get("aliases", [])
+            alias_str = f"（又名：{', '.join(aliases)}）" if aliases else ""
+            qq = p.get("qq_id") or p.get("user_id", "")
+            lines.append(f"- {name}{alias_str} QQ：{qq}")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _build_sender_line(message: Message) -> str:
+        """Build a [消息] prefix that includes sender identity if available."""
+        speaker = message.speaker or "有人"
+        is_private = bool(message.group_id and message.group_id.startswith("private_"))
+        parts: list[str] = ["[消息]"]
+        parts.append(f"群名片：{speaker}")
+        if message.channel_user_id:
+            parts.append(f"QQ（唯一标识）：{message.channel_user_id}")
+        if message.group_id and not is_private:
+            parts.append(f"群：{message.group_id}")
+        return " ".join(parts) + "\n内容："
 
     @staticmethod
     def _build_emotion_context(
@@ -242,14 +298,20 @@ class ResponseAssembler:
 
         # Group atmosphere from latest snapshot
         group_valence = 0.0
+        active_count = 0
         if group_profile and group_profile.atmosphere_history:
-            group_valence = group_profile.atmosphere_history[-1].group_valence
+            latest = group_profile.atmosphere_history[-1]
+            group_valence = latest.group_valence
+            active_count = getattr(latest, "active_participants", 0)
         mood_desc = (
             "挺热络" if group_valence > 0.2
             else "有点低沉" if group_valence < -0.2
             else "一般"
         )
-        lines.append(f"群里氛围{mood_desc}（群体愉悦度{group_valence:.1f}）")
+        group_line = f"群里氛围{mood_desc}（群体愉悦度{group_valence:.1f}）"
+        if active_count:
+            group_line += f"，当前约{active_count}人在聊"
+        lines.append(group_line)
 
         lines.append(
             f"你现在的感觉："
@@ -295,6 +357,8 @@ class ResponseAssembler:
     ) -> str:
         lines = ["[群体风格]"]
 
+        if group_profile.group_name:
+            lines.append(f"群名：{group_profile.group_name}")
         style = group_profile.typical_interaction_style or "balanced"
         style_desc = {
             "humorous": "轻松幽默",
@@ -326,8 +390,36 @@ class ResponseAssembler:
         """Instruct the model to produce <think> + <say> dual output."""
         return (
             "[输出格式]\n"
-            "先写下你此刻的内心想法（不会发送给用户），放在 <think>...</think> 内。\n"
+            "先写下你此刻的内心想法（1-2句话即可，不会发送给用户），放在 <think>...</think> 内。\n"
             "然后写下你要说出口的话，放在 <say>...</say> 内。"
+            "注意：内心想法尽量简短，把主要篇幅留给对外说的话，并确保 </say> 标签完整输出。"
+        )
+
+    def _build_skill_descriptions(self, caller_is_developer: bool = False) -> str:
+        """Build a section describing available skills and how to call them.
+
+        Filters out developer-only skills when the caller is not a developer.
+        """
+        if self.skill_registry is None:
+            return ""
+        try:
+            from sirius_chat.skills.models import SkillInvocationContext
+            from sirius_chat.memory.user.models import UserProfile
+            caller = UserProfile(
+                user_id="caller", name="caller",
+                metadata={"is_developer": caller_is_developer},
+            )
+            ctx = SkillInvocationContext(caller=caller)
+            desc = self.skill_registry.build_tool_descriptions(invocation_context=ctx)
+        except Exception:
+            return ""
+        if not desc:
+            return ""
+        return (
+            "[我的能力]\n"
+            "在合适的时候，我可以调用以下能力来帮助大家：\n"
+            f"{desc}\n\n"
+            "如果需要调用，在回复中插入：[SKILL_CALL: 技能名 | {\"参数\": \"值\"}]"
         )
 
     @staticmethod
@@ -345,9 +437,22 @@ class ResponseAssembler:
         say_match = re.search(r"<say>(.*?)</say>", raw, re.DOTALL)
 
         think = think_match.group(1).strip() if think_match else ""
-        say = say_match.group(1).strip() if say_match else raw.strip()
+        say = say_match.group(1).strip() if say_match else ""
 
-        # If say is empty but think exists, something went wrong; fall back
+        # If </say> is missing, try to extract content after <say>
+        if not say and "<say>" in raw:
+            say_start = raw.index("<say>") + len("<say>")
+            say = raw[say_start:].strip()
+
+        # If say is still empty, fall back to raw text (minus think if present)
+        if not say:
+            if think_match:
+                # Remove think block from raw and use remainder
+                say = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
+            else:
+                say = raw.strip()
+
+        # If say is still empty but think exists, something went wrong; fall back
         if not say and think:
             say = raw.strip()
 
@@ -393,11 +498,13 @@ class ResponseAssembler:
         style_params: StyleParams | None = None,
         heat_level: str = "warm",
         pace: str = "steady",
+        is_group_chat: bool = False,
     ) -> str:
         """Build prompt for a delayed response (topic-gap trigger)."""
         if style_params is None:
             style_params = self.style_adapter.adapt(
-                heat_level=heat_level, pace=pace, persona=self.persona
+                heat_level=heat_level, pace=pace, persona=self.persona,
+                is_group_chat=is_group_chat,
             )
         identity = (
             self.persona.build_system_prompt() if self.persona
@@ -413,6 +520,9 @@ class ResponseAssembler:
             sections.append(f"[群体风格] {style_desc}")
         sections.append(f"[长度要求] {style_params.length_instruction or '保持简洁自然'}")
         sections.append(f"[消息] {message_content}")
+        # Dual-output format so the model follows the same think+say pattern
+        if self.enable_dual_output:
+            sections.append(self._build_output_format())
         return "\n\n".join(sections)
 
     def assemble_proactive(
@@ -421,15 +531,25 @@ class ResponseAssembler:
         trigger_reason: str,
         group_profile: GroupSemanticProfile | None,
         suggested_tone: str = "casual",
+        is_group_chat: bool = False,
     ) -> str:
         """Build prompt for proactive initiation."""
+        identity = (
+            self.persona.build_system_prompt() if self.persona
+            else "[场景定位]\n你在一个多人聊天场景里。"
+        )
         sections = [
-            "[场景定位]\n你在一个多人聊天场景里。",
+            identity,
             "[当前场景] 群里一段时间没人说话，你决定开口说点什么。",
             f"[触发原因] {trigger_reason}",
             f"[语气] {suggested_tone}",
         ]
+        if is_group_chat:
+            sections.append("[长度要求] 群聊请用 3-10 字的短句回复，像真实群友一样自然接话。")
         if group_profile and group_profile.interest_topics:
             topics = ", ".join(group_profile.interest_topics[:3])
             sections.append(f"[群体兴趣] {topics}")
+        # Dual-output format so the model follows the same think+say pattern
+        if self.enable_dual_output:
+            sections.append(self._build_output_format())
         return "\n\n".join(sections)

@@ -14,9 +14,13 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_SILENCE_THRESHOLD_MINUTES = 30
+_DEFAULT_SILENCE_THRESHOLD_MINUTES = 60
 _MAX_PER_USER_PER_DAY = 2
 _MAX_PER_GROUP_PER_HOUR = 1
+_DEFAULT_COOLDOWN_MINUTES = 30
+_DEFAULT_ATMOSPHERE_MIN_SILENCE_MINUTES = 5.0
+_DEFAULT_ACTIVE_START_HOUR = 12
+_DEFAULT_ACTIVE_END_HOUR = 21
 
 
 class ProactiveTrigger:
@@ -27,10 +31,18 @@ class ProactiveTrigger:
         silence_threshold_minutes: float = _DEFAULT_SILENCE_THRESHOLD_MINUTES,
         max_per_user_per_day: int = _MAX_PER_USER_PER_DAY,
         max_per_group_per_hour: int = _MAX_PER_GROUP_PER_HOUR,
+        cooldown_minutes: float = _DEFAULT_COOLDOWN_MINUTES,
+        atmosphere_min_silence_minutes: float = _DEFAULT_ATMOSPHERE_MIN_SILENCE_MINUTES,
+        active_start_hour: int = _DEFAULT_ACTIVE_START_HOUR,
+        active_end_hour: int = _DEFAULT_ACTIVE_END_HOUR,
     ) -> None:
         self.silence_threshold = timedelta(minutes=silence_threshold_minutes)
         self.max_per_user_per_day = max_per_user_per_day
         self.max_per_group_per_hour = max_per_group_per_hour
+        self.cooldown = timedelta(minutes=cooldown_minutes)
+        self.atmosphere_min_silence = timedelta(minutes=atmosphere_min_silence_minutes)
+        self.active_start_hour = active_start_hour
+        self.active_end_hour = active_end_hour
 
         # Tracking counters
         self._user_counts: dict[str, list[str]] = {}  # user_id -> list of ISO dates
@@ -44,18 +56,24 @@ class ProactiveTrigger:
         last_message_at: str | None = None,
         group_atmosphere: dict[str, Any] | None = None,
         important_dates: list[dict[str, str]] | None = None,
+        _now: datetime | None = None,
     ) -> dict[str, Any] | None:
         """Check if proactive trigger should fire.
 
         Returns trigger context dict if should fire, None otherwise.
         """
-        now = datetime.now(timezone.utc)
+        now = _now if _now is not None else datetime.now(timezone.utc)
+
+        # Active hours check (local time)
+        local_now = now.replace(tzinfo=None) if _now is not None else datetime.now()
+        if not (self.active_start_hour <= local_now.hour < self.active_end_hour):
+            return None
 
         # Cooldown check
         last = self._last_proactive.get(group_id)
         if last:
             last_dt = datetime.fromisoformat(last.replace("Z", "+00:00"))
-            if now - last_dt < timedelta(minutes=10):
+            if now - last_dt < self.cooldown:
                 return None
 
         # Rate limit check
@@ -82,10 +100,27 @@ class ProactiveTrigger:
                         "suggested_tone": "casual",
                     }
 
-        # 2. Atmosphere trigger
+        # 2. Atmosphere trigger (only if group has been quiet for a short while)
         if group_atmosphere:
             valence = group_atmosphere.get("valence", 0.0)
             if valence < -0.3:
+                # Suppress atmosphere trigger if there was recent activity
+                if last_message_at:
+                    raw = last_message_at.replace("Z", "+00:00")
+                    try:
+                        last_msg_dt = datetime.fromisoformat(raw)
+                    except ValueError:
+                        last_msg_dt = None
+                    if last_msg_dt is not None:
+                        if last_msg_dt.tzinfo is None:
+                            last_msg_dt = last_msg_dt.replace(tzinfo=timezone.utc)
+                        if now - last_msg_dt < self.atmosphere_min_silence:
+                            logger.debug(
+                                "Atmosphere trigger suppressed for %s: last message %.1f min ago",
+                                group_id,
+                                (now - last_msg_dt).total_seconds() / 60,
+                            )
+                            return None
                 self._record(group_id, None)
                 return {
                     "trigger_type": "atmosphere",

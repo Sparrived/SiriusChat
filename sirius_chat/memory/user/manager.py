@@ -896,7 +896,7 @@ class UserMemoryManager:
         entry.runtime.summary_notes = [s[:100] for s in parsed if s.strip()][:8]
         removed = old_count - len(entry.runtime.summary_notes)
         if removed > 0:
-            logger.info("摘要归纳完成 | user=%s | %d→%d条", user_id, old_count, len(entry.runtime.summary_notes))
+            logger.info("给 %s 的笔记整理好了，从 %d 条浓缩到 %d 条，去掉了很多重复的。", user_id, old_count, len(entry.runtime.summary_notes))
         return removed
 
     async def consolidate_memory_facts(
@@ -979,7 +979,7 @@ class UserMemoryManager:
             entry.runtime.memory_facts = new_facts
             removed = old_count - len(new_facts)
             if removed > 0:
-                logger.info("事实归纳完成 | user=%s | %d→%d条", user_id, old_count, len(new_facts))
+                logger.info("帮 %s 整理记忆档案啦，%d 条压缩成 %d 条，清爽多了。", user_id, old_count, len(new_facts))
             return removed
         return 0
 
@@ -1079,8 +1079,8 @@ class UserMemoryManager:
         
         if deleted_count > 0:
             logger.info(
-                f"Compressed facts for user {user_id}: "
-                f"{original_count} → {len(compressed_facts)} ({deleted_count} deleted)"
+                f"帮 {user_id} 压缩了一下记忆档案："
+                f"{original_count} 条变成 {len(compressed_facts)} 条，删掉了 {deleted_count} 条冗余的。"
             )
         
         return deleted_count

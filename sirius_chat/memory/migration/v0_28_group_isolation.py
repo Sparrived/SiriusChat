@@ -74,12 +74,12 @@ def migrate_workspace(work_path: Path | str) -> dict[str, Any]:
         target = default_group_dir / path.name
         shutil.move(str(path), str(target))
         files_moved += 1
-        logger.info("Migrated %s → %s", path.name, target)
+        logger.info("把 %s 迁移到了 %s", path.name, target)
 
     # Write marker
     marker_path.write_text("done", encoding="utf-8")
     logger.info(
-        "v0.28 migration complete | work_path=%s | files_moved=%d | backup=%s",
+        "v0.28 迁移搞定啦 | 工作目录=%s | 搬了 %d 个文件 | 备份=%s",
         work_path,
         files_moved,
         backup_dir,

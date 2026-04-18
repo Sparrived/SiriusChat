@@ -204,7 +204,7 @@ class AsyncRolePlayEngine:
             log_key = f"unified:{orchestration.unified_model.strip()}"
             if log_key not in self._orchestration_log_cache:
                 logger.info(
-                    "思维线路就绪，所有辅助任务将由 '%s' 统一承担",
+                    "大脑接线完成，所有辅助任务都交给 '%s' 啦",
                     orchestration.unified_model,
                 )
                 self._orchestration_log_cache.add(log_key)
@@ -237,7 +237,7 @@ class AsyncRolePlayEngine:
             )
             if log_key not in self._orchestration_log_cache:
                 logger.info(
-                    "思维线路就绪，各辅助任务已分配专属模型 - %s",
+                    "大脑接线完成，每项任务都有专属模型负责——%s",
                     log_models,
                 )
                 self._orchestration_log_cache.add(log_key)
@@ -1162,7 +1162,7 @@ class AsyncRolePlayEngine:
                     had_unknown_skill = True
                 else:
                     logger.info(
-                        "正在施展『%s』（第 %d/%d 轮）",
+                        "我要施展『%s』了（第 %d/%d 轮）",
                         skill_name, _round + 1, max_rounds,
                     )
                     if event_bus is not None:
@@ -1896,7 +1896,7 @@ class AsyncRolePlayEngine:
             )
             should_reply = engagement.should_reply
             logger.info(
-                "%s 说话了（热度:%s %.2f | 指向:%s | 参与度:%.3f）→ %s",
+                "%s 开口了（氛围:%s %.2f | 指向:%s | 参与感:%.3f）→ %s",
                 turn.speaker,
                 engagement.heat.heat_level if engagement.heat else "?",
                 engagement.heat.heat_score if engagement.heat else 0.0,
@@ -1934,7 +1934,7 @@ class AsyncRolePlayEngine:
 
         if should_reply:
             logger.info(
-                "[会话] 触发回复 | speaker=%s | session_reply_mode=%s",
+                "[会话] 我决定回复 %s | 模式=%s",
                 turn.speaker,
                 resolved_session_mode,
             )
@@ -2029,7 +2029,7 @@ class AsyncRolePlayEngine:
             ))
         else:
             logger.info(
-                "听到 %s 说话了，但这次选择静静旁观（%s）",
+                "听到 %s 说话了，这次我选择静静旁听（%s）",
                 turn.speaker,
                 engagement.reason if engagement else "mode_never",
             )

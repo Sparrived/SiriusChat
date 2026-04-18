@@ -23,21 +23,42 @@ class ResponseStrategyEngine:
         *,
         is_mentioned: bool = False,
         is_developer: bool = False,
+        heat_level: str = "warm",
     ) -> StrategyDecision:
         """Decide response strategy from intent analysis.
 
-        Decision matrix (paper §2.3):
+        Decision matrix:
             urgency >= 80 and relevance >= 0.7  → IMMEDIATE
-            urgency >= 50 and relevance >= 0.5  → DELAYED (high priority)
-            urgency >= 20 and relevance >= 0.5  → DELAYED (low priority)
-            urgency < 20 or relevance < 0.5     → SILENT
+            urgency >= 50 and relevance >= 0.55 → DELAYED (high priority)
+            urgency >= 30 and relevance >= 0.5  → DELAYED (low priority)
+            else                                → SILENT
+
+        Heat suppression:
+            hot:       urgency × 0.85, relevance × 0.92
+            overheated: urgency × 0.68, relevance × 0.85
         """
         urgency = intent.urgency_score
         relevance = intent.relevance_score
         threshold = intent.threshold
 
+        # Heat suppression: reduce scores in hot/overheated groups
+        heat_mult = {"cold": 1.0, "warm": 1.0, "hot": 0.85, "overheated": 0.68}
+        rel_mult = {"cold": 1.0, "warm": 1.0, "hot": 0.92, "overheated": 0.85}
+        urgency *= heat_mult.get(heat_level, 1.0)
+        relevance *= rel_mult.get(heat_level, 1.0)
+
         # Special rules
         if is_mentioned and intent.social_intent == SocialIntent.HELP_SEEKING:
+            # In overheated groups, even direct help-seeking mentions go delayed
+            if heat_level == "overheated":
+                return StrategyDecision(
+                    strategy=ResponseStrategy.DELAYED,
+                    score=0.7,
+                    threshold=threshold,
+                    urgency=urgency,
+                    relevance=relevance,
+                    reason="direct_mention_help_seeking_overheated",
+                )
             return StrategyDecision(
                 strategy=ResponseStrategy.IMMEDIATE,
                 score=1.0,
@@ -48,6 +69,16 @@ class ResponseStrategyEngine:
             )
 
         if intent.social_intent == SocialIntent.EMOTIONAL and urgency >= 70:
+            # Emotional crisis stays immediate unless severely overheated
+            if heat_level == "overheated":
+                return StrategyDecision(
+                    strategy=ResponseStrategy.DELAYED,
+                    score=0.8,
+                    threshold=threshold,
+                    urgency=urgency,
+                    relevance=relevance,
+                    reason="emotional_crisis_overheated",
+                )
             return StrategyDecision(
                 strategy=ResponseStrategy.IMMEDIATE,
                 score=0.95,
@@ -67,14 +98,14 @@ class ResponseStrategyEngine:
                 reason="silent_intent",
             )
 
-        # Standard matrix
+        # Standard matrix (with higher thresholds)
         if urgency >= 80 and relevance >= 0.7:
             strategy = ResponseStrategy.IMMEDIATE
             reason = "high_urgency_high_relevance"
-        elif urgency >= 50 and relevance >= 0.5:
+        elif urgency >= 50 and relevance >= 0.55:
             strategy = ResponseStrategy.DELAYED
             reason = "medium_urgency_delayed"
-        elif urgency >= 20 and relevance >= 0.5:
+        elif urgency >= 25 and relevance >= 0.5:
             strategy = ResponseStrategy.DELAYED
             reason = "low_urgency_delayed"
         else:
