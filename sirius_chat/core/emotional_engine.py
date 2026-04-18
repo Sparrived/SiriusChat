@@ -787,7 +787,7 @@ class EmotionalGroupChatEngine:
         prompt = self._build_delayed_prompt(triggered, group_id)
 
         # Multi-round generation with SKILL support
-        from sirius_chat.skills.parser import parse_skill_calls, strip_skill_calls
+        from sirius_chat.skills.executor import parse_skill_calls, strip_skill_calls
         from sirius_chat.skills.models import SkillInvocationContext
         max_skill_rounds = self.config.get("max_skill_rounds", 3)
         current_prompt = prompt
