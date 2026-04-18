@@ -518,13 +518,13 @@ class ResponseAssembler:
             style = group_profile.typical_interaction_style or "balanced"
             style_desc = {"humorous": "轻松幽默", "formal": "正式严谨", "balanced": "自然平衡"}.get(style, style)
             sections.append(f"[群体风格] {style_desc}")
-        sections.append(f"[长度要求] {style_params.length_instruction or '保持简洁自然'}")
-        sections.append(f"[消息] {message_content}")
-        # Available skills
+        # Available skills (before user message so it lands in system prompt)
         if self.skill_registry is not None:
             skill_desc = self._build_skill_descriptions(caller_is_developer=True)
             if skill_desc:
                 sections.append(skill_desc)
+        sections.append(f"[长度要求] {style_params.length_instruction or '保持简洁自然'}")
+        sections.append(f"[消息] {message_content}")
         # Dual-output format so the model follows the same think+say pattern
         if self.enable_dual_output:
             sections.append(self._build_output_format())
