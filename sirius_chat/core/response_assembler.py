@@ -136,9 +136,15 @@ class StyleAdapter:
 class ResponseAssembler:
     """Assembles LLM prompts with emotion, empathy, memory, and group context."""
 
-    def __init__(self, style_adapter: StyleAdapter | None = None, persona: PersonaProfile | None = None) -> None:
+    def __init__(
+        self,
+        style_adapter: StyleAdapter | None = None,
+        persona: PersonaProfile | None = None,
+        enable_dual_output: bool = True,
+    ) -> None:
         self.style_adapter = style_adapter or StyleAdapter()
         self.persona = persona
+        self.enable_dual_output = enable_dual_output
 
     def assemble(
         self,
@@ -205,7 +211,11 @@ class ResponseAssembler:
         else:
             sections.append(self._build_style_fallback(style_params))
 
-        # 6. User message
+        # 6. Dual-output format (inner monologue + spoken reply)
+        if self.enable_dual_output:
+            sections.append(self._build_output_format())
+
+        # 7. User message
         sections.append(f"[消息] {message.content}")
 
         return "\n\n".join(sections)
@@ -310,6 +320,38 @@ class ResponseAssembler:
         if style_params.tone_instruction:
             lines.append(f"语气要求：{style_params.tone_instruction}")
         return "\n".join(lines)
+
+    @staticmethod
+    def _build_output_format() -> str:
+        """Instruct the model to produce <think> + <say> dual output."""
+        return (
+            "[输出格式]\n"
+            "先写下你此刻的内心想法（不会发送给用户），放在 <think>...</think> 内。\n"
+            "然后写下你要说出口的话，放在 <say>...</say> 内。"
+        )
+
+    @staticmethod
+    def parse_dual_output(raw: str) -> tuple[str, str]:
+        """Extract <think> and <say> from model response.
+
+        Returns:
+            (think_content, say_content)
+
+        If tags are missing, think_content is empty and say_content is the raw text.
+        """
+        import re
+
+        think_match = re.search(r"<think>(.*?)</think>", raw, re.DOTALL)
+        say_match = re.search(r"<say>(.*?)</say>", raw, re.DOTALL)
+
+        think = think_match.group(1).strip() if think_match else ""
+        say = say_match.group(1).strip() if say_match else raw.strip()
+
+        # If say is empty but think exists, something went wrong; fall back
+        if not say and think:
+            say = raw.strip()
+
+        return think, say
 
     @staticmethod
     def _build_persona_context(persona: PersonaProfile) -> str:

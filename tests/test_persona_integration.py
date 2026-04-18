@@ -150,14 +150,18 @@ class TestPersonaBiasesThreshold:
         from sirius_chat.models.emotion import EmotionState
 
         low_p = PersonaProfile(name="Quiet", reply_frequency="low")
-        engine = EmotionalGroupChatEngine(work_path=tmp_path, persona=low_p)
+        mod_p = PersonaProfile(name="Normal", reply_frequency="moderate")
+        low_engine = EmotionalGroupChatEngine(work_path=tmp_path, persona=low_p)
+        mod_engine = EmotionalGroupChatEngine(work_path=tmp_path, persona=mod_p)
 
-        intent = IntentAnalysisV3(urgency_score=30, relevance_score=0.4)
+        intent_low = IntentAnalysisV3(urgency_score=30, relevance_score=0.4)
+        intent_mod = IntentAnalysisV3(urgency_score=30, relevance_score=0.4)
         emotion = EmotionState()
 
-        decision = engine._decision(intent, emotion, "g1", "u1")
-        # low frequency should make it harder to reply (higher threshold)
-        assert intent.threshold > 0.5
+        low_engine._decision(intent_low, emotion, "g1", "u1")
+        mod_engine._decision(intent_mod, emotion, "g1", "u1")
+        # low frequency should make it harder to reply (higher threshold than moderate)
+        assert intent_low.threshold > intent_mod.threshold
 
 
 class TestStyleAdapterPersonaPrefs:

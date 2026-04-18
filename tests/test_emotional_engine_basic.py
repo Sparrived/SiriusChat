@@ -67,10 +67,14 @@ async def test_proactive_trigger_silence(engine):
 
 
 @pytest.mark.asyncio
-async def test_emotion_analyzer_basic(engine):
-    emotion = await engine.emotion_analyzer.analyze("太开心了！", "user_1", "group_a")
+async def test_cognition_analyzer_basic(engine):
+    emotion, intent, empathy = await engine.cognition_analyzer.analyze(
+        "太开心了！", "user_1", "group_a"
+    )
     assert emotion.valence > 0.3
     assert emotion.basic_emotion is not None
+    assert intent.social_intent is not None
+    assert empathy.strategy_type is not None
 
 
 def test_rhythm_analyzer_basic(engine):

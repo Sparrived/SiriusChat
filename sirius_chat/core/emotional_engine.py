@@ -16,8 +16,8 @@ import re
 from datetime import datetime, timezone
 from typing import Any
 
-from sirius_chat.core.emotion import EmotionAnalyzer
-from sirius_chat.core.intent_v3 import IntentAnalyzerV3
+from sirius_chat.core.cognition import CognitionAnalyzer
+from sirius_chat.memory.autobiographical import AutobiographicalMemoryManager
 from sirius_chat.core.proactive_trigger import ProactiveTrigger
 from sirius_chat.core.response_strategy import ResponseStrategyEngine
 from sirius_chat.core.delayed_response_queue import DelayedResponseQueue
@@ -84,9 +84,8 @@ class EmotionalGroupChatEngine:
         self.user_memory = UserMemoryManager()
         self.activation_engine = ActivationEngine()
 
-        # Cognitive layer
-        self.emotion_analyzer = EmotionAnalyzer(provider_async=provider_async)
-        self.intent_analyzer = IntentAnalyzerV3(provider_async=provider_async)
+        # Cognitive layer (unified emotion + intent)
+        self.cognition_analyzer = CognitionAnalyzer(provider_async=provider_async)
         self.memory_retriever = MemoryRetriever(
             working_mgr=self.working_memory,
             episodic_mgr=self.episodic_memory,
@@ -136,6 +135,12 @@ class EmotionalGroupChatEngine:
         self._skill_registry: Any | None = None
         self._skill_executor: Any | None = None
 
+        # Autobiographical memory (first-person experience records)
+        self.autobiographical_memory = AutobiographicalMemoryManager(
+            work_path=work_path,
+            persona=self.persona,
+        )
+
         # Background tasks
         self._bg_tasks: set[asyncio.Task] = set()
         self._bg_running = False
@@ -168,8 +173,8 @@ class EmotionalGroupChatEngine:
             data={"group_id": group_id, "user_id": user_id},
         ))
 
-        # 2. Cognition (parallel)
-        intent, emotion, memories = await self._cognition(
+        # 2. Cognition (unified emotion + intent)
+        intent, emotion, memories, empathy = await self._cognition(
             content, user_id, group_id
         )
         await self.event_bus.emit(SessionEvent(
@@ -194,7 +199,7 @@ class EmotionalGroupChatEngine:
         ))
 
         # 4. Execution
-        result = await self._execution(decision, message, intent, emotion, memories, group_id)
+        result = await self._execution(decision, message, intent, emotion, memories, group_id, empathy)
         await self.event_bus.emit(SessionEvent(
             type=SessionEventType.EXECUTION_COMPLETED,
             data={
@@ -526,14 +531,11 @@ class EmotionalGroupChatEngine:
         content: str,
         user_id: str,
         group_id: str,
-    ) -> tuple[IntentAnalysisV3, EmotionState, list[dict[str, Any]]]:
-        """Cognitive layer: parallel intent + emotion + memory retrieval."""
-        # Emotion analysis
-        emotion = await self.emotion_analyzer.analyze(content, user_id, group_id)
-
-        # Intent analysis
-        intent = await self.intent_analyzer.analyze(
-            content, user_id, group_id, emotion_state=emotion
+    ) -> tuple[IntentAnalysisV3, EmotionState, list[dict[str, Any]], Any]:
+        """Cognitive layer: unified emotion + intent + empathy + memory retrieval."""
+        # Joint cognition (emotion + intent + empathy in one pass)
+        emotion, intent, empathy = await self.cognition_analyzer.analyze(
+            content, user_id, group_id
         )
 
         # Memory retrieval (async to allow future semantic search)
@@ -545,7 +547,7 @@ class EmotionalGroupChatEngine:
             enable_semantic=self.config.get("enable_semantic_retrieval", False),
         )
 
-        return intent, emotion, memories
+        return intent, emotion, memories, empathy
 
     def _decision(
         self,
@@ -611,16 +613,12 @@ class EmotionalGroupChatEngine:
         emotion: EmotionState,
         memories: list[dict[str, Any]],
         group_id: str,
+        empathy: Any,
     ) -> dict[str, Any]:
         """Execution layer: generate or queue reply."""
         # Rhythm context for style adaptation
         recent_msgs = self._get_recent_messages(group_id, n=10)
         rhythm = self.rhythm_analyzer.analyze(group_id, recent_msgs)
-
-        # Empathy strategy
-        empathy = self.emotion_analyzer.select_empathy_strategy(
-            emotion, message.speaker or ""
-        )
 
         # Profiles
         group_profile = self.semantic_memory.get_group_profile(group_id)
@@ -649,13 +647,25 @@ class EmotionalGroupChatEngine:
                 user_communication_style=getattr(user_profile, "communication_style", ""),
                 topic_stability=rhythm.topic_stability,
             )
-            reply = await self._generate(prompt, group_id, style)
-            reply = await self._process_skill_calls(reply, group_id)
+            raw_reply = await self._generate(prompt, group_id, style)
+            raw_reply = await self._process_skill_calls(raw_reply, group_id)
+
+            # Parse dual-output: <think> inner monologue + <say> spoken reply
+            think, say = self.response_assembler.parse_dual_output(raw_reply)
+            if think:
+                self.autobiographical_memory.record_thought(
+                    content=think,
+                    emotion=emotion,
+                    trigger_message=message.content,
+                    group_id=group_id,
+                )
+
             return {
                 "strategy": "immediate",
-                "reply": reply,
+                "reply": say,
                 "emotion": emotion.to_dict(),
                 "intent": intent.to_dict(),
+                "thought": think,
             }
 
         if decision.strategy == ResponseStrategy.DELAYED:
@@ -702,7 +712,7 @@ class EmotionalGroupChatEngine:
             group_profile.atmosphere_history = group_profile.atmosphere_history[-1000:]
 
         # Update group sentiment cache for emotion island detection
-        self.emotion_analyzer.update_group_sentiment(group_id, emotion)
+        self.cognition_analyzer.update_group_sentiment(group_id, emotion)
 
         # Passive group norm learning
         self._learn_group_norms(group_profile, message, intent)
