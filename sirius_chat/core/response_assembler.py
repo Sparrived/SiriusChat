@@ -554,11 +554,6 @@ class ResponseAssembler:
         if group_profile and group_profile.interest_topics:
             topics = ", ".join(group_profile.interest_topics[:3])
             sections.append(f"[群体兴趣] {topics}")
-        # Available skills
-        if self.skill_registry is not None:
-            skill_desc = self._build_skill_descriptions(caller_is_developer=True)
-            if skill_desc:
-                sections.append(skill_desc)
         # Dual-output format so the model follows the same think+say pattern
         if self.enable_dual_output:
             sections.append(self._build_output_format())

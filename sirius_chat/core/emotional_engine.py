@@ -761,22 +761,103 @@ class EmotionalGroupChatEngine:
 
         If multiple items trigger in the same tick, merge them into a single
         prompt so the model generates only one consolidated reply.
+        Supports multi-round SKILL execution similar to immediate responses.
         """
         recent = self._get_recent_messages(group_id, n=10)
         triggered = self.delayed_queue.tick(group_id, recent)
         if not triggered:
             return []
 
+        # Determine caller from the first triggered item
+        caller_user_id = triggered[0].user_id
+        caller_entry = self.user_memory.get_user_by_identity(
+            channel=triggered[0].group_id, external_user_id=caller_user_id,
+        ) if hasattr(triggered[0], 'group_id') else None
+        if caller_entry is None:
+            # Fallback: search by user_id across all groups
+            for gid, group in self.user_memory.entries.items():
+                if caller_user_id in group:
+                    caller_entry = group[caller_user_id]
+                    break
+        caller_is_developer = bool(
+            caller_entry and caller_entry.profile.is_developer
+        )
+
         # Merge all triggered items into one prompt and one generation call
         prompt = self._build_delayed_prompt(triggered, group_id)
-        raw_reply = await self._generate(prompt, group_id)
-        _think, reply = self.response_assembler.parse_dual_output(raw_reply)
+
+        # Multi-round generation with SKILL support
+        from sirius_chat.skills.parser import parse_skill_calls, strip_skill_calls
+        from sirius_chat.skills.models import SkillInvocationContext
+        max_skill_rounds = self.config.get("max_skill_rounds", 3)
+        current_prompt = prompt
+
+        for _round in range(max_skill_rounds + 1):
+            raw_reply = await self._generate(current_prompt, group_id)
+            _think, reply = self.response_assembler.parse_dual_output(raw_reply)
+
+            calls = parse_skill_calls(reply)
+            if not calls or self._skill_registry is None or self._skill_executor is None:
+                break
+
+            # Execute skills and collect results
+            skill_results: list[str] = []
+            from sirius_chat.memory.user.models import UserProfile
+            skill_caller = UserProfile(
+                user_id=caller_user_id,
+                name=caller_entry.profile.name if caller_entry else caller_user_id,
+                metadata={"is_developer": caller_is_developer},
+            )
+            developer_profiles: list[UserProfile] = []
+            group_entries = self.user_memory.entries.get(group_id, {})
+            for entry in group_entries.values():
+                if entry.profile.is_developer:
+                    developer_profiles.append(entry.profile)
+
+            for skill_name, params in calls:
+                skill = self._skill_registry.get(skill_name)
+                if skill is None:
+                    err = f"SKILL '{skill_name}' 未找到"
+                    logger.warning(err)
+                    skill_results.append(f"[{err}]")
+                    continue
+                if skill.developer_only and not caller_is_developer:
+                    err = f"SKILL '{skill_name}' 被拒绝：caller 不是 developer"
+                    logger.warning(err)
+                    skill_results.append(f"[SKILL '{skill_name}' 拒绝] 该技能仅 developer 可用")
+                    continue
+                ctx = SkillInvocationContext(
+                    caller=skill_caller,
+                    developer_profiles=developer_profiles,
+                )
+                try:
+                    result = await self._skill_executor.execute_async(
+                        skill, params, invocation_context=ctx
+                    )
+                    if result.success:
+                        skill_results.append(
+                            f"[SKILL '{skill_name}' 结果] {result.to_display_text()}"
+                        )
+                    else:
+                        err = result.error or "未知错误"
+                        logger.warning("SKILL '%s' 执行失败: %s", skill_name, err)
+                        skill_results.append(f"[SKILL '{skill_name}' 失败] {err}")
+                except Exception as exc:
+                    logger.error("SKILL '%s' 执行异常: %s", skill_name, exc)
+                    skill_results.append(f"[SKILL '{skill_name}' 异常] {exc}")
+
+            results_text = "\n".join(skill_results)
+            current_prompt = (
+                f"{prompt}\n\n"
+                f"[技能执行结果]\n"
+                f"{results_text}\n\n"
+                f"[继续] 请基于以上技能执行结果，继续完成你的回复。"
+            )
 
         # Record reply timestamp for cooldown tracking (once per tick)
         self._last_reply_at[group_id] = datetime.now(timezone.utc).timestamp()
 
         # Emit events for all triggered items but return only one result
-        # to avoid duplicate message delivery
         for item in triggered:
             await self.event_bus.emit(SessionEvent(
                 type=SessionEventType.DELAYED_RESPONSE_TRIGGERED,
