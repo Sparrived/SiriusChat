@@ -1,6 +1,10 @@
-# Legacy AsyncRolePlayEngine
+# Legacy AsyncRolePlayEngine（已归档）
 
-> **v0.27 及之前的核心引擎**，v0.28+ 仍保留用于兼容。
+> **v0.27 及之前的核心引擎**。v0.28+ 已归档到 `sirius_chat/core/_legacy/`，不再作为推荐路径。
+>
+> 新用户请直接使用 `EmotionalGroupChatEngine`（文档见 `docs/engine-emotional.md`）。
+>
+> Legacy 引擎不再接收新功能，仅保留兼容以支持旧实例平滑迁移。
 
 ## 一句话定位
 

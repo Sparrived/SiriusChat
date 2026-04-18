@@ -27,16 +27,8 @@ flowchart TD
   ProviderMgr --> Provider["AutoRoutingProvider 或显式 Provider"]
   Roleplay --> SessionCfg
 
-  SessionCfg --> LegacyEngine["AsyncRolePlayEngine\nsirius_chat/core/engine.py\n（legacy 路径）"]
-  Provider --> LegacyEngine
-  LegacyEngine --> CoreHelpers["core/chat_builder.py\ncore/memory_prompt.py\ncore/memory_runner.py\ncore/engagement_pipeline.py"]
-  LegacyEngine --> LegacyMemory["memory/\nuser + event + self"]
-  LegacyEngine --> Skills["skills/\nSKILL 注册与执行"]
-  LegacyEngine --> Token["token/\n记录、聚合、SQLite 持久化"]
-  LegacyEngine --> SessionStore["session/store.py\nJsonSessionStore / SqliteSessionStore"]
-
-  Provider --> EmotionalEngine["EmotionalGroupChatEngine\nsirius_chat/core/emotional_engine.py\n（v0.28 新引擎）"]
-  EmotionalEngine --> NewCognitive["core/intent_v3.py\ncore/emotion.py\ncore/response_strategy.py\ncore/threshold_engine.py\ncore/rhythm.py"]
+  Provider --> EmotionalEngine["EmotionalGroupChatEngine\nsirius_chat/core/emotional_engine.py\n（v0.28+ 默认引擎）"]
+  EmotionalEngine --> NewCognitive["core/cognition.py\ncore/response_strategy.py\ncore/threshold_engine.py\ncore/rhythm.py"]
   EmotionalEngine --> NewMemory["memory/working/\nmemory/episodic/\nmemory/semantic/\nmemory/activation_engine.py\nmemory/retrieval_engine.py"]
   EmotionalEngine --> NewExecution["core/response_assembler.py\ncore/delayed_response_queue.py\ncore/proactive_trigger.py\ncore/model_router.py"]
   EmotionalEngine --> Skills
@@ -51,9 +43,9 @@ flowchart TD
 
 - 推荐外部入口是 `open_workspace_runtime(...)` / `WorkspaceRuntime`，而不是让调用方自己管理文件布局。
 - `WorkspaceLayout` 是路径的单一事实来源，决定配置资产与运行态数据分别落在哪里。
-- **Legacy 引擎** `AsyncRolePlayEngine` 的实现位于 `sirius_chat/core/engine.py`；旧引擎已迁移到 `core/_legacy/` 子目录下保留。
-- **v0.28 新引擎** `EmotionalGroupChatEngine` 的实现位于 `sirius_chat/core/emotional_engine.py`，采用四层认知架构（感知→认知→决策→执行）与三层记忆底座（工作→情景→语义）。
-- `sirius_chat/async_engine/` 现在承担兼容导出、提示词、任务编排和工具函数，不再承担文件所有权。
+- **v0.28+ 默认引擎** `EmotionalGroupChatEngine` 的实现位于 `sirius_chat/core/emotional_engine.py`，采用四层认知架构（感知→认知→决策→执行）与三层记忆底座（工作→情景→语义）。
+- **Legacy 引擎 `AsyncRolePlayEngine` 已归档**到 `sirius_chat/core/_legacy/`，不再作为推荐路径。
+- `sirius_chat/async_engine/` 承担 legacy 兼容导出、提示词与工具函数。
 - `UserMemoryManager` 已改为群隔离布局：`entries` 为 `{group_id: {user_id: UserMemoryEntry}}` 双层字典；旧格式通过迁移脚本自动升级。
 - SKILL runtime 会先加载包内置技能，再加载 workspace `skills/`；同名 workspace 文件覆盖内置实现。
 - 用户态记忆、事件记忆、自身记忆、session store、token store 都已经收敛到 workspace 语义下。
@@ -93,59 +85,7 @@ flowchart TD
 
 ---
 
-## 3. Legacy 引擎单轮消息执行流
-
-> Legacy 路径默认行为不变。旧引擎通过 `AsyncRolePlayEngine.run_live_message(...)` 处理单轮消息。
-
-```mermaid
-flowchart TD
-  A["外部 turn\nMessage + 可选 UserProfile"] --> B["WorkspaceRuntime.run_live_message(...)"]
-  B --> C["initialize()\n确保 workspace 已完成 bootstrap 与 watcher 启动"]
-  C --> D["_refresh_workspace_config()\n签名校验 + 热刷新兜底"]
-  D --> E["入队到 session 待处理队列"]
-  E --> F["session processor + asyncio.Lock"]
-  F --> G["_build_session_config(session_id)\n按 pending_message_threshold\n选择逐条或静默批处理"]
-  G --> H["_load_session_for_runtime()\n读取现有 Transcript\n并调用 engine.run_live_session(...)"]
-  H --> I["AsyncRolePlayEngine.run_live_message(...)"]
-
-  subgraph EnginePipeline["Legacy Engine 内部流水线"]
-    I --> J["校验 turn.role=user 且带 speaker\n可选自动 register user_profile"]
-    J --> K["写入用户消息\n更新 Transcript.reply_runtime"]
-    K --> K1["并行前处理 A\nmemory_extract\nevent_extract\nmemory_manager"]
-    K --> K2["并行前处理 B\nintent_analysis 任务\n启用时必须走模型推断\n预算/调用/解析失败则本轮无意图结果"]
-    K1 --> L["HeatAnalyzer + IntentAnalyzer + EngagementCoordinator\n决定 should_reply"]
-    K2 --> L
-    L --> M{"需要回复吗"}
-    M -- 否 --> N["发出 REPLY_SKIPPED 事件\n保留记忆与 transcript 更新"]
-    M -- 是 --> O["build_system_prompt()\n注入 agent 身份\n聚焦用户记忆\n(当前发言者+直接相关者)\n事件命中\nself memory\n压缩 session_summary\nenvironment_context\n安全约束"]
-    O --> P["构建主模型请求\n处理多模态输入与模型选择"]
-    P --> Q["Provider.generate()\n显式 Provider 或 AutoRoutingProvider"]
-    Q --> R["可选 SKILL 检测与执行循环\n最多 max_skill_rounds"]
-    R --> S["写入 assistant 消息\n可通过 event bus/on_reply 对外分发"]
-    S --> T["记录 token 使用\n1. Transcript.token_usage_records\n2. token/token_usage.db"]
-    T --> U["按 history_max_messages / history_max_chars 压缩历史\n生成 session_summary"]
-  end
-
-  N --> V["WorkspaceRuntime 落盘"]
-  U --> V
-  V --> W["SessionStore.save(transcript)"]
-  V --> X["写 sessions/<session_id>/participants.json"]
-  W --> Y["返回最新 Transcript"]
-  X --> Y
-```
-
-### Legacy 路径需要特别注意的语义
-
-- `run_live_session(...)` 现在只做会话初始化，不再消费用户消息。
-- `run_live_message(...)` 是真正的单轮处理入口，支持 `on_reply`、`timeout`、`environment_context` 与 `user_profile`；但在 `WorkspaceRuntime` 层会先入队，再由 session processor 决定何时处理。
-- 当单会话待处理消息数超过 `pending_message_threshold` 时，runtime 会进入静默批处理，对同一说话人的连续消息合并后只调用一次主流程。
-- `reply_mode=auto` 不是单一启发式判断，而是热度、意图和参与协调器共同决定。
-- `intent_analysis` 任务关闭时仍可使用关键词回退；任务启用后，本轮意图只能来自模型推断，不再因失败自动降级到关键词路径。
-- `finalize_and_persist=True` 时，引擎会完成最终内存落盘与后台任务状态推进；`WorkspaceRuntime` 再负责 session store 和参与者文件写回。
-
----
-
-## 4. v0.28 Emotional 引擎单轮消息执行流
+## 3. v0.28 Emotional 引擎单轮消息执行流
 
 > Emotional 路径通过 `EmotionalGroupChatEngine.process_message(...)` 处理单轮消息。引擎内部采用四层认知架构，每层职责单一、可独立测试。
 
@@ -161,13 +101,11 @@ flowchart TD
     C4 --> E1["emit PERCEPTION_COMPLETED"]
   end
 
-  subgraph Cognition["② 认知层（并行 asyncio.gather）"]
-    E1 --> D1["IntentAnalyzer v3\n规则引擎为主 + LLM fallback"]
-    E1 --> D2["EmotionAnalyzer\n2D valence-arousal 模型\n规则为主 + LLM fallback"]
-    E1 --> D3["MemoryRetriever\n3-tier 检索：working → episodic → semantic"]
+  subgraph Cognition["② 认知层（统一 CognitionAnalyzer）"]
+    E1 --> D1["CognitionAnalyzer\n联合规则引擎：情绪 + 意图 同时推断\n热路径零成本（~90%），单 LLM fallback（~10%）"]
+    E1 --> D2["MemoryRetriever\n3-tier 检索：working → episodic → semantic"]
     D1 --> E2["emit COGNITION_COMPLETED"]
     D2 --> E2
-    D3 --> E2
   end
 
   subgraph Decision["③ 决策层"]
@@ -180,27 +118,29 @@ flowchart TD
 
   subgraph Execution["④ 执行层"]
     E3 --> G1{"策略？"}
-    G1 -- IMMEDIATE --> G2["ResponseAssembler\n情感上下文 + 共情策略 + 记忆引用 + 群风格"]
+    G1 -- IMMEDIATE --> G2["ResponseAssembler\n情感上下文 + 共情策略 + 记忆引用 + 群风格 + <think>/<say> 格式"]
     G1 -- DELAYED --> G3["入 DelayedResponseQueue\n等待话题间隙或合并触发"]
     G1 -- SILENT --> G4["仅更新内部状态\n不生成回复"]
     G1 -- PROACTIVE --> G5["由 ProactiveTrigger 外部触发\n生成自然开场白"]
     G2 --> G6["StyleAdapter\nmax_tokens / temperature / tone 动态适配"]
     G6 --> G7["ModelRouter 选模型\n构建 GenerationRequest"]
     G7 --> G8["Provider.generate_async()\n或 sync via asyncio.to_thread"]
-    G8 --> G9["SKILL 调用解析与执行"]
+    G8 --> G8a["parse_dual_output()\n<think> → 内心独白\n<say> → 说出口的话"]
+    G8a --> G8b["<think> 存入 AutobiographicalMemory\n形成第一人称日记"]
+    G8a --> G9["SKILL 调用解析与执行"]
     G9 --> G10["Token 追踪记录"]
     G10 --> E4["emit EXECUTION_COMPLETED"]
   end
 
   E4 --> H["_background_update()\n更新群体氛围 + 群规范学习 + 情感孤岛检测"]
-  H --> I["返回结果 dict\n{strategy, reply, emotion, intent}"]
+  H --> I["返回结果 dict\n{strategy, reply, emotion, intent, thought}"]
 ```
 
 ### Emotional 路径需要特别注意的语义
 
 - **群隔离是 P0**：所有记忆操作必须携带 `group_id`。`UserMemoryManager.entries` 为 `{group_id: {user_id: Entry}}` 双层字典。
 - **四层认知架构**：感知 → 认知 → 决策 → 执行，每层通过 `SessionEventBus` 发出事件，外部可订阅监控。
-- **Hybrid 分析器**：`IntentAnalyzer v3` 和 `EmotionAnalyzer` 均采用“规则引擎为主 + LLM fallback”架构。规则层零成本，仅在置信度低于阈值时调用 LLM。
+- **统一认知分析器**：`CognitionAnalyzer` 联合分析情绪+意图，规则引擎覆盖 ~90% 情况（零 LLM 成本），复杂情况单次 LLM fallback（~10% 命中）。情绪结果自然流入意图紧急度评分，无需额外异步边界。
 - **三层记忆底座**：
   - `WorkingMemoryManager`：按群滑动窗口，最近 N 轮，关键信息保护。
   - `EpisodicMemoryManager`：结构化事件存储，支持激活度遗忘曲线。
@@ -238,11 +178,11 @@ flowchart TD
 
 ### 真实的 engine 位置
 
-- **Legacy**：`AsyncRolePlayEngine` 的实现位于 `sirius_chat/core/_legacy/engine.py`（原 `core/engine.py` 保留兼容导出）。
-- **v0.28 新引擎**：`EmotionalGroupChatEngine` 的实现位于 `sirius_chat/core/emotional_engine.py`。
-- `sirius_chat/async_engine/__init__.py` 只是兼容导出入口，并补充 `prompts.py`、`orchestration.py`、`utils.py` 这类辅助模块。
-- 涉及 legacy 主流程的修改，应优先查看 `sirius_chat/core/_legacy/engine.py`。
-- 涉及 emotional 主流程的修改，应优先查看 `sirius_chat/core/emotional_engine.py`。
+- **v0.28+ 默认引擎**：`EmotionalGroupChatEngine` 的实现位于 `sirius_chat/core/emotional_engine.py`。
+- `sirius_chat/core/cognition.py`：统一情绪+意图分析器（`CognitionAnalyzer`）。
+- `sirius_chat/core/response_assembler.py`：prompt 组装 + `<think>` / `<say>` 双输出解析。
+- `sirius_chat/memory/autobiographical/`：自传体记忆（第一人称体验记录）。
+- **Legacy 归档**：`AsyncRolePlayEngine` 的实现位于 `sirius_chat/core/_legacy/engine.py`，不再维护新功能。
 
 ---
 

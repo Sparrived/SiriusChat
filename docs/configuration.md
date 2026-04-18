@@ -2,35 +2,29 @@
 
 ## 概述
 
-从 v0.24.0 开始，Sirius Chat 建议把配置分成两层理解：
+Sirius Chat v0.28+ 使用 **EmotionalGroupChatEngine** 作为默认引擎。配置体系已分为两套：
 
-1. 轻量会话配置
-   - 供 main.py --config、sirius-chat --config、ConfigManager.bootstrap_workspace_from_legacy_session_json(...) 使用
-   - 支持 JSON 和 JSONC 注释
-   - 只描述 generated_agent_key、providers、历史预算和 orchestration
-2. 完整 SessionConfig
-   - 供 Python API 高级接入使用
-   - 包含 agent、global_system_prompt、work_path、data_path 等完整字段
+| 引擎 | 配置文件 | 适用入口 |
+|------|---------|---------|
+| **Emotional (v0.28+)** | `session_emotional.json` | `main.py --engine emotional --config ...` |
+| **Legacy (已归档)** | `session.json` / `session_config.json` | `main.py --engine legacy --config ...`（不推荐） |
 
-推荐做法是：
+Legacy 配置面向 `AsyncRolePlayEngine`（`SessionConfig` + `OrchestrationPolicy`），已归档到 `docs/engine-legacy.md`，新用户无需关注。
 
-- 用户可编辑配置文件使用轻量会话配置
-- agent 和 global_system_prompt 由 roleplay/generated_agents.json 中已经保存的人格资产提供
-- 若确实需要手写完整 SessionConfig，使用 Python API 直接加载或构造
+本文档重点说明 **Emotional Engine 配置**；Legacy 配置保留在文末第 10 节供查阅。
 
-## 1. 推荐的会话 JSON/JSONC 配置
+## 1. Emotional Engine 配置（v0.28+ 推荐）
 
 适用入口：
 
-- python main.py --config ...
-- sirius-chat --config ...
-- ConfigManager.bootstrap_workspace_from_legacy_session_json(...)
+```bash
+python main.py --engine emotional --config session_emotional.json
+```
 
 示例：
 
 ```json
 {
-  "generated_agent_key": "main_agent",
   "providers": [
     {
       "type": "openai-compatible",
@@ -39,57 +33,37 @@
       "healthcheck_model": "gpt-4o-mini"
     }
   ],
-  "history_max_messages": 24,
-  "history_max_chars": 6000,
-  "max_recent_participant_messages": 5,
-  "enable_auto_compression": true,
-  "orchestration": {
-    "task_enabled": {
-      "memory_extract": true,
-      "event_extract": true,
-      "intent_analysis": true,
-      "memory_manager": true
-    },
-    "task_models": {
-      "memory_extract": "gpt-4o-mini",
-      "event_extract": "gpt-4o-mini",
-      "intent_analysis": "gpt-4o-mini",
-      "memory_manager": "gpt-4o-mini"
-    },
-    "task_temperatures": {
-      "memory_extract": 0.1,
-      "event_extract": 0.1,
-      "intent_analysis": 0.1,
-      "memory_manager": 0.3
-    },
-    "task_max_tokens": {
-      "memory_extract": 128,
-      "event_extract": 192,
-      "intent_analysis": 192,
-      "memory_manager": 256
-    },
-    "task_retries": {
-      "memory_extract": 1,
-      "event_extract": 1,
-      "intent_analysis": 1,
-      "memory_manager": 1
-    },
-    "memory_extract_batch_size": 3,
-    "memory_extract_min_content_length": 50,
-    "min_reply_interval_seconds": 15,
-    "enable_prompt_driven_splitting": true,
-    "session_reply_mode": "auto"
+
+  "persona": "warm_friend",
+
+  "emotional_engine": {
+    "working_memory_max_size": 20,
+    "enable_semantic_retrieval": false,
+    "sensitivity": 0.5,
+
+    "delayed_queue_tick_interval_seconds": 10,
+    "proactive_silence_minutes": 30,
+    "proactive_check_interval_seconds": 60,
+
+    "memory_promote_interval_seconds": 300,
+    "working_memory_promote_threshold": 0.3,
+
+    "consolidation_interval_seconds": 600,
+
+    "task_model_overrides": {
+      "response_generate": { "model": "gpt-4o", "max_tokens": 512, "temperature": 0.7 },
+      "cognition_analyze": { "model": "gpt-4o-mini", "max_tokens": 384, "temperature": 0.2 }
+    }
   }
 }
 ```
 
 说明：
 
-- 文件可以直接写成 JSONC，允许 // 注释
-- generated_agent_key 必须指向配置根 roleplay/generated_agents.json 中的已存在资产
-- providers 是推荐字段；旧版单个 provider 仅保留兼容
-- --init-config <path> 会生成带注释模板
-- workspace 自动写出的 config/session_config.json 也会使用 JSONC 注释模板
+- 文件可直接写成 JSONC，允许 `//` 注释
+- `persona` 支持模板名（`warm_friend`、`sarcastic_techie` 等）或 `"generated"`（从 roleplay 资产自动加载）
+- `emotional_engine` 下的字段全部可选，缺失时使用默认值
+- 完整示例见 `examples/session_emotional.json`
 
 ## 2. 完整 SessionConfig 文件
 
@@ -141,75 +115,53 @@
 - 若不需要分离路径，可把两者写成同一路径
 - 这类文件不建议直接给 main.py --config 使用；CLI/main 推荐轻量会话配置
 
-## 3. 核心字段说明
-
-### generated_agent_key
-
-- 类型：字符串
-- 含义：当前选择的人格资产 key
-- 来源：roleplay/generated_agents.json
+## 2. Emotional Engine 配置字段说明
 
 ### providers
 
-- 类型：列表
-- 含义：provider 引导配置
-- 推荐字段：type、api_key、base_url、healthcheck_model、models
+与 legacy 配置相同。支持 `type`、`api_key`、`base_url`、`healthcheck_model`、`models`。
+
+### persona
+
+- 类型：字符串
+- 含义：人格模板名称或 `"generated"`
+- 可选值：`warm_friend`、`sarcastic_techie`、`gentle_caregiver`、`chaotic_jester`、`stoic_observer`、`protective_elder`、`generated`
+- CLI 可用 `--persona` 覆盖此字段
+
+### emotional_engine
+
+| 字段 | 类型 | 默认值 | 含义 |
+|------|------|--------|------|
+| `working_memory_max_size` | int | 20 | 工作记忆窗口容量（条数） |
+| `enable_semantic_retrieval` | bool | false | 是否启用语义检索 |
+| `sensitivity` | float | 0.5 | 回复敏感度（0.0~1.0），越高越容易回复 |
+| `delayed_queue_tick_interval_seconds` | int | 10 | 延迟回复队列扫描间隔 |
+| `proactive_silence_minutes` | int | 30 | 沉默多久后可能触发主动发言 |
+| `proactive_check_interval_seconds` | int | 60 | 主动触发检查间隔 |
+| `memory_promote_interval_seconds` | int | 300 | 工作记忆→情景记忆晋升间隔 |
+| `working_memory_promote_threshold` | float | 0.3 | 晋升 importance 阈值 |
+| `consolidation_interval_seconds` | int | 600 | 情景记忆→语义记忆整合间隔 |
+| `task_model_overrides` | dict | {} | 按任务覆盖模型参数，见下表 |
+
+#### task_model_overrides
+
+按认知任务指定模型、max_tokens、temperature：
+
+| 任务名 | 默认模型 | 说明 |
+|--------|---------|------|
+| `response_generate` | gpt-4o | 回复生成 |
+| `cognition_analyze` | gpt-4o-mini | 统一情绪+意图分析 |
+| `emotion_analyze` | gpt-4o-mini | 情感分析（保留兼容） |
+| `intent_analyze` | gpt-4o-mini | 意图分析（保留兼容） |
 
 示例：
 
 ```json
-[
-  {
-    "type": "openai-compatible",
-    "base_url": "https://api.openai.com",
-    "api_key": "${OPENAI_API_KEY}",
-    "healthcheck_model": "gpt-4o-mini"
-  },
-  {
-    "type": "siliconflow",
-    "api_key": "${SILICONFLOW_API_KEY}",
-    "healthcheck_model": "Pro/glm-4.5",
-    "models": ["Pro/glm-4.5"]
-  }
-]
+"task_model_overrides": {
+  "response_generate": { "model": "gpt-4o", "max_tokens": 512, "temperature": 0.7 },
+  "cognition_analyze": { "model": "gpt-4o-mini", "max_tokens": 384, "temperature": 0.2 }
+}
 ```
-
-### work_path / data_path
-
-- 仅在完整 SessionConfig 中使用
-- work_path：配置根，放 workspace.json、config/、providers/、roleplay/、skills/
-- data_path：运行根，放 sessions/、memory/、token/、skill_data/、primary_user.json
-
-### orchestration
-
-orchestration 负责控制辅助任务、回复节奏、记忆频率和提示词驱动分割。
-
-常用字段：
-
-| 字段 | 含义 |
-| --- | --- |
-| task_enabled | 各辅助任务是否启用 |
-| task_models | 任务模型映射 |
-| task_temperatures | 各任务温度 |
-| task_max_tokens | 各任务最大输出 |
-| task_retries | 各任务重试次数 |
-| memory_extract_batch_size | 每 N 条消息做一次记忆提取 |
-| memory_extract_min_content_length | 只处理达到最小长度的消息 |
-| min_reply_interval_seconds | 两次 AI 实际回复之间的最小间隔 |
-| enable_prompt_driven_splitting | 是否启用提示词驱动分割 |
-| session_reply_mode | always / never / auto |
-| pending_message_threshold | 单会话待处理消息积压超过该阈值后，runtime 进入静默批处理 |
-
-注意：
-
-- intent_analysis 已是正式一等任务，建议显式配置
-- `intent_analysis` 启用后必须通过模型推断；provider 调用失败或解析失败时，不再回退到关键词意图推断
-- 多 AI 群聊里，`intent_analysis` 会区分“当前模型自身”与“其他 AI”；自动回复只会对前者进入直接点名路径，对后者保持抑制
-- `memory_manager` 通过标准任务配置控制，同时承担后台记忆归纳、长上下文下的即时归纳以及 self-memory 默认回退模型参数
-- `min_reply_interval_seconds > 0` 时，runtime 会在 AI 刚回复后的最小间隔内继续蓄积消息；窗口结束后会先合并同一说话人的连续消息，再按 `session_reply_mode` 进入正常回复判断
-- multimodal_parse 已在 v0.15.0 移除，不应再出现在配置中
-- 图片能力应通过 agent 资产中的 metadata.multimodal_model 配置，而不是辅助任务
-- 旧字段 `message_debounce_seconds` 在加载时仍会兼容读取，但新的模板与持久化输出统一使用 `pending_message_threshold`
 
 ## 4. 环境变量替换
 
@@ -243,50 +195,46 @@ ConfigManager.load_from_json(...) 支持 ${VAR_NAME} 形式的环境变量替换
 - 未定义的环境变量会保留原占位符
 - 轻量会话配置在 bootstrap 时同样支持这套替换逻辑
 
-## 5. 多环境配置
+## 3. 环境变量替换
 
-如果你在 Python 服务内直接使用完整 SessionConfig 文件，可以继续用 ConfigManager.load_from_env(...) 读取 dev/test/prod 预设。
+ConfigManager 支持 `${VAR_NAME}` 形式的环境变量替换。
 
 示例：
 
-```python
-from sirius_chat.config import ConfigManager
-
-manager = ConfigManager()
-dev_config = manager.load_from_env("dev")
-test_config = manager.load_from_env("test")
-prod_config = manager.load_from_env("prod")
+```json
+{
+  "providers": [
+    {
+      "type": "openai-compatible",
+      "base_url": "https://api.openai.com",
+      "api_key": "${OPENAI_API_KEY}"
+    }
+  ]
+}
 ```
 
-适用建议：
+说明：
 
-- dev：偏向高可观察性，通常关闭压缩
-- test：推荐配合 mock provider 和最小预算
-- prod：优先使用环境变量注入密钥和路径
+- 未定义的环境变量会保留原占位符
+- Emotional 和 Legacy 配置都支持这套替换逻辑
 
-## 6. 常见加载方式
+## 4. 常见加载方式
 
-### 加载完整 SessionConfig 文件
-
-```python
-from sirius_chat.config import ConfigManager
-
-manager = ConfigManager()
-config = manager.load_from_json("full-session.jsonc")
-```
-
-### 把轻量配置 bootstrap 到 workspace
+### Emotional Engine（推荐）
 
 ```python
-from pathlib import Path
-from sirius_chat.config import ConfigManager
+from sirius_chat.api import create_emotional_engine
 
-manager = ConfigManager(base_path=Path("./config_root"))
-workspace_config, providers = manager.bootstrap_workspace_from_legacy_session_json(
-    "session.jsonc",
-    work_path=Path("./config_root"),
-    data_path=Path("./data_root"),
+engine = create_emotional_engine(
+    work_path="/path/to/workspace",
+    provider=provider,
+    persona="warm_friend",
+    config={
+        "sensitivity": 0.6,
+        "proactive_silence_minutes": 20,
+    },
 )
+engine.start_background_tasks()
 ```
 
 ### 生成带注释的默认模板
@@ -295,39 +243,30 @@ workspace_config, providers = manager.bootstrap_workspace_from_legacy_session_js
 python main.py --init-config session.jsonc
 ```
 
-## 7. workspace 产物位置
+## 5. workspace 产物位置
 
 双根模式下的默认产物：
 
 | 路径 | 说明 |
 | --- | --- |
 | config_root/workspace.json | workspace 级清单 |
-| config_root/config/session_config.json | JSONC 默认配置快照 |
+| config_root/config/session_config.json | JSONC 默认配置快照（Legacy） |
 | config_root/providers/provider_keys.json | provider 注册表 |
 | config_root/roleplay/generated_agents.json | 已生成人格资产 |
-| data_root/sessions/<session_id>/session_state.db | 会话状态 |
-| data_root/sessions/<session_id>/participants.json | 参与者元数据 |
+| data_root/engine_state/ | 引擎运行态持久化（v0.28+） |
+| data_root/sessions/<session_id>/session_state.db | 会话状态（Legacy） |
 | data_root/memory/ | 用户/事件/自我记忆 |
 | data_root/token/token_usage.db | token 计量 |
 | data_root/skill_data/ | SKILL 数据存储 |
 
-## 8. 最佳实践
+## 6. 最佳实践
 
-1. 对外暴露给运营或脚本编辑的配置文件，统一用轻量 JSON/JSONC 结构。
+1. v0.28+ 新用户直接使用 Emotional Engine 配置，不再关注 `generated_agent_key`、`orchestration` 等 legacy 字段。
 2. 需要注释时直接使用 JSONC，不必更换扩展名。
-3. 不要把 agent 和 global_system_prompt 写回用户入口配置；它们应由人格资产维护。
-4. 不要再使用 multimodal_parse 任务配置。
-5. 使用独立的 config_root 和 data_root 时，修改热刷新的文件必须落在 config_root。
+3. `persona` 字段优先使用模板名；复杂人格通过 roleplay 资产 + `"generated"` 加载。
+4. 使用独立的 config_root 和 data_root 时，修改热刷新的文件必须落在 config_root。
 
-## 9. 故障排查
-
-### 轻量配置加载时报“必需提供 generated_agent_key”
-
-说明当前配置文件不符合 workspace 推荐入口格式。请改为：
-
-- 提供 generated_agent_key
-- 去掉顶层 agent / global_system_prompt
-- 确认 roleplay/generated_agents.json 中存在对应资产
+## 7. 故障排查
 
 ### 修改配置文件后没有立即生效
 
@@ -337,16 +276,20 @@ python main.py --init-config session.jsonc
 2. 文件内容仍是合法 JSON/JSONC
 3. 监听的路径是否属于以下之一：
    - workspace.json
-   - config/session_config.json
    - providers/provider_keys.json
    - roleplay/generated_agents.json
 
-### 示例配置里还有旧字段怎么办
+---
 
-请优先对照：
+## 10. Legacy 配置（已归档）
 
-- examples/session.json
-- examples/session_multimodel.json
-- examples/session_prompt_splitting.json
-- docs/migration-v0.15.md
-- docs/migration-v0.24.md
+> **Legacy 引擎 `AsyncRolePlayEngine` 已在 v0.28 归档。** 以下内容仅供维护旧实例时参考。
+
+Legacy 配置使用 `SessionConfig` + `OrchestrationPolicy` 体系，核心字段包括 `generated_agent_key`、`orchestration.task_enabled`、`orchestration.task_models` 等。
+
+完整说明请查阅 `docs/engine-legacy.md` 和历史迁移文档：
+
+- `examples/session.json`
+- `examples/session_multimodel.json`
+- `docs/migration-v0.15.md`
+- `docs/migration-v0.24.md`
