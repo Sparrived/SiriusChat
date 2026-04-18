@@ -33,11 +33,10 @@ python main.py --init-config session.jsonc
 
 这会生成一个可直接编辑的 JSONC 模板，支持 `//` 注释。
 
-### 方式二：手写最小会话配置
+### 方式二：手写 Emotional Engine 配置
 
 ```json
 {
-  "generated_agent_key": "main_agent",
   "providers": [
     {
       "type": "openai-compatible",
@@ -46,33 +45,23 @@ python main.py --init-config session.jsonc
       "healthcheck_model": "gpt-4o-mini"
     }
   ],
-  "history_max_messages": 24,
-  "history_max_chars": 6000,
-  "max_recent_participant_messages": 5,
-  "enable_auto_compression": true,
-  "orchestration": {
-    "task_enabled": {
-      "memory_extract": true,
-      "event_extract": true,
-      "intent_analysis": true,
-      "memory_manager": true
-    },
-    "task_models": {
-      "memory_extract": "gpt-4o-mini",
-      "event_extract": "gpt-4o-mini",
-      "intent_analysis": "gpt-4o-mini",
-      "memory_manager": "gpt-4o-mini"
-    },
-    "enable_prompt_driven_splitting": true
+  "persona": "warm_friend",
+  "emotional_engine": {
+    "sensitivity": 0.5,
+    "proactive_silence_minutes": 30,
+    "task_model_overrides": {
+      "response_generate": { "model": "gpt-4o", "max_tokens": 512 },
+      "cognition_analyze": { "model": "gpt-4o-mini", "max_tokens": 384 }
+    }
   }
 }
 ```
 
 说明：
 
-- `generated_agent_key` 必须指向 `roleplay/generated_agents.json` 中已存在的人格资产
-- `providers` 是推荐入口；CLI 和 `main.py` 都会优先读取这个字段
-- 如果你把配置根和运行根分开，真正被热刷新的文件都在配置根下
+- `persona` 支持模板名（`warm_friend`、`sarcastic_techie` 等）或 `"generated"`（从 roleplay 资产加载）
+- `emotional_engine` 下的字段全部可选，缺失时使用默认值
+- 完整示例见 `examples/session_emotional.json`
 
 ## 3. 启动方式
 
@@ -85,24 +74,68 @@ sirius-chat --config session.jsonc --work-path data/runtime --config-root data/c
 ### 方式二：仓库入口 main.py
 
 ```bash
-python main.py --config session.jsonc --work-path data/runtime --config-root data/config --store sqlite
+# 使用 Emotional Engine（v0.28+ 默认）
+python main.py --config session.jsonc --work-path data/runtime --config-root data/config --engine emotional
+
+# 指定人格模板
+python main.py --config session.jsonc --engine emotional --persona sarcastic_techie
 ```
 
 说明：
 
 - `--config-root`：保存 `workspace.json`、`config/`、`providers/`、`roleplay/`、`skills/`
-- `--work-path`：保存 `sessions/`、`memory/`、`token/`、`skill_data/`、`primary_user.json`
+- `--work-path`：保存 `engine_state/`、`memory/`、`token/`、`skill_data/`
 - 不传 `--config-root` 时，默认退化为单根模式
 
 ## 4. Python API 最小示例
 
-### 推荐入口：WorkspaceRuntime
+### 推荐入口：create_emotional_engine
 
 ```python
 import asyncio
 from pathlib import Path
 
-from sirius_chat.api import Message, UserProfile, open_workspace_runtime
+from sirius_chat.api import create_emotional_engine, Message, Participant
+from sirius_chat.providers.mock import MockProvider
+
+
+async def main() -> None:
+    provider = MockProvider(responses=[
+        "<think>用户说你好，我也友好回应</think><say>你好呀！</say>"
+    ])
+
+    engine = create_emotional_engine(
+        work_path=Path("./data/runtime"),
+        provider=provider,
+        persona="warm_friend",
+        config={"sensitivity": 0.6},
+    )
+    engine.start_background_tasks()
+
+    msg = Message(role="human", content="你好", speaker="user_1")
+    result = await engine.process_message(
+        message=msg,
+        participants=[Participant(name="user_1", user_id="u1")],
+        group_id="default",
+    )
+
+    print(f"策略: {result['strategy']}")
+    print(f"回复: {result.get('reply')}")
+    print(f"内心: {result.get('thought')}")
+
+    engine.save_state()
+
+
+asyncio.run(main())
+```
+
+### 使用 WorkspaceRuntime
+
+```python
+import asyncio
+from pathlib import Path
+
+from sirius_chat.api import open_workspace_runtime, Message, Participant
 from sirius_chat.providers.mock import MockProvider
 
 
@@ -110,49 +143,26 @@ async def main() -> None:
     runtime = open_workspace_runtime(
         Path("./data/runtime"),
         config_path=Path("./data/config"),
-        provider=MockProvider(responses=["我理解你的意思。"]),
+        provider=MockProvider(responses=["<say>你好！</say>"]),
     )
 
-    transcript = await runtime.run_live_message(
-        session_id="group:demo",
-        turn=Message(role="user", speaker="小王", content="帮我整理一下方案"),
-        user_profile=UserProfile(user_id="u_xiaowang", name="小王"),
+    # 创建 emotional engine
+    engine = runtime.create_emotional_engine(
+        persona="warm_friend",
+        config={"sensitivity": 0.6},
+    )
+    engine.start_background_tasks()
+
+    msg = Message(role="human", content="你好", speaker="user_1")
+    result = await engine.process_message(
+        message=msg,
+        participants=[Participant(name="user_1", user_id="u1")],
+        group_id="default",
     )
 
-    print(transcript.as_chat_history())
+    print(f"回复: {result.get('reply')}")
+
     await runtime.close()
-
-
-asyncio.run(main())
-```
-
-### 高级入口：完整 SessionConfig
-
-```python
-import asyncio
-
-from sirius_chat.async_engine import AsyncRolePlayEngine
-from sirius_chat.config import ConfigManager
-from sirius_chat.models import Message
-from sirius_chat.providers.openai_compatible import OpenAICompatibleProvider
-
-
-async def main() -> None:
-    manager = ConfigManager()
-    config = manager.load_from_json("full-session.jsonc")
-    provider = OpenAICompatibleProvider(
-        base_url="https://api.openai.com",
-        api_key="your-key",
-    )
-    engine = AsyncRolePlayEngine(provider=provider)
-
-    transcript = await engine.run_live_session(config=config)
-    transcript = await engine.run_live_message(
-        config=config,
-        transcript=transcript,
-        turn=Message(role="user", speaker="小王", content="你好"),
-    )
-    print(transcript.as_chat_history())
 
 
 asyncio.run(main())
@@ -167,36 +177,31 @@ project/
 ├── session.jsonc                  # 用户可编辑的轻量会话配置
 ├── data/
 │   └── runtime/
-│       ├── sessions/
-│       ├── memory/
-│       ├── token/
-│       └── skill_data/
+│       ├── engine_state/          # 引擎状态持久化
+│       ├── memory/                # 记忆系统数据
+│       ├── token/                 # Token 用量统计
+│       └── skill_data/            # SKILL 数据存储
 ├── config/
 │   ├── workspace.json
-│   ├── config/
-│   │   └── session_config.json
 │   ├── providers/
 │   │   └── provider_keys.json
 │   ├── roleplay/
 │   │   └── generated_agents.json
 │   └── skills/
 └── examples/
-    ├── session.json
-    ├── session_multimodel.json
-    ├── session_prompt_splitting.json
+    ├── session_emotional.json     # Emotional Engine 配置示例
     └── external_api_usage.py
 ```
 
 ## 6. 热刷新与配置编辑
 
-从 v0.24.0 开始：
+以下文件会被 `WorkspaceRuntime` 通过文件监听自动刷新：
 
 - `workspace.json`
-- `config/session_config.json`
 - `providers/provider_keys.json`
 - `roleplay/generated_agents.json`
 
-会被 `WorkspaceRuntime` 通过文件监听自动刷新。文件写坏时会暂时保留旧配置，修复后会再次生效。
+文件写坏时会暂时保留旧配置，修复后会再次生效。
 
 ## 7. 常见任务
 
@@ -207,21 +212,9 @@ sirius-chat --help
 python main.py --help
 ```
 
-### 输出单轮 transcript
+### 启用提示词驱动分割（legacy）
 
-```bash
-sirius-chat --config session.jsonc --work-path data/runtime --output transcript.json
-```
-
-### 启用提示词驱动分割
-
-```json
-{
-  "orchestration": {
-    "enable_prompt_driven_splitting": true
-  }
-}
-```
+Legacy 引擎支持提示词驱动消息分割。Emotional Engine 不使用此功能。
 
 ### 配置多模态升级
 
@@ -229,6 +222,6 @@ sirius-chat --config session.jsonc --work-path data/runtime --output transcript.
 
 ## 8. 下一步
 
-1. 若你还在手写 `agent` 和 `global_system_prompt` 到 `--config` 文件，先阅读 [docs/configuration.md](docs/configuration.md)。
-2. 若你是从 v0.23.x 升级，请阅读 [docs/migration-v0.24.md](docs/migration-v0.24.md)。
-3. 若你要接外部系统，优先阅读 [docs/external-usage.md](docs/external-usage.md)。
+1. 阅读 [docs/engine-emotional.md](engine-emotional.md) 了解 Emotional Engine 的四层认知架构。
+2. 阅读 [docs/configuration.md](configuration.md) 了解所有支持的配置字段。
+3. 若你要接外部系统，优先阅读 [docs/external-usage.md](external-usage.md)。

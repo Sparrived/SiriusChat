@@ -1,13 +1,15 @@
 # Sirius Chat API 文档
 
-自动生成的 Python API 参考文档。
+> **v0.28+ 重要提示**：本文档包含 Legacy API 和 Emotional Engine API。
+> 新用户应优先使用 `create_emotional_engine()` 和 `EmotionalGroupChatEngine`。
+> Legacy `AsyncRolePlayEngine` 已归档，不再接收新功能。
 
 ## 模块索引
 
 - [engine](#engine)
 - [memory](#memory)
 - [models](#models)
-- [orchestration](#orchestration)
+- [orchestration](#orchestration)（Legacy）
 - [prompting](#prompting)
 - [providers](#providers)
 - [session](#session)
@@ -17,7 +19,80 @@
 
 ## engine
 
-### Classes
+### EmotionalGroupChatEngine（v0.28+ 默认）
+
+#### `create_emotional_engine(work_path, *, provider=None, persona=None, config=None)`
+
+创建 EmotionalGroupChatEngine 实例。
+
+**参数：**
+- `work_path`: workspace 路径（持久化目录）
+- `provider`: LLM provider（可选）
+- `persona`: `PersonaProfile` 或模板名字符串（可选）
+- `config`: 引擎配置字典（可选）
+
+**返回：** `EmotionalGroupChatEngine`
+
+**示例：**
+
+```python
+from sirius_chat.api import create_emotional_engine
+
+engine = create_emotional_engine(
+    work_path="./data",
+    persona="warm_friend",
+    config={"sensitivity": 0.6},
+)
+engine.start_background_tasks()
+```
+
+#### `EmotionalGroupChatEngine.process_message(message, participants, group_id)`
+
+处理单条消息。
+
+**参数：**
+- `message`: `Message` 对象
+- `participants`: `list[Participant]`
+- `group_id`: 群聊 ID
+
+**返回：** `dict[str, Any]` 包含：
+- `strategy`: `"immediate"` / `"delayed"` / `"silent"` / `"proactive"`
+- `reply`: 说出口的话（来自 `<say>`）
+- `thought`: 内心独白（来自 `<think>`）
+- `emotion`: 情绪状态字典
+- `intent`: 意图分析字典
+
+**示例：**
+
+```python
+result = await engine.process_message(
+    message=Message(role="human", content="你好", speaker="u1"),
+    participants=[Participant(name="小王", user_id="u1")],
+    group_id="default",
+)
+print(result["reply"])
+```
+
+#### `EmotionalGroupChatEngine.start_background_tasks()` / `stop_background_tasks()`
+
+启动/停止后台任务（延迟队列、主动触发、记忆晋升、语义整合）。
+
+#### `EmotionalGroupChatEngine.save_state()` / `load_state()`
+
+手动持久化/恢复引擎状态。
+
+#### `EmotionalGroupChatEngine.event_bus`
+
+`SessionEventBus` 实例，可订阅实时事件：
+
+```python
+async for event in engine.event_bus.subscribe():
+    print(event.type, event.data)
+```
+
+---
+
+### Legacy API（已归档）
 
 #### `AsyncRolePlayEngine`
 
