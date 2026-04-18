@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import AsyncIterator, Awaitable, Callable
+from typing import Any, AsyncIterator, Awaitable, Callable
 
 from sirius_chat.async_engine import AsyncRolePlayEngine
 from sirius_chat.config import SessionConfig
@@ -31,6 +31,7 @@ def create_emotional_engine(
     *,
     provider: LLMProvider | AsyncLLMProvider | None = None,
     persona=None,
+    config: dict[str, Any] | None = None,
 ) -> EmotionalGroupChatEngine:
     """Create a new EmotionalGroupChatEngine (v0.28+).
 
@@ -38,6 +39,8 @@ def create_emotional_engine(
         work_path: Workspace path for persistence.
         provider: Optional LLM provider for async generation tasks.
         persona: Optional PersonaProfile or string archetype name.
+        config: Optional engine configuration dict. See docs/configuration.md
+            for supported keys.
 
     Returns:
         Configured EmotionalGroupChatEngine instance.
@@ -47,6 +50,7 @@ def create_emotional_engine(
         work_path=work_path,
         provider_async=provider_async,
         persona=persona,
+        config=config,
     )
 
 

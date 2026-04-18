@@ -1004,6 +1004,25 @@ def main(
                         print_func(f"已加载人格模板：{persona.name}")
                     except ValueError as e:
                         print_func(f"未知人格模板：{e}")
+            # Load emotional engine config from config file if available
+            emotional_config: dict[str, Any] | None = None
+            try:
+                raw_cfg = load_json_document(config_path)
+                if isinstance(raw_cfg, dict):
+                    emotional_config = raw_cfg.get("emotional_engine")
+                    # Also load persona from config if not overridden on CLI
+                    if persona is None:
+                        cfg_persona = raw_cfg.get("persona")
+                        if cfg_persona and cfg_persona != "generated":
+                            from sirius_chat.core.persona_generator import PersonaGenerator
+                            try:
+                                persona = PersonaGenerator.from_template(str(cfg_persona))
+                                print_func(f"已从配置加载人格模板：{persona.name}")
+                            except ValueError:
+                                pass
+            except Exception:
+                pass
+
             transcript = _run_emotional_interactive_session(
                 work_path=work_path,
                 primary_user=primary_user,
@@ -1011,6 +1030,7 @@ def main(
                 input_func=input_func,
                 print_func=print_func,
                 persona=persona,
+                config=emotional_config,
             )
         else:
             transcript = run_interactive_session(
@@ -1051,6 +1071,7 @@ def _run_emotional_interactive_session(
     input_func: InputFunc,
     print_func: PrintFunc,
     persona: Any | None = None,
+    config: dict[str, Any] | None = None,
 ) -> Transcript:
     """Run an interactive session using EmotionalGroupChatEngine (v0.28+).
 
@@ -1058,7 +1079,9 @@ def _run_emotional_interactive_session(
     and print assistant replies.
     """
     provider = provider_factory()
-    engine = create_emotional_engine(work_path, provider=provider, persona=persona)
+    engine = create_emotional_engine(
+        work_path, provider=provider, persona=persona, config=config
+    )
 
     print_func("\n=== Emotional Group Chat Engine (v0.28+) ===")
     print_func("输入消息与 AI 交互，输入 /exit 或 /quit 退出。\n")
