@@ -199,9 +199,25 @@ _URGENCY_KEYWORDS = {
 # Joint LLM fallback prompt
 # ------------------------------------------------------------------
 
+# 主观题/观点询问关键词 —— 被点名时出现这些词应触发 IMMEDIATE
+_SUBJECTIVE_KEYWORDS: tuple[str, ...] = (
+    "你觉得", "你认为", "你怎么看", "你的看法", "你喜欢",
+    "你觉得呢", "你觉得怎么样", "你的意见", "你觉得如何",
+    "你更喜欢", "你最", "你讨厌", "你不喜欢", "你觉得好",
+    "你怎么看",
+)
+
+# 需要上下文才能正确理解的短消息模式 —— 单独看像 filler，但有上下文时应视为对话延续
+_CONTEXT_DEPENDENT_PATTERNS: tuple[str, ...] = (
+    "为什么", "怎么回事", "真的吗", "那怎么办", "怎么办呢",
+    "然后呢", "后来呢", "什么意思", "怎么说", "不会吧",
+    "这样啊", "原来如此", "懂了", "这样吗", "那行", "好吧",
+    "哦", "嗯嗯", "对对", "确实", "可以", "好的", "行吧",
+)
+
 _LLM_COGNITION_PROMPT = """分析以下消息的【情感状态】和【社交意图】。
 
-消息：{message}
+{ai_identity}消息：{message}
 
 要求输出 JSON：
 {{
@@ -221,7 +237,7 @@ _LLM_COGNITION_PROMPT = """分析以下消息的【情感状态】和【社交�
 - emotional: 表达情绪、寻求安慰
 - social: 闲聊、讨论、分享
 - silent: 无意义 filler（哈哈、确实、+1）
-
+{ai_identity_note}
 只输出 JSON，不要其他内容。"""
 
 
@@ -239,9 +255,17 @@ class CognitionAnalyzer:
         self,
         lexicon: dict[str, float] | None = None,
         provider_async: Any | None = None,
+        model_name: str = "gpt-4o-mini",
+        ai_name: str = "",
+        ai_aliases: list[str] | None = None,
+        persona: Any | None = None,
     ) -> None:
         self.lexicon = lexicon or dict(_DEFAULT_LEXICON)
         self.provider_async = provider_async
+        self.model_name = model_name
+        self.ai_name = ai_name
+        self.ai_aliases = [a.lower() for a in (ai_aliases or []) if a]
+        self.persona = persona
 
         # Emotion state tracking
         self.trajectories: dict[str, list[tuple[str, EmotionState]]] = {}
@@ -261,6 +285,7 @@ class CognitionAnalyzer:
         message: str,
         user_id: str,
         group_id: str | None = None,
+        context_messages: list[dict[str, Any]] | None = None,
     ) -> tuple[EmotionState, IntentAnalysisV3, EmpathyStrategy]:
         """Joint analysis: emotion, intent, and empathy strategy in one pass.
 
@@ -270,14 +295,16 @@ class CognitionAnalyzer:
         # 1. Rule-based emotion analysis
         text_emotion = self._text_analysis(message)
 
-        # 2. Rule-based intent classification
-        social_intent, subtype, intent_confidence = self._classify_intent(message)
+        # 2. Rule-based intent classification (with context awareness)
+        social_intent, subtype, intent_confidence = self._classify_intent(
+            message, context_messages
+        )
 
         # 3. Joint LLM fallback if either needs help
         need_llm = text_emotion.confidence < 0.6 or intent_confidence < 0.8
         if need_llm and self.provider_async is not None:
             try:
-                llm_result = await self._llm_cognition(message)
+                llm_result = await self._llm_cognition(message, context_messages)
                 if llm_result is not None:
                     if text_emotion.confidence < 0.6:
                         text_emotion = llm_result["emotion"]
@@ -295,12 +322,35 @@ class CognitionAnalyzer:
         self._update_trajectory(user_id, emotion)
 
         # 5. Intent scoring (emotion now available without async hop)
-        urgency = self._calculate_urgency(message, user_id, group_id, emotion)
+        urgency = self._calculate_urgency(
+            message, user_id, group_id, emotion, context_messages
+        )
         relevance = self._calculate_relevance(message, social_intent, user_id, group_id)
         threshold = self._dynamic_threshold(group_id or "", user_id)
         strategy, priority, response_time = self._decide_strategy(
             social_intent, urgency, relevance, threshold
         )
+
+        # Detect if message directly addresses the current AI
+        directed = self._detect_directed_at_ai(message)
+        if directed:
+            # If explicitly addressed, never treat as silent filler
+            if social_intent == SocialIntent.SILENT:
+                social_intent = SocialIntent.SOCIAL
+                subtype = SocialSubtype.TOPIC_DISCUSSION if subtype == SilentSubtype.FILLER else subtype
+
+            # Determine if this is a question / subjective inquiry that requires an answer
+            is_question = "?" in message or "？" in message
+            is_subjective = any(kw in message for kw in _SUBJECTIVE_KEYWORDS)
+
+            if is_question or is_subjective:
+                # Direct question → immediate response (polite + functional)
+                urgency = max(urgency, 80.0)
+                relevance = max(relevance, 0.75)
+            else:
+                # Greeting or casual mention → prompt but not as urgent
+                urgency = max(urgency, 70.0)
+                relevance = max(relevance, 0.65)
 
         intent = IntentAnalysisV3(
             intent_type=self._intent_type_from_social(social_intent, message),
@@ -312,6 +362,7 @@ class CognitionAnalyzer:
             response_priority=priority,
             estimated_response_time=response_time,
             threshold=threshold,
+            directed_at_current_ai=directed,
         )
 
         # 6. Empathy strategy
@@ -445,14 +496,85 @@ class CognitionAnalyzer:
     # LLM fallback
     # ------------------------------------------------------------------
 
-    async def _llm_cognition(self, message: str) -> dict[str, Any] | None:
+    def _build_persona_identity(self) -> str:
+        """Build a concise persona description for the LLM cognition prompt."""
+        if not self.persona and not self.ai_name:
+            return ""
+
+        parts: list[str] = []
+        name = self.ai_name
+        if self.persona:
+            name = self.persona.name or name
+        if name:
+            parts.append(f"你是{name}。")
+
+        if self.persona:
+            p = self.persona
+            if p.persona_summary:
+                parts.append(p.persona_summary)
+            elif p.backstory:
+                # First sentence only, max 40 chars
+                first = p.backstory.split("。")[0] + "。" if "。" in p.backstory else p.backstory
+                parts.append(first[:60])
+            if p.personality_traits:
+                parts.append(f"你的性格是{'、'.join(p.personality_traits[:3])}。")
+            if p.communication_style:
+                parts.append(f"说话风格：{p.communication_style}。")
+            if p.social_role:
+                parts.append(f"在群里通常是{p.social_role}角色。")
+
+        if not parts:
+            return ""
+        return "\n【角色身份】" + "".join(parts) + "\n"
+
+    @staticmethod
+    def _format_context_for_prompt(
+        context_messages: list[dict[str, Any]] | None,
+        max_turns: int = 4,
+    ) -> str:
+        """Format recent conversation context for LLM prompt."""
+        if not context_messages:
+            return ""
+        lines: list[str] = ["\n最近对话上下文："]
+        for msg in context_messages[-max_turns:]:
+            uid = msg.get("user_id", "unknown")
+            content = msg.get("content", "")
+            if content:
+                lines.append(f"[{uid}] {content}")
+        return "\n".join(lines) + "\n"
+
+    async def _llm_cognition(
+        self,
+        message: str,
+        context_messages: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any] | None:
         """Single LLM call for joint emotion + intent analysis."""
         from sirius_chat.providers.base import GenerationRequest, LLMProvider
         import asyncio
 
-        prompt = _LLM_COGNITION_PROMPT.format(message=message)
+        persona_identity = self._build_persona_identity()
+        if self.ai_name:
+            ai_id = f"{persona_identity}当前 AI 名字：{self.ai_name}"
+            if self.ai_aliases:
+                ai_id += f"，别名：{', '.join(self.ai_aliases)}"
+            ai_id += "\n"
+            ai_note = (
+                f"注意：如果消息中提到了当前 AI 的名字或别名，"
+                f"social_intent 必须是 social（不是 silent），"
+                f"且如果消息是提问或询问看法，urgency_score 至少为 80，relevance_score 至少为 0.75。\n"
+            )
+        else:
+            ai_id = persona_identity
+            ai_note = ""
+
+        context_text = self._format_context_for_prompt(context_messages)
+        prompt = _LLM_COGNITION_PROMPT.format(
+            ai_identity=ai_id,
+            message=context_text + message,
+            ai_identity_note=ai_note,
+        )
         request = GenerationRequest(
-            model="gpt-4o-mini",
+            model=self.model_name,
             system_prompt=prompt,
             messages=[],
             temperature=0.2,
@@ -654,8 +776,21 @@ class CognitionAnalyzer:
     # Intent classification (rule-based)
     # ------------------------------------------------------------------
 
-    def _classify_intent(self, message: str) -> tuple[SocialIntent, Any, float]:
+    def _detect_directed_at_ai(self, message: str) -> bool:
+        """Check if message directly addresses the current AI by name or alias."""
+        if not self.ai_name:
+            return False
         text = message.lower()
+        names = [self.ai_name.lower()] + self.ai_aliases
+        return any(name in text for name in names if name)
+
+    def _classify_intent(
+        self,
+        message: str,
+        context_messages: list[dict[str, Any]] | None = None,
+    ) -> tuple[SocialIntent, Any, float]:
+        text = message.lower()
+        has_context = bool(context_messages)
 
         # Help seeking
         help_score = 0
@@ -670,6 +805,15 @@ class CognitionAnalyzer:
 
         # Social
         social_score = sum(1 for w in _SOCIAL_INDICATORS if w in text)
+
+        # Context-aware: short messages that look like filler may actually be
+        # follow-ups to previous messages (e.g. "为什么？", "那怎么办", "懂了")
+        if has_context and len(message) <= 8:
+            if any(p in message for p in _CONTEXT_DEPENDENT_PATTERNS):
+                # This is likely a conversational follow-up, not filler
+                if help_score >= 1:
+                    return SocialIntent.HELP_SEEKING, HelpSubtype.INFO_QUERY, 0.75
+                return SocialIntent.SOCIAL, SocialSubtype.TOPIC_DISCUSSION, 0.65
 
         # Silent indicators (filler)
         if len(message) <= 4 or message in {"哈哈", "确实", "+1", "嗯", "哦"}:
@@ -710,6 +854,7 @@ class CognitionAnalyzer:
         user_id: str,
         group_id: str | None,
         emotion: EmotionState | None,
+        context_messages: list[dict[str, Any]] | None = None,
     ) -> float:
         text = message.lower()
         score = 0.0
@@ -732,6 +877,11 @@ class CognitionAnalyzer:
                 score += 18.0
             elif emotion.intensity > 0.7:
                 score += 12.0
+
+        # Context-aware: follow-up questions in short messages carry implicit urgency
+        if context_messages and len(message) <= 8:
+            if any(p in message for p in _CONTEXT_DEPENDENT_PATTERNS):
+                score += 20.0
 
         return max(0.0, min(100.0, score))
 

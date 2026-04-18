@@ -17,6 +17,7 @@ from sirius_chat.workspace.layout import WorkspaceLayout
 logger = logging.getLogger(__name__)
 
 _MAX_THOUGHTS = 200
+_MAX_SURFACE_BATCH = 20
 
 
 class AutobiographicalMemoryManager:
@@ -27,6 +28,8 @@ class AutobiographicalMemoryManager:
     - Emotion timeline tracking
     - Self-semantic profile evolution
     - Value-weighted importance scoring (zero LLM cost)
+    - Surface thought buffering for background polishing
+    - Self-reflection generation
     """
 
     def __init__(
@@ -51,6 +54,9 @@ class AutobiographicalMemoryManager:
         # Recent thoughts buffer (before they become diary entries)
         self._recent_thoughts: list[dict[str, Any]] = []
 
+        # Surface thoughts buffer (for background polishing)
+        self._surface_buffer: list[dict[str, Any]] = []
+
     # ------------------------------------------------------------------
     # Recording
     # ------------------------------------------------------------------
@@ -61,8 +67,18 @@ class AutobiographicalMemoryManager:
         emotion: EmotionState | None = None,
         trigger_message: str = "",
         group_id: str | None = None,
+        reply: str = "",
+        depth: str = "rich",
     ) -> DiaryEntry | None:
         """Record an inner monologue (<think>) as a diary entry.
+
+        Args:
+            content: The inner monologue text.
+            emotion: Associated emotion state.
+            trigger_message: The message that triggered this thought.
+            group_id: Group context.
+            reply: The spoken reply (if any) associated with this thought.
+            depth: "rich" (from <think> tag) or "surface" (from background generation).
 
         Returns the created DiaryEntry, or None if content is empty.
         """
@@ -79,9 +95,7 @@ class AutobiographicalMemoryManager:
             related_user_ids=[],
         )
 
-        # Attach emotion snapshot as extended metadata (not in base DiaryEntry)
-        # Store in the buffer for now; full integration in v0.28+
-        self._recent_thoughts.append({
+        thought_record = {
             "entry_id": entry.entry_id,
             "timestamp": entry.recorded_at,
             "content": entry.content,
@@ -89,9 +103,18 @@ class AutobiographicalMemoryManager:
             "emotion": emotion.to_dict() if emotion else {},
             "trigger": trigger_message,
             "group_id": group_id,
-        })
+            "reply": reply,
+            "depth": depth,
+        }
+
+        # Store in the buffer
+        self._recent_thoughts.append(thought_record)
         if len(self._recent_thoughts) > _MAX_THOUGHTS:
             self._recent_thoughts = self._recent_thoughts[-_MAX_THOUGHTS:]
+
+        # Surface thoughts also go to the polishing buffer
+        if depth == "surface":
+            self._surface_buffer.append(thought_record)
 
         # Also add to the underlying diary system
         self._self_memory.add_diary_entry(entry)
@@ -142,6 +165,71 @@ class AutobiographicalMemoryManager:
         return entry
 
     # ------------------------------------------------------------------
+    # Surface thought management (for background polishing)
+    # ------------------------------------------------------------------
+
+    def get_surface_thoughts(self, max_entries: int = _MAX_SURFACE_BATCH) -> list[dict[str, Any]]:
+        """Return surface thoughts pending polishing."""
+        return self._surface_buffer[:max_entries]
+
+    def mark_surface_polished(self, entry_ids: list[str]) -> None:
+        """Mark surface thoughts as polished (remove from buffer)."""
+        self._surface_buffer = [
+            t for t in self._surface_buffer if t["entry_id"] not in entry_ids
+        ]
+        # Also update depth in recent_thoughts
+        for t in self._recent_thoughts:
+            if t["entry_id"] in entry_ids:
+                t["depth"] = "rich"
+
+    def apply_polished_thoughts(self, polished: list[dict[str, Any]]) -> None:
+        """Apply polished thoughts back to the diary system.
+
+        Args:
+            polished: List of dicts with entry_id and enriched content.
+        """
+        for p in polished:
+            entry_id = p.get("entry_id")
+            new_content = p.get("content", "").strip()
+            if not entry_id or not new_content:
+                continue
+            # Update in diary entries if found
+            for entry in self._self_memory.diary_entries:
+                if entry.entry_id == entry_id:
+                    entry.content = new_content
+                    entry.confidence = min(1.0, entry.confidence + 0.05)
+                    break
+        self.mark_surface_polished([p["entry_id"] for p in polished if p.get("entry_id")])
+
+    # ------------------------------------------------------------------
+    # Self-reflection
+    # ------------------------------------------------------------------
+
+    def build_reflection_context(self, n_entries: int = 30) -> str:
+        """Build context string for self-reflection from recent thoughts.
+
+        Returns a compact text summarizing recent experiences.
+        """
+        recent = self._recent_thoughts[-n_entries:]
+        if not recent:
+            return ""
+        lines = []
+        for t in recent:
+            ts = t.get("timestamp", "")[11:16]  # HH:MM only
+            content = t.get("content", "")
+            trigger = t.get("trigger", "")
+            depth_label = "【深】" if t.get("depth") == "rich" else "【浅】"
+            if trigger:
+                lines.append(f"[{ts}] {depth_label} 看到「{trigger[:30]}」时：{content[:60]}")
+            else:
+                lines.append(f"[{ts}] {depth_label} {content[:60]}")
+        return "\n".join(lines)
+
+    def update_reflection(self, reflection: str) -> None:
+        """Update self-semantic profile with a new reflection."""
+        self._profile.update_growth_notes(reflection)
+
+    # ------------------------------------------------------------------
     # Retrieval
     # ------------------------------------------------------------------
 
@@ -160,6 +248,42 @@ class AutobiographicalMemoryManager:
     ) -> list[DiaryEntry]:
         """Retrieve diary entries most relevant to current context."""
         return self._self_memory.get_relevant_diary_entries(keywords, max_entries)
+
+    def retrieve_emotionally_resonant(
+        self,
+        emotion: EmotionState | None,
+        top_k: int = 3,
+        threshold: float = 0.3,
+    ) -> list[dict[str, Any]]:
+        """Retrieve autobiographical memories with similar emotional coordinates.
+
+        Computes Euclidean distance in (valence, arousal) space and returns
+        the closest recent thoughts. This is the "associative layer" (联想层)
+        — when the AI feels a certain way, memories with similar emotional
+        color surface naturally.
+        """
+        if not emotion:
+            return []
+
+        ev, ea = emotion.valence, emotion.arousal
+        scored = []
+        for thought in self._recent_thoughts:
+            te = thought.get("emotion", {})
+            tv = te.get("valence", 0.0)
+            ta = te.get("arousal", 0.3)
+            dist = ((ev - tv) ** 2 + (ea - ta) ** 2) ** 0.5
+            if dist <= threshold:
+                scored.append({
+                    "source": "autobiographical_emotion",
+                    "content": thought.get("content", ""),
+                    "score": round(1.0 - dist, 4),
+                    "timestamp": thought.get("timestamp", ""),
+                    "emotion_distance": round(dist, 4),
+                    "trigger": thought.get("trigger", ""),
+                })
+
+        scored.sort(key=lambda x: x["score"], reverse=True)
+        return scored[:top_k]
 
     def build_diary_prompt_section(
         self,
@@ -182,6 +306,8 @@ class AutobiographicalMemoryManager:
             lines.append(
                 f"最近的心情：愉悦度{latest['valence']}，紧张度{latest['arousal']}"
             )
+        if self._profile.growth_notes:
+            lines.append(f"最近的感悟：{self._profile.growth_notes[:100]}")
         return "\n".join(lines)
 
     # ------------------------------------------------------------------
@@ -223,7 +349,6 @@ class AutobiographicalMemoryManager:
     @staticmethod
     def _extract_keywords(content: str) -> list[str]:
         """Simple keyword extraction for diary entries."""
-        # Very basic: use significant words (length >= 2) that aren't common fillers
         fillers = {"的", "了", "是", "在", "我", "你", "他", "她", "它", "们", "这", "那", "有", "和", "就", "都", "而", "及", "与", "或", "但是", "因为", "所以", "如果", "那么", "虽然", "但是"}
         words = []
         for w in content.replace("，", " ").replace("。", " ").replace("！", " ").replace("？", " ").split():

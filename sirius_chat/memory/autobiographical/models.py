@@ -32,6 +32,7 @@ class SelfSemanticProfile(JsonSerializable):
     emotion_timeline: list[dict[str, Any]] = field(default_factory=list)
     relationship_self_views: dict[str, str] = field(default_factory=dict)
     accumulated_experiences: dict[str, int] = field(default_factory=dict)
+    growth_notes: str = ""  # 自我反思摘要，由后台反思任务更新
     created_at: str = ""
     updated_at: str = ""
 
@@ -65,6 +66,11 @@ class SelfSemanticProfile(JsonSerializable):
         """Return the last n emotional snapshots."""
         return self.emotion_timeline[-n:]
 
+    def update_growth_notes(self, reflection: str) -> None:
+        """Update growth_notes with a new reflection summary."""
+        self.growth_notes = reflection
+        self.updated_at = datetime.now(timezone.utc).isoformat()
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "self_description": self.self_description,
@@ -73,6 +79,7 @@ class SelfSemanticProfile(JsonSerializable):
             "emotion_timeline": self.emotion_timeline,
             "relationship_self_views": self.relationship_self_views,
             "accumulated_experiences": self.accumulated_experiences,
+            "growth_notes": self.growth_notes,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
@@ -86,6 +93,7 @@ class SelfSemanticProfile(JsonSerializable):
             emotion_timeline=data.get("emotion_timeline", []),
             relationship_self_views=data.get("relationship_self_views", {}),
             accumulated_experiences=data.get("accumulated_experiences", {}),
+            growth_notes=data.get("growth_notes", ""),
             created_at=data.get("created_at", ""),
             updated_at=data.get("updated_at", ""),
         )

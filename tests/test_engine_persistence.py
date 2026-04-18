@@ -7,6 +7,7 @@ import pytest
 from sirius_chat.core.emotional_engine import EmotionalGroupChatEngine
 from sirius_chat.core.engine_persistence import EngineStateStore
 from sirius_chat.models.models import Message, Participant
+from sirius_chat.models.persona import PersonaProfile
 
 
 class TestEngineStateStore:
@@ -63,7 +64,10 @@ class TestEngineStateStore:
 class TestEnginePersistenceIntegration:
     @pytest.mark.asyncio
     async def test_save_and_load_roundtrip(self, tmp_path):
-        engine = EmotionalGroupChatEngine(work_path=tmp_path)
+        engine = EmotionalGroupChatEngine(
+            work_path=tmp_path,
+            persona=PersonaProfile(name="TestBot"),
+        )
 
         # Process some messages
         p = Participant(name="u1", user_id="u1")
@@ -80,7 +84,10 @@ class TestEnginePersistenceIntegration:
         engine.save_state()
 
         # New engine, load state
-        engine2 = EmotionalGroupChatEngine(work_path=tmp_path)
+        engine2 = EmotionalGroupChatEngine(
+            work_path=tmp_path,
+            persona=PersonaProfile(name="TestBot"),
+        )
         engine2.load_state()
 
         # Verify working memory restored
@@ -93,6 +100,9 @@ class TestEnginePersistenceIntegration:
         assert "group_a" in engine2._group_last_message_at
 
     def test_load_state_no_crash_when_empty(self, tmp_path):
-        engine = EmotionalGroupChatEngine(work_path=tmp_path)
+        engine = EmotionalGroupChatEngine(
+            work_path=tmp_path,
+            persona=PersonaProfile(name="TestBot"),
+        )
         engine.load_state()  # Should not crash when no prior state exists
         assert engine.working_memory.list_groups() == []

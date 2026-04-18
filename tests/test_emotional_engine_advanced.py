@@ -421,8 +421,12 @@ class TestConsolidation:
     async def test_consolidate_group_updates_user_profiles(self, tmp_path):
         from sirius_chat.core.emotional_engine import EmotionalGroupChatEngine
         from sirius_chat.memory.semantic.models import UserSemanticProfile
+        from sirius_chat.models.persona import PersonaProfile
 
-        engine = EmotionalGroupChatEngine(work_path=tmp_path)
+        engine = EmotionalGroupChatEngine(
+            work_path=tmp_path,
+            persona=PersonaProfile(name="TestBot"),
+        )
         group_id = "test_g"
 
         # Seed some episodic events for a user
@@ -459,9 +463,13 @@ class TestConsolidation:
     async def test_consolidate_group_skips_old_events(self, tmp_path):
         from sirius_chat.core.emotional_engine import EmotionalGroupChatEngine
         from sirius_chat.memory.event.models import EventMemoryEntry
+        from sirius_chat.models.persona import PersonaProfile
         from datetime import datetime, timezone, timedelta
 
-        engine = EmotionalGroupChatEngine(work_path=tmp_path)
+        engine = EmotionalGroupChatEngine(
+            work_path=tmp_path,
+            persona=PersonaProfile(name="TestBot"),
+        )
         group_id = "test_g"
 
         # Add a very old event directly (bypassing add_event to control timestamp)

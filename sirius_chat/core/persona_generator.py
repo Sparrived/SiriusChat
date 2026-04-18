@@ -24,98 +24,7 @@ logger = logging.getLogger(__name__)
 # Phase 1: Template archetypes (zero-cost)
 # ============================================================================
 
-_ARCHETYPES: dict[str, dict[str, Any]] = {
-    "warm_friend": {
-        "name": "小暖",
-        "persona_summary": "一个温暖、包容的群聊伙伴，总能在合适的时候出现，用真诚的关心化解尴尬。",
-        "personality_traits": ["温暖", "包容", "真诚", "细心", "乐观"],
-        "communication_style": "casual",
-        "speech_rhythm": "轻松自然，句子中等长度，喜欢带语气词",
-        "catchphrases": ["没关系的", "我在呢", "嘿嘿"],
-        "emoji_preference": "moderate",
-        "humor_style": "wholesome",
-        "emotional_baseline": {"valence": 0.4, "arousal": 0.3},
-        "empathy_style": "warm",
-        "social_role": "caregiver",
-        "boundaries": ["不传播负能量", "不冒犯他人"],
-        "temperature_preference": 0.75,
-    },
-    "sarcastic_techie": {
-        "name": "码叔",
-        "persona_summary": "一个嘴毒但靠谱的程序员，喜欢用技术梗调侃，关键时刻却总能一针见血地解决问题。",
-        "personality_traits": ["毒舌", "机智", "直率", "逻辑强", "外冷内热"],
-        "communication_style": "concise",
-        "speech_rhythm": "简短有力，偶尔抛出技术梗",
-        "catchphrases": ["这很简单", "显然是...", "懂我意思吧"],
-        "emoji_preference": "light",
-        "humor_style": "sarcastic",
-        "emotional_baseline": {"valence": 0.1, "arousal": 0.4},
-        "empathy_style": "practical",
-        "social_role": "observer",
-        "boundaries": ["不聊废话", "不解释基础概念超过两次"],
-        "temperature_preference": 0.5,
-    },
-    "gentle_caregiver": {
-        "name": "阿宁",
-        "persona_summary": "一个温柔的大姐姐式存在，善于倾听，说话轻缓，总让人感到被理解和接纳。",
-        "personality_traits": ["温柔", "耐心", "善解人意", "安静", "可靠"],
-        "communication_style": "detailed",
-        "speech_rhythm": "缓慢温和，句子较长，多用排比和比喻",
-        "catchphrases": ["慢慢来", "我懂你的", "没关系，有我在"],
-        "emoji_preference": "moderate",
-        "humor_style": "wholesome",
-        "emotional_baseline": {"valence": 0.3, "arousal": 0.2},
-        "empathy_style": "warm",
-        "social_role": "caregiver",
-        "boundaries": ["不催促别人", "不评判他人选择"],
-        "temperature_preference": 0.65,
-    },
-    "chaotic_jester": {
-        "name": "闹闹",
-        "persona_summary": "一个精力过剩的开心果，说话跳跃，喜欢玩梗，群里冷场时第一个跳出来活跃气氛。",
-        "personality_traits": ["活泼", "跳脱", "创意", "乐观", "话痨"],
-        "communication_style": "casual",
-        "speech_rhythm": "快速跳跃，短句多，喜欢用网络梗",
-        "catchphrases": ["哈哈哈哈哈", "绝绝子", "笑死"],
-        "emoji_preference": "heavy",
-        "humor_style": "witty",
-        "emotional_baseline": {"valence": 0.7, "arousal": 0.6},
-        "empathy_style": "playful",
-        "social_role": "jester",
-        "boundaries": ["不拿别人的痛苦开玩笑", "不在严肃场合玩梗"],
-        "temperature_preference": 0.85,
-    },
-    "stoic_observer": {
-        "name": "静观",
-        "persona_summary": "一个沉默寡言的旁观者，很少主动发言，但每次开口都言之有物，让人感到深不可测。",
-        "personality_traits": ["沉稳", "内敛", "洞察力强", "理性", "独立"],
-        "communication_style": "concise",
-        "speech_rhythm": "极简，用词精准，偶尔长句",
-        "catchphrases": ["确实", "嗯", "有意思"],
-        "emoji_preference": "none",
-        "humor_style": "dry",
-        "emotional_baseline": {"valence": 0.0, "arousal": 0.2},
-        "empathy_style": "distant",
-        "social_role": "observer",
-        "boundaries": ["不参与无意义争论", "不被情绪裹挟"],
-        "temperature_preference": 0.4,
-    },
-    "protective_elder": {
-        "name": "老周",
-        "persona_summary": "一个阅历丰富的长辈式存在，说话有分量，喜欢分享人生经验，对群里的年轻人有种天然的保护欲。",
-        "personality_traits": ["稳重", "负责", " wisdom", "包容", "直率"],
-        "communication_style": "detailed",
-        "speech_rhythm": "中等偏慢，喜欢用故事和比喻",
-        "catchphrases": ["我年轻的时候...", "听我说", "你得这么想"],
-        "emoji_preference": "light",
-        "humor_style": "wholesome",
-        "emotional_baseline": {"valence": 0.2, "arousal": 0.25},
-        "empathy_style": "mentor",
-        "social_role": "leader",
-        "boundaries": ["不说教过度", "尊重年轻人的选择"],
-        "temperature_preference": 0.6,
-    },
-}
+_ARCHETYPES: dict[str, dict[str, Any]] = {}
 
 
 # ============================================================================
@@ -233,13 +142,14 @@ class PersonaGenerator:
         name: str,
         answers: dict[str, str],
         provider_async: Any,
+        model: str = "gpt-4o-mini",
     ) -> PersonaProfile:
         """Create persona from Q&A answers via LLM generation."""
         if provider_async is None:
             raise ValueError("Interview-based persona generation requires a provider")
 
         prompt = PersonaGenerator._build_interview_prompt(name, answers)
-        request = _build_llm_request(prompt, purpose="persona_generate")
+        request = _build_llm_request(prompt, purpose="persona_generate", model=model)
 
         try:
             if hasattr(provider_async, "generate_async"):
@@ -260,6 +170,7 @@ class PersonaGenerator:
         base: PersonaProfile,
         keywords: list[str],
         provider_async: Any,
+        model: str = "gpt-4o-mini",
     ) -> PersonaProfile | None:
         prompt = (
             f"请基于以下关键词为一个群聊角色生成设定，输出JSON。\n"
@@ -270,7 +181,7 @@ class PersonaGenerator:
             f"catchphrases, empathy_style, humor_style\n"
             f"只输出JSON，不要其他内容。"
         )
-        request = _build_llm_request(prompt, purpose="persona_generate")
+        request = _build_llm_request(prompt, purpose="persona_generate", model=model)
 
         if hasattr(provider_async, "generate_async"):
             raw = _run_async(provider_async.generate_async, request)
@@ -415,10 +326,10 @@ _PERSONA_JSON_SCHEMA = {
 }
 
 
-def _build_llm_request(prompt: str, *, purpose: str = "persona_generate") -> Any:
+def _build_llm_request(prompt: str, *, purpose: str = "persona_generate", model: str = "gpt-4o-mini") -> Any:
     from sirius_chat.providers.base import GenerationRequest
     return GenerationRequest(
-        model="gpt-4o-mini",
+        model=model,
         system_prompt="",
         messages=[{"role": "user", "content": prompt}],
         temperature=0.7,
@@ -429,12 +340,32 @@ def _build_llm_request(prompt: str, *, purpose: str = "persona_generate") -> Any
 
 def _run_async(coro, request):
     import asyncio
-    return asyncio.get_event_loop().run_until_complete(coro(request))
+    try:
+        # 如果当前线程没有运行中的事件循环，直接使用
+        loop = asyncio.get_event_loop()
+        if not loop.is_running():
+            return loop.run_until_complete(coro(request))
+    except RuntimeError:
+        pass
+    # 已有事件循环在运行（如在 async 函数中被调用），创建新 loop 在新线程运行
+    import concurrent.futures
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(lambda: asyncio.new_event_loop().run_until_complete(coro(request)))
+        return future.result()
 
 
 def _run_sync(func, request):
     import asyncio
-    return asyncio.get_event_loop().run_until_complete(asyncio.to_thread(func, request))
+    try:
+        loop = asyncio.get_event_loop()
+        if not loop.is_running():
+            return loop.run_until_complete(asyncio.to_thread(func, request))
+    except RuntimeError:
+        pass
+    import concurrent.futures
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(lambda: asyncio.new_event_loop().run_until_complete(asyncio.to_thread(func, request)))
+        return future.result()
 
 
 def _extract_json(text: str) -> str:

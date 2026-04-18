@@ -16,12 +16,16 @@ import pytest
 
 from sirius_chat.core.emotional_engine import EmotionalGroupChatEngine
 from sirius_chat.models.models import Message, Participant
+from sirius_chat.models.persona import PersonaProfile
 
 
 class TestE2EImmediateResponse:
     @pytest.mark.asyncio
     async def test_help_seeking_triggers_immediate(self, tmp_path):
-        engine = EmotionalGroupChatEngine(work_path=tmp_path)
+        engine = EmotionalGroupChatEngine(
+            work_path=tmp_path,
+            persona=PersonaProfile(name="TestBot"),
+        )
         p = Participant(name="alice", user_id="alice")
 
         result = await engine.process_message(
@@ -39,7 +43,10 @@ class TestE2EImmediateResponse:
 class TestE2ESilentStrategy:
     @pytest.mark.asyncio
     async def test_casual_filler_is_silent(self, tmp_path):
-        engine = EmotionalGroupChatEngine(work_path=tmp_path)
+        engine = EmotionalGroupChatEngine(
+            work_path=tmp_path,
+            persona=PersonaProfile(name="TestBot"),
+        )
         p = Participant(name="bob", user_id="bob")
 
         result = await engine.process_message(
@@ -50,11 +57,37 @@ class TestE2ESilentStrategy:
         # Should be silent or at most delayed
         assert result["strategy"] in ("silent", "delayed")
 
+    @pytest.mark.asyncio
+    async def test_silent_message_buffers_for_surface_thought(self, tmp_path):
+        engine = EmotionalGroupChatEngine(
+            work_path=tmp_path,
+            persona=PersonaProfile(name="TestBot"),
+        )
+        p = Participant(name="bob", user_id="bob")
+
+        # Send a message that should be silent
+        result = await engine.process_message(
+            Message(role="human", content="嗯", speaker="bob"),
+            [p], "chat_group",
+        )
+
+        if result["strategy"] == "silent":
+            # Should be added to the silent message buffer
+            assert len(engine._silent_message_buffer) >= 1
+            buffered = engine._silent_message_buffer[-1]
+            assert buffered["group_id"] == "chat_group"
+            assert buffered["message"] == "嗯"
+            assert "emotion" in buffered
+            assert "timestamp" in buffered
+
 
 class TestE2EDelayedResponse:
     @pytest.mark.asyncio
     async def test_delayed_queue_triggers_after_gap(self, tmp_path):
-        engine = EmotionalGroupChatEngine(work_path=tmp_path)
+        engine = EmotionalGroupChatEngine(
+            work_path=tmp_path,
+            persona=PersonaProfile(name="TestBot"),
+        )
         p = Participant(name="carol", user_id="carol")
 
         # First message: medium relevance -> DELAYED
@@ -77,7 +110,10 @@ class TestE2EDelayedResponse:
 class TestE2EProactiveTrigger:
     @pytest.mark.asyncio
     async def test_long_silence_triggers_proactive(self, tmp_path):
-        engine = EmotionalGroupChatEngine(work_path=tmp_path)
+        engine = EmotionalGroupChatEngine(
+            work_path=tmp_path,
+            persona=PersonaProfile(name="TestBot"),
+        )
 
         # Set last message far in the past
         engine._group_last_message_at["quiet_group"] = "2026-04-01T00:00:00+00:00"
@@ -93,7 +129,10 @@ class TestE2EProactiveTrigger:
 class TestE2EMultiGroupIsolation:
     @pytest.mark.asyncio
     async def test_messages_stay_in_own_group(self, tmp_path):
-        engine = EmotionalGroupChatEngine(work_path=tmp_path)
+        engine = EmotionalGroupChatEngine(
+            work_path=tmp_path,
+            persona=PersonaProfile(name="TestBot"),
+        )
         p = Participant(name="dave", user_id="dave")
 
         await engine.process_message(
@@ -115,7 +154,10 @@ class TestE2EMultiGroupIsolation:
 
     @pytest.mark.asyncio
     async def test_user_memory_is_group_isolated(self, tmp_path):
-        engine = EmotionalGroupChatEngine(work_path=tmp_path)
+        engine = EmotionalGroupChatEngine(
+            work_path=tmp_path,
+            persona=PersonaProfile(name="TestBot"),
+        )
         p = Participant(name="eve", user_id="eve")
 
         # Register in group_a and add a fact
@@ -136,7 +178,10 @@ class TestE2EMultiGroupIsolation:
 class TestE2EAtmosphereShift:
     @pytest.mark.asyncio
     async def test_positive_to_negative_changes_empathy(self, tmp_path):
-        engine = EmotionalGroupChatEngine(work_path=tmp_path)
+        engine = EmotionalGroupChatEngine(
+            work_path=tmp_path,
+            persona=PersonaProfile(name="TestBot"),
+        )
         p = Participant(name="frank", user_id="frank")
 
         # Positive message
@@ -165,10 +210,13 @@ class TestE2EAtmosphereShift:
 class TestE2EBackgroundTasks:
     @pytest.mark.asyncio
     async def test_background_tasks_start_stop(self, tmp_path):
-        engine = EmotionalGroupChatEngine(work_path=tmp_path)
+        engine = EmotionalGroupChatEngine(
+            work_path=tmp_path,
+            persona=PersonaProfile(name="TestBot"),
+        )
         engine.start_background_tasks()
         assert engine._bg_running is True
-        assert len(engine._bg_tasks) == 4
+        assert len(engine._bg_tasks) == 7
 
         engine.stop_background_tasks()
         assert engine._bg_running is False
@@ -178,6 +226,7 @@ class TestE2EBackgroundTasks:
     async def test_background_delayed_queue_tick(self, tmp_path):
         engine = EmotionalGroupChatEngine(
             work_path=tmp_path,
+            persona=PersonaProfile(name="TestBot"),
             config={"delayed_queue_tick_interval_seconds": 0.1},
         )
         p = Participant(name="alice", user_id="alice")
@@ -203,7 +252,10 @@ class TestE2EBackgroundTasks:
 
     @pytest.mark.asyncio
     async def test_background_idempotent(self, tmp_path):
-        engine = EmotionalGroupChatEngine(work_path=tmp_path)
+        engine = EmotionalGroupChatEngine(
+            work_path=tmp_path,
+            persona=PersonaProfile(name="TestBot"),
+        )
         engine.start_background_tasks()
         first_tasks = list(engine._bg_tasks)
         engine.start_background_tasks()  # idempotent
@@ -216,7 +268,10 @@ class TestE2EBackgroundTasks:
 class TestE2EGroupNormLearning:
     @pytest.mark.asyncio
     async def test_group_norms_updated_after_messages(self, tmp_path):
-        engine = EmotionalGroupChatEngine(work_path=tmp_path)
+        engine = EmotionalGroupChatEngine(
+            work_path=tmp_path,
+            persona=PersonaProfile(name="TestBot"),
+        )
         p = Participant(name="grace", user_id="grace")
 
         # Send a few messages

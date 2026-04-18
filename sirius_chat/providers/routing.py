@@ -395,6 +395,10 @@ class AutoRoutingProvider(LLMProvider):
         provider = self._create_provider(selected)
         return provider.generate(request)
 
+    async def generate_async(self, request: GenerationRequest) -> str:
+        import asyncio
+        return await asyncio.to_thread(self.generate, request)
+
 
 def probe_provider_availability(
     *,

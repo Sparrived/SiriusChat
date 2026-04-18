@@ -8,12 +8,16 @@ import pytest
 from sirius_chat.core.emotional_engine import EmotionalGroupChatEngine
 from sirius_chat.core.events import SessionEventType
 from sirius_chat.models.models import Message, Participant
+from sirius_chat.models.persona import PersonaProfile
 
 
 class TestEventStream:
     @pytest.mark.asyncio
     async def test_process_message_emits_pipeline_events(self, tmp_path):
-        engine = EmotionalGroupChatEngine(work_path=tmp_path)
+        engine = EmotionalGroupChatEngine(
+            work_path=tmp_path,
+            persona=PersonaProfile(name="TestBot"),
+        )
         events = []
 
         async def collector():
@@ -42,7 +46,10 @@ class TestEventStream:
 
     @pytest.mark.asyncio
     async def test_decision_event_contains_strategy(self, tmp_path):
-        engine = EmotionalGroupChatEngine(work_path=tmp_path)
+        engine = EmotionalGroupChatEngine(
+            work_path=tmp_path,
+            persona=PersonaProfile(name="TestBot"),
+        )
         events = []
 
         async def collector():
@@ -72,7 +79,10 @@ class TestEventStream:
 
     @pytest.mark.asyncio
     async def test_proactive_check_emits_event(self, tmp_path):
-        engine = EmotionalGroupChatEngine(work_path=tmp_path)
+        engine = EmotionalGroupChatEngine(
+            work_path=tmp_path,
+            persona=PersonaProfile(name="TestBot"),
+        )
         events = []
 
         async def collector():
@@ -99,7 +109,10 @@ class TestEventStream:
 
     @pytest.mark.asyncio
     async def test_multiple_messages_in_order(self, tmp_path):
-        engine = EmotionalGroupChatEngine(work_path=tmp_path)
+        engine = EmotionalGroupChatEngine(
+            work_path=tmp_path,
+            persona=PersonaProfile(name="TestBot"),
+        )
         events = []
 
         async def collector():

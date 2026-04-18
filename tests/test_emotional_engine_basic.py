@@ -6,11 +6,15 @@ import pytest
 
 from sirius_chat.core.emotional_engine import EmotionalGroupChatEngine
 from sirius_chat.models.models import Message, Participant
+from sirius_chat.models.persona import PersonaProfile
 
 
 @pytest.fixture
 def engine(tmp_path):
-    return EmotionalGroupChatEngine(work_path=tmp_path)
+    return EmotionalGroupChatEngine(
+        work_path=tmp_path,
+        persona=PersonaProfile(name="TestBot"),
+    )
 
 
 @pytest.mark.asyncio

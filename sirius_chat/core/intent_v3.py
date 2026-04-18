@@ -80,8 +80,9 @@ class IntentAnalyzerV3:
     Hybrid: rule engine (fast, zero cost) + optional LLM fallback for ambiguous cases.
     """
 
-    def __init__(self, provider_async: Any | None = None) -> None:
+    def __init__(self, provider_async: Any | None = None, model_name: str = "gpt-4o-mini") -> None:
         self.provider_async = provider_async
+        self.model_name = model_name
         self.group_activity_history: dict[str, list[tuple[float, float]]] = {}
         self.user_response_prefs: dict[str, dict[str, Any]] = {}
 
@@ -141,7 +142,7 @@ class IntentAnalyzerV3:
 
         prompt = _LLM_INTENT_PROMPT.format(message=message)
         request = GenerationRequest(
-            model="gpt-4o-mini",
+            model=self.model_name,
             system_prompt=prompt,
             messages=[],
             temperature=0.2,

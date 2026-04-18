@@ -63,9 +63,11 @@ class EmotionAnalyzer:
         self,
         lexicon: dict[str, float] | None = None,
         provider_async: Any | None = None,
+        model_name: str = "gpt-4o-mini",
     ) -> None:
         self.lexicon = lexicon or dict(_DEFAULT_LEXICON)
         self.provider_async = provider_async
+        self.model_name = model_name
         # User emotion trajectories: user_id -> list of (timestamp, EmotionState)
         self.trajectories: dict[str, list[tuple[str, EmotionState]]] = {}
         # Group emotion cache: group_id -> EmotionState
@@ -116,7 +118,7 @@ class EmotionAnalyzer:
 
         prompt = _LLM_EMOTION_PROMPT.format(message=message)
         request = GenerationRequest(
-            model="gpt-4o-mini",
+            model=self.model_name,
             system_prompt=prompt,
             messages=[],
             temperature=0.2,

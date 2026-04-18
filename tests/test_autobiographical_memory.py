@@ -49,6 +49,22 @@ class TestRecordThought:
             assert len(timeline) == 1
             assert timeline[0]["valence"] == pytest.approx(-0.3, 0.01)
 
+    def test_surface_depth_goes_to_buffer(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mgr = AMMgr(tmp)
+            mgr.record_thought("表面想法", depth="surface")
+            surface = mgr.get_surface_thoughts()
+            assert len(surface) == 1
+            assert surface[0]["content"] == "表面想法"
+            assert surface[0]["depth"] == "surface"
+
+    def test_rich_depth_not_in_surface_buffer(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mgr = AMMgr(tmp)
+            mgr.record_thought("深度想法", depth="rich")
+            surface = mgr.get_surface_thoughts()
+            assert len(surface) == 0
+
 
 class TestValueWeightedImportance:
     def test_value_resonance_boosts_importance(self):
@@ -100,6 +116,12 @@ class TestSelfSemanticProfile:
         assert restored.core_values == ["温暖", "真诚"]
         assert len(restored.emotion_timeline) == 1
 
+    def test_update_growth_notes(self):
+        profile = SelfSemanticProfile()
+        profile.update_growth_notes("最近学会了耐心")
+        assert "耐心" in profile.growth_notes
+        assert profile.updated_at != ""
+
 
 class TestPromptSections:
     def test_build_self_prompt_section_with_data(self):
@@ -124,6 +146,91 @@ class TestPromptSections:
             mgr.record_experience("今天认识了新朋友", category="milestone")
             section = mgr.build_diary_prompt_section()
             assert "新朋友" in section
+
+
+class TestEmotionalResonanceRetrieval:
+    def test_returns_empty_without_emotion(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mgr = AMMgr(tmp)
+            mgr.record_thought("想法A", emotion=EmotionState(valence=0.5, arousal=0.5))
+            result = mgr.retrieve_emotionally_resonant(None)
+            assert result == []
+
+    def test_finds_similar_emotion(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mgr = AMMgr(tmp)
+            mgr.record_thought("开心的想法", emotion=EmotionState(valence=0.8, arousal=0.6))
+            mgr.record_thought("悲伤的想法", emotion=EmotionState(valence=-0.8, arousal=0.3))
+            mgr.record_thought("中性的想法", emotion=EmotionState(valence=0.0, arousal=0.0))
+
+            query_emotion = EmotionState(valence=0.75, arousal=0.55)
+            results = mgr.retrieve_emotionally_resonant(query_emotion, top_k=3, threshold=0.3)
+            assert len(results) >= 1
+            # The closest should be the happy thought
+            assert "开心" in results[0]["content"]
+            assert results[0]["source"] == "autobiographical_emotion"
+
+    def test_respects_threshold(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mgr = AMMgr(tmp)
+            mgr.record_thought("开心的想法", emotion=EmotionState(valence=0.8, arousal=0.6))
+
+            query_emotion = EmotionState(valence=-0.8, arousal=-0.6)
+            results = mgr.retrieve_emotionally_resonant(query_emotion, top_k=3, threshold=0.3)
+            assert len(results) == 0  # Too far apart
+
+
+class TestSurfaceThoughtPolishing:
+    def test_apply_polished_thoughts_updates_content(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mgr = AMMgr(tmp)
+            entry = mgr.record_thought("短想法", depth="surface")
+            assert entry is not None
+            entry_id = entry.entry_id
+
+            surface = mgr.get_surface_thoughts()
+            assert len(surface) == 1
+
+            mgr.apply_polished_thoughts([{"entry_id": entry_id, "content": "扩写后的丰富想法"}])
+
+            # Surface buffer should be cleared
+            assert len(mgr.get_surface_thoughts()) == 0
+
+            # Diary entry should be updated
+            entries = mgr.get_relevant_diary_entries(max_entries=10)
+            assert any(e.entry_id == entry_id and e.content == "扩写后的丰富想法" for e in entries)
+
+    def test_mark_surface_polished(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mgr = AMMgr(tmp)
+            entry1 = mgr.record_thought("想法1", depth="surface")
+            entry2 = mgr.record_thought("想法2", depth="surface")
+            mgr.mark_surface_polished([entry1.entry_id])
+            surface = mgr.get_surface_thoughts()
+            assert len(surface) == 1
+            assert surface[0]["entry_id"] == entry2.entry_id
+
+
+class TestSelfReflection:
+    def test_build_reflection_context_empty(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mgr = AMMgr(tmp)
+            ctx = mgr.build_reflection_context()
+            assert ctx == ""
+
+    def test_build_reflection_context_includes_thoughts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mgr = AMMgr(tmp)
+            mgr.record_thought("想法A", trigger_message="消息A")
+            mgr.record_thought("想法B", trigger_message="消息B", depth="surface")
+            ctx = mgr.build_reflection_context(n_entries=10)
+            assert "想法A" in ctx or "想法B" in ctx
+
+    def test_update_reflection_updates_profile(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mgr = AMMgr(tmp)
+            mgr.update_reflection("我觉得自己变沉稳了")
+            assert "沉稳" in mgr._profile.growth_notes
 
 
 class TestPersistence:

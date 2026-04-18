@@ -35,17 +35,9 @@ class TestPersonaProfileRoundtrip:
 
 
 class TestTemplatePersonaCreation:
-    def test_all_archetypes_valid(self):
-        archetypes = [
-            "warm_friend", "sarcastic_techie", "gentle_caregiver",
-            "chaotic_jester", "stoic_observer", "protective_elder",
-        ]
-        for name in archetypes:
-            p = PersonaGenerator.from_template(name)
-            assert p.name
-            assert p.personality_traits
-            assert p.communication_style
-            assert p.source == "template"
+    def test_no_builtin_archetypes(self):
+        with pytest.raises(ValueError):
+            PersonaGenerator.from_template("sarcastic_techie")
 
     def test_unknown_archetype_raises(self):
         with pytest.raises(ValueError):
@@ -71,7 +63,12 @@ class TestKeywordPersonaGeneration:
 
 class TestResponseAssemblerPersonaInjection:
     def test_prompt_contains_persona_name(self):
-        persona = PersonaGenerator.from_template("sarcastic_techie")
+        from sirius_chat.models.persona import PersonaProfile
+        persona = PersonaProfile(
+            name="码叔",
+            personality_traits=["毒舌", "机智"],
+            communication_style="concise",
+        )
         assembler = ResponseAssembler(persona=persona)
         prompt = assembler.assemble(
             message=Message(role="human", content="你好"),
@@ -102,19 +99,15 @@ class TestResponseAssemblerPersonaInjection:
 
 
 class TestEngineLoadsPersona:
-    def test_engine_creates_default_persona(self, tmp_path):
+    def test_engine_requires_persona(self, tmp_path):
         from sirius_chat.core.emotional_engine import EmotionalGroupChatEngine
-        engine = EmotionalGroupChatEngine(work_path=tmp_path)
-        assert engine.persona is not None
-        assert engine.persona.name == "小暖"  # warm_friend default
-        # Verify saved to disk
-        loaded = PersonaStore.load(tmp_path)
-        assert loaded is not None
-        assert loaded.name == "小暖"
+        with pytest.raises(ValueError, match="No persona provided"):
+            EmotionalGroupChatEngine(work_path=tmp_path)
 
     def test_engine_loads_existing_persona(self, tmp_path):
         from sirius_chat.core.emotional_engine import EmotionalGroupChatEngine
-        custom = PersonaGenerator.from_template("stoic_observer")
+        from sirius_chat.models.persona import PersonaProfile
+        custom = PersonaProfile(name="静观", personality_traits=["沉稳", "内敛"])
         PersonaStore.save(tmp_path, custom)
 
         engine = EmotionalGroupChatEngine(work_path=tmp_path)
