@@ -1204,6 +1204,12 @@ class EmotionalGroupChatEngine:
                     name=message.speaker or "unknown",
                     metadata={"is_developer": caller_is_developer},
                 )
+                # Collect all developer profiles in the current group for security check
+                developer_profiles: list[UserProfile] = []
+                group_entries = self.user_memory.entries.get(group_id, {})
+                for entry in group_entries.values():
+                    if entry.profile.is_developer:
+                        developer_profiles.append(entry.profile)
                 for skill_name, params in calls:
                     skill = self._skill_registry.get(skill_name)
                     if skill is None:
@@ -1216,7 +1222,10 @@ class EmotionalGroupChatEngine:
                         logger.warning(err)
                         skill_results.append(f"[SKILL '{skill_name}' 拒绝] 该技能仅 developer 可用")
                         continue
-                    ctx = SkillInvocationContext(caller=skill_caller)
+                    ctx = SkillInvocationContext(
+                        caller=skill_caller,
+                        developer_profiles=developer_profiles,
+                    )
                     try:
                         result = await self._skill_executor.execute_async(
                             skill, params, invocation_context=ctx
