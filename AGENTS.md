@@ -8,7 +8,7 @@
 
 **Sirius Chat**（PyPI 包名 `sirius-chat`）是一个为**多人 RPG 对话场景**设计的 Python LLM 编排框架。它以异步优先（Async-First）架构为核心，支持多人用户与一个 AI 主助手之间的实时交互，具备结构化记忆系统、角色扮演资产生成、多 Provider 自动路由、可扩展 SKILL 任务编排、Token 消耗追踪与性能监控等能力。
 
-- **版本**：`0.28.0-dev`
+- **版本**：`1.0.0`
 - **Python 要求**：`>=3.12`
 - **许可证**：MIT
 - **仓库**：`https://github.com/Sparrived/SiriusChat`

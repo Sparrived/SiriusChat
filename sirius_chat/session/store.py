@@ -237,7 +237,6 @@ class SqliteSessionStore:
         else:
             raise ValueError("SqliteSessionStore requires either work_path or path.")
         self._ensure_schema()
-        self._migrate_legacy_storage_if_needed()
 
     @classmethod
     def from_layout(cls, layout: WorkspaceLayout, *, session_id: str) -> "SqliteSessionStore":
@@ -627,43 +626,6 @@ class SqliteSessionStore:
             for index_sql in _CREATE_INDEXES:
                 conn.execute(index_sql)
             self._set_meta(conn, "session_store_schema_version", str(_SESSION_STORE_SCHEMA_VERSION))
-
-    def _migrate_legacy_storage_if_needed(self) -> None:
-        """Import data from legacy storage formats if present.
-
-        Handles two legacy formats:
-        1. ``session_state.json`` alongside the sqlite file (JSON snapshot).
-        2. Old ``session_state`` single-payload table inside the same db.
-        """
-        with self._managed_connection() as conn:
-            if self._has_session_data(conn):
-                return
-
-            # Legacy format 1: old single-payload table in same db
-            if self._table_exists(conn, "session_state"):
-                row = conn.execute(
-                    "SELECT payload FROM session_state WHERE id = 1"
-                ).fetchone()
-                if row is not None:
-                    payload = json.loads(row[0])
-                    transcript = Transcript.from_dict(payload)
-                    self._save_with_connection(conn, transcript)
-                    conn.execute("DROP TABLE session_state")
-                    return
-
-            # Legacy format 2: JSON file next to the db
-            if self._work_path is not None:
-                json_path = self._work_path / "session_state.json"
-                if json_path.exists():
-                    try:
-                        payload = json.loads(json_path.read_text(encoding="utf-8"))
-                        transcript = Transcript.from_dict(payload)
-                        self._save_with_connection(conn, transcript)
-                        # Rename legacy file to prevent re-import on next open.
-                        json_path.rename(json_path.with_suffix(".json.migrated"))
-                    except (json.JSONDecodeError, OSError):
-                        pass
-
 
     def exists(self) -> bool:
         if not self._path.exists():

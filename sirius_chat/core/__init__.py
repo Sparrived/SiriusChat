@@ -1,8 +1,7 @@
 """
-核心编排引擎模块 (v0.28+)
+核心编排引擎模块 (v1.0.0)
 
- EmotionalGroupChatEngine 是新默认引擎。
- Legacy 文件已归档至 sirius_chat/core/_legacy/。
+EmotionalGroupChatEngine 是默认引擎。
 """
 
 from sirius_chat.core.emotional_engine import EmotionalGroupChatEngine

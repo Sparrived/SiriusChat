@@ -2,6 +2,22 @@
 
 本文档记录 Sirius Chat 的所有版本变更。采用 [Keep a Changelog](https://keepachangelog.com/zh-CN/) 规范。
 
+## [1.0.0] - 2026-04-18
+
+### Changed
+
+- **版本号提升至 1.0.0**：框架进入稳定版本。
+- **默认引擎**：`EmotionalGroupChatEngine` 成为唯一推荐引擎，`AsyncRolePlayEngine` 相关 legacy API 已移除。
+- **Proactive 时间窗口**：新增 `active_start_hour`/`active_end_hour` 配置（默认 12:00-21:00），限制主动消息触发时段。
+- **Proactive 氛围抑制**：`atmosphere` 类型 trigger 新增 `min_silence` 检查（默认 5 分钟），避免消息刚到达时立即触发。
+- **Proactive 状态加载鲁棒性**：`_load_proactive_state` 强制 `str()` 转换 group_id，避免 int/str 类型不匹配导致黑名单失效；`load_state()` 通过 `try/finally` 确保 proactive 状态总能加载。
+
+### Removed
+
+- **移除 `create_async_engine` 公开 API**：`AsyncRolePlayEngine` 仍作为内部运行时组件保留（`WorkspaceRuntime` 依赖），但不再通过 `sirius_chat.api` 公开导出。
+- **删除 session store legacy migration**：`_migrate_legacy_storage_if_needed` 及对应测试已移除。
+- **删除 user memory auto-migration**：`UserMemoryFileStore.load_all()` 不再自动检测并迁移旧格式。
+
 ## [Unreleased]
 
 ### Added (Persona System)

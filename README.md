@@ -184,12 +184,12 @@ provider = BigModelProvider(api_key="YOUR_BIGMODEL_API_KEY")
 
 > `BigModelProvider` 默认请求 `https://open.bigmodel.cn/api/paas/v4/chat/completions`，兼容传入根域名 `https://open.bigmodel.cn` 或完整 `api/paas/v4` 前缀。多模态消息沿用 OpenAI 兼容的 `content` 列表格式，可直接用于 `glm-4.6v`。
 
-**底层模式：AsyncRolePlayEngine + SessionConfig（高级控制）**
+**底层模式：EmotionalGroupChatEngine（高级控制）**
 
 ```python
 import asyncio
 from pathlib import Path
-from sirius_chat.api import create_async_engine, SessionConfig, Agent, AgentPreset, Message, OrchestrationPolicy
+from sirius_chat.api import create_emotional_engine, SessionConfig, Agent, AgentPreset, Message, OrchestrationPolicy
 from sirius_chat.providers.mock import MockProvider
 
 async def main():
@@ -227,7 +227,7 @@ sirius_chat/
 ├── __init__.py
 ├── api/                          # 🔌 公开 API facade（engine/models/providers/session 等）
 ├── core/                         # 🧠 编排核心真实实现
-│   ├── engine.py                 # AsyncRolePlayEngine
+│   ├── emotional_engine.py       # EmotionalGroupChatEngine（v1.0.0 默认引擎）
 │   ├── chat_builder.py           # 主模型请求构造
 │   ├── memory_runner.py          # 记忆相关辅助任务
 │   ├── engagement_pipeline.py    # 热度/意图/参与协调流水线
@@ -311,18 +311,18 @@ asyncio.run(main())
 
 若你需要使用受限内置 SKILL，例如 `desktop_screenshot`，请至少为一个可信用户显式设置 `metadata={"is_developer": True}`。非 developer 当前轮次不会看到这些技能，模型即使强行调用也会被 runtime 拒绝。
 
-### 示例 2：低层入口 AsyncRolePlayEngine
+### 示例 2：低层入口 EmotionalGroupChatEngine
 
 ```python
 import asyncio
 from pathlib import Path
 
-from sirius_chat.api import Agent, AgentPreset, Message, OrchestrationPolicy, SessionConfig, create_async_engine
+from sirius_chat.api import Agent, AgentPreset, Message, OrchestrationPolicy, SessionConfig, create_emotional_engine
 from sirius_chat.providers.mock import MockProvider
 
 
 async def main() -> None:
-  engine = create_async_engine(MockProvider(responses=["这很有意思"]))
+  engine = create_emotional_engine(work_path=Path("./data/chat_session"), provider_async=MockProvider(responses=["这很有意思"]))
 
   config = SessionConfig(
     work_path=Path("./config/chat_session"),
