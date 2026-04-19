@@ -45,7 +45,7 @@ class TestParseDualOutput:
 class TestAssemblerDualOutputFlag:
     def test_prompt_contains_format_when_enabled(self):
         assembler = ResponseAssembler(enable_dual_output=True)
-        prompt = assembler.assemble(
+        bundle = assembler.assemble(
             message=Message(role="human", content="你好"),
             intent=Mock(),
             emotion=EmotionState(),
@@ -55,12 +55,12 @@ class TestAssemblerDualOutputFlag:
             user_profile=None,
             assistant_emotion=AssistantEmotionState(),
         )
-        assert "<think>" in prompt
-        assert "<say>" in prompt
+        assert "<think>" in bundle.system_prompt
+        assert "<say>" in bundle.system_prompt
 
     def test_prompt_omits_format_when_disabled(self):
         assembler = ResponseAssembler(enable_dual_output=False)
-        prompt = assembler.assemble(
+        bundle = assembler.assemble(
             message=Message(role="human", content="你好"),
             intent=Mock(),
             emotion=EmotionState(),
@@ -70,4 +70,4 @@ class TestAssemblerDualOutputFlag:
             user_profile=None,
             assistant_emotion=AssistantEmotionState(),
         )
-        assert "<think>" not in prompt
+        assert "<think>" not in bundle.system_prompt

@@ -20,6 +20,22 @@ from sirius_chat.memory.semantic.models import GroupSemanticProfile, UserSemanti
 
 
 # ---------------------------------------------------------------------------
+# Prompt bundle
+# ---------------------------------------------------------------------------
+
+@dataclass(slots=True)
+class PromptBundle:
+    """Structured prompt result: system instructions + current user content.
+
+    History messages are managed separately by the engine and passed to
+    ``_generate()`` as the standard OpenAI ``messages`` list.
+    """
+
+    system_prompt: str
+    user_content: str
+
+
+# ---------------------------------------------------------------------------
 # Style adaptation
 # ---------------------------------------------------------------------------
 
@@ -172,16 +188,17 @@ class ResponseAssembler:
         is_group_chat: bool = False,
         recent_participants: list[dict[str, Any]] | None = None,
         caller_is_developer: bool = False,
-    ) -> str:
-        """Build a complete prompt string for response generation.
+    ) -> PromptBundle:
+        """Build a structured prompt for response generation.
 
-        Sections (in order):
-        1. System identity (persona-driven)
-        2. Emotional context summary
-        3. Empathy strategy instruction
-        4. Relevant memory references
-        5. Group style parameters + persona style
-        6. User message
+        Returns a PromptBundle containing:
+        - system_prompt: all instruction-level context (persona, emotion,
+          empathy, memories, style, skills, output format)
+        - user_content: the current message ready for the last ``user`` role
+          message in the standard OpenAI messages list.
+
+        The caller (engine) is responsible for assembling the full
+        ``messages`` array from working-memory history + this user_content.
         """
         if style_params is None:
             style_params = self.style_adapter.adapt(
@@ -245,11 +262,14 @@ class ResponseAssembler:
         if self.enable_dual_output:
             sections.append(self._build_output_format())
 
-        # 9. Sender context + user message
-        sender_info = self._build_sender_line(message)
-        sections.append(f"{sender_info}{message.content}")
+        system_prompt = "\n\n".join(sections)
 
-        return "\n\n".join(sections)
+        # Current user message content (will be appended as the last user
+        # message in the standard OpenAI messages array by the engine).
+        sender_info = self._build_sender_line(message)
+        user_content = f"{sender_info}{message.content}"
+
+        return PromptBundle(system_prompt=system_prompt, user_content=user_content)
 
     # ------------------------------------------------------------------
     # Section builders
@@ -265,6 +285,19 @@ class ResponseAssembler:
             alias_str = f"（又名：{', '.join(aliases)}）" if aliases else ""
             qq = p.get("qq_id") or p.get("user_id", "")
             lines.append(f"- {name}{alias_str} QQ：{qq}")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _build_recent_messages_context(messages: list[dict[str, Any]]) -> str:
+        """Build a section summarising recent conversation history."""
+        lines = ["[最近对话]"]
+        for m in messages[-10:]:
+            uid = m.get("user_id", "某人")
+            content = m.get("content", "")
+            # Truncate very long messages for prompt brevity
+            if len(content) > 200:
+                content = content[:197] + "..."
+            lines.append(f"{uid}: {content}")
         return "\n".join(lines)
 
     @staticmethod
@@ -499,7 +532,7 @@ class ResponseAssembler:
         heat_level: str = "warm",
         pace: str = "steady",
         is_group_chat: bool = False,
-    ) -> str:
+    ) -> PromptBundle:
         """Build prompt for a delayed response (topic-gap trigger)."""
         if style_params is None:
             style_params = self.style_adapter.adapt(
@@ -524,11 +557,12 @@ class ResponseAssembler:
             if skill_desc:
                 sections.append(skill_desc)
         sections.append(f"[长度要求] {style_params.length_instruction or '保持简洁自然'}")
-        sections.append(f"[消息] {message_content}")
-        # Dual-output format so the model follows the same think+say pattern
+        # Dual-output format must land in system prompt
         if self.enable_dual_output:
             sections.append(self._build_output_format())
-        return "\n\n".join(sections)
+
+        system_prompt = "\n\n".join(sections)
+        return PromptBundle(system_prompt=system_prompt, user_content=message_content)
 
     def assemble_proactive(
         self,
@@ -537,7 +571,7 @@ class ResponseAssembler:
         group_profile: GroupSemanticProfile | None,
         suggested_tone: str = "casual",
         is_group_chat: bool = False,
-    ) -> str:
+    ) -> PromptBundle:
         """Build prompt for proactive initiation."""
         identity = (
             self.persona.build_system_prompt() if self.persona
@@ -557,4 +591,8 @@ class ResponseAssembler:
         # Dual-output format so the model follows the same think+say pattern
         if self.enable_dual_output:
             sections.append(self._build_output_format())
-        return "\n\n".join(sections)
+
+        system_prompt = "\n\n".join(sections)
+        # Proactive has no explicit user message; the engine will append an
+        # empty user message if no history ends with a user turn.
+        return PromptBundle(system_prompt=system_prompt, user_content="")

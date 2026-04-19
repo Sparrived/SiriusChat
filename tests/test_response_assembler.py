@@ -56,7 +56,7 @@ class TestResponseAssembler:
         empathy = EmpathyStrategy(strategy_type="confirm_action", priority=1, depth_level=2)
         assistant = AssistantEmotionState(valence=0.1, arousal=0.3)
 
-        prompt = assembler.assemble(
+        bundle = assembler.assemble(
             message=msg,
             intent=intent,
             emotion=emotion,
@@ -67,13 +67,13 @@ class TestResponseAssembler:
             assistant_emotion=assistant,
         )
 
-        assert "你在一个多人聊天场景里" in prompt
-        assert "当下的感觉" in prompt
-        assert "心情不好" in prompt
-        assert "共情策略" in prompt
-        assert "confirm_action" in prompt
-        assert "相关记忆" in prompt
-        assert "工作压力大" in prompt
+        assert "你在一个多人聊天场景里" in bundle.system_prompt
+        assert "当下的感觉" in bundle.system_prompt
+        assert "共情策略" in bundle.system_prompt
+        assert "confirm_action" in bundle.system_prompt
+        assert "相关记忆" in bundle.system_prompt
+        assert "工作压力大" in bundle.system_prompt
+        assert "我今天心情不好" in bundle.user_content
 
     def test_assemble_with_group_profile(self):
         assembler = ResponseAssembler()
@@ -88,7 +88,7 @@ class TestResponseAssembler:
             timestamp="2026-04-17T10:00:00", group_valence=0.3, group_arousal=0.4
         ))
 
-        prompt = assembler.assemble(
+        bundle = assembler.assemble(
             message=msg,
             intent=intent,
             emotion=emotion,
@@ -99,9 +99,9 @@ class TestResponseAssembler:
             assistant_emotion=assistant,
         )
 
-        assert "群体风格" in prompt
-        assert "轻松幽默" in prompt
-        assert "群体愉悦度0.3" in prompt
+        assert "群体风格" in bundle.system_prompt
+        assert "轻松幽默" in bundle.system_prompt
+        assert "群体愉悦度0.3" in bundle.system_prompt
 
     def test_assemble_with_user_profile_concise(self):
         assembler = ResponseAssembler()
@@ -114,7 +114,7 @@ class TestResponseAssembler:
         user = UserSemanticProfile(user_id="u1", communication_style="concise")
         group = GroupSemanticProfile(group_id="g1")
 
-        prompt = assembler.assemble(
+        bundle = assembler.assemble(
             message=msg,
             intent=intent,
             emotion=emotion,
@@ -127,28 +127,28 @@ class TestResponseAssembler:
             pace="steady",
         )
 
-        assert "1-2句话" in prompt
+        assert "1-2句话" in bundle.system_prompt
 
     def test_assemble_delayed(self):
         assembler = ResponseAssembler()
-        prompt = assembler.assemble_delayed(
+        bundle = assembler.assemble_delayed(
             message_content="刚才的话题很有趣",
             group_profile=GroupSemanticProfile(group_id="g1", typical_interaction_style="humorous"),
         )
-        assert "话题有了自然间隙" in prompt
-        assert "刚才的话题很有趣" in prompt
-        assert "轻松幽默" in prompt
+        assert "话题有了自然间隙" in bundle.system_prompt
+        assert "刚才的话题很有趣" in bundle.user_content
+        assert "轻松幽默" in bundle.system_prompt
 
     def test_assemble_proactive(self):
         assembler = ResponseAssembler()
-        prompt = assembler.assemble_proactive(
+        bundle = assembler.assemble_proactive(
             trigger_reason="silence_30min",
             group_profile=GroupSemanticProfile(group_id="g1", interest_topics=["photography", "travel"]),
             suggested_tone="casual",
         )
-        assert "silence_30min" in prompt
-        assert "casual" in prompt
-        assert "photography" in prompt
+        assert "silence_30min" in bundle.system_prompt
+        assert "casual" in bundle.system_prompt
+        assert "photography" in bundle.system_prompt
 
     def test_empathy_strategy_action_type(self):
         assembler = ResponseAssembler()

@@ -396,10 +396,11 @@ python scripts/ci_check.py
     │
     ▼
 执行层
-    ├─ ResponseAssembler → 情感上下文 + 共情策略 + 记忆引用 + 群风格
+    ├─ ResponseAssembler → PromptBundle（system_prompt：persona + 情绪 + 共情 + 记忆 + skill + 输出格式；user_content：当前消息）
+    ├─ _build_history_messages() → working_memory 转标准 OpenAI messages（user / assistant / system）
     ├─ StyleAdapter → max_tokens / temperature / tone 动态适配
     ├─ ModelRouter → 任务感知模型选择（urgency / heat / 用户风格）
-    └─ LLM 生成回复（provider_async.generate_async / generate）
+    └─ LLM 生成回复（provider_async.generate_async / generate），传入标准 messages 数组
     │
     ▼
 后台更新层

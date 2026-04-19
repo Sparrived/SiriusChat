@@ -732,11 +732,18 @@ class EmotionalGroupChatEngine:
         self._save_proactive_state()
 
         # Generate proactive message
-        prompt = self._build_proactive_prompt(trigger, group_id)
+        bundle = self._build_proactive_prompt(trigger, group_id)
         style = self.style_adapter.adapt(
             heat_level="warm", pace="steady", is_group_chat=True,
         )
-        raw_reply = await self._generate(prompt, group_id, style)
+        # Proactive uses history only; append an empty user turn if needed
+        # so the model sees "continue the conversation" rather than a blank prompt.
+        messages = self._build_history_messages(group_id, n=10)
+        if not messages or messages[-1]["role"] != "user":
+            messages.append({"role": "user", "content": bundle.user_content or "..."})
+        raw_reply = await self._generate(
+            bundle.system_prompt, messages, group_id, style
+        )
         _think, reply = self.response_assembler.parse_dual_output(raw_reply)
 
         await self.event_bus.emit(SessionEvent(
@@ -784,16 +791,21 @@ class EmotionalGroupChatEngine:
         )
 
         # Merge all triggered items into one prompt and one generation call
-        prompt = self._build_delayed_prompt(triggered, group_id)
+        bundle = self._build_delayed_prompt(triggered, group_id)
+
+        # Build standard OpenAI messages from working memory
+        history = self._build_history_messages(group_id, n=10)
+        messages = history + [{"role": "user", "content": bundle.user_content}]
 
         # Multi-round generation with SKILL support
         from sirius_chat.skills.executor import parse_skill_calls, strip_skill_calls
         from sirius_chat.skills.models import SkillInvocationContext
         max_skill_rounds = self.config.get("max_skill_rounds", 3)
-        current_prompt = prompt
 
         for _round in range(max_skill_rounds + 1):
-            raw_reply = await self._generate(current_prompt, group_id)
+            raw_reply = await self._generate(
+                bundle.system_prompt, messages, group_id
+            )
             _think, reply = self.response_assembler.parse_dual_output(raw_reply)
 
             calls = parse_skill_calls(reply)
@@ -846,13 +858,17 @@ class EmotionalGroupChatEngine:
                     logger.error("SKILL '%s' 执行异常: %s", skill_name, exc)
                     skill_results.append(f"[SKILL '{skill_name}' 异常] {exc}")
 
+            # Inject skill results into the conversation for the next round
             results_text = "\n".join(skill_results)
-            current_prompt = (
-                f"{prompt}\n\n"
-                f"[技能执行结果]\n"
-                f"{results_text}\n\n"
-                f"[继续] 请基于以上技能执行结果，继续完成你的回复。"
-            )
+            messages.append({"role": "assistant", "content": strip_skill_calls(reply)})
+            messages.append({
+                "role": "user",
+                "content": (
+                    f"[技能执行结果]\n"
+                    f"{results_text}\n\n"
+                    f"[继续] 请基于以上技能执行结果，继续完成你的回复。"
+                ),
+            })
 
         # Record reply timestamp for cooldown tracking (once per tick)
         self._last_reply_at[group_id] = datetime.now(timezone.utc).timestamp()
@@ -1226,7 +1242,7 @@ class EmotionalGroupChatEngine:
                         "aliases": entry.profile.aliases,
                         "qq_id": qq_id or uid,
                     })
-            prompt = self.response_assembler.assemble(
+            bundle = self.response_assembler.assemble(
                 message=message,
                 intent=intent,
                 emotion=emotion,
@@ -1250,19 +1266,28 @@ class EmotionalGroupChatEngine:
                 is_group_chat=is_group_chat,
             )
 
+            # Build standard OpenAI messages from working memory.
+            # The last entry is the current message (added by perception); replace
+            # it with the richer user_content produced by the assembler.
+            history = self._build_history_messages(group_id, n=10)
+            if history and history[-1]["role"] == "user":
+                history.pop()
+            messages = history + [{"role": "user", "content": bundle.user_content}]
+
             # Multi-round skill calling: generate → detect SKILL_CALL →
             # emit partial reply → execute skill → re-generate with result injected.
             from sirius_chat.skills.executor import parse_skill_calls, strip_skill_calls
             from sirius_chat.skills.models import SkillInvocationContext
 
             partial_replies: list[str] = []
-            current_prompt = prompt
             max_skill_rounds = max(1, self.config.get("max_skill_rounds", 3))
             think = ""
             say = ""
 
             for _round in range(max_skill_rounds + 1):
-                raw_reply = await self._generate(current_prompt, group_id, style)
+                raw_reply = await self._generate(
+                    bundle.system_prompt, messages, group_id, style
+                )
                 think, say = self.response_assembler.parse_dual_output(raw_reply)
 
                 # Check if the spoken part contains skill calls
@@ -1323,14 +1348,17 @@ class EmotionalGroupChatEngine:
                         logger.error("SKILL '%s' 执行异常: %s", skill_name, exc)
                         skill_results.append(f"[SKILL '{skill_name}' 异常] {exc}")
 
-                # Inject skill results into the prompt for the next generation round
+                # Inject skill results into the conversation for the next round
                 results_text = "\n".join(skill_results)
-                current_prompt = (
-                    f"{prompt}\n\n"
-                    f"[技能执行结果]\n"
-                    f"{results_text}\n\n"
-                    f"[继续] 请基于以上技能执行结果，继续完成你的回复。"
-                )
+                messages.append({"role": "assistant", "content": strip_skill_calls(say)})
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        f"[技能执行结果]\n"
+                        f"{results_text}\n\n"
+                        f"[继续] 请基于以上技能执行结果，继续完成你的回复。"
+                    ),
+                })
 
             # Record final thought
             if think:
@@ -1506,8 +1534,9 @@ class EmotionalGroupChatEngine:
     # Prompt builders & generation
     # ==================================================================
 
-    def _build_delayed_prompt(self, items: Any, group_id: str) -> str:
-        """Build prompt for delayed response (supports single item or merged list)."""
+    def _build_delayed_prompt(self, items: Any, group_id: str):
+        """Build prompt bundle for delayed response (supports single item or merged list)."""
+        from sirius_chat.core.response_assembler import PromptBundle
         if not isinstance(items, list):
             items = [items]
         if len(items) == 1:
@@ -1524,8 +1553,8 @@ class EmotionalGroupChatEngine:
             is_group_chat=True,
         )
 
-    def _build_proactive_prompt(self, trigger: dict[str, Any], group_id: str) -> str:
-        """Build prompt for proactive initiation."""
+    def _build_proactive_prompt(self, trigger: dict[str, Any], group_id: str):
+        """Build prompt bundle for proactive initiation."""
         return self.response_assembler.assemble_proactive(
             trigger_reason=trigger.get("trigger_type", "silence"),
             group_profile=self.semantic_memory.get_group_profile(group_id),
@@ -1535,7 +1564,8 @@ class EmotionalGroupChatEngine:
 
     async def _generate(
         self,
-        prompt: str,
+        system_prompt: str,
+        messages: list[dict[str, Any]],
         group_id: str,
         style_params: StyleParams | None = None,
         task_name: str = "response_generate",
@@ -1544,7 +1574,9 @@ class EmotionalGroupChatEngine:
         """Call LLM provider to generate response.
 
         Args:
-            prompt: The assembled prompt text.
+            system_prompt: Instruction-level context (persona, emotion, skills, etc.).
+            messages: Standard OpenAI-format conversation history ending with the
+                current user message.
             group_id: Target group identifier.
             style_params: Optional style parameters (max_tokens, temperature).
             task_name: Cognitive task type for model routing.
@@ -1577,17 +1609,10 @@ class EmotionalGroupChatEngine:
         # Build GenerationRequest
         from sirius_chat.providers.base import GenerationRequest, LLMProvider
 
-        # Split prompt: everything before the last [消息] section is system context
-        if "[消息]" in prompt:
-            system_prompt, _, user_content = prompt.rpartition("[消息] ")
-        else:
-            system_prompt = prompt
-            user_content = ""
-
         request = GenerationRequest(
             model=cfg.model_name,
             system_prompt=system_prompt.strip(),
-            messages=[{"role": "user", "content": user_content.strip()}],
+            messages=messages,
             temperature=effective_temperature,
             max_tokens=effective_max_tokens,
             timeout_seconds=cfg.timeout,
@@ -1713,6 +1738,22 @@ class EmotionalGroupChatEngine:
             }
             for e in entries
         ]
+
+    def _build_history_messages(self, group_id: str, n: int = 10) -> list[dict[str, Any]]:
+        """Convert working-memory entries to standard OpenAI messages format.
+
+        The most recent entry (the current message just added by perception)
+        is included so the caller can decide whether to keep or replace it.
+        """
+        entries = self.working_memory.get_recent_entries(group_id, n=n)
+        messages: list[dict[str, Any]] = []
+        for e in entries:
+            role = "user" if e.role == "human" else e.role
+            msg: dict[str, Any] = {"role": role, "content": e.content}
+            if role == "user" and e.user_id:
+                msg["name"] = e.user_id
+            messages.append(msg)
+        return messages
 
     @staticmethod
     def _message_rate_per_minute(recent_msgs: list[dict[str, Any]]) -> float:

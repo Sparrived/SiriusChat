@@ -70,7 +70,7 @@ class TestResponseAssemblerPersonaInjection:
             communication_style="concise",
         )
         assembler = ResponseAssembler(persona=persona)
-        prompt = assembler.assemble(
+        bundle = assembler.assemble(
             message=Message(role="human", content="你好"),
             intent=Mock(),
             emotion=EmotionState(),
@@ -80,12 +80,12 @@ class TestResponseAssemblerPersonaInjection:
             user_profile=None,
             assistant_emotion=Mock(valence=0.0, arousal=0.0),
         )
-        assert persona.name in prompt
-        assert "毒舌" in prompt or "机智" in prompt
+        assert persona.name in bundle.system_prompt
+        assert "毒舌" in bundle.system_prompt or "机智" in bundle.system_prompt
 
     def test_default_prompt_without_persona(self):
         assembler = ResponseAssembler()
-        prompt = assembler.assemble(
+        bundle = assembler.assemble(
             message=Message(role="human", content="你好"),
             intent=Mock(),
             emotion=EmotionState(),
@@ -95,7 +95,7 @@ class TestResponseAssemblerPersonaInjection:
             user_profile=None,
             assistant_emotion=Mock(valence=0.0, arousal=0.0),
         )
-        assert "你在一个多人聊天场景里" in prompt
+        assert "你在一个多人聊天场景里" in bundle.system_prompt
 
 
 class TestEngineLoadsPersona:
