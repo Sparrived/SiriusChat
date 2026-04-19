@@ -162,7 +162,7 @@ class ResponseAssembler:
         self,
         style_adapter: StyleAdapter | None = None,
         persona: PersonaProfile | None = None,
-        enable_dual_output: bool = True,
+        enable_dual_output: bool = False,
         skill_registry: Any | None = None,
     ) -> None:
         self.style_adapter = style_adapter or StyleAdapter()
@@ -425,13 +425,10 @@ class ResponseAssembler:
 
     @staticmethod
     def _build_output_format() -> str:
-        """Instruct the model to produce <think> + <say> dual output."""
+        """Instruct the model to produce plain spoken reply."""
         return (
             "[输出格式]\n"
-            "先写下你此刻的内心想法（1-2句话即可，不会发送给用户），放在 <think>...</think> 内。\n"
-            "如果需要调用能力，请将 [SKILL_CALL: ...] 放在 <think>...</think> 内。\n"
-            "然后写下你要说出口的话，放在 <say>...</say> 内。"
-            "注意：内心想法尽量简短，把主要篇幅留给对外说的话，并确保 </say> 标签完整输出。"
+            "直接输出你要说的话，不要添加任何额外标签或格式标记。"
         )
 
     def _build_skill_descriptions(self, caller_is_developer: bool = False) -> str:
@@ -461,42 +458,17 @@ class ResponseAssembler:
             "当用户要求你执行某项操作（如检查状态、获取信息等）时，"
             "你必须立即在回复中插入对应的能力调用标记，"
             "不要只作出口头承诺而不调用。"
-            "请将能力调用标记放在 <think>...</think> 内，"
-            "与实际要说出口的话分开。"
             "调用格式：[SKILL_CALL: 技能名 | {\"参数\": \"值\"}]"
         )
 
     @staticmethod
     def parse_dual_output(raw: str) -> tuple[str, str]:
-        """Extract <think> and <say> from model response.
+        """Return the raw reply as spoken content.
 
-        Returns:
-            (think_content, say_content)
-
-        If tags are missing, think_content is empty and say_content is the raw text.
+        The dual-output <think> + <say> format has been disabled;
+        the entire response is treated as the spoken reply.
         """
-        import re
-
-        think_match = re.search(r"<think>(.*?)</think>", raw, re.DOTALL)
-        say_match = re.search(r"<say>(.*?)</say>", raw, re.DOTALL)
-
-        think = think_match.group(1).strip() if think_match else ""
-        say = say_match.group(1).strip() if say_match else ""
-
-        # If </say> is missing, try to extract content after <say>
-        if not say and "<say>" in raw:
-            say_start = raw.index("<say>") + len("<say>")
-            say = raw[say_start:].strip()
-
-        # If say is still empty, fall back to raw text (minus think if present)
-        if not say:
-            if think_match:
-                # Remove think block from raw and use remainder
-                say = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
-            else:
-                say = raw.strip()
-
-        return think, say
+        return "", raw.strip()
 
     @staticmethod
     def _build_persona_context(persona: PersonaProfile) -> str:

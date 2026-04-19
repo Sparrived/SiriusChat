@@ -552,7 +552,7 @@ class EmotionalGroupChatEngine:
         raw_reply = await self._generate(
             bundle.system_prompt, messages, group_id, style
         )
-        _think, reply = self.response_assembler.parse_dual_output(raw_reply)
+        reply = raw_reply.strip()
 
         await self.event_bus.emit(SessionEvent(
             type=SessionEventType.PROACTIVE_RESPONSE_TRIGGERED,
@@ -628,7 +628,7 @@ class EmotionalGroupChatEngine:
             raw_reply = await self._generate(
                 bundle.system_prompt, messages, group_id
             )
-            _think, reply = self.response_assembler.parse_dual_output(raw_reply)
+            reply = raw_reply.strip()
 
             calls = parse_skill_calls(reply)
             if not calls or self._skill_registry is None or self._skill_executor is None:
@@ -706,7 +706,6 @@ class EmotionalGroupChatEngine:
                         "\n\n[继续] 请基于以上技能执行结果，继续完成你的回复。"
                         "如果结果中包含错误或失败信息，请直接忽略，"
                         "不要向用户提及任何关于能力调用或失败的内容，继续自然地对话。"
-                        "请用 <say>...</say> 标签包裹你的最终回复。"
                     ),
                 ),
             })
@@ -1184,16 +1183,15 @@ class EmotionalGroupChatEngine:
 
             partial_replies: list[str] = []
             max_skill_rounds = max(1, self.config.get("max_skill_rounds", 3))
-            think = ""
             say = ""
 
             for _round in range(max_skill_rounds + 1):
                 raw_reply = await self._generate(
                     bundle.system_prompt, messages, group_id, style
                 )
-                think, say = self.response_assembler.parse_dual_output(raw_reply)
+                say = raw_reply.strip()
 
-                # Check if the spoken part contains skill calls
+                # Check if the reply contains skill calls
                 calls = parse_skill_calls(say)
                 if not calls or self._skill_registry is None or self._skill_executor is None:
                     # No more skill calls — finalize
@@ -1274,10 +1272,7 @@ class EmotionalGroupChatEngine:
                     "content": self._build_skill_result_content(
                         skill_results,
                         skill_multimodal,
-                        suffix=(
-                            "\n\n[继续] 请基于以上技能执行结果，继续完成你的回复。"
-                            "请用 <say>...</say> 标签包裹你的最终回复。"
-                        ),
+                        suffix="\n\n[继续] 请基于以上技能执行结果，继续完成你的回复。",
                     ),
                 })
 
@@ -1299,17 +1294,6 @@ class EmotionalGroupChatEngine:
                         importance=0.3,
                     )
 
-            # Record final thought
-            if think:
-                self.autobiographical_memory.record_thought(
-                    content=think,
-                    emotion=emotion,
-                    trigger_message=message.content,
-                    group_id=group_id,
-                    reply=say,
-                    depth="rich",
-                )
-
             # Record assistant reply into working memory so future turns can see it
             clean_reply = strip_skill_calls(say).strip()
             if clean_reply:
@@ -1329,7 +1313,7 @@ class EmotionalGroupChatEngine:
                 "reply": say,
                 "emotion": emotion.to_dict(),
                 "intent": intent.to_dict(),
-                "thought": think,
+                "thought": "",
                 "partial_replies": partial_replies,
             }
 
@@ -1569,9 +1553,7 @@ class EmotionalGroupChatEngine:
             effective_max_tokens = cfg.max_tokens
             effective_temperature = cfg.temperature
 
-        # Dual-output needs extra token budget for <think> + <say> sections
-        if getattr(self.response_assembler, "enable_dual_output", False):
-            effective_max_tokens = min(2048, int(effective_max_tokens * 1.8))
+        # No dual-output format; use token budget as-is
 
         # Build GenerationRequest
         from sirius_chat.providers.base import GenerationRequest, LLMProvider
@@ -1690,16 +1672,9 @@ class EmotionalGroupChatEngine:
                 skill_results.append(f"[SKILL '{skill_name}' 异常] {exc}")
 
         # Inject skill results into the reply so the model (and user) sees them.
-        # If <say>...</say> is present, insert results before </say> so they
-        # survive parse_dual_output(); otherwise append at the end.
         if skill_results:
             results_text = "\n".join(skill_results)
-            if "</say>" in clean_reply:
-                clean_reply = clean_reply.replace(
-                    "</say>", f"\n{results_text}\n</say>", 1
-                )
-            else:
-                clean_reply += "\n\n" + results_text
+            clean_reply += "\n\n" + results_text
 
         return clean_reply
 
