@@ -1,7 +1,6 @@
-﻿<h1 align="center">🌟 Sirius Chat</h1>
+﻿<h1 align="center">🌟 Sirius Chat 🌟</h1>
 
 <div align="center">
-<h1>🌟 Sirius Chat 🌟</h1>
 [![Python 3.12+](https://img.shields.io/badge/Python-3.12%2B-blue?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)](LICENSE)
 [![PyPI](https://img.shields.io/badge/PyPI-sirius--chat-blueviolet?style=flat-square)](https://pypi.org/project/sirius-chat/)
