@@ -537,6 +537,7 @@ class ResponseAssembler:
         heat_level: str = "warm",
         pace: str = "steady",
         is_group_chat: bool = False,
+        caller_is_developer: bool = False,
         glossary_section: str = "",
     ) -> PromptBundle:
         """Build prompt for a delayed response (topic-gap trigger)."""
@@ -559,7 +560,7 @@ class ResponseAssembler:
             sections.append(f"[群体风格] {style_desc}")
         # Available skills (before user message so it lands in system prompt)
         if self.skill_registry is not None:
-            skill_desc = self._build_skill_descriptions(caller_is_developer=True)
+            skill_desc = self._build_skill_descriptions(caller_is_developer=caller_is_developer)
             if skill_desc:
                 sections.append(skill_desc)
         sections.append(f"[长度要求] {style_params.length_instruction or '保持简洁自然'}")

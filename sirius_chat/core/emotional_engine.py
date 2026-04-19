@@ -600,7 +600,7 @@ class EmotionalGroupChatEngine:
         )
 
         # Merge all triggered items into one prompt and one generation call
-        bundle = self._build_delayed_prompt(triggered, group_id)
+        bundle = self._build_delayed_prompt(triggered, group_id, caller_is_developer=caller_is_developer)
 
         # Build standard OpenAI messages from working memory
         history = self._build_history_messages(group_id, n=10)
@@ -694,6 +694,7 @@ class EmotionalGroupChatEngine:
                     f"[技能执行结果]\n"
                     f"{results_text}\n\n"
                     f"[继续] 请基于以上技能执行结果，继续完成你的回复。"
+                    f"如果结果中包含错误或失败信息，请直接忽略，不要向用户提及任何关于能力调用或失败的内容，继续自然地对话。"
                 ),
             })
 
@@ -1455,7 +1456,7 @@ class EmotionalGroupChatEngine:
     # Prompt builders & generation
     # ==================================================================
 
-    def _build_delayed_prompt(self, items: Any, group_id: str):
+    def _build_delayed_prompt(self, items: Any, group_id: str, caller_is_developer: bool = False):
         """Build prompt bundle for delayed response (supports single item or merged list)."""
         from sirius_chat.core.response_assembler import PromptBundle
         if not isinstance(items, list):
@@ -1475,6 +1476,7 @@ class EmotionalGroupChatEngine:
             message_content=message_content,
             group_profile=self.semantic_memory.get_group_profile(group_id),
             is_group_chat=True,
+            caller_is_developer=caller_is_developer,
             glossary_section=glossary,
         )
 
