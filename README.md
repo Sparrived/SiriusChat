@@ -1,15 +1,16 @@
 ﻿<h1 align="center">🌟 Sirius Chat 🌟</h1>
 
 <div align="center">
-[![Python 3.12+](https://img.shields.io/badge/Python-3.12%2B-blue?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
-[![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)](LICENSE)
-[![PyPI](https://img.shields.io/badge/PyPI-sirius--chat-blueviolet?style=flat-square)](https://pypi.org/project/sirius-chat/)
-[![Tests](https://img.shields.io/badge/Tests-600%2B%20passing-brightgreen?style=flat-square)](#-测试)
-[![Async First](https://img.shields.io/badge/Async-First-orange?style=flat-square)](sirius_chat/async_engine/)
 
-*一个为多人交互场景设计的 Python LLM 编排框架。构建具有真实情感表达能力、能提供帮助与情绪价值的核心引擎。*
+<a href="https://www.python.org/"><img src="https://img.shields.io/badge/Python-3.12%2B-blue?style=flat-square&logo=python&logoColor=white" alt="Python 3.12+"></a>
+<a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green?style=flat-square" alt="License"></a>
+<a href="https://pypi.org/project/sirius-chat/"><img src="https://img.shields.io/badge/PyPI-sirius--chat-blueviolet?style=flat-square" alt="PyPI"></a>
+<a href="#-测试"><img src="https://img.shields.io/badge/Tests-600%2B%20passing-brightgreen?style=flat-square" alt="Tests"></a>
+<a href="sirius_chat/async_engine/"><img src="https://img.shields.io/badge/Async-First-orange?style=flat-square" alt="Async First"></a>
 
-[📚 文档](#-文档) • [🚀 快速开始](#-快速开始) • [💡 示例](#使用示例) • [🛠️ 配置](#-配置示例) • [🤝 贡献](#-贡献)
+<em>一个为多人交互场景设计的 Python LLM 编排框架。构建具有真实情感表达能力、能提供帮助与情绪价值的核心引擎。</em>
+
+<a href="#-文档">📚 文档</a> · <a href="#-快速开始">🚀 快速开始</a> · <a href="#使用示例">💡 示例</a> · <a href="#-配置示例">🛠️ 配置</a> · <a href="#-贡献">🤝 贡献</a>
 
 </div>
 
