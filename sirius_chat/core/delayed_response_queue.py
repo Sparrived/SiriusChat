@@ -36,12 +36,16 @@ class DelayedResponseQueue:
         strategy_decision: StrategyDecision,
         emotion_state: dict[str, Any] | None = None,
         candidate_memories: list[str] | None = None,
+        channel: str | None = None,
+        channel_user_id: str | None = None,
     ) -> DelayedResponseItem:
         """Add an item to the delayed queue."""
         item = DelayedResponseItem(
             item_id=f"dri_{uuid.uuid4().hex[:12]}",
             group_id=group_id,
             user_id=user_id,
+            channel=channel,
+            channel_user_id=channel_user_id,
             message_content=message_content,
             strategy_decision=strategy_decision,
             emotion_state=dict(emotion_state or {}),

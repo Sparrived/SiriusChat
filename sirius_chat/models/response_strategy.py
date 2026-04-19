@@ -37,6 +37,8 @@ class DelayedResponseItem:
     item_id: str = ""
     group_id: str = ""
     user_id: str = ""
+    channel: str | None = None
+    channel_user_id: str | None = None
     message_content: str = ""
     strategy_decision: StrategyDecision = field(default_factory=StrategyDecision)
     emotion_state: dict[str, Any] = field(default_factory=dict)
@@ -50,6 +52,8 @@ class DelayedResponseItem:
             "item_id": self.item_id,
             "group_id": self.group_id,
             "user_id": self.user_id,
+            "channel": self.channel,
+            "channel_user_id": self.channel_user_id,
             "message_content": self.message_content,
             "strategy_decision": self.strategy_decision.__dict__,
             "emotion_state": self.emotion_state,

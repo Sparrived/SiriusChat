@@ -585,15 +585,18 @@ class EmotionalGroupChatEngine:
             return []
 
         # Determine caller from the first triggered item
-        caller_user_id = triggered[0].user_id
-        caller_entry = self.user_memory.get_user_by_identity(
-            channel=triggered[0].group_id, external_user_id=caller_user_id,
-        ) if hasattr(triggered[0], 'group_id') else None
+        caller_entry = None
+        item = triggered[0]
+        if item.channel and item.channel_user_id:
+            caller_entry = self.user_memory.get_user_by_identity(
+                channel=item.channel,
+                external_user_id=item.channel_user_id,
+            )
         if caller_entry is None:
-            # Fallback: search by user_id across all groups
+            # Fallback: search by user_id (nickname) across all groups
             for gid, group in self.user_memory.entries.items():
-                if caller_user_id in group:
-                    caller_entry = group[caller_user_id]
+                if item.user_id in group:
+                    caller_entry = group[item.user_id]
                     break
         caller_is_developer = bool(
             caller_entry and caller_entry.profile.is_developer
@@ -1328,6 +1331,8 @@ class EmotionalGroupChatEngine:
                 strategy_decision=decision,
                 emotion_state=emotion.to_dict(),
                 candidate_memories=[m.get("content", "") for m in memories],
+                channel=message.channel,
+                channel_user_id=message.channel_user_id,
             )
             return {
                 "strategy": "delayed",
