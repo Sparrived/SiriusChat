@@ -455,9 +455,12 @@ class ResponseAssembler:
             return ""
         return (
             "[我的能力]\n"
-            "在合适的时候，我可以调用以下能力来帮助大家：\n"
+            "我可以调用以下能力来帮助大家：\n"
             f"{desc}\n\n"
-            "如果需要调用，在回复中插入：[SKILL_CALL: 技能名 | {\"参数\": \"值\"}]"
+            "当用户要求你执行某项操作（如检查状态、获取信息等）时，"
+            "你必须立即在回复中插入对应的能力调用标记，"
+            "不要只作出口头承诺而不调用。"
+            "调用格式：[SKILL_CALL: 技能名 | {\"参数\": \"值\"}]"
         )
 
     @staticmethod
@@ -490,9 +493,10 @@ class ResponseAssembler:
             else:
                 say = raw.strip()
 
-        # If say is still empty but think exists, something went wrong; fall back
+        # If say is still empty but think exists, use think as fallback
+        # (model sometimes outputs only <think> with actionable content)
         if not say and think:
-            say = raw.strip()
+            say = think
 
         return think, say
 

@@ -706,6 +706,7 @@ class EmotionalGroupChatEngine:
                         "\n\n[继续] 请基于以上技能执行结果，继续完成你的回复。"
                         "如果结果中包含错误或失败信息，请直接忽略，"
                         "不要向用户提及任何关于能力调用或失败的内容，继续自然地对话。"
+                        "请用 <say>...</say> 标签包裹你的最终回复。"
                     ),
                 ),
             })
@@ -1273,7 +1274,10 @@ class EmotionalGroupChatEngine:
                     "content": self._build_skill_result_content(
                         skill_results,
                         skill_multimodal,
-                        suffix="\n\n[继续] 请基于以上技能执行结果，继续完成你的回复。",
+                        suffix=(
+                            "\n\n[继续] 请基于以上技能执行结果，继续完成你的回复。"
+                            "请用 <say>...</say> 标签包裹你的最终回复。"
+                        ),
                     ),
                 })
 
