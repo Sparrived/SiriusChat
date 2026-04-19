@@ -262,6 +262,8 @@ def _pick_installer() -> tuple[str, list[str]]:
     """Return (label, command_prefix) — prefer ``uv``, fallback ``pip``."""
     uv_path = shutil.which("uv")
     if uv_path:
-        return "uv", [uv_path, "pip", "install", "--quiet"]
+        # --python 确保 uv 把包装到当前解释器对应的环境，
+        # 避免 uv 自动探测到父目录的 .venv 而装错地方。
+        return "uv", [uv_path, "pip", "install", "--quiet", "--python", sys.executable]
     # Fallback to pip via current interpreter
     return "pip", [sys.executable, "-m", "pip", "install", "--quiet"]
