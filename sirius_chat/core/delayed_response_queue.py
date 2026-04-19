@@ -143,11 +143,19 @@ class DelayedResponseQueue:
                 item.item_id, elapsed, item.window_seconds,
             )
 
-        # Check if problem solved (cancel)
+        # Check if problem solved (cancel) — only inspect human messages,
+        # skip assistant/system/skill messages to avoid self-cancelling.
+        skip_user_ids = {"assistant", "skill_system"}
         for msg in recent_messages:
+            if msg.get("user_id") in skip_user_ids:
+                continue
             content = str(msg.get("content", ""))
             if any(kw in content for kw in _CANCEL_KEYWORDS):
-                logger.debug("Delayed item %s cancelled (keyword match)", item.item_id)
+                logger.debug(
+                    "Delayed item %s cancelled (keyword '%s' in human msg)",
+                    item.item_id,
+                    next(kw for kw in _CANCEL_KEYWORDS if kw in content),
+                )
                 return "cancel"
 
         # Check for topic gap (trigger)
