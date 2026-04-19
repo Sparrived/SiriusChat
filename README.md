@@ -1,4 +1,4 @@
-﻿# 🌟 Sirius Chat
+﻿<h1 align="center">🌟 Sirius Chat</h1>
 
 <div align="center">
 
