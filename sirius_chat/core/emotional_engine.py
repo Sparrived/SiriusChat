@@ -636,6 +636,7 @@ class EmotionalGroupChatEngine:
 
             # Execute skills and collect results
             skill_results: list[str] = []
+            skill_multimodal: list[dict[str, Any]] = []
             from sirius_chat.memory.user.models import UserProfile
             caller_user_id = item.user_id
             skill_caller = UserProfile(
@@ -673,6 +674,11 @@ class EmotionalGroupChatEngine:
                         skill_results.append(
                             f"[SKILL '{skill_name}' 结果] {result.to_display_text()}"
                         )
+                        for block in result.multimodal_blocks:
+                            skill_multimodal.append({
+                                "type": "image_url",
+                                "image_url": {"url": block.value},
+                            })
                         # Auto-persist glossary terms from learn_term
                         if skill_name == "learn_term":
                             term = params.get("term", "")
@@ -690,15 +696,17 @@ class EmotionalGroupChatEngine:
                     skill_results.append(f"[SKILL '{skill_name}' 异常] {exc}")
 
             # Inject skill results into the conversation for the next round
-            results_text = "\n".join(skill_results)
             messages.append({"role": "assistant", "content": strip_skill_calls(reply)})
             messages.append({
                 "role": "user",
-                "content": (
-                    f"[技能执行结果]\n"
-                    f"{results_text}\n\n"
-                    f"[继续] 请基于以上技能执行结果，继续完成你的回复。"
-                    f"如果结果中包含错误或失败信息，请直接忽略，不要向用户提及任何关于能力调用或失败的内容，继续自然地对话。"
+                "content": self._build_skill_result_content(
+                    skill_results,
+                    skill_multimodal,
+                    suffix=(
+                        "\n\n[继续] 请基于以上技能执行结果，继续完成你的回复。"
+                        "如果结果中包含错误或失败信息，请直接忽略，"
+                        "不要向用户提及任何关于能力调用或失败的内容，继续自然地对话。"
+                    ),
                 ),
             })
 
@@ -1207,6 +1215,7 @@ class EmotionalGroupChatEngine:
 
                 # Execute skills and collect results
                 skill_results: list[str] = []
+                skill_multimodal: list[dict[str, Any]] = []
                 from sirius_chat.memory.user.models import UserProfile
                 skill_caller = UserProfile(
                     user_id=message.channel_user_id or "unknown",
@@ -1243,6 +1252,11 @@ class EmotionalGroupChatEngine:
                             skill_results.append(
                                 f"[SKILL '{skill_name}' 结果] {result.to_display_text()}"
                             )
+                            for block in result.multimodal_blocks:
+                                skill_multimodal.append({
+                                    "type": "image_url",
+                                    "image_url": {"url": block.value},
+                                })
                             # Auto-persist glossary terms from learn_term
                             if skill_name == "learn_term":
                                 term = params.get("term", "")
@@ -1260,14 +1274,13 @@ class EmotionalGroupChatEngine:
                         skill_results.append(f"[SKILL '{skill_name}' 异常] {exc}")
 
                 # Inject skill results into the conversation for the next round
-                results_text = "\n".join(skill_results)
                 messages.append({"role": "assistant", "content": strip_skill_calls(say)})
                 messages.append({
                     "role": "user",
-                    "content": (
-                        f"[技能执行结果]\n"
-                        f"{results_text}\n\n"
-                        f"[继续] 请基于以上技能执行结果，继续完成你的回复。"
+                    "content": self._build_skill_result_content(
+                        skill_results,
+                        skill_multimodal,
+                        suffix="\n\n[继续] 请基于以上技能执行结果，继续完成你的回复。",
                     ),
                 })
 
@@ -1461,6 +1474,26 @@ class EmotionalGroupChatEngine:
     # ==================================================================
     # Prompt builders & generation
     # ==================================================================
+
+    @staticmethod
+    def _build_skill_result_content(
+        skill_results: list[str],
+        multimodal_blocks: list[dict[str, Any]],
+        suffix: str = "",
+    ) -> str | list[dict[str, Any]]:
+        """Assemble skill execution results into message content.
+
+        If *multimodal_blocks* is non-empty, returns an OpenAI-compatible
+        ``content`` list (text + image_url parts) so local image paths are
+        later converted to base64 data URLs by the transport layer.
+        """
+        results_text = "\n".join(skill_results)
+        text = f"[技能执行结果]\n{results_text}{suffix}"
+        if not multimodal_blocks:
+            return text
+        content: list[dict[str, Any]] = [{"type": "text", "text": text}]
+        content.extend(multimodal_blocks)
+        return content
 
     def _build_delayed_prompt(self, items: Any, group_id: str, caller_is_developer: bool = False):
         """Build prompt bundle for delayed response (supports single item or merged list)."""
