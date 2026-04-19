@@ -616,8 +616,12 @@ class EmotionalGroupChatEngine:
         # Merge all triggered items into one prompt and one generation call
         bundle = self._build_delayed_prompt(triggered, group_id, caller_is_developer=caller_is_developer)
 
-        # Build standard OpenAI messages from working memory
+        # Build standard OpenAI messages from working memory.
+        # The last entry is the original user message (added by perception);
+        # replace it with the richer user_content produced by the assembler.
         history = self._build_history_messages(group_id, n=10)
+        if history and history[-1]["role"] == "user":
+            history.pop()
         messages = history + [{"role": "user", "content": bundle.user_content}]
 
         # Multi-round generation with SKILL support
