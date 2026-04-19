@@ -19,7 +19,7 @@ class EpisodicMemoryManager:
 
     Storage layout:
         {work_path}/episodic/
-            └── {group_id}.jsonl
+            └── {group_id}.json
     """
 
     def __init__(
@@ -36,13 +36,49 @@ class EpisodicMemoryManager:
     # CRUD
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _load_entries(path: Path) -> list[dict[str, Any]]:
+        """Load entries from file, supporting both legacy jsonl and new JSON-array format."""
+        if not path.exists():
+            return []
+        try:
+            text = path.read_text(encoding="utf-8").strip()
+            if not text:
+                return []
+            # New format: JSON object with "entries" array
+            if text.startswith("{"):
+                data = json.loads(text)
+                return list(data.get("entries", []))
+            # Legacy format: jsonl (one JSON object per line)
+            entries = []
+            for line in text.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entries.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+            return entries
+        except (OSError, json.JSONDecodeError):
+            return []
+
+    @staticmethod
+    def _save_entries(path: Path, entries: list[dict[str, Any]]) -> None:
+        """Save entries as a formatted JSON array (human-readable)."""
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        with tmp.open("w", encoding="utf-8") as f:
+            json.dump({"entries": entries}, f, ensure_ascii=False, indent=2)
+        tmp.replace(path)
+
     def add_entry(self, entry: EventMemoryEntry) -> None:
         """Append an entry to the group's episodic memory."""
         import dataclasses
         path = self._entry_path(entry.group_id or "default")
-        line = json.dumps(dataclasses.asdict(entry), ensure_ascii=False)
-        with path.open("a", encoding="utf-8") as f:
-            f.write(line + "\n")
+        entries = self._load_entries(path)
+        entries.append(dataclasses.asdict(entry))
+        self._save_entries(path, entries)
 
     def add_event(
         self,
@@ -50,17 +86,33 @@ class EpisodicMemoryManager:
         group_id: str,
         user_id: str,
         content: str,
+        summary: str = "",
         emotion_valence: float = 0.0,
         importance: float = 0.5,
     ) -> None:
-        """Convenience method: create and append a simple event entry."""
+        """Convenience method: create and append a simple event entry.
+
+        Args:
+            summary: Human-readable event summary. If empty, a brief description
+                is auto-generated from user_id and content.
+        """
         import uuid
         from datetime import datetime, timezone
+        if not summary:
+            text = content.strip()
+            if text.startswith("[图片:"):
+                summary = f"{user_id} 分享了一张图片"
+            elif text.startswith("[SKILL_CALL:"):
+                summary = f"{user_id} 调用了技能"
+            elif len(text) <= 30:
+                summary = f"{user_id} 说: {text}"
+            else:
+                summary = f"{user_id} 提到: {text[:60]}"
         entry = EventMemoryEntry(
             event_id=str(uuid.uuid4()),
             user_id=user_id,
             group_id=group_id,
-            summary=content,
+            summary=summary,
             category="custom",
             confidence=min(1.0, max(0.0, importance)),
             created_at=datetime.now(timezone.utc).isoformat(),
@@ -80,30 +132,20 @@ class EpisodicMemoryManager:
     ) -> list[EventMemoryEntry]:
         """Query entries with optional filters."""
         path = self._entry_path(group_id)
-        if not path.exists():
-            return []
+        raw_entries = self._load_entries(path)
 
         results = []
-        with path.open("r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    data = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
+        for data in raw_entries:
+            if user_id and data.get("user_id") != user_id:
+                continue
+            if category and data.get("category") != category:
+                continue
+            if data.get("confidence", 0.0) < min_confidence:
+                continue
 
-                if user_id and data.get("user_id") != user_id:
-                    continue
-                if category and data.get("category") != category:
-                    continue
-                if data.get("confidence", 0.0) < min_confidence:
-                    continue
-
-                results.append(EventMemoryEntry(**data))
-                if len(results) >= limit:
-                    break
+            results.append(EventMemoryEntry(**data))
+            if len(results) >= limit:
+                break
 
         return results
 
@@ -116,25 +158,15 @@ class EpisodicMemoryManager:
         """Simple keyword search in entry summaries."""
         keyword_lower = keyword.lower()
         path = self._entry_path(group_id)
-        if not path.exists():
-            return []
+        raw_entries = self._load_entries(path)
 
         results = []
-        with path.open("r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    data = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-
-                summary = str(data.get("summary", "")).lower()
-                if keyword_lower in summary:
-                    results.append(EventMemoryEntry(**data))
-                    if len(results) >= limit:
-                        break
+        for data in raw_entries:
+            summary = str(data.get("summary", "")).lower()
+            if keyword_lower in summary:
+                results.append(EventMemoryEntry(**data))
+                if len(results) >= limit:
+                    break
 
         return results
 
@@ -144,61 +176,50 @@ class EpisodicMemoryManager:
         Returns number of entries archived (activation below threshold).
         """
         path = self._entry_path(group_id)
-        if not path.exists():
+        raw_entries = self._load_entries(path)
+        if not raw_entries:
             return 0
 
-        kept_lines = []
-        archived_lines = []
-        archive_path = self._base_dir / f"{self._safe_name(group_id)}_archive.jsonl"
+        kept_entries = []
+        archived_entries = []
+        archive_path = self._base_dir / f"{self._safe_name(group_id)}_archive.json"
 
-        with path.open("r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    data = json.loads(line)
-                except json.JSONDecodeError:
-                    kept_lines.append(line)
-                    continue
+        for data in raw_entries:
+            activation = self._activation.calculate_activation(
+                importance=float(data.get("confidence", 0.5)),
+                created_at=str(data.get("created_at", "")),
+                access_count=int(data.get("access_count", 0)),
+                memory_category=str(data.get("category", "custom")),
+            )
+            data["activation"] = round(activation, 6)
 
-                activation = self._activation.calculate_activation(
-                    importance=float(data.get("confidence", 0.5)),
-                    created_at=str(data.get("created_at", "")),
-                    access_count=int(data.get("access_count", 0)),
-                    memory_category=str(data.get("category", "custom")),
-                )
-                data["activation"] = round(activation, 6)
+            if self._activation.should_archive(activation):
+                archived_entries.append(data)
+            else:
+                kept_entries.append(data)
 
-                if self._activation.should_archive(activation):
-                    archived_lines.append(json.dumps(data, ensure_ascii=False))
-                else:
-                    kept_lines.append(json.dumps(data, ensure_ascii=False))
-
-        # Rewrite kept entries
-        with path.open("w", encoding="utf-8") as f:
-            for line in kept_lines:
-                f.write(line + "\n")
+        # Rewrite kept entries in formatted JSON array
+        self._save_entries(path, kept_entries)
 
         # Append archived entries
-        if archived_lines:
-            with archive_path.open("a", encoding="utf-8") as f:
-                for line in archived_lines:
-                    f.write(line + "\n")
+        if archived_entries:
+            existing_archive = self._load_entries(archive_path)
+            existing_archive.extend(archived_entries)
+            self._save_entries(archive_path, existing_archive)
             logger.info(
                 "%s 群的往事有点沉了，我把 %d 条淡去的回忆轻轻收进了档案室。",
                 group_id,
-                len(archived_lines),
+                len(archived_entries),
             )
 
-        return len(archived_lines)
+        return len(archived_entries)
 
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
 
     def _entry_path(self, group_id: str) -> Path:
-        return self._base_dir / f"{self._safe_name(group_id)}.jsonl"
+        return self._base_dir / f"{self._safe_name(group_id)}.json"
 
     @staticmethod
     def _safe_name(name: str) -> str:
