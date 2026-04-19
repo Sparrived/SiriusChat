@@ -637,6 +637,7 @@ class EmotionalGroupChatEngine:
             # Execute skills and collect results
             skill_results: list[str] = []
             from sirius_chat.memory.user.models import UserProfile
+            caller_user_id = item.user_id
             skill_caller = UserProfile(
                 user_id=caller_user_id,
                 name=caller_entry.profile.name if caller_entry else caller_user_id,
