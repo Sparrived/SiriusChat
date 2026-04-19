@@ -405,9 +405,15 @@ class EmotionalGroupChatEngine:
                     logger.warning("Proactive check failed for %s: %s", group_id, exc)
 
     async def _bg_memory_promoter(self) -> None:
-        """Periodically promote high-importance working memory entries to episodic."""
+        """Periodically promote high-importance working memory entries to episodic.
+
+        Only human messages and final assistant replies are promoted.
+        Intermediate skill turns (importance==0.3) and system messages are skipped.
+        Each entry is promoted at most once, tracked by entry_id.
+        """
         interval = self.config.get("memory_promote_interval_seconds", 300)
         threshold = self.config.get("working_memory_promote_threshold", 0.3)
+        promoted_ids: set[str] = set()
         promoted = 0
         while self._bg_running:
             await asyncio.sleep(interval)
@@ -415,6 +421,15 @@ class EmotionalGroupChatEngine:
                 for group_id in self.working_memory.list_groups():
                     entries = self.working_memory.get_recent_entries(group_id, n=100)
                     for entry in entries:
+                        # Skip already-promoted entries
+                        if entry.entry_id in promoted_ids:
+                            continue
+                        # Skip system messages (skill results, etc.)
+                        if entry.role == "system":
+                            continue
+                        # Skip intermediate assistant turns (exactly 0.3)
+                        if entry.role == "assistant" and entry.importance <= threshold:
+                            continue
                         if entry.importance >= threshold:
                             self.episodic_memory.add_event(
                                 group_id=group_id,
@@ -423,6 +438,7 @@ class EmotionalGroupChatEngine:
                                 emotion_valence=0.0,
                                 importance=entry.importance,
                             )
+                            promoted_ids.add(entry.entry_id)
                             promoted += 1
                 if promoted > 0:
                     self._log_inner_thought(f"整理了一下记忆，把 {promoted} 条重要的对话收进了长久记忆里。")
