@@ -1534,21 +1534,49 @@ class EmotionalGroupChatEngine:
         )
 
     def _pick_proactive_topic(self, group_id: str) -> str:
-        """Pick a topic from episodic/semantic memory for proactive initiation."""
-        # Try recent episodic events first (newest first)
-        entries = self.episodic_memory.get_entries(group_id, limit=30)
-        for e in reversed(entries):
-            content = e.content.strip()
-            if len(content) > 10 and e.importance >= 0.5:
-                # Truncate very long content
-                return content[:120] if len(content) > 120 else content
-
-        # Fall back to group interest topics
+        """Pick a topic from semantic memory for proactive initiation."""
         group_profile = self.semantic_memory.get_group_profile(group_id)
-        if group_profile and group_profile.interest_topics:
-            return f"聊聊{group_profile.interest_topics[0]}"
+        if group_profile is None:
+            return ""
 
-        return ""
+        # Collect candidate topics from group-level and user-level semantic memory
+        candidates: list[str] = []
+
+        # 1. Group-level interest topics
+        if group_profile.interest_topics:
+            candidates.extend(group_profile.interest_topics)
+
+        # 2. User-level interest graphs (high participation topics)
+        for profile in self.semantic_memory.list_group_user_profiles(group_id):
+            for node in profile.interest_graph:
+                if node.participation >= 0.3 and node.topic:
+                    candidates.append(node.topic)
+
+        # 3. Dominant topic from group norms (if available)
+        dominant = group_profile.group_norms.get("dominant_topic", "")
+        if dominant:
+            candidates.append(dominant)
+
+        if not candidates:
+            return ""
+
+        # Filter out taboo topics
+        taboo = set(group_profile.taboo_topics or [])
+        candidates = [t for t in candidates if t not in taboo]
+
+        if not candidates:
+            return ""
+
+        # Deduplicate while preserving order (first occurrence = higher relevance)
+        seen: set[str] = set()
+        unique: list[str] = []
+        for t in candidates:
+            if t not in seen:
+                seen.add(t)
+                unique.append(t)
+
+        # Pick the first (highest-relevance) topic
+        return unique[0]
 
     def _build_proactive_prompt(self, trigger: dict[str, Any], group_id: str):
         """Build prompt bundle for proactive initiation."""
