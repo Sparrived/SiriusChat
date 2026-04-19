@@ -71,14 +71,8 @@ class TestE2ESilentStrategy:
             [p], "chat_group",
         )
 
-        if result["strategy"] == "silent":
-            # Should be added to the silent message buffer
-            assert len(engine._silent_message_buffer) >= 1
-            buffered = engine._silent_message_buffer[-1]
-            assert buffered["group_id"] == "chat_group"
-            assert buffered["message"] == "嗯"
-            assert "emotion" in buffered
-            assert "timestamp" in buffered
+        # Silent strategy simply returns without reply; no buffer is maintained
+        # since surface-thought generation has been removed.
 
 
 class TestE2EDelayedResponse:
@@ -320,7 +314,7 @@ class TestE2EBackgroundTasks:
         )
         engine.start_background_tasks()
         assert engine._bg_running is True
-        assert len(engine._bg_tasks) == 7
+        assert len(engine._bg_tasks) == 4
 
         engine.stop_background_tasks()
         assert engine._bg_running is False

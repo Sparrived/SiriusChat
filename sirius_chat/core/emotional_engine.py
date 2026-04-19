@@ -192,9 +192,6 @@ class EmotionalGroupChatEngine:
         self._bg_tasks: set[asyncio.Task] = set()
         self._bg_running = False
 
-        # Silent message buffer (for background surface thought generation)
-        self._silent_message_buffer: list[dict[str, Any]] = []
-
     # ==================================================================
     # Public API
     # ==================================================================
@@ -358,9 +355,7 @@ class EmotionalGroupChatEngine:
             asyncio.create_task(self._bg_proactive_checker(), name="proactive_check"),
             asyncio.create_task(self._bg_memory_promoter(), name="memory_promote"),
             asyncio.create_task(self._bg_consolidator(), name="consolidator"),
-            asyncio.create_task(self._bg_silent_thought_generator(), name="silent_thought"),
-            asyncio.create_task(self._bg_autobiography_polisher(), name="autobiography_polish"),
-            asyncio.create_task(self._bg_self_reflection(), name="self_reflection"),
+
         ]
         for t in tasks:
             self._bg_tasks.add(t)
@@ -503,204 +498,6 @@ class EmotionalGroupChatEngine:
 
             self.semantic_memory.save_user_profile(group_id, profile)
 
-    # ------------------------------------------------------------------
-    # Background: silent message surface thought generation (Phase 5)
-    # ------------------------------------------------------------------
-
-    async def _bg_silent_thought_generator(self) -> None:
-        """Periodically generate surface thoughts for silent messages."""
-        interval = self.config.get("silent_thought_interval_seconds", 30)
-        batch_size = self.config.get("silent_thought_batch_size", 5)
-        while self._bg_running:
-            await asyncio.sleep(interval)
-            try:
-                if not self._silent_message_buffer:
-                    continue
-                self._log_inner_thought("有些消息我虽然没回，但心里一直在嘀咕...")
-                # Process up to batch_size messages
-                batch = self._silent_message_buffer[:batch_size]
-                self._silent_message_buffer = self._silent_message_buffer[batch_size:]
-                for item in batch:
-                    thought = await self._generate_surface_thought(item)
-                    if thought:
-                        self.autobiographical_memory.record_thought(
-                            content=thought,
-                            emotion=EmotionState.from_dict(item.get("emotion", {}))
-                            if item.get("emotion") else None,
-                            trigger_message=item.get("message", ""),
-                            group_id=item.get("group_id"),
-                            reply="",
-                            depth="surface",
-                        )
-            except Exception as exc:
-                logger.warning("Silent thought generation failed: %s", exc)
-
-    async def _generate_surface_thought(self, item: dict[str, Any]) -> str | None:
-        """Generate a brief inner monologue for a silent message.
-
-        Uses the lightweight cognition model (cheap, fast).
-        """
-        if self.provider_async is None:
-            return None
-
-        persona_prompt = ""
-        if self.persona:
-            persona_prompt = self.persona.build_system_prompt()
-
-        prompt = (
-            f"{persona_prompt}\n\n"
-            f"[当前场景]\n"
-            f"群里有人发了一条消息，但你决定不回复。\n\n"
-            f"[消息] {item.get('message', '')}\n\n"
-            f"请用一句话写下你看到这条消息时的内心反应（第一人称，自然口语）："
-        )
-
-        from sirius_chat.providers.base import GenerationRequest, LLMProvider
-
-        request = GenerationRequest(
-            model=self._task_models.get("silent_thought", self.config.get("silent_thought_model", self._default_model)),
-            system_prompt=prompt,
-            messages=[],
-            temperature=0.7,
-            max_tokens=128,
-            purpose="silent_thought",
-        )
-
-        if hasattr(self.provider_async, "generate_async"):
-            raw = await self.provider_async.generate_async(request)
-        elif isinstance(self.provider_async, LLMProvider):
-            raw = await asyncio.to_thread(self.provider_async.generate, request)
-        else:
-            return None
-
-        # Clean up: take first sentence, strip quotes
-        thought = raw.strip().split("\n")[0].strip("\"'《》【】")
-        if len(thought) > 200:
-            thought = thought[:200] + "..."
-        return thought if thought else None
-
-    # ------------------------------------------------------------------
-    # Background: autobiography polishing (Phase 6)
-    # ------------------------------------------------------------------
-
-    async def _bg_autobiography_polisher(self) -> None:
-        """Periodically polish surface thoughts into rich ones."""
-        interval = self.config.get("autobiography_polish_interval_seconds", 300)
-        while self._bg_running:
-            await asyncio.sleep(interval)
-            try:
-                surface = self.autobiographical_memory.get_surface_thoughts()
-                if not surface:
-                    continue
-
-                # Build batch prompt
-                lines = []
-                for i, t in enumerate(surface):
-                    lines.append(f"{i+1}. {t['content']}")
-                batch_text = "\n".join(lines)
-
-                prompt = (
-                    f"以下是我（{self.persona.name if self.persona else 'AI'}）看到一些消息时的简短内心反应。"
-                    f"请帮我把每条反应扩写得更具体、更有画面感，保持第一人称。"
-                    f"每条输出一行，格式为「序号. 扩写内容」。\n\n"
-                    f"{batch_text}\n\n"
-                    f"扩写："
-                )
-
-                from sirius_chat.providers.base import GenerationRequest, LLMProvider
-
-                request = GenerationRequest(
-                    model=self._task_models.get("polish", self.config.get("polish_model", self._default_model)),
-                    system_prompt=prompt,
-                    messages=[],
-                    temperature=0.7,
-                    max_tokens=256,
-                    purpose="autobiography_polish",
-                )
-
-                if hasattr(self.provider_async, "generate_async"):
-                    raw = await self.provider_async.generate_async(request)
-                elif isinstance(self.provider_async, LLMProvider):
-                    raw = await asyncio.to_thread(self.provider_async.generate, request)
-                else:
-                    continue
-
-                # Parse results
-                polished = []
-                for line in raw.strip().split("\n"):
-                    line = line.strip()
-                    if not line or "." not in line:
-                        continue
-                    parts = line.split(".", 1)
-                    try:
-                        idx = int(parts[0].strip()) - 1
-                        content = parts[1].strip().strip("\"'")
-                        if 0 <= idx < len(surface):
-                            polished.append({
-                                "entry_id": surface[idx]["entry_id"],
-                                "content": content,
-                            })
-                    except (ValueError, IndexError):
-                        continue
-
-                if polished:
-                    self.autobiographical_memory.apply_polished_thoughts(polished)
-                    self._log_inner_thought("把刚才的一些零碎想法整理了一下，感觉清晰多了。")
-                    logger.debug("Polished %d surface thoughts", len(polished))
-
-            except Exception as exc:
-                logger.warning("Autobiography polishing failed: %s", exc)
-
-    # ------------------------------------------------------------------
-    # Background: self-reflection (Phase 6/7)
-    # ------------------------------------------------------------------
-
-    async def _bg_self_reflection(self) -> None:
-        """Periodically generate self-reflection from recent experiences."""
-        interval = self.config.get("self_reflection_interval_seconds", 1800)
-        while self._bg_running:
-            await asyncio.sleep(interval)
-            try:
-                context = self.autobiographical_memory.build_reflection_context()
-                if not context:
-                    continue
-
-                prompt = (
-                    f"以下是我（{self.persona.name if self.persona else 'AI'}）最近的经历和内心反应：\n\n"
-                    f"{context}\n\n"
-                    f"请用第一人称写一段简短的自我反思（50~100字）："
-                    f"- 你对最近发生的事有什么感受？"
-                    f"- 你觉得自己有什么变化？"
-                    f"- 有什么未解决的情绪？"
-                )
-
-                from sirius_chat.providers.base import GenerationRequest, LLMProvider
-
-                request = GenerationRequest(
-                    model=self._task_models.get("reflection", self.config.get("reflection_model", self._default_model)),
-                    system_prompt=prompt,
-                    messages=[],
-                    temperature=0.8,
-                    max_tokens=256,
-                    purpose="self_reflection",
-                )
-
-                if hasattr(self.provider_async, "generate_async"):
-                    raw = await self.provider_async.generate_async(request)
-                elif isinstance(self.provider_async, LLMProvider):
-                    raw = await asyncio.to_thread(self.provider_async.generate, request)
-                else:
-                    continue
-
-                reflection = raw.strip()
-                if reflection:
-                    self.autobiographical_memory.update_reflection(reflection)
-                    self._log_inner_thought("最近的事情让我有些感触，偷偷写进了日记里...")
-                    logger.debug("Self-reflection updated: %s...", reflection[:60])
-
-            except Exception as exc:
-                logger.warning("Self-reflection failed: %s", exc)
-
     async def proactive_check(
         self,
         group_id: str,
@@ -824,6 +621,16 @@ class EmotionalGroupChatEngine:
             if not calls or self._skill_registry is None or self._skill_executor is None:
                 break
 
+            # If all called skills are silent, skip the re-generation round
+            all_silent = True
+            for skill_name, _ in calls:
+                skill_def = self._skill_registry.get(skill_name)
+                if skill_def is None or not skill_def.silent:
+                    all_silent = False
+                    break
+            if all_silent:
+                break
+
             # Execute skills and collect results
             skill_results: list[str] = []
             from sirius_chat.memory.user.models import UserProfile
@@ -862,6 +669,14 @@ class EmotionalGroupChatEngine:
                         skill_results.append(
                             f"[SKILL '{skill_name}' 结果] {result.to_display_text()}"
                         )
+                        # Auto-persist glossary terms from learn_term
+                        if skill_name == "learn_term":
+                            term = params.get("term", "")
+                            definition = params.get("definition", "")
+                            if term and definition:
+                                self.autobiographical_memory.add_glossary_term(
+                                    term, definition, source="skill"
+                                )
                     else:
                         err = result.error or "未知错误"
                         logger.warning("SKILL '%s' 执行失败: %s", skill_name, err)
@@ -1179,16 +994,6 @@ class EmotionalGroupChatEngine:
             enable_semantic=self.config.get("enable_semantic_retrieval", False),
         )
 
-        # Phase 4: Emotional resonance retrieval (联想层)
-        # When current emotion is similar to a past experience, surface it
-        resonant = self.autobiographical_memory.retrieve_emotionally_resonant(
-            emotion=emotion,
-            top_k=self.config.get("emotional_resonance_top_k", 3),
-            threshold=self.config.get("emotional_resonance_threshold", 0.3),
-        )
-        if resonant:
-            memories.extend(resonant)
-
         return intent, emotion, memories, empathy
 
     def _decision(
@@ -1314,6 +1119,9 @@ class EmotionalGroupChatEngine:
                         "aliases": entry.profile.aliases,
                         "qq_id": qq_id or uid,
                     })
+            glossary = self.autobiographical_memory.build_glossary_prompt_section(
+                text=message.content, max_terms=5
+            )
             bundle = self.response_assembler.assemble(
                 message=message,
                 intent=intent,
@@ -1329,6 +1137,7 @@ class EmotionalGroupChatEngine:
                 is_group_chat=is_group_chat,
                 recent_participants=recent_participants if recent_participants else None,
                 caller_is_developer=caller_is_developer,
+                glossary_section=glossary,
             )
             style = self.style_adapter.adapt(
                 heat_level=rhythm.heat_level,
@@ -1366,6 +1175,16 @@ class EmotionalGroupChatEngine:
                 calls = parse_skill_calls(say)
                 if not calls or self._skill_registry is None or self._skill_executor is None:
                     # No more skill calls — finalize
+                    break
+
+                # If all called skills are silent, skip the re-generation round
+                all_silent = True
+                for skill_name, _ in calls:
+                    skill_def = self._skill_registry.get(skill_name)
+                    if skill_def is None or not skill_def.silent:
+                        all_silent = False
+                        break
+                if all_silent:
                     break
 
                 # Extract non-skill text as a partial reply to send immediately
@@ -1412,6 +1231,14 @@ class EmotionalGroupChatEngine:
                             skill_results.append(
                                 f"[SKILL '{skill_name}' 结果] {result.to_display_text()}"
                             )
+                            # Auto-persist glossary terms from learn_term
+                            if skill_name == "learn_term":
+                                term = params.get("term", "")
+                                definition = params.get("definition", "")
+                                if term and definition:
+                                    self.autobiographical_memory.add_glossary_term(
+                                        term, definition, source="skill"
+                                    )
                         else:
                             err = result.error or "未知错误"
                             logger.warning("SKILL '%s' 执行失败: %s", skill_name, err)
@@ -1500,20 +1327,6 @@ class EmotionalGroupChatEngine:
                 "emotion": emotion.to_dict(),
                 "intent": intent.to_dict(),
             }
-
-        # SILENT or PROACTIVE: queue for background surface thought generation
-        if decision.strategy == ResponseStrategy.SILENT:
-            self._log_inner_thought("这次我就静静看着吧，在心里默默消化这条消息。")
-            self._silent_message_buffer.append({
-                "group_id": group_id,
-                "message": message.content,
-                "user_id": message.speaker or "unknown",
-                "emotion": emotion.to_dict(),
-                "timestamp": _now_iso(),
-            })
-            # Keep buffer bounded
-            if len(self._silent_message_buffer) > 100:
-                self._silent_message_buffer = self._silent_message_buffer[-100:]
 
         return {
             "strategy": decision.strategy.value,
@@ -1648,19 +1461,27 @@ class EmotionalGroupChatEngine:
             for idx, item in enumerate(items, 1):
                 lines.append(f"{idx}. {item.message_content}")
             message_content = "\n".join(lines)
+        glossary = self.autobiographical_memory.build_glossary_prompt_section(
+            text=message_content, max_terms=5
+        )
         return self.response_assembler.assemble_delayed(
             message_content=message_content,
             group_profile=self.semantic_memory.get_group_profile(group_id),
             is_group_chat=True,
+            glossary_section=glossary,
         )
 
     def _build_proactive_prompt(self, trigger: dict[str, Any], group_id: str):
         """Build prompt bundle for proactive initiation."""
+        glossary = self.autobiographical_memory.build_glossary_prompt_section(
+            text=trigger.get("trigger_type", ""), max_terms=3
+        )
         return self.response_assembler.assemble_proactive(
             trigger_reason=trigger.get("trigger_type", "silence"),
             group_profile=self.semantic_memory.get_group_profile(group_id),
             suggested_tone=trigger.get("suggested_tone", "casual"),
             is_group_chat=True,
+            glossary_section=glossary,
         )
 
     async def _generate(
@@ -1810,6 +1631,14 @@ class EmotionalGroupChatEngine:
                     skill_results.append(
                         f"[SKILL '{skill_name}' 结果] {result.to_display_text()}"
                     )
+                    # Auto-persist glossary terms from learn_term
+                    if skill_name == "learn_term":
+                        term = params.get("term", "")
+                        definition = params.get("definition", "")
+                        if term and definition:
+                            self.autobiographical_memory.add_glossary_term(
+                                term, definition, source="skill"
+                            )
                 else:
                     skill_results.append(f"[SKILL '{skill_name}' 失败] {result.error or '未知错误'}")
             except Exception as exc:

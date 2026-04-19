@@ -292,6 +292,30 @@ class AutobiographicalMemoryManager:
         """Build a compact diary section for injection into LLM prompts."""
         return self._self_memory.build_diary_prompt_section(keywords)
 
+    def build_glossary_prompt_section(
+        self,
+        text: str = "",
+        max_terms: int = 5,
+    ) -> str:
+        """Build a compact glossary section for injection into LLM prompts."""
+        return self._self_memory.build_glossary_prompt_section(text, max_terms)
+
+    def add_glossary_term(self, term: str, definition: str, source: str = "user") -> None:
+        """Add or update a glossary term."""
+        from sirius_chat.memory.self.models import GlossaryTerm
+        from datetime import datetime, timezone
+        gterm = GlossaryTerm(
+            term=term,
+            definition=definition,
+            source=source,
+            first_seen_at=datetime.now(timezone.utc).isoformat(),
+            last_updated_at=datetime.now(timezone.utc).isoformat(),
+            confidence=0.9 if source == "user" else 0.6,
+        )
+        self._self_memory.add_or_update_term(gterm)
+        # Persist immediately
+        self._file_store.save(self._self_memory.state)
+
     def build_self_prompt_section(self) -> str:
         """Build a self-concept section for injection into LLM prompts."""
         lines: list[str] = ["[我是谁]"]

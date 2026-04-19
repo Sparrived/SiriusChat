@@ -222,6 +222,7 @@ class SkillRegistry:
         description = str(meta.get("description", "")).strip()
         version = str(meta.get("version", "1.0.0")).strip()
         developer_only = bool(meta.get("developer_only", False))
+        silent = bool(meta.get("silent", False))
         if not name:
             name = file_path.stem
         if not description:
@@ -261,6 +262,7 @@ class SkillRegistry:
             parameters=parameters,
             version=version,
             developer_only=developer_only,
+            silent=silent,
             source_path=file_path,
             _run_func=run_func,
         )

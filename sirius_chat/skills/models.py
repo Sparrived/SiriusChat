@@ -172,6 +172,7 @@ class SkillDefinition:
     parameters: list[SkillParameter] = field(default_factory=list)
     version: str = "1.0.0"
     developer_only: bool = False
+    silent: bool = False
     source_path: Path | None = None
     _run_func: Callable[..., Any] | None = field(default=None, repr=False)
 

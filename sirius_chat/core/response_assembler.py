@@ -188,6 +188,7 @@ class ResponseAssembler:
         is_group_chat: bool = False,
         recent_participants: list[dict[str, Any]] | None = None,
         caller_is_developer: bool = False,
+        glossary_section: str = "",
     ) -> PromptBundle:
         """Build a structured prompt for response generation.
 
@@ -257,6 +258,10 @@ class ResponseAssembler:
             skill_desc = self._build_skill_descriptions(caller_is_developer=caller_is_developer)
             if skill_desc:
                 sections.append(skill_desc)
+
+        # 7b. Glossary (terms mentioned in current message)
+        if glossary_section:
+            sections.append(glossary_section)
 
         # 8. Dual-output format (inner monologue + spoken reply)
         if self.enable_dual_output:
@@ -532,6 +537,7 @@ class ResponseAssembler:
         heat_level: str = "warm",
         pace: str = "steady",
         is_group_chat: bool = False,
+        glossary_section: str = "",
     ) -> PromptBundle:
         """Build prompt for a delayed response (topic-gap trigger)."""
         if style_params is None:
@@ -571,6 +577,7 @@ class ResponseAssembler:
         group_profile: GroupSemanticProfile | None,
         suggested_tone: str = "casual",
         is_group_chat: bool = False,
+        glossary_section: str = "",
     ) -> PromptBundle:
         """Build prompt for proactive initiation."""
         identity = (
@@ -588,6 +595,8 @@ class ResponseAssembler:
         if group_profile and group_profile.interest_topics:
             topics = ", ".join(group_profile.interest_topics[:3])
             sections.append(f"[群体兴趣] {topics}")
+        if glossary_section:
+            sections.append(glossary_section)
         # Dual-output format so the model follows the same think+say pattern
         if self.enable_dual_output:
             sections.append(self._build_output_format())
