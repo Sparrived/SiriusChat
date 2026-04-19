@@ -129,33 +129,38 @@ class WorkingMemoryManager:
     def _manage_window(self, group_id: str) -> list[WorkingMemoryEntry]:
         """Truncate window if it exceeds max_size.
 
+        Protected entries are kept first; remaining slots are filled with
+        the newest entries by timestamp (FIFO).  This preserves the most
+        recent conversation context regardless of importance.
+
         Returns list of removed entries that should be promoted to episodic memory.
         """
         window = self._windows.get(group_id, [])
         if len(window) <= self.max_size:
             return []
 
-        # Sort by (importance desc, timestamp desc), but protect protected entries
-        sorted_entries = sorted(
-            window,
-            key=lambda e: (1 if e.protected else 0, e.importance, e.timestamp),
-            reverse=True,
-        )
+        # Separate protected and normal entries
+        protected = [e for e in window if e.protected]
+        normal = [e for e in window if not e.protected]
 
-        keep_ids = {e.entry_id for e in sorted_entries[: self.max_size]}
-        kept: list[WorkingMemoryEntry] = []
-        promoted: list[WorkingMemoryEntry] = []
-        discarded: list[WorkingMemoryEntry] = []
+        # Sort normal entries by timestamp desc (newest first)
+        normal_sorted = sorted(normal, key=lambda e: e.timestamp, reverse=True)
 
-        for e in window:
-            if e.entry_id in keep_ids:
-                kept.append(e)
-            elif e.importance >= PROMOTE_THRESHOLD:
-                promoted.append(e)
-            else:
-                discarded.append(e)
+        # Determine how many slots are available for normal entries
+        slots_for_normal = self.max_size - len(protected)
+        if slots_for_normal < 0:
+            # Too many protected entries; keep only the newest protected
+            protected_kept = sorted(protected, key=lambda e: e.timestamp, reverse=True)[:self.max_size]
+            removed = normal + sorted(protected, key=lambda e: e.timestamp, reverse=True)[self.max_size:]
+            kept = protected_kept
+        else:
+            kept = protected + normal_sorted[:slots_for_normal]
+            removed = normal_sorted[slots_for_normal:]
 
         self._windows[group_id] = kept
+
+        promoted = [e for e in removed if e.importance >= PROMOTE_THRESHOLD]
+        discarded = [e for e in removed if e.importance < PROMOTE_THRESHOLD]
 
         if promoted:
             logger.debug(

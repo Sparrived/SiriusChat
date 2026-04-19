@@ -575,6 +575,7 @@ class EmotionalGroupChatEngine:
 
         # Record reply timestamp for cooldown tracking
         self._last_reply_at[group_id] = datetime.now(timezone.utc).timestamp()
+        self._persist_group_state(group_id)
 
         return {
             "strategy": "proactive",
@@ -740,6 +741,7 @@ class EmotionalGroupChatEngine:
 
         # Record reply timestamp for cooldown tracking (once per tick)
         self._last_reply_at[group_id] = datetime.now(timezone.utc).timestamp()
+        self._persist_group_state(group_id)
 
         # Emit events for all triggered items but return only one result
         for item in triggered:
@@ -761,8 +763,26 @@ class EmotionalGroupChatEngine:
     # Persistence
     # ==================================================================
 
-    def save_state(self) -> None:
-        """Persist all runtime state to disk."""
+    def _persist_group_state(self, group_id: str) -> None:
+        """Persist working memory and timestamps for a single group in real-time."""
+        entries = self.working_memory.get_recent_entries(group_id, n=100)
+        self._state_store.save_working_memory(
+            group_id,
+            [
+                {
+                    "user_id": e.user_id,
+                    "role": e.role,
+                    "content": e.content,
+                    "timestamp": e.timestamp,
+                    "importance": e.importance,
+                }
+                for e in entries
+            ],
+        )
+        self._state_store.save_group_timestamps(dict(self._group_last_message_at))
+
+    def _persist_full_state(self) -> None:
+        """Persist all runtime state to disk (used on graceful shutdown)."""
         working_memories: dict[str, list[dict[str, Any]]] = {}
         for group_id in self.working_memory.list_groups():
             entries = self.working_memory.get_recent_entries(group_id, n=100)
@@ -793,6 +813,10 @@ class EmotionalGroupChatEngine:
         from sirius_chat.core.persona_store import PersonaStore
         PersonaStore.save(self.work_path, self.persona)
 
+    def save_state(self) -> None:
+        """Persist all runtime state to disk."""
+        self._persist_full_state()
+
     def load_state(self) -> None:
         """Restore runtime state from disk."""
         try:
@@ -807,6 +831,7 @@ class EmotionalGroupChatEngine:
                         role=e.get("role", "human"),
                         content=e.get("content", ""),
                         importance=e.get("importance", 0.5),
+                        timestamp=e.get("timestamp"),
                     )
 
             # Assistant emotion
@@ -986,6 +1011,7 @@ class EmotionalGroupChatEngine:
 
         # Update group last message time
         self._group_last_message_at[group_id] = _now_iso()
+        self._persist_group_state(group_id)
 
     async def _cognition(
         self,
@@ -1307,6 +1333,7 @@ class EmotionalGroupChatEngine:
 
             # Record reply timestamp for cooldown tracking
             self._last_reply_at[group_id] = datetime.now(timezone.utc).timestamp()
+            self._persist_group_state(group_id)
 
             return {
                 "strategy": "immediate",
@@ -1329,6 +1356,7 @@ class EmotionalGroupChatEngine:
                 channel=message.channel,
                 channel_user_id=message.channel_user_id,
             )
+            self._persist_group_state(group_id)
             return {
                 "strategy": "delayed",
                 "reply": None,
@@ -1336,6 +1364,7 @@ class EmotionalGroupChatEngine:
                 "intent": intent.to_dict(),
             }
 
+        self._persist_group_state(group_id)
         return {
             "strategy": decision.strategy.value,
             "reply": None,
