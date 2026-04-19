@@ -38,6 +38,7 @@ from sirius_chat.memory.working.manager import WorkingMemoryManager
 from sirius_chat.core.events import SessionEvent, SessionEventBus, SessionEventType
 from sirius_chat.models.emotion import AssistantEmotionState, EmotionState
 from sirius_chat.models.intent_v3 import IntentAnalysisV3
+from sirius_chat.skills.executor import strip_skill_calls
 from sirius_chat.models.models import Message, Participant, Transcript
 from sirius_chat.models.response_strategy import ResponseStrategy, StrategyDecision
 
@@ -754,6 +755,17 @@ class EmotionalGroupChatEngine:
             },
         ))
 
+        # Record assistant reply into working memory so future turns can see it
+        clean_reply = strip_skill_calls(reply).strip()
+        if clean_reply:
+            self.working_memory.add_entry(
+                group_id=group_id,
+                user_id="assistant",
+                role="assistant",
+                content=clean_reply,
+                importance=0.6,
+            )
+
         # Record reply timestamp for cooldown tracking
         self._last_reply_at[group_id] = datetime.now(timezone.utc).timestamp()
 
@@ -869,6 +881,17 @@ class EmotionalGroupChatEngine:
                     f"[继续] 请基于以上技能执行结果，继续完成你的回复。"
                 ),
             })
+
+        # Record assistant reply into working memory so future turns can see it
+        clean_reply = strip_skill_calls(reply).strip()
+        if clean_reply:
+            self.working_memory.add_entry(
+                group_id=group_id,
+                user_id="assistant",
+                role="assistant",
+                content=clean_reply,
+                importance=0.6,
+            )
 
         # Record reply timestamp for cooldown tracking (once per tick)
         self._last_reply_at[group_id] = datetime.now(timezone.utc).timestamp()
@@ -1369,6 +1392,17 @@ class EmotionalGroupChatEngine:
                     group_id=group_id,
                     reply=say,
                     depth="rich",
+                )
+
+            # Record assistant reply into working memory so future turns can see it
+            clean_reply = strip_skill_calls(say).strip()
+            if clean_reply:
+                self.working_memory.add_entry(
+                    group_id=group_id,
+                    user_id="assistant",
+                    role="assistant",
+                    content=clean_reply,
+                    importance=0.6,
                 )
 
             # Record reply timestamp for cooldown tracking
