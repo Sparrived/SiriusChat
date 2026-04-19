@@ -981,6 +981,7 @@ class EmotionalGroupChatEngine:
             channel=message.channel or "",
             channel_user_id=message.channel_user_id or "",
             importance=importance,
+            multimodal_inputs=list(message.multimodal_inputs) if message.multimodal_inputs else None,
         )
 
         # Update group last message time
@@ -1722,12 +1723,30 @@ class EmotionalGroupChatEngine:
 
         The most recent entry (the current message just added by perception)
         is included so the caller can decide whether to keep or replace it.
+        Supports multimodal inputs (image URLs) when present.
         """
         entries = self.working_memory.get_recent_entries(group_id, n=n)
         messages: list[dict[str, Any]] = []
         for e in entries:
             role = "user" if e.role == "human" else e.role
-            msg: dict[str, Any] = {"role": role, "content": e.content}
+            msg: dict[str, Any] = {"role": role}
+            # Build content: str for text-only, list for multimodal
+            image_inputs = [
+                item for item in e.multimodal_inputs
+                if item.get("type") == "image" and item.get("value")
+            ]
+            if image_inputs and role == "user":
+                content_parts: list[dict[str, object]] = [
+                    {"type": "text", "text": e.content or ""},
+                ]
+                for img in image_inputs:
+                    content_parts.append({
+                        "type": "image_url",
+                        "image_url": {"url": str(img["value"])},
+                    })
+                msg["content"] = content_parts
+            else:
+                msg["content"] = e.content
             if role == "user":
                 # Prefer channel_user_id (QQ number) because it is pure digits
                 # and always fits OpenAI's name constraints (a-zA-Z0-9_-).

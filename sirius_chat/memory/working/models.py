@@ -28,6 +28,8 @@ class WorkingMemoryEntry:
     # Source metadata
     channel: str = ""
     channel_user_id: str = ""
+    # Multimodal inputs (image URLs, etc.)
+    multimodal_inputs: list[dict[str, str]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -43,6 +45,7 @@ class WorkingMemoryEntry:
             "mentioned_user_ids": self.mentioned_user_ids,
             "channel": self.channel,
             "channel_user_id": self.channel_user_id,
+            "multimodal_inputs": list(self.multimodal_inputs),
         }
 
     @classmethod
@@ -60,4 +63,8 @@ class WorkingMemoryEntry:
             mentioned_user_ids=list(data.get("mentioned_user_ids", [])),
             channel=data.get("channel", ""),
             channel_user_id=data.get("channel_user_id", ""),
+            multimodal_inputs=[
+                dict(item) for item in data.get("multimodal_inputs", [])
+                if isinstance(item, dict)
+            ],
         )

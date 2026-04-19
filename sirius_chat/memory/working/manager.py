@@ -48,6 +48,7 @@ class WorkingMemoryManager:
         channel: str = "",
         channel_user_id: str = "",
         timestamp: str | None = None,
+        multimodal_inputs: list[dict[str, str]] | None = None,
     ) -> WorkingMemoryEntry:
         """Add an entry to a group's working memory and manage the window."""
         gid = group_id or "default"
@@ -63,6 +64,10 @@ class WorkingMemoryManager:
             emotion_state=dict(emotion_state or {}),
             channel=channel,
             channel_user_id=channel_user_id,
+            multimodal_inputs=[
+                dict(item) for item in (multimodal_inputs or [])
+                if isinstance(item, dict)
+            ],
         )
 
         if gid not in self._windows:
