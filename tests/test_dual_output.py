@@ -27,8 +27,8 @@ class TestParseDualOutput:
         raw = "<think>只是想想</think>"
         think, say = ResponseAssembler.parse_dual_output(raw)
         assert think == "只是想想"
-        # When only <think> is present, fallback to think content as say
-        assert say == "只是想想"
+        # Only <think> without <say> means model forgot the say tag; say stays empty
+        assert say == ""
 
     def test_multiline_content(self):
         raw = "<think>\n这用户挺有意思的\n让我想想怎么回\n</think>\n<say>\n你好呀！\n很高兴见到你\n</say>"

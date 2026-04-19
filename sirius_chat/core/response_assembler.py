@@ -493,11 +493,6 @@ class ResponseAssembler:
             else:
                 say = raw.strip()
 
-        # If say is still empty but think exists, use think as fallback
-        # (model sometimes outputs only <think> with actionable content)
-        if not say and think:
-            say = think
-
         return think, say
 
     @staticmethod
