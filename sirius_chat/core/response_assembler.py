@@ -553,6 +553,7 @@ class ResponseAssembler:
         suggested_tone: str = "casual",
         is_group_chat: bool = False,
         glossary_section: str = "",
+        topic_context: str = "",
     ) -> PromptBundle:
         """Build prompt for proactive initiation."""
         identity = (
@@ -565,6 +566,10 @@ class ResponseAssembler:
             f"[触发原因] {trigger_reason}",
             f"[语气] {suggested_tone}",
         ]
+        if topic_context:
+            sections.append(
+                f"[话题建议] 你可以基于这段群聊记忆自然地开启话题：{topic_context}"
+            )
         if is_group_chat:
             sections.append("[长度要求] 群聊请用 3-10 字的短句回复，像真实群友一样自然接话。")
         if group_profile and group_profile.interest_topics:
@@ -579,4 +584,4 @@ class ResponseAssembler:
         system_prompt = "\n\n".join(sections)
         # Proactive has no explicit user message; the engine will append an
         # empty user message if no history ends with a user turn.
-        return PromptBundle(system_prompt=system_prompt, user_content="")
+        return PromptBundle(system_prompt=system_prompt, user_content=topic_context or "...")

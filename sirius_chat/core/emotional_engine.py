@@ -1533,17 +1533,36 @@ class EmotionalGroupChatEngine:
             glossary_section=glossary,
         )
 
+    def _pick_proactive_topic(self, group_id: str) -> str:
+        """Pick a topic from episodic/semantic memory for proactive initiation."""
+        # Try recent episodic events first (newest first)
+        entries = self.episodic_memory.get_entries(group_id, limit=30)
+        for e in reversed(entries):
+            content = e.content.strip()
+            if len(content) > 10 and e.importance >= 0.5:
+                # Truncate very long content
+                return content[:120] if len(content) > 120 else content
+
+        # Fall back to group interest topics
+        group_profile = self.semantic_memory.get_group_profile(group_id)
+        if group_profile and group_profile.interest_topics:
+            return f"聊聊{group_profile.interest_topics[0]}"
+
+        return ""
+
     def _build_proactive_prompt(self, trigger: dict[str, Any], group_id: str):
         """Build prompt bundle for proactive initiation."""
         glossary = self.autobiographical_memory.build_glossary_prompt_section(
             text=trigger.get("trigger_type", ""), max_terms=3
         )
+        topic = self._pick_proactive_topic(group_id)
         return self.response_assembler.assemble_proactive(
             trigger_reason=trigger.get("trigger_type", "silence"),
             group_profile=self.semantic_memory.get_group_profile(group_id),
             suggested_tone=trigger.get("suggested_tone", "casual"),
             is_group_chat=True,
             glossary_section=glossary,
+            topic_context=topic,
         )
 
     async def _generate(
