@@ -70,6 +70,11 @@ class DelayedResponseQueue:
         Returns items that should be triggered now.
         """
         queue = self._queues.get(group_id, [])
+        pending = [i for i in queue if i.status == "pending"]
+        logger.debug(
+            "Ticking delayed queue for group %s: %d total, %d pending",
+            group_id, len(queue), len(pending),
+        )
         if not queue:
             return []
 
@@ -121,17 +126,28 @@ class DelayedResponseQueue:
         recent_messages: list[dict[str, Any]],
     ) -> str:
         """Evaluate whether to trigger, cancel, or keep waiting."""
+        now = datetime.now(timezone.utc)
+
         # Check if window expired
         enqueue_dt = _parse_iso(item.enqueue_time)
         if enqueue_dt:
-            elapsed = (datetime.now(timezone.utc) - enqueue_dt).total_seconds()
+            elapsed = (now - enqueue_dt).total_seconds()
             if elapsed >= item.window_seconds:
+                logger.debug(
+                    "Delayed item %s triggered (window expired: %.1fs >= %.1fs)",
+                    item.item_id, elapsed, item.window_seconds,
+                )
                 return "trigger"
+            logger.debug(
+                "Delayed item %s waiting (elapsed %.1fs < window %.1fs)",
+                item.item_id, elapsed, item.window_seconds,
+            )
 
         # Check if problem solved (cancel)
         for msg in recent_messages:
             content = str(msg.get("content", ""))
             if any(kw in content for kw in _CANCEL_KEYWORDS):
+                logger.debug("Delayed item %s cancelled (keyword match)", item.item_id)
                 return "cancel"
 
         # Check for topic gap (trigger)
@@ -139,9 +155,17 @@ class DelayedResponseQueue:
             last_msg_time = recent_messages[-1].get("timestamp", "")
             last_dt = _parse_iso(last_msg_time)
             if last_dt:
-                gap = (datetime.now(timezone.utc) - last_dt).total_seconds()
+                gap = (now - last_dt).total_seconds()
                 if gap >= _GAP_TRIGGER_SECONDS:
+                    logger.debug(
+                        "Delayed item %s triggered (topic gap: %.1fs >= %.1fs)",
+                        item.item_id, gap, _GAP_TRIGGER_SECONDS,
+                    )
                     return "trigger"
+                logger.debug(
+                    "Delayed item %s waiting (topic gap: %.1fs < %.1fs)",
+                    item.item_id, gap, _GAP_TRIGGER_SECONDS,
+                )
 
         return "wait"
 
