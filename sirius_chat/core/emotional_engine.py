@@ -806,6 +806,13 @@ class EmotionalGroupChatEngine:
             # Group timestamps
             self._group_last_message_at = dict(state.get("group_timestamps", {}))
 
+            # Reset timestamps to now so the proactive silence timer starts fresh
+            # after engine restart; otherwise offline time would be mis-counted as
+            # group silence.
+            now_iso = datetime.now(timezone.utc).isoformat()
+            for gid in list(self._group_last_message_at.keys()):
+                self._group_last_message_at[gid] = now_iso
+
             # Token usage records
             from sirius_chat.config import TokenUsageRecord
             for rec_data in state.get("token_usage_records", []):
@@ -1564,7 +1571,7 @@ class EmotionalGroupChatEngine:
             prompt_tokens=estimated_input_tokens,
             completion_tokens=estimated_output_tokens,
             total_tokens=estimated_input_tokens + estimated_output_tokens,
-            input_chars=len(system_prompt) + len(user_content),
+            input_chars=len(system_prompt) + sum(len(str(m.get("content", ""))) for m in messages),
             output_chars=output_chars,
             estimation_method="char_div4",
             retries_used=0,
