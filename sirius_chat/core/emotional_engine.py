@@ -634,16 +634,6 @@ class EmotionalGroupChatEngine:
             if not calls or self._skill_registry is None or self._skill_executor is None:
                 break
 
-            # If all called skills are silent, skip the re-generation round
-            all_silent = True
-            for skill_name, _ in calls:
-                skill_def = self._skill_registry.get(skill_name)
-                if skill_def is None or not skill_def.silent:
-                    all_silent = False
-                    break
-            if all_silent:
-                break
-
             # Execute skills and collect results
             skill_results: list[str] = []
             skill_multimodal: list[dict[str, Any]] = []
@@ -1208,17 +1198,9 @@ class EmotionalGroupChatEngine:
                     # No more skill calls — finalize
                     break
 
-                # If all called skills are silent, skip the re-generation round
-                all_silent = True
-                for skill_name, _ in calls:
-                    skill_def = self._skill_registry.get(skill_name)
-                    if skill_def is None or not skill_def.silent:
-                        all_silent = False
-                        break
-                if all_silent:
-                    break
-
-                # Extract non-skill text as a partial reply to send immediately
+                # Extract non-skill text as a partial reply to send immediately.
+                # For silent-only skills we still do a re-generation so the model
+                # can synthesize the skill results into a natural reply.
                 non_skill_text = strip_skill_calls(say).strip()
                 if non_skill_text:
                     partial_replies.append(non_skill_text)
