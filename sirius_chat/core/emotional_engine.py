@@ -718,12 +718,12 @@ class EmotionalGroupChatEngine:
                 content=strip_skill_calls(reply),
                 importance=0.3,
             )
-            if results_text:
+            if skill_results:
                 self.working_memory.add_entry(
                     group_id=group_id,
                     user_id="skill_system",
                     role="system",
-                    content=f"[技能执行结果]\n{results_text}",
+                    content=f"[技能执行结果]\n{'\n'.join(skill_results)}",
                     importance=0.3,
                 )
 
@@ -1293,12 +1293,12 @@ class EmotionalGroupChatEngine:
                     content=strip_skill_calls(say),
                     importance=0.3,
                 )
-                if results_text:
+                if skill_results:
                     self.working_memory.add_entry(
                         group_id=group_id,
                         user_id="skill_system",
                         role="system",
-                        content=f"[技能执行结果]\n{results_text}",
+                        content=f"[技能执行结果]\n{'\n'.join(skill_results)}",
                         importance=0.3,
                     )
 
