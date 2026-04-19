@@ -47,7 +47,7 @@ flowchart TD
 - **Legacy 引擎 `AsyncRolePlayEngine` 已归档**到 `sirius_chat/core/_legacy/`，不再作为推荐路径。
 - `sirius_chat/async_engine/` 承担 legacy 兼容导出、提示词与工具函数。
 - `UserMemoryManager` 已改为群隔离布局：`entries` 为 `{group_id: {user_id: UserMemoryEntry}}` 双层字典；旧格式通过迁移脚本自动升级。
-- SKILL runtime 会先加载包内置技能，再加载 workspace `skills/`；同名 workspace 文件覆盖内置实现。
+- SKILL runtime 会先加载包内置技能（`system_info`、`desktop_screenshot`、`learn_term`、`url_content_reader`、`bing_search`），再加载 workspace `skills/`；同名 workspace 文件覆盖内置实现。
 - 用户态记忆、事件记忆、自身记忆、session store、token store 都已经收敛到 workspace 语义下。
 - v1.0.0 新增存储路径：`episodic/`（情景记忆）、`semantic/`（语义记忆）、`engine_state/`（引擎运行态持久化）。
 
@@ -96,7 +96,7 @@ flowchart TD
   subgraph Perception["① 感知层"]
     B --> C1["MessageNormalizer：标准化消息格式\n补全 group_id（默认 'default'）"]
     C1 --> C2["注册参与者到 user_memory（群隔离）"]
-    C2 --> C3["写入 working_memory（按群滑动窗口）"]
+    C2 --> C3["写入 working_memory（按群滑动窗口，含助手回复；动态 importance + sanitized 消息名）"]
     C3 --> C4["更新 group_last_message_at"]
     C4 --> E1["emit PERCEPTION_COMPLETED"]
   end
@@ -118,7 +118,7 @@ flowchart TD
 
   subgraph Execution["④ 执行层"]
     E3 --> G1{"策略？"}
-    G1 -- IMMEDIATE --> G2["ResponseAssembler 返回 PromptBundle\nsystem_prompt（persona + 情绪 + 记忆 + skill + 格式）\nuser_content（当前消息）\n_build_history_messages() 将 working memory 转为标准 messages"]
+    G1 -- IMMEDIATE --> G2["ResponseAssembler 返回 PromptBundle\nsystem_prompt（persona + 情绪 + 记忆 + glossary + skill + 格式）\nuser_content（当前消息）\n_build_history_messages() 将 working memory 转为标准 messages"]
     G1 -- DELAYED --> G3["入 DelayedResponseQueue\n等待话题间隙或合并触发"]
     G1 -- SILENT --> G4["仅更新内部状态\n不生成回复"]
     G1 -- PROACTIVE --> G5["由 ProactiveTrigger 外部触发\n生成自然开场白"]
@@ -126,8 +126,8 @@ flowchart TD
     G6 --> G7["ModelRouter 选模型\n构建 GenerationRequest"]
     G7 --> G8["Provider.generate_async()\n或 sync via asyncio.to_thread"]
     G8 --> G8a["parse_dual_output()\n<think> → 内心独白\n<say> → 说出口的话"]
-    G8a --> G8b["<think> 存入 AutobiographicalMemory\n形成第一人称日记"]
-    G8a --> G9["SKILL 调用解析与执行"]
+    G8a --> G8b["<think> 存入 AutobiographicalMemory\n形成第一人称日记；glossary 术语同步更新"]
+    G8a --> G9["SKILL 调用解析与执行（支持 silent 模式，如 learn_term）"]
     G9 --> G10["Token 追踪记录"]
     G10 --> E4["emit EXECUTION_COMPLETED"]
   end
@@ -181,7 +181,7 @@ flowchart TD
 - **v1.0.0 默认引擎**：`EmotionalGroupChatEngine` 的实现位于 `sirius_chat/core/emotional_engine.py`。
 - `sirius_chat/core/cognition.py`：统一情绪+意图分析器（`CognitionAnalyzer`）。
 - `sirius_chat/core/response_assembler.py`：返回 `PromptBundle`（system_prompt + user_content），负责指令级上下文组装；`<think>` / `<say>` 双输出解析。历史消息由引擎通过 `_build_history_messages()` 独立管理为标准 OpenAI messages。
-- `sirius_chat/memory/autobiographical/`：自传体记忆（第一人称体验记录）。
+- `sirius_chat/memory/autobiographical/`：自传体记忆（第一人称体验记录 + glossary 术语表）。
 - **Legacy 归档**：`AsyncRolePlayEngine` 的实现位于 `sirius_chat/core/_legacy/engine.py`，不再维护新功能。
 
 ---
@@ -271,7 +271,7 @@ flowchart TD
 - `roleplay_prompting.py` 只负责生成、持久化和选择 agent 资产。
 - `WorkspaceRuntime` 不生成人格，只消费已经选中的资产。
 - `RoleplayWorkspaceManager` 是“选中 agent + 更新 workspace 默认值”的组合封装。
-- **v0.28 说明**：`EmotionalGroupChatEngine` 当前不直接消费 roleplay 资产；`ResponseAssembler` 负责构建 `PromptBundle`（system_prompt 注入 persona、情绪、共情、记忆、skill 与输出格式；user_content 为当前消息格式化内容）。历史对话通过 `_build_history_messages()` 从 `working_memory` 提取，转为标准 `user`/`assistant` messages 数组传入 `_generate()`。
+- **v0.28 说明**：`EmotionalGroupChatEngine` 当前不直接消费 roleplay 资产；`ResponseAssembler` 负责构建 `PromptBundle`（system_prompt 注入 persona、情绪、共情、记忆、glossary、skill 与输出格式；user_content 为当前消息格式化内容）。历史对话通过 `_build_history_messages()` 从 `working_memory` 提取，转为标准 `user`/`assistant` messages 数组传入 `_generate()`。
 
 ---
 

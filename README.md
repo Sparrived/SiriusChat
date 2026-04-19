@@ -685,12 +685,12 @@ selected = select_generated_agent_profile(config.work_path, "assistant_v2")
 SKILL 系统支持可扩展任务编排：
 
 - 自动初始化 `skills/` 目录；默认位于 `work_path`，双根布局时位于 `config_root`
-- 内置 `system_info` 与 developer-only 的 `desktop_screenshot` 默认可用；若放置同名 workspace skill，workspace 文件会覆盖内置实现
+- 内置 `system_info`、`learn_term`、`url_content_reader`、`bing_search` 与 developer-only 的 `desktop_screenshot` 默认可用；若放置同名 workspace skill，workspace 文件会覆盖内置实现
 - `desktop_screenshot` 会把“判断主机当前在做什么、屏幕上显示什么”的分析提示一并回传给模型，便于模型在需要时主动截图后再回答
 - 若要使用受限技能，外部至少应显式标记一名 developer：`UserProfile.metadata["is_developer"] = True`
 - 支持外部 Python 技能文件
 - 链式调用与迭代反馈
-- 内置与 workspace SKILL 会共用依赖自动安装流程；`system_info` 会声明 `psutil`，`desktop_screenshot` 会声明 `Pillow`
+- 内置与 workspace SKILL 会共用依赖自动安装流程；`system_info` 声明 `psutil`，`desktop_screenshot` 声明 `Pillow`，`bing_search` 与 `url_content_reader` 声明 `requests` 和 `beautifulsoup4`
 - SKILL 可返回结构化文本块与图片块，框架会把它们作为内部推理通道注入下一轮生成，同时隐藏 `internal_metadata` 等元信息
 - developer-only SKILL 会在非 developer 当前轮次的提示词中自动隐藏，执行时也会再次做权限校验
 - 会话事件流仅暴露 SKILL 状态，不直接暴露内部技能结果正文；外部投递应消费 assistant 回复

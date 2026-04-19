@@ -46,6 +46,7 @@ def run(name: str, **kwargs):
 | `description` | ✅ | 给 AI 看的功能描述，决定 AI 会不会调用它 |
 | `version` | ❌ | 语义化版本 |
 | `developer_only` | ❌ | `True` 时只有开发者身份的用户能调用 |
+| `silent` | ❌ | `True` 时技能结果不追加到回复文本，默认 `False` |
 | `dependencies` | ❌ | 第三方依赖列表，自动安装 |
 | `parameters` | ❌ | 参数 Schema（dict 或 list） |
 
@@ -122,12 +123,15 @@ API：
 
 ## 内置 SKILL
 
-框架自带两个内置 SKILL：
+框架自带以下内置 SKILL：
 
-| SKILL | 权限 | 功能 |
-|-------|------|------|
-| `system_info` | 所有人 | 返回 CPU、内存、磁盘、网络、OS 信息（依赖 `psutil`） |
-| `desktop_screenshot` | **仅开发者** | 截取桌面屏幕（依赖 `Pillow`），返回图片 + 文字摘要 |
+| SKILL | 权限 | 功能 | 备注 |
+|-------|------|------|------|
+| `system_info` | 所有人 | 返回 CPU、内存、磁盘、网络、OS 信息（依赖 `psutil`） | |
+| `desktop_screenshot` | **仅开发者** | 截取桌面屏幕（依赖 `Pillow`），返回图片 + 文字摘要 | |
+| `learn_term` | 所有人 | 将术语、俚语、黑话记录到自传体记忆 glossary | `silent=True`，结果不追加到回复 |
+| `url_content_reader` | 所有人 | 读取指定网页的文本内容 | |
+| `bing_search` | 所有人 | 通过 Bing 搜索网络内容 | |
 
 内置 SKILL 存放在 `sirius_chat/skills/builtin/`，会被自动加载。如果 workspace 的 `skills/` 目录下有同名文件，**workspace 版本会覆盖内置版本**。
 

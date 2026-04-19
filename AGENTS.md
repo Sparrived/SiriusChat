@@ -103,7 +103,7 @@ sirius_chat/
 │   └── middleware/          # 重试、熔断、限流、成本监控中间件
 ├── session/                 # SessionStore 与高层兼容 runner
 ├── skills/                  # SKILL 注册、执行与数据存储
-│   └── builtin/             # 内置技能（system_info、desktop_screenshot）
+│   └── builtin/             # 内置技能（system_info、desktop_screenshot、learn_term、url_content_reader、bing_search）
 ├── token/                   # Token 统计、SQLite 持久化与分析
 ├── workspace/               # 布局、运行时、文件监听、角色资产 bootstrap
 ├── roleplay_prompting.py    # 人格资产生成、持久化与选择
@@ -318,7 +318,7 @@ python scripts/ci_check.py
 ### 记忆架构要点
 
 **三层记忆底座（v0.28 新增）**：
-- **工作记忆（Working）**：按 `group_id` 维护内存中的对话滑动窗口（默认 20 条），按 `(importance, timestamp)` 排序截断，高重要性消息自动晋升到情景记忆。
+- **工作记忆（Working）**：按 `group_id` 维护内存中的对话滑动窗口（默认 20 条），同时记录用户消息与 assistant 回复；按动态 `importance` 与 `timestamp` 排序截断，消息名称经过 sanitized 处理；高重要性消息自动晋升到情景记忆。
 - **情景记忆（Episodic）**：按群存储为 `{group_id}.jsonl`，包含情绪标签、重要性、激活度；支持关键词搜索与批量归档（激活度低于阈值时移入 archive）。
 - **语义记忆（Semantic）**：用户语义画像（兴趣图谱、关系状态、禁忌边界）+ 群体语义画像（氛围历史、群体规范、典型交互风格）。
 
@@ -396,11 +396,13 @@ python scripts/ci_check.py
     │
     ▼
 执行层
-    ├─ ResponseAssembler → PromptBundle（system_prompt：persona + 情绪 + 共情 + 记忆 + skill + 输出格式；user_content：当前消息）
+    ├─ ResponseAssembler → PromptBundle（system_prompt：persona + 情绪 + 共情 + 记忆 + glossary + skill + 输出格式；user_content：当前消息）
     ├─ _build_history_messages() → working_memory 转标准 OpenAI messages（user / assistant / system）
     ├─ StyleAdapter → max_tokens / temperature / tone 动态适配
     ├─ ModelRouter → 任务感知模型选择（urgency / heat / 用户风格）
     └─ LLM 生成回复（provider_async.generate_async / generate），传入标准 messages 数组
+    │
+    ├─ 记录 assistant 回复到 working_memory（含动态 importance 与 sanitized 名称）
     │
     ▼
 后台更新层

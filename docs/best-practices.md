@@ -187,6 +187,10 @@ async def monitor(engine):
 config = {"proactive_silence_minutes": 999999}
 ```
 
-### Q: `<think>` 内容会暴露给用户吗？
+### Q: 助手回复会被记录到工作记忆中吗？
 
-不会。`<think>` 只存入 `AutobiographicalMemoryManager`，用户只收到 `<say>`。
+会。引擎会将 assistant 回复以标准 OpenAI messages 格式写入工作记忆，并赋予动态 importance，供后续上下文使用。
+
+### Q: 如何让 SKILL 结果不显示在回复中？
+
+在 `SKILL_META` 中设置 `silent: true`。此时 SKILL 的执行结果不会追加到回复文本，但会通过 `internal_metadata` 保留在事件数据中，供下游处理。

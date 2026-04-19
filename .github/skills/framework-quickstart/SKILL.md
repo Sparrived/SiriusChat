@@ -62,7 +62,7 @@ description: "当你需要在不通读全部代码的情况下快速理解 Siriu
 
 - 当前推荐入口是 `WorkspaceRuntime`；它负责文件布局、session 恢复、participants 写回、watcher 热刷新和 provider 注册表联动。
 - `WorkspaceRuntime.run_live_message(...)` 先按 session 入队，再由单会话 processor 决定逐条处理、按 `pending_message_threshold` 执行静默批处理，或在 `min_reply_interval_seconds` 冷却窗口结束后强制合并同一说话人的连续消息再进入下一次回复判断。
-- `WorkspaceRuntime.initialize()` 会预先初始化共享 SKILL runtime，并在 `skills/` 目录变化时通过 watcher 触发全量 reload，不再在消息路径按次扫描目录。SKILL runtime 会先加载包内置技能（当前包含 `system_info` 与 developer-only 的 `desktop_screenshot`），再加载 workspace `skills/`；同名 workspace 文件覆盖内置实现。
+- `WorkspaceRuntime.initialize()` 会预先初始化共享 SKILL runtime，并在 `skills/` 目录变化时通过 watcher 触发全量 reload，不再在消息路径按次扫描目录。SKILL runtime 会先加载包内置技能（当前包含 `system_info`、`learn_term`、`url_content_reader`、`bing_search` 与 developer-only 的 `desktop_screenshot`），再加载 workspace `skills/`；同名 workspace 文件覆盖内置实现。
 - 内置 SKILL 与 workspace SKILL 共用依赖自动安装路径；`SKILL_META["dependencies"]` 会在模块真正导入前参与解析。
 - SKILL 执行结果现在支持结构化 `text_blocks` / `multimodal_blocks` / `internal_metadata`；`core/engine.py` 负责把结果注入 transcript，`core/chat_builder.py` 负责把可用文本与图片转成隐藏模型上下文，并在最近少量 assistant turn 内继续保留这些内部结果，避免模型在短期追问里立刻忘掉刚拿到的观察，同时避免把元信息泄露到用户回复中。
 - `Participant.metadata` / `UserProfile.metadata` 中的 `is_developer` 是 SKILL 安全模型的显式权限来源；engine 会据此构建 `SkillInvocationContext`，让 developer-only 工具在非 developer 当前轮次中自动隐藏，并在执行时再次校验。
@@ -79,7 +79,7 @@ description: "当你需要在不通读全部代码的情况下快速理解 Siriu
 ## 修改路由指南
 
 - 新增 provider：修改 `sirius_chat/providers/`、`sirius_chat/providers/routing.py`、`sirius_chat/api/providers.py`，并补测试与文档。
-- 修改对话主流程：优先检查 `sirius_chat/core/engine.py`、`core/chat_builder.py`、`core/memory_prompt.py`、`core/memory_runner.py`、`core/engagement_pipeline.py`。
+- 修改对话主流程（当前默认 Emotional 引擎）：优先检查 `sirius_chat/core/emotional_engine.py`、`core/response_assembler.py`、`core/cognition.py`、`core/response_strategy.py`。Legacy 引擎检查 `sirius_chat/core/_legacy/engine.py`、`core/chat_builder.py`、`core/memory_prompt.py`、`core/memory_runner.py`、`core/engagement_pipeline.py`。
 - 修改 workspace / session 持久化：同步检查 `sirius_chat/workspace/`、`sirius_chat/config/manager.py`、`sirius_chat/session/store.py`。
 - 修改识人或记忆逻辑：同步检查 `sirius_chat/memory/user/`、`sirius_chat/memory/event/`、`sirius_chat/memory/self/`、`sirius_chat/core/memory_prompt.py`、`sirius_chat/models/models.py` 与 `docs/external-usage.md`。
 - 修改外部 API：同步更新 `sirius_chat/api/`、README、`docs/external-usage.md` 与示例代码。

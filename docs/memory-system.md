@@ -151,6 +151,28 @@ recency = exp(-0.1 × 天数)
 - `SelfSemanticProfile`：AI 的自我概念（"我是谁"、核心价值观、情绪时间线）
 - `DiaryEntry`：第一人称体验记录，带价值加权重要性评分
 - `emotion_timeline`：AI 自身的情绪变化轨迹
+- `Glossary`：术语表，记录群聊中出现的俚语、黑话、专有名词及 AI 对其的理解
+
+### 自传体记忆 glossary
+
+**定位**：AI 对自身语言环境的"活字典"——不是通用百科，而是"这个群里的人把 X 叫做 Y"的局部知识。
+
+**添加方式**：
+1. **SKILL 调用**：内置 `learn_term` 技能被触发时，将用户提到的术语/俚语/黑话通过 `add_glossary_term()` 写入自传体记忆。该技能标记为 `silent=True`，执行结果不会出现在回复文本中。
+2. **引擎自动提取**：`ResponseAssembler` 在组装 prompt 时，若检测到当前群存在已积累的 glossary 条目，可通过 `glossary_section` 参数将其注入系统提示词。
+
+**条目结构**：
+- `term`：术语原文
+- `definition`：AI 对其的理解或解释
+- `confidence`：置信度。用户明确提供的解释 → `0.9`；AI 自行推断的 → `0.6`
+- `source_group_id`：来源群聊（群隔离）
+- `added_at`：添加时间
+
+**使用方式**：
+- `build_glossary_prompt_section()` 将 glossary 格式化为 prompt 区块，供 `ResponseAssembler` 在生成**立即回复、延迟回复、主动回复**时注入。
+- 低置信度条目可在后续对话中被用户纠正，从而提升置信度或更新定义。
+
+**持久化**：glossary 作为自传体记忆的一部分，随 `self_memory` 持久化到磁盘，引擎重启后自动恢复。
 
 **重要性评分**（零 LLM 成本）：
 ```

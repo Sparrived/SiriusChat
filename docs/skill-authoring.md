@@ -66,6 +66,10 @@ SKILL_META = {
     # [可选] 是否仅允许 developer 调用，默认 False
     "developer_only": False,
 
+    # [可选] 是否为静默技能，默认 False
+    # True 时技能执行结果不会追加到 AI 的回复文本中（如 learn_term）
+    "silent": False,
+
     # [可选] 参数定义，dict 或 list 格式均可
     "parameters": { ... },
 }
@@ -347,6 +351,7 @@ config = SessionConfig(
 - [ ] `run()` 函数存在且参数名与 `parameters` 定义匹配
 - [ ] `run()` 至少保留 `**kwargs`；若需要持久化或审计，显式接收 `data_store` / `invocation_context`
 - [ ] 若是受限能力，已显式设置 `developer_only=True`
+- [ ] 若技能结果无需展示给用户，已显式设置 `silent=True`
 - [ ] 返回值为 `dict` 或可序列化对象
 - [ ] 不依赖未安装的第三方库（或在 `dependencies` 中显式声明）
 - [ ] 不包含长时间阻塞操作（注意 30 秒超时限制）
