@@ -222,6 +222,16 @@ class EmotionalGroupChatEngine:
             data={"group_id": group_id, "user_id": user_id},
         ))
 
+        # Pure image message (no substantive text) → save to context but skip analysis
+        if message.multimodal_inputs and self._is_pure_image_message(message.content):
+            self._log_inner_thought(f"{speaker} 发了一张图，我先默默记下来～")
+            return {
+                "strategy": "silent",
+                "reply": None,
+                "emotion": {},
+                "intent": {},
+            }
+
         # 2. Cognition (unified emotion + intent)
         intent, emotion, memories, empathy = await self._cognition(
             content, user_id, group_id
@@ -1781,6 +1791,17 @@ class EmotionalGroupChatEngine:
             return round((len(timestamps) - 1) / span_minutes, 2)
         except Exception:
             return 0.0
+
+    @staticmethod
+    def _is_pure_image_message(content: str) -> bool:
+        """Check if content contains only image placeholders with no substantive text.
+
+        Image placeholder format: [图片: filename.png] or [图片1: filename.png]
+        """
+        if not content:
+            return False
+        cleaned = re.sub(r"\[图片\d*: [^\]]+\]", "", content).strip()
+        return not cleaned
 
     def _describe_atmosphere(self, group_id: str) -> str:
         recent = self._get_recent_messages(group_id, n=5)
