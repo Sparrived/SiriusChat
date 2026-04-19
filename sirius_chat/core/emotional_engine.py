@@ -882,6 +882,23 @@ class EmotionalGroupChatEngine:
                 ),
             })
 
+            # Persist intermediate skill turns into working memory
+            self.working_memory.add_entry(
+                group_id=group_id,
+                user_id="assistant",
+                role="assistant",
+                content=strip_skill_calls(reply),
+                importance=0.3,
+            )
+            if results_text:
+                self.working_memory.add_entry(
+                    group_id=group_id,
+                    user_id="skill_system",
+                    role="system",
+                    content=f"[技能执行结果]\n{results_text}",
+                    importance=0.3,
+                )
+
         # Record assistant reply into working memory so future turns can see it
         clean_reply = strip_skill_calls(reply).strip()
         if clean_reply:
@@ -1075,6 +1092,34 @@ class EmotionalGroupChatEngine:
     # Pipeline stages
     # ==================================================================
 
+    @staticmethod
+    def _compute_message_importance(content: str) -> float:
+        """Score message importance for working-memory retention.
+
+        Returns a float between 0.0 and 1.0.
+        """
+        importance = 0.5
+        lowered = content.lower()
+
+        # Mentioned / addressed → higher importance
+        if "@" in content:
+            importance += 0.2
+
+        # Crisis / urgency keywords
+        crisis_keywords = ["紧急", "救命", "危险", "help", "crisis", "urgent", "自杀", "死亡"]
+        if any(kw in lowered for kw in crisis_keywords):
+            importance += 0.3
+
+        # Substantial content → slightly higher
+        if len(content) > 100:
+            importance += 0.1
+
+        # Question marks → user is seeking info / engagement
+        if "?" in content or "？" in content:
+            importance += 0.05
+
+        return min(1.0, importance)
+
     def _perception(
         self,
         group_id: str,
@@ -1089,6 +1134,9 @@ class EmotionalGroupChatEngine:
                 group_id=group_id,
             )
 
+        # Compute dynamic importance for working-memory retention
+        importance = self._compute_message_importance(message.content or "")
+
         # Add to working memory
         self.working_memory.add_entry(
             group_id=group_id,
@@ -1097,6 +1145,7 @@ class EmotionalGroupChatEngine:
             content=message.content,
             channel=message.channel or "",
             channel_user_id=message.channel_user_id or "",
+            importance=importance,
         )
 
         # Update group last message time
@@ -1382,6 +1431,24 @@ class EmotionalGroupChatEngine:
                         f"[继续] 请基于以上技能执行结果，继续完成你的回复。"
                     ),
                 })
+
+                # Persist intermediate skill turns into working memory with low
+                # importance so they fade naturally when the conversation moves on.
+                self.working_memory.add_entry(
+                    group_id=group_id,
+                    user_id="assistant",
+                    role="assistant",
+                    content=strip_skill_calls(say),
+                    importance=0.3,
+                )
+                if results_text:
+                    self.working_memory.add_entry(
+                        group_id=group_id,
+                        user_id="skill_system",
+                        role="system",
+                        content=f"[技能执行结果]\n{results_text}",
+                        importance=0.3,
+                    )
 
             # Record final thought
             if think:
@@ -1784,8 +1851,15 @@ class EmotionalGroupChatEngine:
         for e in entries:
             role = "user" if e.role == "human" else e.role
             msg: dict[str, Any] = {"role": role, "content": e.content}
-            if role == "user" and e.user_id:
-                msg["name"] = e.user_id
+            if role == "user":
+                # Prefer channel_user_id (QQ number) because it is pure digits
+                # and always fits OpenAI's name constraints (a-zA-Z0-9_-).
+                # Fallback to sanitized user_id.
+                raw_name = e.channel_user_id or e.user_id
+                if raw_name:
+                    sanitized = re.sub(r"[^a-zA-Z0-9_-]", "_", raw_name)[:64]
+                    if sanitized:
+                        msg["name"] = sanitized
             messages.append(msg)
         return messages
 
