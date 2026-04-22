@@ -42,6 +42,7 @@ from sirius_chat.memory.diary import DiaryManager
 from sirius_chat.memory.context_assembler import ContextAssembler
 from sirius_chat.memory.user.simple import UserManager
 from sirius_chat.core.identity_resolver import IdentityResolver, IdentityContext
+from sirius_chat.memory.glossary import GlossaryManager, GlossaryTerm
 
 from sirius_chat.core.events import SessionEvent, SessionEventBus, SessionEventType
 from sirius_chat.models.emotion import AssistantEmotionState, EmotionState
@@ -210,6 +211,8 @@ class EmotionalGroupChatEngine:
             work_path=work_path,
             persona=self.persona,
         )
+        # Glossary (migrated from autobiographical)
+        self.glossary_manager = GlossaryManager(work_path)
 
         # Background tasks
         self._bg_tasks: set[asyncio.Task] = set()
@@ -827,8 +830,9 @@ class EmotionalGroupChatEngine:
                             term = params.get("term", "")
                             definition = params.get("definition", "")
                             if term and definition:
-                                self.autobiographical_memory.add_glossary_term(
-                                    term, definition, source="skill"
+                                self.glossary_manager.add_or_update(
+                                    group_id,
+                                    GlossaryTerm(term=term, definition=definition, source="skill"),
                                 )
                     else:
                         err = result.error or "未知错误"
@@ -1377,8 +1381,8 @@ class EmotionalGroupChatEngine:
                         "aliases": entry.profile.aliases,
                         "qq_id": qq_id or uid,
                     })
-            glossary = self.autobiographical_memory.build_glossary_prompt_section(
-                text=message.content, max_terms=5
+            glossary = self.glossary_manager.build_prompt_section(
+                group_id, text=message.content, max_terms=5
             )
             bundle = self.response_assembler.assemble(
                 message=message,
@@ -1500,8 +1504,9 @@ class EmotionalGroupChatEngine:
                                 term = params.get("term", "")
                                 definition = params.get("definition", "")
                                 if term and definition:
-                                    self.autobiographical_memory.add_glossary_term(
-                                        term, definition, source="skill"
+                                    self.glossary_manager.add_or_update(
+                                        group_id,
+                                        GlossaryTerm(term=term, definition=definition, source="skill"),
                                     )
                         else:
                             err = result.error or "未知错误"
@@ -1735,8 +1740,8 @@ class EmotionalGroupChatEngine:
             for idx, item in enumerate(items, 1):
                 lines.append(f"{idx}. {item.message_content}")
             message_content = "\n".join(lines)
-        glossary = self.autobiographical_memory.build_glossary_prompt_section(
-            text=message_content, max_terms=5
+        glossary = self.glossary_manager.build_prompt_section(
+            group_id, text=message_content, max_terms=5
         )
         return self.response_assembler.assemble_delayed(
             message_content=message_content,
@@ -1793,8 +1798,8 @@ class EmotionalGroupChatEngine:
 
     def _build_proactive_prompt(self, trigger: dict[str, Any], group_id: str):
         """Build prompt bundle for proactive initiation."""
-        glossary = self.autobiographical_memory.build_glossary_prompt_section(
-            text=trigger.get("trigger_type", ""), max_terms=3
+        glossary = self.glossary_manager.build_prompt_section(
+            group_id, text=trigger.get("trigger_type", ""), max_terms=3
         )
         topic = self._pick_proactive_topic(group_id)
         return self.response_assembler.assemble_proactive(
@@ -1956,8 +1961,9 @@ class EmotionalGroupChatEngine:
                         term = params.get("term", "")
                         definition = params.get("definition", "")
                         if term and definition:
-                            self.autobiographical_memory.add_glossary_term(
-                                term, definition, source="skill"
+                            self.glossary_manager.add_or_update(
+                                group_id,
+                                GlossaryTerm(term=term, definition=definition, source="skill"),
                             )
                 else:
                     skill_results.append(f"[SKILL '{skill_name}' 失败] {result.error or '未知错误'}")
