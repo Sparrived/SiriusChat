@@ -201,7 +201,9 @@ class SkillInvocationContext:
 
     @property
     def caller_is_developer(self) -> bool:
-        return bool(self.caller and self.caller.is_developer)
+        if self.caller is None:
+            return False
+        return bool(self.caller.metadata.get("is_developer"))
 
     @property
     def has_declared_developer(self) -> bool:

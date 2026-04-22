@@ -17,12 +17,21 @@ class GroupSemanticProfile:
     typical_interaction_style: str = ""
     interest_topics: list[str] = field(default_factory=list)
     atmosphere_history: list[Any] = field(default_factory=list)
+    group_norms: dict[str, Any] = field(default_factory=dict)
+    taboo_topics: list[str] = field(default_factory=list)
+
+
+@dataclass
+class InterestNode:
+    topic: str = ""
+    participation: float = 0.0
 
 
 @dataclass
 class UserSemanticProfile:
     user_id: str = ""
     communication_style: str = ""
+    interest_graph: list[Any] = field(default_factory=list)
 
 
 @dataclass

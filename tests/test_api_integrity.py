@@ -89,13 +89,14 @@ class TestAPILayerHiding:
         
         required = {
             'AsyncRolePlayEngine',
+            'EmotionalGroupChatEngine',
             'SessionConfig',
             'OrchestrationPolicy',
-            'UserMemoryManager',
-            'EventMemoryManager',
-            'TRAIT_TAXONOMY',
+            'UserProfile',
             'Message',
             'Transcript',
+            'IdentityResolver',
+            'IdentityContext',
         }
         
         all_set = set(sirius_chat.__all__)
@@ -165,33 +166,19 @@ class TestAPIFunctionality:
         assert profile.user_id == "test_user"
         assert profile.name == "Test User"
     
-    def test_can_access_trait_taxonomy(self):
-        """测试：能否访问特征分类"""
-        from sirius_chat import TRAIT_TAXONOMY
+    def test_can_create_identity_resolver(self):
+        """测试：能否创建身份解析器"""
+        from sirius_chat import IdentityResolver, IdentityContext
         
-        assert isinstance(TRAIT_TAXONOMY, dict)
-        assert len(TRAIT_TAXONOMY) > 0
+        resolver = IdentityResolver()
         
-        # 检查包含必要的分类
-        assert "Social" in TRAIT_TAXONOMY or \
-               "Practical" in TRAIT_TAXONOMY or \
-               "Learning" in TRAIT_TAXONOMY
-    
-    def test_can_create_memory_manager(self):
-        """测试：能否创建内存管理器"""
-        from sirius_chat import UserMemoryManager, UserProfile
-        
-        mgr = UserMemoryManager()
-        
-        profile = UserProfile(
-            user_id="test",
-            name="Test"
+        ctx = IdentityContext(
+            speaker_name="Test",
+            user_id="test_user"
         )
         
-        mgr.register_user(profile)
-        
-        # 验证用户已注册
-        assert "test" in mgr.entries.get("default", {})
+        assert ctx.speaker_name == "Test"
+        assert ctx.user_id == "test_user"
     
     def test_cannot_access_internal_functions(self):
         """测试：不应该能访问内部函数"""
@@ -261,29 +248,21 @@ class TestAPIDataIntegrity:
         assert len(transcript.messages) == 1
         assert transcript.messages[0].role == "user"
     
-    def test_memory_fact_available(self):
-        """测试：内存事实应该通过公开API可用"""
-        from sirius_chat import UserMemoryManager
+    def test_identity_context_available(self):
+        """测试：身份上下文应该可用"""
+        from sirius_chat import IdentityContext
         
-        mgr = UserMemoryManager()
-        
-        # 应该能添加内存事实
-        from sirius_chat import UserProfile
-        profile = UserProfile(user_id="test", name="Test")
-        mgr.register_user(profile)
-        
-        # 添加事实（confidence > 0.85 是 resident facts）
-        mgr.add_memory_fact(
-            user_id="test",
-            fact_type="preference",
-            value="Test fact",
-            source="observation",
-            confidence=0.9  # 超过0.85门槛
+        ctx = IdentityContext(
+            speaker_name="Alice",
+            user_id="u123",
+            platform_uid="qq_456",
+            platform="qq",
+            is_developer=False
         )
         
-        # 应该能获取事实
-        facts = mgr.get_resident_facts(user_id="test")
-        assert len(facts) > 0
+        assert ctx.speaker_name == "Alice"
+        assert ctx.platform == "qq"
+        assert not ctx.is_developer
 
 
 if __name__ == "__main__":

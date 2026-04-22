@@ -78,6 +78,7 @@ from sirius_chat.api import (
     SkillRegistry,
     SkillExecutor,
     SkillDataStore,
+    UserProfile,
     IntentAnalyzerV3,
     EmotionAnalyzer,
     ResponseStrategyEngine,
@@ -193,6 +194,8 @@ __all__ = [
     "SkillRegistry",
     "SkillExecutor",
     "SkillDataStore",
+    # User model
+    "UserProfile",
     # v0.28+ cognitive layer
     "IntentAnalyzerV3",
     "EmotionAnalyzer",
