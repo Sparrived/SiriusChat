@@ -2,35 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from typing import Any
 
-from sirius_chat.developer_profiles import metadata_declares_developer
-
-
-@dataclass(slots=True)
-class UserProfile:
-    """Core user identity. Minimal and focused.
-
-    Attributes:
-        user_id: Unique identifier.
-        name: Human-readable display name.
-        aliases: Alternative names the user may go by.
-        identities: Mapping from external systems (platform:external_uid).
-        metadata: Additional custom metadata (e.g. is_developer).
-    """
-
-    user_id: str
-    name: str
-    persona: str = ""
-    aliases: list[str] = field(default_factory=list)
-    identities: dict[str, str] = field(default_factory=dict)
-    traits: list[str] = field(default_factory=list)
-    metadata: dict[str, Any] = field(default_factory=dict)
-
-    @property
-    def is_developer(self) -> bool:
-        return metadata_declares_developer(self.metadata)
+from sirius_chat.memory.user.models import UserProfile
 
 
 class UserManager:
@@ -133,16 +107,7 @@ class UserManager:
     def to_dict(self) -> dict[str, Any]:
         """Serialize to dict."""
         return {
-            gid: {
-                uid: {
-                    "user_id": p.user_id,
-                    "name": p.name,
-                    "aliases": list(p.aliases),
-                    "identities": dict(p.identities),
-                    "metadata": dict(p.metadata),
-                }
-                for uid, p in group.items()
-            }
+            gid: {uid: p.to_dict() for uid, p in group.items()}
             for gid, group in self.entries.items()
         }
 
@@ -154,12 +119,6 @@ class UserManager:
             for uid, payload in group.items():
                 if not isinstance(payload, dict):
                     continue
-                profile = UserProfile(
-                    user_id=str(payload.get("user_id", uid)),
-                    name=str(payload.get("name", uid)),
-                    aliases=list(payload.get("aliases", [])),
-                    identities=dict(payload.get("identities", {})),
-                    metadata=dict(payload.get("metadata", {})),
-                )
+                profile = UserProfile.from_dict(payload)
                 mgr.register_user(profile, group_id=gid)
         return mgr
