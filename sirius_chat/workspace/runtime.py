@@ -354,6 +354,34 @@ class WorkspaceRuntime:
             json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
         ).hexdigest()
 
+    def load_skills(self, *, auto_install_deps: bool = True) -> None:
+        """Discover and load SKILL registry + executor from workspace.
+
+        Loads built-in skills first, then user-defined skills from the workspace
+        ``skills/`` directory.  Safe to call multiple times (idempotent).
+        """
+        if self._skill_registry is not None and self._skill_executor is not None:
+            return
+
+        registry = SkillRegistry()
+        builtin_loaded = registry._load_builtin_skills(auto_install_deps=auto_install_deps)
+        if builtin_loaded:
+            logger.info("内置 SKILL 已加载 %d 个", builtin_loaded)
+
+        skills_dir = self.layout.config_root / "skills"
+        if skills_dir.exists():
+            user_loaded = registry.load_from_directory(
+                skills_dir,
+                auto_install_deps=auto_install_deps,
+                include_builtin=False,
+            )
+            if user_loaded:
+                logger.info("用户 SKILL 已加载 %d 个", user_loaded)
+
+        self._skill_registry = registry
+        self._skill_executor = SkillExecutor(self.work_path)
+        logger.info("SKILL runtime 已就绪，共 %d 个技能", len(registry.skill_names))
+
     def create_emotional_engine(
         self,
         *,
@@ -365,6 +393,8 @@ class WorkspaceRuntime:
         The engine shares the workspace's work_path and provider.
         Background tasks are NOT started automatically—call
         ``engine.start_background_tasks()`` after creation if desired.
+
+        Skills are auto-loaded if not already loaded via ``load_skills()``.
         """
         provider = self.provider
         if self._prefer_workspace_registry_provider:
@@ -393,6 +423,14 @@ class WorkspaceRuntime:
             config=config,
             persona=persona,
         )
+
+        # Auto-load skills if not already loaded
+        if self._skill_registry is None or self._skill_executor is None:
+            try:
+                self.load_skills()
+            except Exception as exc:
+                logger.warning("自动加载 SKILL 失败: %s", exc)
+
         # Inject skill runtime if available
         if self._skill_registry is not None and self._skill_executor is not None:
             engine.set_skill_runtime(
