@@ -1,4 +1,4 @@
-﻿---
+---
 name: framework-quickstart
 description: "当你需要在不通读全部代码的情况下快速理解 Sirius Chat 架构时使用，包括模块边界、执行流与扩展点。关键词：架构总览、框架地图、修改位置、provider 集成。"
 ---
@@ -29,47 +29,49 @@ description: "当你需要在不通读全部代码的情况下快速理解 Siriu
 3. `README.md`
 4. `docs/orchestration-policy.md`
 5. `sirius_chat/models/models.py` ✨ (包重构)
-3. `docs/external-usage.md`
-4. `README.md`
-5. `docs/orchestration-policy.md`
-6. `sirius_chat/api/__init__.py`
-7. `sirius_chat/workspace/layout.py`
-8. `sirius_chat/workspace/runtime.py`
-9. `sirius_chat/workspace/roleplay_manager.py`
-10. `sirius_chat/config/models.py`
-11. `sirius_chat/config/manager.py`
-12. `sirius_chat/roleplay_prompting.py`
-13. `sirius_chat/models/models.py`
-14. `sirius_chat/core/engine.py`
-15. `sirius_chat/core/chat_builder.py`
-16. `sirius_chat/core/memory_runner.py`
-17. `sirius_chat/core/engagement_pipeline.py`
-18. `sirius_chat/core/heat.py`
-19. `sirius_chat/core/intent_v2.py`
-20. `sirius_chat/memory/__init__.py`
-21. `sirius_chat/session/store.py`
-22. `sirius_chat/providers/base.py`
-23. `sirius_chat/providers/routing.py`
-24. `sirius_chat/providers/middleware/base.py`
-25. `sirius_chat/cli.py`
-26. `tests/test_workspace_runtime.py`
-27. `tests/test_engine.py`
+6. `docs/external-usage.md`
+7. `sirius_chat/api/__init__.py`
+8. `sirius_chat/workspace/layout.py`
+9. `sirius_chat/workspace/runtime.py`
+10. `sirius_chat/workspace/roleplay_manager.py`
+11. `sirius_chat/config/models.py`
+12. `sirius_chat/config/manager.py`
+13. `sirius_chat/roleplay_prompting.py`
+14. `sirius_chat/core/emotional_engine.py`
+15. `sirius_chat/core/cognition.py`
+16. `sirius_chat/core/response_assembler.py`
+17. `sirius_chat/core/response_strategy.py`
+18. `sirius_chat/core/model_router.py`
+19. `sirius_chat/memory/working/manager.py`
+20. `sirius_chat/memory/event/manager.py`
+21. `sirius_chat/memory/episodic/manager.py`
+22. `sirius_chat/memory/semantic/manager.py`
+23. `sirius_chat/memory/retrieval_engine.py`
+24. `sirius_chat/session/store.py`
+25. `sirius_chat/providers/base.py`
+26. `sirius_chat/providers/routing.py`
+27. `sirius_chat/providers/middleware/base.py`
+28. `sirius_chat/cli.py`
+29. `tests/test_workspace_runtime.py`
+30. `tests/test_emotional_engine_basic.py`
+
 - `models/models.py` ✨ **（包重构）** 定义数据契约（多人用户 + 单 AI 主助手）。
-- `OrchestrationPolicy` 用于任务路由与任务级参数控制，支持 `memory_extract`、`event_extract`、`intent_analysis`、`memory_manager` 等任务的模型配置。`reply_mode=auto` 下的 LLM 意图分析已纳入 `intent_analysis` 任务；关闭该任务时才会走关键词回退，任务启用后若调用失败或解析失败，本轮不会再回退关键词意图推断。多 AI 群聊里，`intent_analysis` 会先从名字/别称中提取 AI 证据（如 `AI`、`bot`、`助手`、`Claude` 等），再把无明确证据的对象作为 possible-AI 候选交给模型结合最近交互链、aliases 和 `environment_context` 判断，从而减少把其他对象误判成当前模型自身。对未明确点名当前模型的群控/停用类命令，还会在 engagement 前做硬抑制。同时支持提示词驱动的内容分割（`enable_prompt_driven_splitting=True`）、基于 `pending_message_threshold` 的 runtime 积压静默批处理，以及基于 `min_reply_interval_seconds` 的最小回复间隔冷却。✨ `memory_manager` 是标准 LLM 任务，用于汇聚、去重、标注、冲突检测记忆，并为后台归纳与长上下文下的即时整理提供模型参数。
+- `OrchestrationPolicy` 用于任务路由与任务级参数控制，支持 `memory_extract`、`event_extract`、`intent_analysis` 等任务的模型配置。`reply_mode=auto` 下的 LLM 意图分析已纳入 `intent_analysis` 任务；关闭该任务时才会走关键词回退，任务启用后若调用失败或解析失败，本轮不会再回退关键词意图推断。多 AI 群聊里，`intent_analysis` 会先从名字/别称中提取 AI 证据（如 `AI`、`bot`、`助手`、`Claude` 等），再把无明确证据的对象作为 possible-AI 候选交给模型结合最近交互链、aliases 和 `environment_context` 判断，从而减少把其他对象误判成当前模型自身。对未明确点名当前模型的群控/停用类命令，还会在 engagement 前做硬抑制。同时支持提示词驱动的内容分割（`enable_prompt_driven_splitting=True`）、基于 `pending_message_threshold` 的 runtime 积压静默批处理，以及基于 `min_reply_interval_seconds` 的最小回复间隔冷却。
 - 兼容层面，旧 `enable_intent_analysis` / `intent_analysis_model` 仅作为读取时的映射入口存在；当前模板、workspace 持久化与示例应统一使用 `task_enabled/task_models`。
-- ✨ **(v0.13.0)** `OrchestrationPolicy` 新增 AI 自身记忆配置（`enable_self_memory`、`self_memory_extract_batch_size`、`self_memory_max_diary_prompt_entries`、`self_memory_max_glossary_prompt_terms`）。
+
 ## 心智模型
 
 - 当前推荐入口是 `WorkspaceRuntime`；它负责文件布局、session 恢复、participants 写回、watcher 热刷新和 provider 注册表联动。
-- `WorkspaceRuntime.run_live_message(...)` 先按 session 入队，再由单会话 processor 决定逐条处理、按 `pending_message_threshold` 执行静默批处理，或在 `min_reply_interval_seconds` 冷却窗口结束后强制合并同一说话人的连续消息再进入下一次回复判断。
+- **v0.28+ 默认引擎** `EmotionalGroupChatEngine` 直接处理消息，不经过 `run_live_message` 的 legacy 队列系统。
 - `WorkspaceRuntime.initialize()` 会预先初始化共享 SKILL runtime，并在 `skills/` 目录变化时通过 watcher 触发全量 reload，不再在消息路径按次扫描目录。SKILL runtime 会先加载包内置技能（当前包含 `system_info`、`learn_term`、`url_content_reader`、`bing_search` 与 developer-only 的 `desktop_screenshot`），再加载 workspace `skills/`；同名 workspace 文件覆盖内置实现。
 - 内置 SKILL 与 workspace SKILL 共用依赖自动安装路径；`SKILL_META["dependencies"]` 会在模块真正导入前参与解析。
-- SKILL 执行结果现在支持结构化 `text_blocks` / `multimodal_blocks` / `internal_metadata`；`core/engine.py` 负责把结果注入 transcript，`core/chat_builder.py` 负责把可用文本与图片转成隐藏模型上下文，并在最近少量 assistant turn 内继续保留这些内部结果，避免模型在短期追问里立刻忘掉刚拿到的观察，同时避免把元信息泄露到用户回复中。
+- SKILL 执行结果现在支持结构化 `text_blocks` / `multimodal_blocks` / `internal_metadata`；`core/emotional_engine.py` 负责把结果注入 working memory，`core/response_assembler.py` 负责把可用文本与图片转成隐藏模型上下文，并在最近少量 assistant turn 内继续保留这些内部结果，避免模型在短期追问里立刻忘掉刚拿到的观察，同时避免把元信息泄露到用户回复中。
 - `Participant.metadata` / `UserProfile.metadata` 中的 `is_developer` 是 SKILL 安全模型的显式权限来源；engine 会据此构建 `SkillInvocationContext`，让 developer-only 工具在非 developer 当前轮次中自动隐藏，并在执行时再次校验。
 - 会话事件流里的 `SKILL_COMPLETED` 仅表示技能执行状态，技能结果正文不会直接通过该事件暴露；只有落成 assistant 回复后才会进入外部消息流或 `on_reply`。
 - `WorkspaceRuntime` 会把 `WorkspaceBootstrap` 的签名记入 `workspace.json`；同一份 bootstrap 只在首次命中时持久化一次，后续重启会保留用户在 config root 下的手工修改。
 - `WorkspaceLayout` 是路径语义的单一事实来源：config root 放配置与资产，data root 放运行态数据。
-- `AsyncRolePlayEngine` 的真实实现位于 `sirius_chat/core/engine.py`；`sirius_chat/async_engine/` 只承担兼容导出与 prompts/orchestration/utils 辅助层。
+- **v0.28+ 默认引擎** `EmotionalGroupChatEngine` 的真实实现位于 `sirius_chat/core/emotional_engine.py`；采用四层认知架构（感知→认知→决策→执行）与四层记忆底座（工作→事件 V2→情景→语义）。
+- `sirius_chat/async_engine/` 只承担兼容导出与 prompts/orchestration/utils 辅助层。
 - 一个 `SessionConfig` 只对应一个主 AI，主 AI 由 `preset=AgentPreset(...)` 描述，不再推荐在外部配置里手写完整 agent prompt。
 - `User` 只是 `Participant` 的别名；运行时识人与记忆的事实来源是 `transcript.user_memory`，而不是旧版 `participants` 配置字段。`profile.identities/name/aliases` 是可信身份锚点，`runtime.inferred_aliases` 只是弱线索，不参与稳定识人绑定。
 - provider 注册表由 `WorkspaceProviderManager` 管理，路由顺序是 `models` 列表优先、`healthcheck_model` 次之、最后回退到第一个启用 provider。
@@ -80,8 +82,9 @@ description: "当你需要在不通读全部代码的情况下快速理解 Siriu
 
 - 新增 provider：修改 `sirius_chat/providers/`、`sirius_chat/providers/routing.py`、`sirius_chat/api/providers.py`，并补测试与文档。
 - 修改对话主流程（当前默认 Emotional 引擎）：优先检查 `sirius_chat/core/emotional_engine.py`、`core/response_assembler.py`、`core/cognition.py`、`core/response_strategy.py`。Legacy 引擎检查 `sirius_chat/core/_legacy/engine.py`、`core/chat_builder.py`、`core/memory_prompt.py`、`core/memory_runner.py`、`core/engagement_pipeline.py`。
+- 修改记忆系统（事件记忆 V2 / 工作记忆 / 情景记忆 / 语义记忆）：同步检查 `sirius_chat/memory/event/manager.py`、`sirius_chat/memory/working/manager.py`、`sirius_chat/memory/episodic/manager.py`、`sirius_chat/memory/semantic/manager.py`、`sirius_chat/memory/retrieval_engine.py`、`docs/memory-system.md`。
 - 修改 workspace / session 持久化：同步检查 `sirius_chat/workspace/`、`sirius_chat/config/manager.py`、`sirius_chat/session/store.py`。
-- 修改识人或记忆逻辑：同步检查 `sirius_chat/memory/user/`、`sirius_chat/memory/event/`、`sirius_chat/memory/self/`、`sirius_chat/core/memory_prompt.py`、`sirius_chat/models/models.py` 与 `docs/external-usage.md`。
+- 修改识人或记忆逻辑：同步检查 `sirius_chat/memory/user/`、`sirius_chat/memory/event/`、`sirius_chat/memory/self/`、`sirius_chat/models/models.py` 与 `docs/external-usage.md`。
 - 修改外部 API：同步更新 `sirius_chat/api/`、README、`docs/external-usage.md` 与示例代码。
 - 修改 roleplay 资产流：同步更新 `sirius_chat/roleplay_prompting.py`、`workspace/roleplay_manager.py` 和架构文档。
 - `providers/*` 实现具体的 LLM 后端。
@@ -95,7 +98,6 @@ description: "当你需要在不通读全部代码的情况下快速理解 Siriu
 - 提示词流程：`list_roleplay_question_templates()` 暴露问卷模板枚举，`generate_humanized_roleplay_questions(template=...)` 产出高层人格问题；`agenerate_agent_prompts_from_answers` / `agenerate_from_persona_spec`（支持 `trait_keywords`、`answers`、`dependency_files`）生成完整 `GeneratedSessionPreset`。推荐先收集人物原型、核心矛盾、关系策略、情绪原则、表达节奏、边界和小缺点等上位约束，再让生成器展开为具体人物小传与语言习惯；推荐将生成结果作为 agent 资产持久化（`roleplay/generated_agents.json`），并利用 `roleplay/generated_agent_traces/<agent_key>.json` 保存完整生成轨迹。对于 `abuild_roleplay_prompt_from_answers_and_apply(...)`、`aupdate_agent_prompt(...)`、`aregenerate_agent_prompt_from_dependencies(...)` 三条持久化链路，框架会先落盘输入快照，再调用模型，失败时可通过 `load_persona_spec(...)` 恢复最近一次输入。依赖文件更新后可调用 `aregenerate_agent_prompt_from_dependencies(...)` 直接重生人格。
 - 内部实现允许重构；当前未发布阶段若影响外部接口，可直接升级 `api/`，并同步文档与示例。
 - 内部新增能力需同步在 `api/` 提供对外入口。
-- ✨ **(v0.12.0)** `arun_live_message` 新增 `on_reply`（引擎管理事件订阅回调）、`user_profile`（消息处理前自动注册用户）、`timeout`（引擎管理超时与清理）参数，大幅减少外部集成样板代码。详见 `docs/migration-v0.12.md`。
 - `main.py` 是仓库级测试/业务入口，承载主用户档案初始化、provider 管理命令与持续会话流程。
 - ✨ **开发工具链** (P1-004)：
   - `.github/workflows/ci.yml`：GitHub Actions 多版本 Python 自动化测试与代码质量检查
@@ -104,11 +106,11 @@ description: "当你需要在不通读全部代码的情况下快速理解 Siriu
   - `scripts/setup_dev_env.py`：开发环境自动化初始化
   - `Makefile`：便捷开发命令集
 
-## 修改路由指南
+## 修改路由指南（补充）
 
-- 新增 provider 支持：修改 `sirius_chat/providers/`，并保持 `sirius_chat/core/engine.py` 不含 provider 细节。
-- 修改主 AI 或多人轮次策略：更新 `sirius_chat/core/engine.py`，并检查 transcript 兼容性。
-- 修改动态参与者或识人记忆逻辑：同步更新 `models/models.py`、`sirius_chat/core/engine.py` 与 `docs/external-usage.md`。
+- 新增 provider 支持：修改 `sirius_chat/providers/`，并保持 `sirius_chat/core/emotional_engine.py` 不含 provider 细节。
+- 修改主 AI 或多人轮次策略：更新 `sirius_chat/core/emotional_engine.py`，并检查 transcript 兼容性。
+- 修改动态参与者或识人记忆逻辑：同步更新 `models/models.py`、`sirius_chat/core/emotional_engine.py` 与 `docs/external-usage.md`。
 - 修改会话恢复或压缩策略：同步更新 `workspace/`、`session/store.py`、`session/runner.py`、`docs/architecture.md`、相关迁移文档；若外部可见行为变化，再同步 `README.md`。
 - 修改配置结构或环境变量处理：同步更新 `sirius_chat/config/manager.py`、`sirius_chat/cli.py`、`README.md` 与 `examples/session.json`。
 - 修改缓存策略或后端：在 `sirius_chat/cache/` 实现新后端或修改现有接口，并更新 `docs/best-practices.md`。
@@ -122,10 +124,10 @@ description: "当你需要在不通读全部代码的情况下快速理解 Siriu
 
 1. `docs/architecture.md`
 2. `docs/full-architecture-flow.md`
-3. `README.md`（若用户可见用法发生变化）
-4. 本文件（`.github/skills/framework-quickstart/SKILL.md`）
-5. 相关 SKILL 文件（`.github/skills/external-integration/SKILL.md` 等）
+3. `docs/memory-system.md`（若涉及记忆系统变更）
+4. `docs/engine-emotional.md`（若涉及引擎变更）
+5. `README.md`（若用户可见用法发生变化）
+6. 本文件（`.github/skills/framework-quickstart/SKILL.md`）
+7. 相关 SKILL 文件（`.github/skills/external-integration/SKILL.md` 等）
 
 **重点提醒**：实现新功能后，**不应自动生成额外的 markdown 文档**来说明新功能的用法（如指南、快速启动、参考手册），除非用户明确提及。应将功能文档集中在现有位置或等待用户要求。
-
-

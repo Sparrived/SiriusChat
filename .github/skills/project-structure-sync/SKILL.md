@@ -16,12 +16,12 @@ description: "遍历项目结构变化并同步更新文档。监控模块变化
 ```
 sirius_chat/
 ├── api/                      - 对外 API facade（engine/models/providers/session 等）
-├── core/                     - 编排核心真实实现（engine/chat_builder/memory_runner/...）
+├── core/                     - 编排核心（emotional_engine.py、cognition.py、response_assembler.py、model_router.py、engine_persistence.py）；legacy 归档于 core/_legacy/
 ├── async_engine/             - 兼容导出 + prompts/orchestration/utils 辅助层
 ├── workspace/                - WorkspaceLayout / Runtime / Watcher / RoleplayManager
 ├── config/                   - SessionConfig / WorkspaceConfig / JSONC / ConfigManager
 ├── models/                   - Message / Participant / Transcript 等数据契约
-├── memory/                   - user/event/self/quality 子包
+├── memory/                   - user/event/self/quality 子包；v0.28+ 新增 working/episodic/semantic/activation_engine/retrieval_engine
 ├── session/                  - SessionStore / runner
 ├── providers/                - Provider 实现、路由与 middleware
 ├── token/                    - token 记录、SQLite 持久化与分析
@@ -47,11 +47,14 @@ sirius_chat/
 |------|------|----------|
 | `docs/architecture.md` | 架构设计详解 | 模块重构、新增模块、接口变化 |
 | `docs/full-architecture-flow.md` | 完整架构流程图 | 数据流、执行流变化 |
+| `docs/memory-system.md` | 四层记忆底座 | 记忆系统变更 |
+| `docs/engine-emotional.md` | Emotional Engine 详细说明 | 引擎行为变更 |
 | `docs/external-usage.md` | 外部接入指南 | Provider 变化、API 变化、配置变化 |
 | `docs/best-practices.md` | 最佳实践与模式 | 性能优化、内存管理特性新增 |
 | `docs/configuration.md` | 配置项详解 | 配置选项新增、参数变化 |
 | `docs/quickstart.md` | 快速启动指南 | 命令名称、基本用法变化 |
 | `README.md` | 项目总览 | 用法、特性、依赖版本 |
+| `docs/migration-v0.28.md` | v0.28 Emotional Engine 迁移指南 | 引擎切换、记忆系统变更 |
 | `docs/migration-roleplay-v0.20.md` | 外部人格生成迁移指南 | roleplay_prompting 对外用法变化 |
 
 ### SKILL 文件

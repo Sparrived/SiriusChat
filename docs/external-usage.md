@@ -50,7 +50,7 @@ async def main() -> None:
 
     print(f"策略: {result['strategy']}")
     print(f"回复: {result.get('reply')}")
-    print(f"内心: {result.get('thought')}")
+    # result.get('thought') 保留兼容，当前为空字符串（dual-output 已移除）
 
     # 保存状态
     engine.save_state()
@@ -184,7 +184,7 @@ config = {
     "proactive_silence_minutes": 30,
     "proactive_check_interval_seconds": 60,
     "memory_promote_interval_seconds": 300,
-    "working_memory_promote_threshold": 0.3,
+    "event_memory_batch_size": 5,
     "consolidation_interval_seconds": 600,
     "task_model_overrides": {
         "response_generate": {"model": "gpt-4o", "max_tokens": 512},

@@ -42,7 +42,7 @@
 - **低开销记忆注入**：主提示词只拼接当前发言者与直接相关参与者，`session_summary` 也会做尾部压缩
 - **AI 自身记忆**：日记系统 (Diary) 与名词解释系统 (Glossary)，支持遗忘曲线，并在长上下文或达到回复阈值时自动提取
 - **跨环境身份识别**：通过 `identities` 映射不同平台的外部账号到同一用户
-- **事件记忆管理**：自动提取关键事件，支持历史事件命中评分
+- **事件记忆管理 V2**：按用户缓冲原始消息，后台批量 LLM 提取结构化观察（preference/trait/relationship/experience/emotion/goal），自动去重合并，驱动语义画像更新
 
 ### 🚀 **性能与扩展**
 - **智能缓存框架**：内存 LRU + TTL 缓存，支持 LLM 响应缓存
@@ -189,31 +189,31 @@ provider = BigModelProvider(api_key="YOUR_BIGMODEL_API_KEY")
 ```python
 import asyncio
 from pathlib import Path
-from sirius_chat.api import create_emotional_engine, SessionConfig, Agent, AgentPreset, Message, OrchestrationPolicy
+from sirius_chat.api import create_emotional_engine, Message, Participant
 from sirius_chat.providers.mock import MockProvider
 
 async def main():
-    provider = MockProvider(responses=["我理解您的想法", "这很有意思"])
-    engine = create_async_engine(provider)
-    
-    config = SessionConfig(
-      work_path=Path("./config/chat_session"),
-      data_path=Path("./data/chat_session"),
-        preset=AgentPreset(
-            agent=Agent(name="助手", persona="耐心和善", model="gpt-4o-mini"),
-            global_system_prompt="你是一个友善的助手。",
-        ),
-        orchestration=OrchestrationPolicy(pending_message_threshold=0),
+    engine = create_emotional_engine(
+        work_path=Path("./data/chat_session"),
+        provider_async=MockProvider(responses=["我理解您的想法", "这很有意思"]),
+        persona="warm_friend",
+        config={
+            "sensitivity": 0.6,
+            "event_memory_batch_size": 5,
+        },
     )
-    
-    # 启动会话
-    transcript = await engine.run_live_session(config=config)
-    
-    # 用户发言
-    msg = Message(role="user", speaker="小王", content="Python 如何学习？")
-    transcript = await engine.run_live_message(config=config, turn=msg, transcript=transcript)
-    
-    print(transcript.as_chat_history())
+    engine.start_background_tasks()
+
+    # 处理消息
+    result = await engine.process_message(
+        message=Message(role="human", content="Python 如何学习？", speaker="u1"),
+        participants=[Participant(name="小王", user_id="u1")],
+        group_id="group:demo",
+    )
+    print(result.get("reply"))
+
+    engine.stop_background_tasks()
+    engine.save_state()
 
 asyncio.run(main())
 ```
@@ -311,43 +311,17 @@ asyncio.run(main())
 
 若你需要使用受限内置 SKILL，例如 `desktop_screenshot`，请至少为一个可信用户显式设置 `metadata={"is_developer": True}`。非 developer 当前轮次不会看到这些技能，模型即使强行调用也会被 runtime 拒绝。
 
-### 示例 2：低层入口 EmotionalGroupChatEngine
+### 示例 2：事件订阅与监控
 
 ```python
-import asyncio
-from pathlib import Path
+from sirius_chat.core.events import SessionEventType
 
-from sirius_chat.api import Agent, AgentPreset, Message, OrchestrationPolicy, SessionConfig, create_emotional_engine
-from sirius_chat.providers.mock import MockProvider
-
-
-async def main() -> None:
-  engine = create_emotional_engine(work_path=Path("./data/chat_session"), provider_async=MockProvider(responses=["这很有意思"]))
-
-  config = SessionConfig(
-    work_path=Path("./config/chat_session"),
-    data_path=Path("./data/chat_session"),
-    preset=AgentPreset(
-      agent=Agent(name="助手", persona="耐心和善", model="gpt-4o-mini"),
-      global_system_prompt="你是一个友善、克制、连续性很强的助手。",
-    ),
-    orchestration=OrchestrationPolicy(
-      unified_model="gpt-4o-mini",
-      pending_message_threshold=0,
-    ),
-  )
-
-  transcript = await engine.run_live_session(config=config)
-  transcript = await engine.run_live_message(
-    config=config,
-    transcript=transcript,
-    turn=Message(role="user", speaker="小王", content="我也想学"),
-  )
-
-  print(transcript.as_chat_history())
-
-
-asyncio.run(main())
+async def monitor(engine):
+    async for event in engine.event_bus.subscribe():
+        if event.type == SessionEventType.COGNITION_COMPLETED:
+            print(f"认知: {event.data}")
+        elif event.type == SessionEventType.DECISION_COMPLETED:
+            print(f"决策策略: {event.data['strategy']}")
 ```
 
 ### 示例 3：多模态输入
@@ -566,9 +540,11 @@ msg = Message(
 | `providers/provider_keys.json` | Provider 注册表与路由元数据 |
 | `sessions/<session_id>/session_state.db` | 默认会话状态（结构化 SQLite，可恢复；自动迁移旧 `session_state.json` / payload SQLite） |
 | `sessions/<session_id>/participants.json` | 会话参与者与主用户元数据 |
-| `memory/users/*.json` | 用户记忆持久化 |
-| `memory/events/events.json` | 事件记忆持久化 |
-| `memory/self_memory.json` | AI 自身记忆持久化 |
+| `memory/user_memory/groups/<group_id>/<user_id>.json` | 用户事实记忆（群隔离） |
+| `memory/self_memory.json` | AI 自身记忆（日记 + 名词解释） |
+| `episodic/<group_id>.json` | 情景记忆（JSON 数组格式） |
+| `semantic/users/<group_id>_<user_id>.json` | 用户语义画像 |
+| `semantic/groups/<group_id>.json` | 群体语义画像 |
 | `token/token_usage.db` | Token 消耗计量（SQLite） |
 | `roleplay/generated_agents.json` | 已生成的人格资产库 |
 | `roleplay/generated_agent_traces/<agent_key>.json` | 人格生成轨迹与失败快照 |
@@ -708,6 +684,9 @@ SKILL 系统支持可扩展任务编排：
 | [🔧 configuration.md](docs/configuration.md) | 所有配置字段说明和最佳实践 |
 | [📋 full-architecture-flow.md](docs/full-architecture-flow.md) | 详细数据流图解 |
 | [🎬 external-usage.md](docs/external-usage.md) | 库调用指南与集成文档 |
+| [🧠 memory-system.md](docs/memory-system.md) | 四层记忆底座（工作/事件 V2/情景/语义） |
+| [🎬 engine-emotional.md](docs/engine-emotional.md) | EmotionalGroupChatEngine 详细说明 |
+| [🗂️ migration-v0.28.md](docs/migration-v0.28.md) | v0.28 Emotional Engine 迁移指南 |
 | [🗂️ migration-v0.27.md](docs/migration-v0.27.md) | v0.27 破坏性变更迁移指南 |
 | [🗂️ migration-v0.27.12.md](docs/migration-v0.27.12.md) | v0.27.12 桌面截图自动调用语义迁移说明 |
 | [🗂️ migration-v0.27.11.md](docs/migration-v0.27.11.md) | v0.27.11 developer 安全模型与桌面截图 Skill 迁移说明 |
@@ -751,16 +730,19 @@ python -m pytest tests/test_engine.py::test_roleplay_engine_multi_human_single_a
 
 ## 🆕 最新变更
 
-### ✨ **新增**
-- **截图后自动观察当前桌面状态**：`desktop_screenshot` 现在会明确告诉模型这张图适合判断主机当前在做什么、前台窗口/页面/应用是什么，并支持传入本次观察重点。
-- **v0.27.12 迁移说明**：新增 `docs/migration-v0.27.12.md`，集中说明桌面截图自动调用提示与新的 `focus` 语义。
+### ✨ **v0.28 重大变更**
+- **EmotionalGroupChatEngine 成为默认引擎**：四层认知架构（感知→认知→决策→执行），支持情感分析、延迟响应、主动发言、群隔离记忆
+- **事件记忆 V2**：按用户缓冲原始消息，后台批量 LLM 提取结构化观察（preference/trait/relationship/experience/emotion/goal），自动去重合并
+- **工作记忆 FIFO**：改为按时间戳 FIFO + protected 截断，确保 human 和 assistant 消息公平保留
+- **移除 `<think>/<say>` dual-output**：模型输出纯文本，`SKILL_CALL` 内联解析
+- **新增存储路径**：`episodic/`（JSON 数组）、`semantic/`（用户/群体画像）、`engine_state/event_memory.json`
 
 ### 🚀 **改进**
 - **系统提示词会更明确鼓励截图再回答**：当 developer 可见的 SKILL 列表中包含 `desktop_screenshot` 时，主提示词会明确要求模型在判断主机当前状态前优先截图，而不是直接猜测。
 - **截图结果自带分析护栏**：桌面截图返回的内部文本会强调优先观察前台窗口、可见应用和页面标题；无法从截图确认的后台动作需要明确标注不确定。
 
 **迁移提示：**
-> 若你希望模型能更稳定地通过截图判断主机当前在做什么，请阅读 `docs/migration-v0.27.12.md`，并确认当前发言者具备 developer 权限。
+> v0.28+ 用户请阅读 `docs/migration-v0.28.md`。若你希望模型能更稳定地通过截图判断主机当前在做什么，请阅读 `docs/migration-v0.27.12.md`，并确认当前发言者具备 developer 权限。
 
 更多信息见 [CHANGELOG.md](CHANGELOG.md)。
 

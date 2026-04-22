@@ -49,6 +49,13 @@ _DEFAULT_TASK_REGISTRY: dict[str, TaskConfig] = {
         timeout=20.0,
         fallback_model="deepseek-chat",
     ),
+    "event_extract": TaskConfig(
+        model_name="gpt-4o-mini",
+        temperature=0.3,
+        max_tokens=512,
+        timeout=20.0,
+        fallback_model="deepseek-chat",
+    ),
     # High-quality tasks → stronger models
     "response_generate": TaskConfig(
         model_name="gpt-4o",

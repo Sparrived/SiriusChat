@@ -1,6 +1,6 @@
 # 记忆系统（Memory System）
 
-> **v0.28 三层记忆底座** — 工作记忆 → 情景记忆 → 语义记忆
+> **v0.28+ 四层记忆底座** — 工作记忆 → 事件记忆 V2 → 情景记忆 → 语义记忆
 
 ## 一句话定位
 
@@ -8,11 +8,12 @@
 
 ## 为什么要分层
 
-如果所有聊天记录都塞给 LLM，很快就会爆 token。如果只保留最近20条，重要的信息（比如用户说"我讨厌香菜"）会在几轮对话后被遗忘。三层记忆解决了这个矛盾：
+如果所有聊天记录都塞给 LLM，很快就会爆 token。如果只保留最近20条，重要的信息（比如用户说"我讨厌香菜"）会在几轮对话后被遗忘。四层记忆解决了这个矛盾：
 
 | 层级 | 保留什么 | 遗忘策略 | 查询方式 |
 |------|---------|---------|---------|
-| **工作记忆** | 最近对话上下文 | 滑动窗口溢出时丢弃低重要性内容 | 直接读取 |
+| **工作记忆** | 最近对话上下文 | 滑动窗口 FIFO 溢出时丢弃（protected 条目免疫） | 直接读取 |
+| **事件记忆 V2** | 结构化观察（preference/trait/relationship/experience/emotion/goal） | 按用户缓冲批量提取，去重合并 | 按 user_id + category 查询 |
 | **情景记忆** | 具体事件、偏好、关系变化 | 激活度衰减（艾宾浩斯曲线） | 关键词 + 语义相似度 |
 | **语义记忆** | 用户画像、群体氛围、关系状态 | 长期保留，定期合并更新 | 画像字段直接读取 |
 
@@ -26,20 +27,86 @@
 - 重要性评分（0~1）
 - 是否受保护（敏感信息不会被挤出窗口）
 
-**窗口溢出时的行为**：
-1. 按 `(受保护 > 重要性 > 时间)` 排序，保留前20条
-2. 被挤出且 `importance ≥ 0.3` 的条目 → **晋升到情景记忆**
-3. 被挤出且 `importance < 0.3` 的条目 → **直接丢弃**
+**窗口溢出时的行为**（FIFO + protected）：
+1. `protected` 条目（包含危机关键词或 `importance ≥ 0.7`）**永远保留**
+2. 其余条目按 **时间戳** 排序，保留最新的 `max_size - len(protected)` 条
+3. 被挤出的条目**直接丢弃**，不再自动晋升到情景记忆
+
+> **注意**：v0.28+ 的工作记忆已改为 FIFO 截断，不再按 importance 排序。这确保了 human 消息（importance=0.5）和 assistant 消息（importance=0.6）不会因为排序差异而被不公平地挤出。
 
 **受保护规则**：包含"喜欢""讨厌""deadline""自杀"等关键词，或 `importance ≥ 0.7` 的条目不会被挤出。这是一个兜底的安全网——高风险的对话内容不会因为窗口溢出而丢失。
 
-**持久化**：工作记忆在引擎重启后会从 `engine_state/working_memory.json` 恢复，但本质上是临时的，长期留存靠情景记忆。
+**持久化**：工作记忆在引擎重启后会从 `engine_state/groups/{group_id}.json` 恢复，本质上是临时的，长期留存靠事件记忆和情景记忆。
+
+## 事件记忆 V2（Event Memory）
+
+**定位**：连接原始对话与结构化认知的桥梁，通过 LLM 批量提取有意义的用户观察。
+
+### 核心流程
+
+```
+Human Message
+     │
+     ▼
+event_memory.buffer_message(user_id, content, group_id)
+     │  （过短内容 <6 字符自动丢弃）
+     ▼
+按用户聚合的原始消息缓冲（_buffer: user_id → [(group_id, content)]）
+     │
+     ▼ 每 5 分钟（后台 _bg_memory_promoter）
+达到 batch_size（默认 5）→ extract_observations()
+     │  （event_extract 任务，LLM 批量提取）
+     ▼
+EventMemoryEntry（结构化观察）
+  · category: preference / trait / relationship / experience / emotion / goal
+  · summary: ≤50 字自然语言描述
+  · confidence: 0.0~1.0
+  · evidence_samples: 原始消息片段
+  · group_id: 群隔离标识
+     │
+     ▼
+去重合并（同一用户同一 category，字符集 Jaccard ≥0.55 则合并）
+     │
+     ▼
+entries 列表（全局，按 group_id 可过滤）
+     │
+     ▼ 镜像备份
+episodic_memory.add_event()（向后兼容）
+```
+
+### 提取 Prompt 示例
+
+系统提示词要求 LLM 返回 JSON 数组，每个元素包含：
+- `category`：观察类别
+- `content`：简洁描述（≤50 字）
+- `confidence`：信息确定度（0.0-1.0）
+
+如果消息过于日常（问候、简短回应、无信息量），LLM 返回空数组 `[]`。
+
+### 去重合并
+
+```python
+# 字符集 Jaccard 相似度
+similarity = len(set(a) & set(b)) / len(set(a) | set(b))
+
+# 阈值 0.55
+if similarity >= 0.55:
+    # 合并：mention_count++、confidence 取 max、evidence 去重追加
+```
+
+### 与情景记忆的关系
+
+事件记忆 V2 是**主数据源**，情景记忆接收其提取结果作为**镜像备份**。这样：
+- 新检索逻辑可以直接从 `event_memory.entries` 读取结构化观察
+- 旧代码和第三方集成仍然可以通过 `episodic_memory` 访问事件数据
 
 ## 情景记忆（Episodic Memory）
 
 **定位**：中期事件库，按群聊分组存储的具体事件。
 
-存储格式是**追加式 JSONL**（每行一个 JSON 对象），路径为 `{work_path}/episodic/{group_id}.jsonl`。
+存储格式是**格式化的 JSON 数组**（不再是 JSONL），路径为 `{work_path}/episodic/{group_id}.json`。
+
+> **注意**：v0.28+ 已从 jsonl 迁移到格式化的 JSON 数组，便于人类阅读和调试。旧版 jsonl 文件在加载时自动兼容。
 
 每条事件包含：
 - `event_id`, `user_id`, `group_id`
@@ -62,14 +129,9 @@ activation = importance × exp(-λ × 小时数) × (1 + 0.1 × 访问次数)
 
 当 `activation < 0.1` 时，事件被移入 `{group_id}_archive.jsonl`，不再参与日常检索，但并未删除。
 
-**为什么用 JSONL 而不是数据库**：
-- 追加写极快，不需要事务
-- 人类可读，方便调试
-- 按群聊分文件，天然隔离
-
 ## 语义记忆（Semantic Memory）
 
-**定位**：长期认知层，从大量情景事件中提炼出的**结构化画像**。
+**定位**：长期认知层，从结构化观察中提炼出的**结构化画像**。
 
 ### 用户画像（UserSemanticProfile）
 
@@ -92,6 +154,18 @@ activation = importance × exp(-λ × 小时数) × (1 + 0.1 × 访问次数)
   "taboo_boundaries": ["前女友"]
 }
 ```
+
+### Consolidation 来源（v0.28+ 变更）
+
+语义整合 `_consolidate_group()` 现在**优先从事件记忆 V2 读取**：
+
+| category | 更新目标 |
+|----------|----------|
+| `preference` / `trait` / `experience` / `goal` | `base_attributes` |
+| `emotion` | `relationship_state.emotional_intimacy` |
+| `relationship` | `relationship_state.trust_score` |
+
+当没有事件记忆 V2 数据时（如旧数据或冷启动），自动回退到旧的情景记忆统计逻辑。
 
 ### 群体画像（GroupSemanticProfile）
 
@@ -124,7 +198,7 @@ activation = importance × exp(-λ × 小时数) × (1 + 0.1 × 访问次数)
 
 ## 记忆检索（MemoryRetriever）
 
-**定位**：统一查询接口，把三层记忆整合成一个有序的结果列表。
+**定位**：统一查询接口，把多层记忆整合成一个有序的结果列表。
 
 检索流程（`retrieve()`）：
 1. **工作记忆层**：关键词子串匹配，激活度固定为 1.0（最近的内容永远最"热"）
@@ -145,7 +219,9 @@ recency = exp(-0.1 × 天数)
 
 **定位**：AI 的"第一人称日记"——不是关于用户的事实，而是关于"我自己经历了什么"的记录。
 
-**来源**：Emotional Engine 的 `<think>` 输出（模型的内心独白）被解析后存入自传体记忆。
+**来源**：
+- v0.28 早期：Emotional Engine 的 `<think>` 输出被解析后存入自传体记忆
+- **当前**：dual-output（`<think>/<say>`）已完全移除，自传体记忆的更新改为由 engine 内部状态驱动（如重要对话轮次、情绪变化、skill 执行结果等）
 
 **组成**：
 - `SelfSemanticProfile`：AI 的自我概念（"我是谁"、核心价值观、情绪时间线）
@@ -196,21 +272,27 @@ importance = 0.5 + value_resonance(0~0.3) + emotional_intensity(0~0.2)
     │
     ▼
 [工作记忆] 加入窗口，分配 importance
+    │  （FIFO + protected 截断）
+    ▼
+[事件记忆 V2] buffer_message() 按用户聚合原始消息
+    │  （过短内容自动丢弃）
+    ▼ 每 5 分钟（后台 _bg_memory_promoter）
+[事件提取] 达到 batch_size → LLM 批量提取结构化观察
+    │  （category / summary / confidence / evidence）
+    ▼
+[去重合并] 字符集 Jaccard ≥0.55 的观察合并
     │
-    ▼ 窗口溢出
-[情景记忆] 高 importance 条目晋升，追加 JSONL
-    │
-    ▼ 每 10 分钟（后台任务）
-[激活度引擎] 重新计算 activation，低于 0.1 的归档
-    │
-    ▼ 每 10 分钟（后台任务）
-[语义记忆] 聚合最近7天事件，更新用户画像 + 群体画像
-    │
-    ▼ 回复生成时
-[记忆检索] 工作 + 情景 + 画像 + 自传体 → top_k 结果 → 注入 prompt
-    │
-    ▼ 回复输出后
-[自传体记忆] <think> 内容 → DiaryEntry + 情绪时间线
+    ├─→ [event_memory.entries] 主数据源
+    └─→ [情景记忆] 镜像备份（向后兼容）
+         │
+         ▼ 每 10 分钟（后台 _bg_consolidator）
+         [语义记忆] 按 category 聚合更新用户画像
+           · preference/trait/goal → base_attributes
+           · emotion → emotional_intimacy
+           · relationship → trust_score
+         │
+         ▼ 回复生成时
+         [记忆检索] 工作 + 情景 + 画像 + 自传体 → top_k 结果 → 注入 prompt
 ```
 
 ## 群聊隔离
@@ -218,7 +300,8 @@ importance = 0.5 + value_resonance(0~0.3) + emotional_intensity(0~0.2)
 v0.28 最重要的设计决策之一：**所有记忆层级都按 `group_id` 隔离**。
 
 - 工作记忆：`{group_id: [entries]}`
-- 情景记忆：`{group_id}.jsonl`
+- 事件记忆：`EventMemoryEntry.group_id`
+- 情景记忆：`{group_id}.json`
 - 语义记忆：`users/{group_id}_{user_id}.json`, `groups/{group_id}.json`
 - 迁移脚本自动把旧格式（不分群）拆分到新布局
 
@@ -228,7 +311,6 @@ v0.28 最重要的设计决策之一：**所有记忆层级都按 `group_id` 隔
 
 | 交互对象 | 方式 |
 |---------|------|
-| **EmotionalGroupChatEngine** | 引擎持有所有记忆管理器实例，调用 `add_entry()` / `retrieve()` |
+| **EmotionalGroupChatEngine** | 引擎持有所有记忆管理器实例，调用 `add_entry()` / `buffer_message()` / `retrieve()` |
 | **Persona** | 语义记忆中的 `communication_style` 影响 `StyleAdapter` 的参数选择 |
-| **Background Tasks** | 4 个后台任务中的 2 个（memory promoter + consolidator）专门维护记忆系统 |
-| **LLM Provider** | 检索结果作为 `[相关记忆]` 区块注入生成 prompt |
+| **Background Tasks** | 4 个后台任务中的 2 个（观察提取 promoter + 语义 consolidator）专门维护记忆系统 |

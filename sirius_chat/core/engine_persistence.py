@@ -67,6 +67,11 @@ class EngineStateStore:
         path = self._base / "token_usage_records.json"
         _atomic_write(path, {"records": records})
 
+    def save_event_memory(self, state: dict[str, Any]) -> None:
+        """Save event memory v2 state."""
+        path = self._base / "event_memory.json"
+        _atomic_write(path, state)
+
     def save_all(
         self,
         *,
@@ -75,6 +80,7 @@ class EngineStateStore:
         delayed_queue: list[dict[str, Any]],
         group_timestamps: dict[str, str],
         token_usage_records: list[dict[str, Any]] | None = None,
+        event_memory: dict[str, Any] | None = None,
     ) -> None:
         """Convenience: save all state in one call."""
         for group_id, entries in working_memories.items():
@@ -84,6 +90,8 @@ class EngineStateStore:
         self.save_group_timestamps(group_timestamps)
         if token_usage_records is not None:
             self.save_token_usage_records(token_usage_records)
+        if event_memory is not None:
+            self.save_event_memory(event_memory)
         logger.info("把现在的状态记下来啦，%d 个群的上下文都好好存着呢。", len(working_memories))
 
     # ------------------------------------------------------------------
@@ -135,6 +143,16 @@ class EngineStateStore:
         except (OSError, json.JSONDecodeError):
             return {}
 
+    def load_event_memory(self) -> dict[str, Any] | None:
+        """Load event memory v2 state."""
+        path = self._base / "event_memory.json"
+        if not path.exists():
+            return None
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+
     def load_all(self) -> dict[str, Any]:
         """Convenience: load all state in one call.
 
@@ -143,6 +161,7 @@ class EngineStateStore:
             assistant_emotion: dict | None
             delayed_queue: list[dict]
             group_timestamps: dict[str, str]
+            event_memory: dict | None
         """
         # Discover saved groups
         groups_dir = self._base / "groups"
@@ -164,6 +183,7 @@ class EngineStateStore:
             "assistant_emotion": self.load_assistant_emotion(),
             "delayed_queue": self.load_delayed_queue(),
             "group_timestamps": self.load_group_timestamps(),
+            "event_memory": self.load_event_memory(),
         }
 
     # ------------------------------------------------------------------

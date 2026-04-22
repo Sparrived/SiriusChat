@@ -96,8 +96,9 @@ flowchart TD
   subgraph Perception["① 感知层"]
     B --> C1["MessageNormalizer：标准化消息格式\n补全 group_id（默认 'default'）"]
     C1 --> C2["注册参与者到 user_memory（群隔离）"]
-    C2 --> C3["写入 working_memory（按群滑动窗口，含助手回复；动态 importance + sanitized 消息名）"]
-    C3 --> C4["更新 group_last_message_at"]
+    C2 --> C3["写入 working_memory（按群滑动窗口，含助手回复；FIFO + protected 截断）"]
+    C3 --> C3a["缓冲原始消息到 event_memory\n过短内容（<6 字符）自动丢弃"]
+    C3a --> C4["更新 group_last_message_at"]
     C4 --> E1["emit PERCEPTION_COMPLETED"]
   end
 
@@ -132,7 +133,7 @@ flowchart TD
     G10 --> E4["emit EXECUTION_COMPLETED"]
   end
 
-  E4 --> H["_background_update()\n更新群体氛围 + 群规范学习 + 情感孤岛检测"]
+  E4 --> H["_background_update()\n更新群体氛围 + 群规范学习 + 情感孤岛检测\nevent_memory 批量提取（每 5min）+ 语义整合（每 10min）"]
   H --> I["返回结果 dict\n{strategy, reply, emotion, intent, thought}"]
 ```
 
@@ -141,10 +142,11 @@ flowchart TD
 - **群隔离是 P0**：所有记忆操作必须携带 `group_id`。`UserMemoryManager.entries` 为 `{group_id: {user_id: Entry}}` 双层字典。
 - **四层认知架构**：感知 → 认知 → 决策 → 执行，每层通过 `SessionEventBus` 发出事件，外部可订阅监控。
 - **统一认知分析器**：`CognitionAnalyzer` 联合分析情绪+意图，规则引擎覆盖 ~90% 情况（零 LLM 成本），复杂情况单次 LLM fallback（~10% 命中）。情绪结果自然流入意图紧急度评分，无需额外异步边界。
-- **三层记忆底座**：
-  - `WorkingMemoryManager`：按群滑动窗口，最近 N 轮，关键信息保护。
-  - `EpisodicMemoryManager`：结构化事件存储，支持激活度遗忘曲线。
-  - `SemanticMemoryManager`：用户画像 + 群体规范，周期性 consolidation 更新。
+- **三层记忆底座 + Observation 层**：
+  - `WorkingMemoryManager`：按群滑动窗口（默认 20 条），FIFO + protected 截断，实时保留对话上下文。
+  - `EventMemoryManager`（V2）：按用户缓冲原始消息，后台批量 LLM 提取结构化观察（preference/trait/relationship/experience/emotion/goal），字符集 Jaccard 去重合并（阈值 0.55）。
+  - `EpisodicMemoryManager`：接收 event_memory 提取结果镜像备份，支持激活度遗忘曲线与关键词检索。
+  - `SemanticMemoryManager`：用户画像（兴趣图谱、关系状态、基础属性）+ 群体规范，由 consolidator 按观察 category 周期性更新。
 - **四种响应策略**：
   - `IMMEDIATE`：直接生成回复（高 urgency 或被 @ 时）。
   - `DELAYED`：入延迟队列，等待话题间隙或合并后触发。
@@ -153,9 +155,9 @@ flowchart TD
 - **后台任务**（`start_background_tasks()` / `stop_background_tasks()`）：
   - 延迟队列 ticker（每 10 秒）
   - 主动触发 checker（每 60 秒）
-  - 记忆 promoter（每 5 分钟，working → episodic）
-  - 语义整合 consolidator（每 10 分钟，episodic → semantic）
-- **状态持久化**：`save_state()` / `load_state()` 通过 `EngineStateStore` 持久化 working memory、assistant emotion、token usage 到 `engine_state/` 目录。
+  - 观察提取 promoter（每 5 分钟，检查 event_memory 缓冲 → 批量 LLM 提取 → 写入 event_memory.entries + 镜像到 episodic_memory）
+  - 语义整合 consolidator（每 10 分钟，event_memory.entries 按 category 聚合 → semantic 用户画像；无 v2 数据时回退到旧 episodic 统计）
+- **状态持久化**：`save_state()` / `load_state()` 通过 `EngineStateStore` 持久化 working memory、assistant emotion、token usage、**event_memory（缓冲 + 已提取观察）** 到 `engine_state/` 目录。
 - **Token 追踪**：`_generate()` 中估算 input/output tokens，记录到 `token_usage_records`，随状态持久化。
 
 ---
@@ -211,7 +213,7 @@ flowchart TD
 | `episodic/<group_id>.jsonl` | data root | `EpisodicMemoryManager` | **v0.28**：情景记忆条目（每群一行一个 JSON） |
 | `semantic/users/<group_id>_<user_id>.json` | data root | `SemanticMemoryManager` | **v0.28**：用户语义画像 |
 | `semantic/groups/<group_id>.json` | data root | `SemanticMemoryManager` | **v0.28**：群体语义画像 |
-| `engine_state/` | data root | `EngineStateStore` | **v0.28**：引擎运行态（working memory、assistant emotion、token usage） |
+| `engine_state/` | data root | `EngineStateStore` | **v0.28**：引擎运行态（working memory、assistant emotion、token usage、**event_memory**） |
 | `token/token_usage.db` | data root | `TokenUsageStore` | 跨会话 token 使用记录 |
 | `skill_data/*.json` | data root | `SkillDataStore` | 每个 SKILL 的独立数据存储 |
 | `primary_user.json` | data root | `JsonPersistentSessionRunner` / `main.py` | 兼容入口保留文件，不是主架构核心 |

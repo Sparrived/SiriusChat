@@ -70,7 +70,9 @@ class EventMemoryManager:
 
     # ── message buffering ──────────────────────────────────────
 
-    def buffer_message(self, *, user_id: str, content: str) -> None:
+    def buffer_message(
+        self, *, user_id: str, content: str, group_id: str = ""
+    ) -> None:
         """Buffer a message for later batch extraction.
 
         Very short / trivial messages are silently discarded.
@@ -79,9 +81,14 @@ class EventMemoryManager:
         if len(text) < _MIN_CONTENT_LENGTH:
             return
         buf = self._buffer.setdefault(user_id, [])
-        buf.append(text[:_MAX_MESSAGE_SAMPLE_LEN])
+        buf.append((group_id, text[:_MAX_MESSAGE_SAMPLE_LEN]))
         if len(buf) > _MAX_BUFFER_PER_USER:
             buf[:] = buf[-_MAX_BUFFER_PER_USER:]
+
+    def _get_group_id_for_user(self, user_id: str) -> str:
+        """Return the most recent group_id for a buffered user."""
+        buf = self._buffer.get(user_id, [])
+        return buf[-1][0] if buf else ""
 
     def should_extract(self, user_id: str, batch_size: int = 5) -> bool:
         """Check whether buffered messages reached the extraction threshold."""
@@ -128,9 +135,11 @@ class EventMemoryManager:
         """
         from sirius_chat.providers.base import GenerationRequest
 
-        messages = self._buffer.pop(user_id, [])
-        if not messages:
+        buffered = self._buffer.pop(user_id, [])
+        if not buffered:
             return []
+        messages = [msg for _, msg in buffered]
+        group_id = buffered[-1][0] if buffered else ""
 
         request = GenerationRequest(
             model=model_name,
@@ -173,6 +182,7 @@ class EventMemoryManager:
             entry = EventMemoryEntry(
                 event_id=self._next_event_id(),
                 user_id=user_id,
+                group_id=group_id,
                 category=category,
                 summary=summary_text[:100],
                 confidence=confidence,
@@ -203,8 +213,8 @@ class EventMemoryManager:
         verified_count = 0
         rejected_count = 0
         for uid in list(self._buffer.keys()):
-            messages = self._buffer.get(uid, [])
-            if not messages:
+            buffered = self._buffer.get(uid, [])
+            if not buffered:
                 continue
             results = await self.extract_observations(
                 user_id=uid,
@@ -292,7 +302,7 @@ class EventMemoryManager:
             "version": 2,
             "entries": [e.to_dict() for e in self.entries],
             "buffer": {
-                uid: list(msgs)
+                uid: [list(item) for item in msgs]
                 for uid, msgs in self._buffer.items()
                 if msgs
             },
@@ -314,7 +324,14 @@ class EventMemoryManager:
             manager.entries.append(_EME.from_dict(item))
         for uid, msgs in payload.get("buffer", {}).items():
             if isinstance(msgs, list):
-                manager._buffer[uid] = [str(m) for m in msgs]
+                parsed: list[tuple[str, str]] = []
+                for m in msgs:
+                    if isinstance(m, list) and len(m) == 2:
+                        parsed.append((str(m[0]), str(m[1])))
+                    elif isinstance(m, str):
+                        # backward compat: old format had plain strings
+                        parsed.append(("", m))
+                manager._buffer[uid] = parsed
         return manager
 
 

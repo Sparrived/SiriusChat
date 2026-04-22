@@ -138,9 +138,10 @@ python main.py --engine emotional --config session_emotional.json
 | `delayed_queue_tick_interval_seconds` | int | 10 | 延迟回复队列扫描间隔 |
 | `proactive_silence_minutes` | int | 30 | 沉默多久后可能触发主动发言 |
 | `proactive_check_interval_seconds` | int | 60 | 主动触发检查间隔 |
-| `memory_promote_interval_seconds` | int | 300 | 工作记忆→情景记忆晋升间隔 |
-| `working_memory_promote_threshold` | float | 0.3 | 晋升 importance 阈值 |
-| `consolidation_interval_seconds` | int | 600 | 情景记忆→语义记忆整合间隔 |
+| `memory_promote_interval_seconds` | int | 300 | 事件记忆缓冲检查间隔（观察提取 promoter） |
+| `working_memory_promote_threshold` | float | 0.3 | 保留兼容字段 |
+| `event_memory_batch_size` | int | 5 | 单用户缓冲达到此数量触发 LLM 批量提取 |
+| `consolidation_interval_seconds` | int | 600 | 语义整合间隔（event_memory.entries → 语义画像） |
 | `task_model_overrides` | dict | {} | 按任务覆盖模型参数，见下表 |
 
 #### task_model_overrides
@@ -151,6 +152,7 @@ python main.py --engine emotional --config session_emotional.json
 |--------|---------|------|
 | `response_generate` | gpt-4o | 回复生成 |
 | `cognition_analyze` | gpt-4o-mini | 统一情绪+意图分析 |
+| `event_extract` | gpt-4o-mini | 事件记忆 V2 观察提取 |
 | `emotion_analyze` | gpt-4o-mini | 情感分析（保留兼容） |
 | `intent_analyze` | gpt-4o-mini | 意图分析（保留兼容） |
 

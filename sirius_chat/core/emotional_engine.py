@@ -30,6 +30,7 @@ from sirius_chat.core.threshold_engine import ThresholdEngine
 
 from sirius_chat.memory.activation_engine import ActivationEngine
 from sirius_chat.memory.episodic.manager import EpisodicMemoryManager
+from sirius_chat.memory.event.manager import EventMemoryManager
 from sirius_chat.memory.retrieval_engine import MemoryRetriever
 from sirius_chat.memory.semantic.manager import SemanticMemoryManager
 from sirius_chat.memory.user.manager import UserMemoryManager
@@ -111,6 +112,7 @@ class EmotionalGroupChatEngine:
             max_size=self.config.get("working_memory_max_size", 20)
         )
         self.episodic_memory = EpisodicMemoryManager(work_path)
+        self.event_memory = EventMemoryManager()
         self.semantic_memory = SemanticMemoryManager(work_path)
         self.user_memory = UserMemoryManager()
         self.activation_engine = ActivationEngine()
@@ -379,15 +381,31 @@ class EmotionalGroupChatEngine:
         self._bg_tasks.clear()
 
     async def _bg_delayed_queue_ticker(self) -> None:
-        """Periodically tick delayed queue for all active groups."""
+        """Periodically tick delayed queue for all active groups.
+
+        Note: This task only monitors pending items and emits events.
+        Actual reply generation and delivery must be handled by the external
+        caller (e.g. _background_delivery_loop in the QQ plugin) via
+        tick_delayed_queue() to avoid consuming queue items without delivery.
+        """
         interval = self.config.get("delayed_queue_tick_interval_seconds", 10)
         while self._bg_running:
             await asyncio.sleep(interval)
             for group_id in list(self._group_last_message_at.keys()):
                 try:
-                    results = await self.tick_delayed_queue(group_id)
-                    if results:
+                    pending = self.delayed_queue.get_pending(group_id)
+                    if pending:
                         self._log_inner_thought("之前记下的延迟回复，现在该开口了～")
+                        # Emit event so external delivery loop can call
+                        # tick_delayed_queue() to generate and send the reply.
+                        for item in pending:
+                            await self.event_bus.emit(SessionEvent(
+                                type=SessionEventType.DELAYED_RESPONSE_TRIGGERED,
+                                data={
+                                    "group_id": group_id,
+                                    "item_id": item.item_id,
+                                },
+                            ))
                 except Exception as exc:
                     logger.warning("Delayed queue tick failed for %s: %s", group_id, exc)
 
@@ -405,46 +423,63 @@ class EmotionalGroupChatEngine:
                     logger.warning("Proactive check failed for %s: %s", group_id, exc)
 
     async def _bg_memory_promoter(self) -> None:
-        """Periodically promote high-importance working memory entries to episodic.
+        """Periodically extract structured observations from buffered messages.
 
-        Only human messages and final assistant replies are promoted.
-        Intermediate skill turns (importance==0.3) and system messages are skipped.
-        Each entry is promoted at most once, tracked by entry_id.
+        Uses EventMemoryManager's batch LLM extraction instead of raw
+        working-memory promotion.
         """
         interval = self.config.get("memory_promote_interval_seconds", 300)
-        threshold = self.config.get("working_memory_promote_threshold", 0.3)
-        promoted_ids: set[str] = set()
-        promoted = 0
+        batch_size = self.config.get("event_memory_batch_size", 5)
         while self._bg_running:
             await asyncio.sleep(interval)
             try:
-                for group_id in self.working_memory.list_groups():
-                    entries = self.working_memory.get_recent_entries(group_id, n=100)
-                    for entry in entries:
-                        # Skip already-promoted entries
-                        if entry.entry_id in promoted_ids:
-                            continue
-                        # Skip system messages (skill results, etc.)
-                        if entry.role == "system":
-                            continue
-                        # Skip intermediate assistant turns (exactly 0.3)
-                        if entry.role == "assistant" and entry.importance <= threshold:
-                            continue
-                        if entry.importance >= threshold:
-                            self.episodic_memory.add_event(
-                                group_id=group_id,
-                                user_id=entry.user_id,
-                                content=entry.content,
-                                emotion_valence=0.0,
-                                importance=entry.importance,
-                            )
-                            promoted_ids.add(entry.entry_id)
-                            promoted += 1
-                if promoted > 0:
-                    self._log_inner_thought(f"整理了一下记忆，把 {promoted} 条重要的对话收进了长久记忆里。")
-                    promoted = 0
+                if self.provider_async is None:
+                    continue
+
+                pending = self.event_memory.pending_buffer_counts()
+                if not pending:
+                    continue
+
+                extracted_total = 0
+                for user_id, count in list(pending.items()):
+                    if count < batch_size:
+                        continue
+
+                    group_id = self.event_memory._get_group_id_for_user(user_id)
+                    user_entry = self.user_memory.get_user_by_id(user_id, group_id)
+                    user_name = (
+                        user_entry.name
+                        if user_entry and getattr(user_entry, "name", None)
+                        else user_id
+                    )
+
+                    cfg = self.model_router.resolve("event_extract")
+                    new_entries = await self.event_memory.extract_observations(
+                        user_id=user_id,
+                        user_name=user_name,
+                        provider_async=self.provider_async,
+                        model_name=cfg.model_name,
+                        temperature=cfg.temperature,
+                        max_tokens=cfg.max_tokens,
+                    )
+                    extracted_total += len(new_entries)
+
+                    # Mirror to episodic memory for backward-compat retrieval
+                    for entry in new_entries:
+                        self.episodic_memory.add_event(
+                            group_id=entry.group_id or group_id,
+                            user_id=entry.user_id,
+                            content=entry.summary,
+                            emotion_valence=0.0,
+                            importance=entry.confidence,
+                        )
+
+                if extracted_total > 0:
+                    self._log_inner_thought(
+                        f"从大家的对话里提炼了 {extracted_total} 条观察，对每个人的了解又深了一点点～"
+                    )
             except Exception as exc:
-                logger.warning("Memory promotion failed: %s", exc)
+                logger.warning("Observation extraction failed: %s", exc)
 
     async def _bg_consolidator(self) -> None:
         """Periodically consolidate episodic memories into semantic profiles."""
@@ -459,69 +494,150 @@ class EmotionalGroupChatEngine:
                 logger.warning("Consolidation failed: %s", exc)
 
     async def _consolidate_group(self, group_id: str) -> None:
-        """Consolidate episodic events into semantic user profiles for a group."""
+        """Consolidate structured event-memory observations into semantic profiles."""
         from datetime import datetime, timedelta, timezone
         from sirius_chat.memory.semantic.models import UserSemanticProfile
 
-        # Read recent episodic events (last 7 days)
-        entries = self.episodic_memory.get_entries(group_id, limit=500)
-        if not entries:
-            return
-
         cutoff = datetime.now(timezone.utc) - timedelta(days=7)
-        recent = [
-            e for e in entries
-            if e.created_at and datetime.fromisoformat(e.created_at.replace("Z", "+00:00")) > cutoff
+
+        # ── 1. Structured observations from event memory v2 ──────────────
+        recent_obs = [
+            e for e in self.event_memory.entries
+            if e.group_id == group_id and e.verified
+            and e.created_at
+            and datetime.fromisoformat(e.created_at.replace("Z", "+00:00")) > cutoff
         ]
-        if not recent:
+
+        # ── Fallback to raw episodic events when no v2 observations ──────
+        if not recent_obs:
+            entries = self.episodic_memory.get_entries(group_id, limit=500)
+            if not entries:
+                return
+            recent_ep = [
+                e for e in entries
+                if e.created_at and datetime.fromisoformat(e.created_at.replace("Z", "+00:00")) > cutoff
+            ]
+            if not recent_ep:
+                return
+
+            user_stats: dict[str, dict[str, Any]] = {}
+            for e in recent_ep:
+                uid = e.user_id or "unknown"
+                if uid not in user_stats:
+                    user_stats[uid] = {
+                        "count": 0, "valence_sum": 0.0, "help_count": 0,
+                        "last_at": e.created_at,
+                    }
+                user_stats[uid]["count"] += 1
+                valence = 0.0
+                if e.summary:
+                    s = e.summary.lower()
+                    pos = sum(1 for w in ["开心", "高兴", "喜欢", "棒", "好"] if w in s)
+                    neg = sum(1 for w in ["难受", "难过", "伤心", "烦", "累", "生气"] if w in s)
+                    valence = (pos - neg) * 0.2
+                user_stats[uid]["valence_sum"] += valence
+                if "help" in e.summary.lower() or "求助" in e.summary or "怎么办" in e.summary:
+                    user_stats[uid]["help_count"] += 1
+
+            for uid, stats in user_stats.items():
+                profile = self.semantic_memory.get_user_profile(group_id, uid)
+                if profile is None:
+                    profile = UserSemanticProfile(user_id=uid)
+                rs = profile.relationship_state
+                rs.interaction_frequency_7d = stats["count"] / 7.0
+                avg_valence = stats["valence_sum"] / stats["count"] if stats["count"] > 0 else 0.0
+                rs.emotional_intimacy = round(
+                    rs.emotional_intimacy * 0.7 + abs(avg_valence) * 0.3, 3
+                )
+                rs.dependency_score = round(
+                    rs.dependency_score * 0.7 + min(1.0, stats["help_count"] / max(1, stats["count"])) * 0.3, 3
+                )
+                rs.compute_familiarity()
+                rs.last_interaction_at = stats["last_at"]
+                if not rs.first_interaction_at:
+                    rs.first_interaction_at = stats["last_at"]
+                self.semantic_memory.save_user_profile(group_id, profile)
             return
 
-        # Aggregate per user
+        # ── 2. Aggregate structured observations per user ────────────────
         user_stats: dict[str, dict[str, Any]] = {}
-        for e in recent:
+        for e in recent_obs:
             uid = e.user_id or "unknown"
             if uid not in user_stats:
                 user_stats[uid] = {
                     "count": 0,
-                    "valence_sum": 0.0,
-                    "help_count": 0,
+                    "emotion_count": 0,
+                    "relationship_count": 0,
+                    "preference_count": 0,
+                    "trait_count": 0,
                     "last_at": e.created_at,
+                    "observations": [],
                 }
             user_stats[uid]["count"] += 1
-            # Approximate valence from confidence and summary sentiment
-            valence = 0.0
-            if e.summary:
-                s = e.summary.lower()
-                pos = sum(1 for w in ["开心", "高兴", "喜欢", "棒", "好"] if w in s)
-                neg = sum(1 for w in ["难受", "难过", "伤心", "烦", "累", "生气"] if w in s)
-                valence = (pos - neg) * 0.2
-            user_stats[uid]["valence_sum"] += valence
-            if "help" in e.summary.lower() or "求助" in e.summary or "怎么办" in e.summary:
-                user_stats[uid]["help_count"] += 1
+            user_stats[uid]["observations"].append(e)
+            if e.category == "emotion":
+                user_stats[uid]["emotion_count"] += 1
+            elif e.category == "relationship":
+                user_stats[uid]["relationship_count"] += 1
+            elif e.category == "preference":
+                user_stats[uid]["preference_count"] += 1
+            elif e.category == "trait":
+                user_stats[uid]["trait_count"] += 1
 
-        # Update semantic profiles
+        # ── 3. Raw message frequency from episodic memory (accuracy) ─────
+        episodic_entries = self.episodic_memory.get_entries(group_id, limit=500)
+        msg_count: dict[str, int] = {}
+        for e in episodic_entries:
+            if (
+                e.created_at
+                and datetime.fromisoformat(e.created_at.replace("Z", "+00:00")) > cutoff
+            ):
+                uid = e.user_id or "unknown"
+                msg_count[uid] = msg_count.get(uid, 0) + 1
+
+        # ── 4. Update semantic profiles ──────────────────────────────────
         for uid, stats in user_stats.items():
             profile = self.semantic_memory.get_user_profile(group_id, uid)
             if profile is None:
                 profile = UserSemanticProfile(user_id=uid)
 
-            # Update relationship state
             rs = profile.relationship_state
-            rs.interaction_frequency_7d = stats["count"] / 7.0
-            avg_valence = stats["valence_sum"] / stats["count"] if stats["count"] > 0 else 0.0
-            # Smooth emotional intimacy update
+            raw_count = msg_count.get(uid, stats["count"])
+            rs.interaction_frequency_7d = raw_count / 7.0
+
+            # Emotional intimacy from emotion-category observations
+            emotion_ratio = stats["emotion_count"] / max(1, stats["count"])
             rs.emotional_intimacy = round(
-                rs.emotional_intimacy * 0.7 + abs(avg_valence) * 0.3, 3
+                rs.emotional_intimacy * 0.7 + emotion_ratio * 0.3, 3
             )
-            # Dependency score: how often they seek help
+
+            # Trust score from relationship-category observations
+            rel_ratio = stats["relationship_count"] / max(1, stats["count"])
+            rs.trust_score = round(
+                rs.trust_score * 0.7 + rel_ratio * 0.3, 3
+            )
+
+            # Dependency score (smoothed engagement proxy)
             rs.dependency_score = round(
-                rs.dependency_score * 0.7 + min(1.0, stats["help_count"] / max(1, stats["count"])) * 0.3, 3
+                rs.dependency_score * 0.8 + min(1.0, raw_count / 50.0) * 0.2, 3
             )
+
             rs.compute_familiarity()
             rs.last_interaction_at = stats["last_at"]
             if not rs.first_interaction_at:
                 rs.first_interaction_at = stats["last_at"]
 
+            # Update base_attributes from preference/trait/experience/goal
+            for obs in stats["observations"]:
+                if obs.category in ("preference", "trait", "experience", "goal"):
+                    attr_key = f"{obs.category}_{len(profile.base_attributes)}"
+                    profile.base_attributes[attr_key] = {
+                        "content": obs.summary,
+                        "confidence": obs.confidence,
+                        "updated_at": obs.created_at,
+                    }
+
+            profile.updated_at = stats["last_at"]
             self.semantic_memory.save_user_profile(group_id, profile)
 
     async def proactive_check(
@@ -824,6 +940,7 @@ class EmotionalGroupChatEngine:
             delayed_queue=[],
             group_timestamps=dict(self._group_last_message_at),
             token_usage_records=[r.to_dict() for r in self.token_usage_records],
+            event_memory=self.event_memory.to_dict(),
         )
 
         # Save proactive state
@@ -870,6 +987,15 @@ class EmotionalGroupChatEngine:
             now_iso = datetime.now(timezone.utc).isoformat()
             for gid in list(self._group_last_message_at.keys()):
                 self._group_last_message_at[gid] = now_iso
+
+            # Event memory v2
+            event_mem_data = state.get("event_memory")
+            if event_mem_data:
+                try:
+                    self.event_memory = EventMemoryManager.from_dict(event_mem_data)
+                except Exception as exc:
+                    logger.warning("事件记忆恢复失败，使用空实例: %s", exc)
+                    self.event_memory = EventMemoryManager()
 
             # Token usage records
             from sirius_chat.config import TokenUsageRecord
@@ -1028,6 +1154,14 @@ class EmotionalGroupChatEngine:
             importance=importance,
             multimodal_inputs=list(message.multimodal_inputs) if message.multimodal_inputs else None,
         )
+
+        # Buffer raw message for structured observation extraction
+        if message.content and message.speaker:
+            self.event_memory.buffer_message(
+                user_id=message.speaker,
+                content=message.content,
+                group_id=group_id,
+            )
 
         # Update group last message time
         self._group_last_message_at[group_id] = _now_iso()

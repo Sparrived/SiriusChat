@@ -332,7 +332,12 @@ python scripts/ci_check.py
 - 公式：`activation = importance × exp(-λ × hours) × (1 + γ × access_count)`
 - 分类衰减：`identity/preference`（λ=0.001，几乎永久）、`emotion/transient`（λ=0.05，数周衰减）、`event/timely`（λ=0.1，事件后快速衰减）。
 
-**事件记忆 V2**：基于 observation、按用户缓冲、批量提取；去重使用字符集 Jaccard 相似度（阈值 0.55）。
+**事件记忆 V2（observation-based，v0.28+ 核心）**：
+- **按用户缓冲**：每条 human 消息经 `_perception` 进入 `EventMemoryManager.buffer_message(user_id, content, group_id)`；过短（<6 字符）内容被丢弃。
+- **批量 LLM 提取**：后台 `_bg_memory_promoter` 每 5 分钟检查缓冲；当单用户缓冲达到 `event_memory_batch_size`（默认 5）时，调用 `extract_observations()` 通过 LLM 批量提取结构化观察。
+- **结构化观察**：每条观察为 `EventMemoryEntry`，含 `category`（preference/trait/relationship/experience/emotion/goal）、`summary`（≤50 字）、`confidence`（0.0-1.0）、`evidence_samples`（原始消息片段）。
+- **去重合并**：同一用户同一 category 下，字符集 Jaccard 相似度 ≥0.55 的观察会被合并（mention_count++、confidence 取 max、evidence 去重追加）。
+- **群隔离**：`EventMemoryEntry.group_id` 确保观察归属特定群；`buffer_message` 和 `extract_observations` 均携带 group_id。
 
 **AI 自身记忆**：日记（Diary，最多 100 条）+ 名词解释（Glossary，最多 200 条），支持遗忘曲线与衰减。
 
@@ -347,8 +352,8 @@ python scripts/ci_check.py
 - `start_background_tasks()` / `stop_background_tasks()` 幂等启停。
 - 延迟队列 ticker：每 10 秒检查所有活跃群的延迟响应。
 - 主动触发 checker：每 60 秒检查长时间沉默群。
-- 记忆 promoter：每 5 分钟将 `importance ≥ 0.3` 的工作记忆条目晋升到情景记忆。
-- 语义整合 consolidator：每 10 分钟（可配置）将最近 7 天的情景事件聚合为语义用户画像更新（互动频率、情感亲密度、依赖度）。
+- 观察提取 promoter：每 5 分钟检查 `EventMemoryManager` 的待处理缓冲；达到阈值的用户触发 `extract_observations()` 批量 LLM 提取，结果写入 `event_memory.entries` 并镜像到 `episodic_memory` 保持兼容。
+- 语义整合 consolidator：每 10 分钟（可配置）将最近 7 天的结构化观察（`event_memory.entries`）按 category 聚合为语义用户画像更新；无 v2 观察时自动回退到旧的 episodic 原始事件统计。
 
 **群级规范学习（v0.28 新增）**：
 - 被动学习：每处理一条消息自动更新群体统计。
@@ -378,6 +383,7 @@ python scripts/ci_check.py
     │
     ├─ 注册参与者 → user_memory (group-isolated)
     ├─ 写入工作记忆 → working_memory
+    ├─ 缓冲原始消息 → event_memory.buffer_message(user_id, content, group_id)
     └─ 更新 group_last_message_at
     │
     ▼
@@ -396,7 +402,7 @@ python scripts/ci_check.py
     │
     ▼
 执行层
-    ├─ ResponseAssembler → PromptBundle（system_prompt：persona + 情绪 + 共情 + 记忆 + glossary + skill + 输出格式；user_content：当前消息）
+    ├─ ResponseAssembler → PromptBundle（system_prompt：persona + 情绪 + 共情 + 记忆 + skill + 输出格式；user_content：当前消息）
     ├─ _build_history_messages() → working_memory 转标准 OpenAI messages（user / assistant / system）
     ├─ StyleAdapter → max_tokens / temperature / tone 动态适配
     ├─ ModelRouter → 任务感知模型选择（urgency / heat / 用户风格）
@@ -406,8 +412,10 @@ python scripts/ci_check.py
     │
     ▼
 后台更新层
+    ├─ 批量提取观察 → event_memory.extract_observations() → 写入 episodic_memory
     ├─ 更新群氛围 → semantic_memory.atmosphere_history
     ├─ 被动学习群规范 → semantic_memory.group_norms
+    ├─ 语义整合 → event_memory.entries 按 category 更新 semantic 用户画像
     ├─ 更新用户情感轨迹 → emotion_analyzer.trajectories
     └─ 触发事件 → event_bus (PERCEPTION/COGNITION/DECISION/EXECUTION_COMPLETED)
 ```
@@ -419,8 +427,8 @@ python scripts/ci_check.py
 - **PROACTIVE**：长时间沉默 / 记忆触发 / 情感触发 → AI 主动开启话题
 
 **持久化与恢复**：
-- `save_state()` → 原子写入 `engine_state/`（working_memory.json、assistant_emotion.json、group_timestamps.json）
-- `load_state()` → 从磁盘恢复所有群的运行态
+- `save_state()` → 原子写入 `engine_state/`（working_memory.json、assistant_emotion.json、group_timestamps.json、event_memory.json）
+- `load_state()` → 从磁盘恢复所有群的运行态，含 `event_memory` 缓冲与已提取观察
 - 语义记忆和情景记忆已自带文件持久化，无需额外处理
 
 ---
