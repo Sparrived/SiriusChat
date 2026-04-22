@@ -77,7 +77,8 @@ class DiaryIndexer:
                 continue
             # Cosine similarity via dot product of normalized vectors
             score = self._cosine_sim(query_vec, entry.embedding)
-            scored.append((entry, score))
+            if score > 0.25:  # minimum relevance threshold
+                scored.append((entry, score))
 
         scored.sort(key=lambda x: x[1], reverse=True)
         return scored[:top_k]
