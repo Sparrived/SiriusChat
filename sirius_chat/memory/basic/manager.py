@@ -86,6 +86,7 @@ class BasicMemoryManager:
         role: str,
         content: str,
         *,
+        speaker_name: str = "",
         system_prompt: str = "",
         timestamp: str | None = None,
     ) -> BasicMemoryEntry:
@@ -95,6 +96,7 @@ class BasicMemoryManager:
             entry_id=f"bme_{uuid.uuid4().hex[:12]}",
             group_id=gid,
             user_id=user_id,
+            speaker_name=speaker_name,
             role=role,
             content=content,
             timestamp=timestamp or self._now_iso(),

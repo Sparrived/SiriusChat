@@ -15,11 +15,21 @@ logger = logging.getLogger(__name__)
 
 _DIARY_SYSTEM_PROMPT = (
     "你是日记整理助手。请根据提供的对话记录，以第一人称口吻整理成一段日记。\n"
-    "要求：\n"
-    "- 保留关键信息、用户观点、重要约定\n"
+    "\n"
+    "【对话记录格式说明】\n"
+    "每条记录格式为：[稳定ID (显示名称)] 内容\n"
+    "- 稳定ID：用户的唯一身份标识，不会因改昵称而变化，是识别人的主要依据\n"
+    "- 显示名称：括号内的昵称/名字，可能变化，仅作辅助识别\n"
+    "- assistant 的显示名称为 AI 当前人格名称\n"
+    "\n"
+    "【日记要求】\n"
+    "- 明确提到谁（用显示名称）说了什么、做了什么、表达了什么观点\n"
+    "- 通过稳定ID识别同一个人，即使显示名称不同也要视为同一人\n"
+    "- 保留关键信息、用户观点、重要约定、情绪变化\n"
     "- 去除日常寒暄和重复内容\n"
     "- 口吻自然，像AI本人在回顾群聊经历\n"
     "- 正文不超过300字\n"
+    "\n"
     "严格输出 JSON，包含以下字段：\n"
     '{"content": "日记正文", "keywords": ["关键词1", "关键词2"], "summary": "一句话摘要（不超过50字）"}'
 )
@@ -32,13 +42,15 @@ def _build_diary_user_prompt(
 ) -> str:
     lines: list[str] = []
     for e in candidates:
-        speaker = e.user_id
-        lines.append(f"[{speaker}] {e.content}")
+        # user_id is the stable identity key; speaker_name is the display nickname
+        name = e.speaker_name if e.speaker_name else e.user_id
+        lines.append(f"[{e.user_id} ({name})] {e.content}")
     conversation = "\n".join(lines)
     return (
         f"人格设定：{persona_name}，{persona_description}\n\n"
-        f"以下是对话记录：\n{conversation}\n\n"
-        "请整理成日记。"
+        f"以下是对话记录（格式：[稳定ID (显示名称)] 内容）：\n"
+        f"{conversation}\n\n"
+        "请整理成日记。记住：稳定ID是识别人的主要依据，显示名称只是辅助。"
     )
 
 

@@ -20,6 +20,7 @@ class BasicMemoryEntry:
     role: str              # "human" | "assistant" | "system"
     content: str
     timestamp: str         # ISO 8601
+    speaker_name: str = "" # display name (nickname, card, or persona name)
     system_prompt: str = ""  # system prompt used for this assistant turn
 
     def to_dict(self) -> dict[str, Any]:
@@ -27,6 +28,7 @@ class BasicMemoryEntry:
             "entry_id": self.entry_id,
             "group_id": self.group_id,
             "user_id": self.user_id,
+            "speaker_name": self.speaker_name,
             "role": self.role,
             "content": self.content,
             "timestamp": self.timestamp,
@@ -39,6 +41,7 @@ class BasicMemoryEntry:
             entry_id=data.get("entry_id", ""),
             group_id=data.get("group_id", ""),
             user_id=data.get("user_id", ""),
+            speaker_name=data.get("speaker_name", ""),
             role=data.get("role", "human"),
             content=data.get("content", ""),
             timestamp=data.get("timestamp", ""),

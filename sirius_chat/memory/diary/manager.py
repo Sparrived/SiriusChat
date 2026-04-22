@@ -29,6 +29,8 @@ class DiaryManager:
         self._generator = DiaryGenerator()
         # Track source_ids that have already been diary-ized per group
         self._diarized_sources: dict[str, set[str]] = {}
+        # Track which groups have been loaded from disk (lazy loading)
+        self._loaded_groups: set[str] = set()
 
     # ------------------------------------------------------------------
     # Generation
@@ -72,8 +74,21 @@ class DiaryManager:
         )
         return entry
 
+    def ensure_group_loaded(self, group_id: str) -> None:
+        """Lazy-load persisted entries for a group if not already loaded.
+
+        Safe to call multiple times (idempotent).  This is the entry point
+        for external callers (e.g. EmotionalGroupChatEngine) to warm up
+        the diary index before retrieval.
+        """
+        if group_id in self._loaded_groups:
+            return
+        self.load_group(group_id)
+        self._loaded_groups.add(group_id)
+
     def is_source_diarized(self, group_id: str, entry_id: str) -> bool:
         """Check if a basic memory entry has already been processed into a diary."""
+        self.ensure_group_loaded(group_id)
         return entry_id in self._diarized_sources.get(group_id, set())
 
     # ------------------------------------------------------------------
@@ -82,6 +97,7 @@ class DiaryManager:
 
     def add_entry(self, group_id: str, entry: DiaryEntry) -> None:
         """Add an entry to memory index and persist."""
+        self.ensure_group_loaded(group_id)
         self._indexer.add(entry)
         existing = self._store.load(group_id)
         existing.append(entry)
@@ -103,10 +119,20 @@ class DiaryManager:
         self,
         query: str,
         *,
+        group_id: str | None = None,
         top_k: int = 5,
         max_tokens_budget: int = 800,
     ) -> list[DiaryEntry]:
-        """Retrieve relevant diary entries."""
+        """Retrieve relevant diary entries.
+
+        Args:
+            query: Search query.
+            group_id: If provided, lazy-load this group's entries before retrieval.
+            top_k: Maximum number of entries to return.
+            max_tokens_budget: Maximum tokens for the returned content.
+        """
+        if group_id is not None:
+            self.ensure_group_loaded(group_id)
         return self._retriever.retrieve(
             query=query,
             top_k=top_k,
@@ -119,6 +145,7 @@ class DiaryManager:
 
     def get_entries_for_group(self, group_id: str) -> list[DiaryEntry]:
         """Get all indexed entries for a group."""
+        self.ensure_group_loaded(group_id)
         return [e for e in self._indexer.list_all() if e.group_id == group_id]
 
     def replace_entries(self, group_id: str, new_entries: list[DiaryEntry]) -> None:

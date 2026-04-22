@@ -286,6 +286,8 @@ class EmotionalGroupChatEngine:
         ))
 
         # 4. Execution
+        # Warm up diary index for this group (lazy-loads from disk on first call)
+        self.diary_manager.ensure_group_loaded(group_id)
         result = await self._execution(decision, message, intent, emotion, memories, group_id, empathy)
         # 内心活动：执行后的反馈
         self._log_execution_thought(speaker, decision, result)
@@ -1205,6 +1207,7 @@ class EmotionalGroupChatEngine:
         entry = self.basic_memory.add_entry(
             group_id=group_id,
             user_id=message.speaker or "unknown",
+            speaker_name=message.speaker or "unknown",
             role="human",
             content=message.content,
         )
@@ -1559,6 +1562,7 @@ class EmotionalGroupChatEngine:
                 self.basic_memory.add_entry(
                     group_id=group_id,
                     user_id="assistant",
+                    speaker_name=self.persona.name if self.persona else "assistant",
                     role="assistant",
                     content=clean_reply,
                     system_prompt=bundle.system_prompt,
