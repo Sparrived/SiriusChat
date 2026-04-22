@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from sirius_chat.memory.diary.models import DiaryEntry
-from sirius_chat.memory.diary.manager import DiaryManager, DiaryGenerator
+from sirius_chat.memory.diary.manager import DiaryManager
+from sirius_chat.memory.diary.generator import DiaryGenerator
 from sirius_chat.memory.diary.indexer import DiaryIndexer, DiaryRetriever
 
 __all__ = [
