@@ -68,6 +68,7 @@ class IntentAnalysisV3:
     confidence: float = 0.8
     response_priority: int = 5  # 1-10
     estimated_response_time: float = 0.0  # seconds; 0 = immediate
+    search_query: str = ""  # LLM-generated query for memory retrieval
 
     # === multi-factor decision support ===
     activity_factor: float = 1.0
@@ -89,6 +90,7 @@ class IntentAnalysisV3:
             "confidence": self.confidence,
             "response_priority": self.response_priority,
             "estimated_response_time": self.estimated_response_time,
+            "search_query": self.search_query,
             "activity_factor": self.activity_factor,
             "relationship_factor": self.relationship_factor,
             "time_factor": self.time_factor,
@@ -115,6 +117,7 @@ class IntentAnalysisV3:
             confidence=data.get("confidence", 0.8),
             response_priority=data.get("response_priority", 5),
             estimated_response_time=data.get("estimated_response_time", 0.0),
+            search_query=data.get("search_query", ""),
             activity_factor=data.get("activity_factor", 1.0),
             relationship_factor=data.get("relationship_factor", 1.0),
             time_factor=data.get("time_factor", 1.0),

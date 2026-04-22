@@ -1416,6 +1416,7 @@ class EmotionalGroupChatEngine:
             messages = self.context_assembler.build_messages(
                 group_id=group_id,
                 current_query=message.content,
+                search_query=intent.search_query,
                 system_prompt=bundle.system_prompt,
                 recent_n=self.config.get("basic_memory_context_window", 5),
                 diary_top_k=self.config.get("diary_top_k", 5),

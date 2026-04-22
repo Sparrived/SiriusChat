@@ -29,6 +29,7 @@ class ContextAssembler:
         current_query: str,
         system_prompt: str,
         *,
+        search_query: str = "",
         recent_n: int = 5,
         diary_top_k: int = 5,
         diary_token_budget: int = 800,
@@ -38,9 +39,9 @@ class ContextAssembler:
         Returns messages in chronological order:
         [system(with diary context), ...recent_basic_entries..., user(current_query)]
         """
-        # 1. Retrieve relevant diary entries
+        # 1. Retrieve relevant diary entries (prefer LLM-generated search_query)
         diary_entries = self._diary.retrieve(
-            query=current_query,
+            query=search_query or current_query,
             top_k=diary_top_k,
             max_tokens_budget=diary_token_budget,
         )

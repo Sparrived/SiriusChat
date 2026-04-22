@@ -229,7 +229,8 @@ _LLM_COGNITION_PROMPT = """分析以下消息的【情感状态】和【社交�
   "intent_subtype": "tech_help|info_query|venting|seeking_empathy|topic_discussion|filler",
   "urgency_score": 0-100,
   "relevance_score": 0.0-1.0,
-  "confidence": 0.0-1.0
+  "confidence": 0.0-1.0,
+  "search_query": "用于检索记忆的一句话查询，概括用户核心需求（不是标签，是自然语言）"
 }}
 
 定义：
@@ -295,29 +296,38 @@ class CognitionAnalyzer:
         # 1. Rule-based emotion analysis
         text_emotion = self._text_analysis(message)
 
-        # 2. Rule-based intent classification (with context awareness)
+        # 2. Rule-based intent classification (fallback only)
         social_intent, subtype, intent_confidence = self._classify_intent(
             message, context_messages
         )
+        search_query = message  # fallback when no LLM or LLM fails
 
-        # 3. Joint LLM fallback if either needs help
+        # 3. Intent analysis is mandatory via LLM when provider is available.
+        #    LLM failure → default SILENT (safe degradation).
         llm_urgency: float | None = None
         llm_relevance: float | None = None
-        need_llm = text_emotion.confidence < 0.6 or intent_confidence < 0.8
-        if need_llm and self.provider_async is not None:
+        if self.provider_async is not None:
             try:
                 llm_result = await self._llm_cognition(message, context_messages)
                 if llm_result is not None:
+                    social_intent = llm_result["social_intent"]
+                    subtype = llm_result["subtype"]
+                    intent_confidence = llm_result.get("confidence", 0.85)
+                    llm_urgency = llm_result.get("urgency_score")
+                    llm_relevance = llm_result.get("relevance_score")
+                    search_query = llm_result.get("search_query", message)
                     if text_emotion.confidence < 0.6:
                         text_emotion = llm_result["emotion"]
-                    if intent_confidence < 0.8:
-                        social_intent = llm_result["social_intent"]
-                        subtype = llm_result["subtype"]
-                        intent_confidence = llm_result.get("confidence", 0.85)
-                        llm_urgency = llm_result.get("urgency_score")
-                        llm_relevance = llm_result.get("relevance_score")
+                else:
+                    # LLM parse failure → safe SILENT
+                    social_intent = SocialIntent.SILENT
+                    subtype = SilentSubtype.IRRELEVANT
+                    intent_confidence = 0.3
             except Exception as exc:
-                logger.warning("LLM cognition fallback failed: %s", exc)
+                logger.warning("LLM cognition failed: %s", exc)
+                social_intent = SocialIntent.SILENT
+                subtype = SilentSubtype.IRRELEVANT
+                intent_confidence = 0.3
 
         # 4. Emotion context fusion
         context_emotion = self._context_inference(user_id)
@@ -370,6 +380,7 @@ class CognitionAnalyzer:
             confidence=intent_confidence,
             response_priority=priority,
             estimated_response_time=response_time,
+            search_query=search_query,
             threshold=threshold,
             directed_at_current_ai=directed,
         )
@@ -631,6 +642,7 @@ class CognitionAnalyzer:
                 "confidence": float(data.get("confidence", 0.85)),
                 "urgency_score": float(data.get("urgency_score", 0)),
                 "relevance_score": float(data.get("relevance_score", 0.5)),
+                "search_query": data.get("search_query", ""),
             }
         except (json.JSONDecodeError, ValueError, KeyError) as exc:
             logger.warning("Failed to parse LLM cognition JSON: %s | raw=%r", exc, raw)
