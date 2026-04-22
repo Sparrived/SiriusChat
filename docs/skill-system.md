@@ -161,7 +161,7 @@ SKILL 加载时，系统会：
 
 ### Legacy 引擎
 
-`AsyncRolePlayEngine` 在 `_build_system_prompt()` 阶段把 SKILL 描述注入 `<available_skills>` 区块，包含调用格式和可用技能列表。AI 在生成回复时自行决定调用。
+`EmotionalGroupChatEngine` 在 `ResponseAssembler` 阶段把 SKILL 描述注入系统提示词，包含调用格式和可用技能列表。AI 在生成回复时自行决定调用。
 
 ### Emotional 引擎
 

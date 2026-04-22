@@ -27,7 +27,7 @@ description: "当你需要在不通读全部代码的情况下快速理解 Siriu
 1. `docs/architecture.md`
 2. `docs/full-architecture-flow.md`
 3. `README.md`
-4. `docs/orchestration-policy.md`
+4. `docs/orchestration-policy.md`（任务模型覆盖与动态路由）
 5. `sirius_chat/models/models.py` ✨ (包重构)
 6. `docs/external-usage.md`
 7. `sirius_chat/api/__init__.py`
@@ -72,7 +72,7 @@ description: "当你需要在不通读全部代码的情况下快速理解 Siriu
 - `WorkspaceRuntime` 会把 `WorkspaceBootstrap` 的签名记入 `workspace.json`；同一份 bootstrap 只在首次命中时持久化一次，后续重启会保留用户在 config root 下的手工修改。
 - `WorkspaceLayout` 是路径语义的单一事实来源：config root 放配置与资产，data root 放运行态数据。
 - **v1.0.0 默认引擎** `EmotionalGroupChatEngine` 的真实实现位于 `sirius_chat/core/emotional_engine.py`；采用四层认知架构（感知→认知→决策→执行）与简化记忆模型（基础记忆 → 日记记忆）。
-- `sirius_chat/async_engine/` 只承担兼容导出与 prompts/orchestration/utils 辅助层；`AsyncRolePlayEngine` 最小 stub 位于 `__init__.py`。
+- `sirius_chat/async_engine/` 只承担兼容导出与 prompts/orchestration/utils 辅助层。
 - 一个 `SessionConfig` 只对应一个主 AI，主 AI 由 `preset=AgentPreset(...)` 描述，不再推荐在外部配置里手写完整 agent prompt。
 - `User` 只是 `Participant` 的别名；运行时识人与记忆的事实来源是 `transcript.user_memory`，而不是旧版 `participants` 配置字段。`profile.identities/name/aliases` 是可信身份锚点，`runtime.inferred_aliases` 只是弱线索，不参与稳定识人绑定。
 - provider 注册表由 `WorkspaceProviderManager` 管理，路由顺序是 `models` 列表优先、`healthcheck_model` 次之、最后回退到第一个启用 provider。
@@ -82,7 +82,7 @@ description: "当你需要在不通读全部代码的情况下快速理解 Siriu
 ## 修改路由指南
 
 - 新增 provider：修改 `sirius_chat/providers/`、`sirius_chat/providers/routing.py`、`sirius_chat/api/providers.py`，并补测试与文档。
-- 修改对话主流程（当前默认 Emotional 引擎）：优先检查 `sirius_chat/core/emotional_engine.py`、`core/response_assembler.py`、`core/cognition.py`、`core/response_strategy.py`。Legacy 引擎检查 `sirius_chat/core/_legacy/engine.py`、`core/chat_builder.py`、`core/memory_prompt.py`、`core/memory_runner.py`、`core/engagement_pipeline.py`。
+- 修改对话主流程（当前唯一 Emotional 引擎）：优先检查 `sirius_chat/core/emotional_engine.py`、`core/response_assembler.py`、`core/cognition.py`、`core/response_strategy.py`。
 - 修改记忆系统（基础记忆 / 日记记忆 / 用户管理 / 名词解释）：同步检查 `sirius_chat/memory/basic/manager.py`、`sirius_chat/memory/diary/manager.py`、`sirius_chat/memory/user/simple.py`、`sirius_chat/memory/glossary/manager.py`、`sirius_chat/memory/context_assembler.py`、`sirius_chat/core/identity_resolver.py`。
 - 修改 workspace / session 持久化：同步检查 `sirius_chat/workspace/`、`sirius_chat/config/manager.py`、`sirius_chat/session/store.py`。
 - 修改识人或记忆逻辑：同步检查 `sirius_chat/memory/user/simple.py`、`sirius_chat/core/identity_resolver.py`、`sirius_chat/models/models.py` 与 `docs/external-usage.md`。

@@ -5,17 +5,32 @@
     "engine": {
       "functions": [
         {
-          "name": "create_async_engine",
+          "name": "create_emotional_engine",
           "is_async": false,
           "params": [
             {
-              "name": "provider",
-              "annotation": "LLMProvider | AsyncLLMProvider",
+              "name": "work_path",
+              "annotation": null,
               "kind": "positional"
+            },
+            {
+              "name": "provider",
+              "annotation": "LLMProvider | AsyncLLMProvider | None",
+              "kind": "keyword-only"
+            },
+            {
+              "name": "persona",
+              "annotation": null,
+              "kind": "keyword-only"
+            },
+            {
+              "name": "config",
+              "annotation": "dict[str, Any] | None",
+              "kind": "keyword-only"
             }
           ],
-          "return_type": "AsyncRolePlayEngine",
-          "docstring": "Create an async roleplay engine for non-blocking integration."
+          "return_type": "EmotionalGroupChatEngine",
+          "docstring": "Create a new EmotionalGroupChatEngine (v0.28+).\n\nArgs:\n    work_path: Workspace path for persistence.\n    provider: Optional LLM provider for async generation tasks.\n    persona: Optional PersonaProfile or string archetype name.\n    config: Optional engine configuration dict. See docs/configuration.md\n        for supported keys.\n\nReturns:\n    Configured EmotionalGroupChatEngine instance."
         },
         {
           "name": "open_workspace_runtime",
@@ -51,100 +66,6 @@
           "docstring": "Open a workspace runtime that owns persistence and session recovery.\n\nWhen *bootstrap* is provided the host-supplied defaults are merged into the\nworkspace on the first ``initialize()`` call.  If *persist_bootstrap* is\n``True`` (default) the merged values are written to the workspace files so\nthat subsequent launches recover them automatically."
         },
         {
-          "name": "ainit_live_session",
-          "is_async": true,
-          "params": [
-            {
-              "name": "engine",
-              "annotation": "AsyncRolePlayEngine",
-              "kind": "positional"
-            },
-            {
-              "name": "config",
-              "annotation": "SessionConfig",
-              "kind": "positional"
-            },
-            {
-              "name": "transcript",
-              "annotation": "Transcript | None",
-              "kind": "positional"
-            }
-          ],
-          "return_type": "Transcript",
-          "docstring": "Async facade for live session initialization."
-        },
-        {
-          "name": "arun_live_message",
-          "is_async": true,
-          "params": [
-            {
-              "name": "engine",
-              "annotation": "AsyncRolePlayEngine",
-              "kind": "positional"
-            },
-            {
-              "name": "config",
-              "annotation": "SessionConfig",
-              "kind": "positional"
-            },
-            {
-              "name": "turn",
-              "annotation": "Message",
-              "kind": "positional"
-            },
-            {
-              "name": "transcript",
-              "annotation": "Transcript | None",
-              "kind": "positional"
-            },
-            {
-              "name": "environment_context",
-              "annotation": "str",
-              "kind": "positional"
-            },
-            {
-              "name": "user_profile",
-              "annotation": "UserProfile | None",
-              "kind": "positional"
-            },
-            {
-              "name": "on_reply",
-              "annotation": "Callable[[Message], Awaitable[None]] | None",
-              "kind": "positional"
-            },
-            {
-              "name": "timeout",
-              "annotation": "float",
-              "kind": "positional"
-            }
-          ],
-          "return_type": "Transcript",
-          "docstring": "Async facade for single-message live processing.\n\n.. versionchanged:: 0.12.0\n   Added *user_profile*, *on_reply* and *timeout* parameters.\n   When *on_reply* is provided the engine subscribes to the event stream\n   internally and calls back for each assistant message — no external\n   ``asubscribe`` boilerplate needed.\n\n.. versionchanged:: 0.9.0\n   The ``on_message`` callback has been removed.  Use\n   :func:`asubscribe` to receive real-time session events instead."
-        },
-        {
-          "name": "asubscribe",
-          "is_async": true,
-          "params": [
-            {
-              "name": "engine",
-              "annotation": "AsyncRolePlayEngine",
-              "kind": "positional"
-            },
-            {
-              "name": "transcript",
-              "annotation": "Transcript",
-              "kind": "positional"
-            },
-            {
-              "name": "max_queue_size",
-              "annotation": "int",
-              "kind": "keyword-only"
-            }
-          ],
-          "return_type": "AsyncIterator[SessionEvent]",
-          "docstring": "Subscribe to real-time session events.\n\nReturns an async iterator that yields :class:`SessionEvent` objects\n(new messages, SKILL execution status, processing lifecycle, etc.)\nas they are produced by the engine.\n\nExample::\n\n    async for event in asubscribe(engine, transcript):\n        if event.type == SessionEventType.MESSAGE_ADDED:\n            send_to_external(event.message)\n\nArgs:\n    engine: The engine instance.\n    transcript: The active transcript (session).\n    max_queue_size: Maximum buffered events per subscriber.\n\nYields:\n    SessionEvent instances in chronological order."
-        },
-        {
           "name": "find_user_by_channel_uid",
           "is_async": false,
           "params": [
@@ -164,7 +85,7 @@
               "kind": "keyword-only"
             }
           ],
-          "return_type": "UserMemoryEntry | None",
+          "return_type": "UserProfile | None",
           "docstring": "Stable external lookup by channel + uid."
         },
         {
@@ -188,11 +109,11 @@
       ],
       "classes": [
         {
-          "name": "AsyncRolePlayEngine",
-          "docstring": "AsyncRolePlayEngine(provider: 'LLMProvider | AsyncLLMProvider')",
+          "name": "EmotionalGroupChatEngine",
+          "docstring": "Next-generation engine for emotional group chat (v0.28+).",
           "methods": [
             {
-              "name": "get_model_for_task",
+              "name": "is_proactive_enabled",
               "is_async": false,
               "params": [
                 {
@@ -201,21 +122,29 @@
                   "kind": "positional"
                 },
                 {
-                  "name": "config",
-                  "annotation": "SessionConfig",
-                  "kind": "positional"
-                },
-                {
-                  "name": "task_name",
+                  "name": "group_id",
                   "annotation": "str",
                   "kind": "positional"
                 }
               ],
-              "return_type": "str",
-              "docstring": "根据多模型协同配置获取任务模型。\n\nArgs:\n    config: 会话配置\n    task_name: 任务名称（如 'memory_extract'、'event_extract'）\n    \nReturns:\n    该任务应使用的模型名称\n    \nRaises:\n    ValueError: 如果无法确定任务模型"
+              "return_type": "bool",
+              "docstring": "Check if proactive triggers are enabled for a group.\n\nPriority:\n1. If group is in disabled list → False\n2. If enabled_groups is not empty and group not in it → False\n3. Otherwise → True"
             },
             {
-              "name": "run_live_message",
+              "name": "load_state",
+              "is_async": false,
+              "params": [
+                {
+                  "name": "self",
+                  "annotation": null,
+                  "kind": "positional"
+                }
+              ],
+              "return_type": "None",
+              "docstring": "Restore runtime state from disk."
+            },
+            {
+              "name": "proactive_check",
               "is_async": true,
               "params": [
                 {
@@ -224,206 +153,155 @@
                   "kind": "positional"
                 },
                 {
-                  "name": "config",
-                  "annotation": "SessionConfig",
+                  "name": "group_id",
+                  "annotation": "str",
                   "kind": "positional"
                 },
                 {
-                  "name": "turn",
+                  "name": "_now",
+                  "annotation": "datetime | None",
+                  "kind": "keyword-only"
+                }
+              ],
+              "return_type": "dict[str, Any] | None",
+              "docstring": "Check if proactive trigger should fire for a group."
+            },
+            {
+              "name": "process_message",
+              "is_async": true,
+              "params": [
+                {
+                  "name": "self",
+                  "annotation": null,
+                  "kind": "positional"
+                },
+                {
+                  "name": "message",
                   "annotation": "Message",
                   "kind": "positional"
                 },
                 {
-                  "name": "transcript",
-                  "annotation": "Transcript | None",
+                  "name": "participants",
+                  "annotation": "list[Participant]",
                   "kind": "positional"
                 },
                 {
-                  "name": "session_reply_mode",
-                  "annotation": "str | None",
+                  "name": "group_id",
+                  "annotation": "str",
+                  "kind": "positional"
+                }
+              ],
+              "return_type": "dict[str, Any]",
+              "docstring": "Process a single incoming message through the full pipeline.\n\nReturns a dict with at least:\n    - strategy: str (immediate / delayed / silent / proactive)\n    - reply: str | None\n    - emotion: dict\n    - intent: dict"
+            },
+            {
+              "name": "save_state",
+              "is_async": false,
+              "params": [
+                {
+                  "name": "self",
+                  "annotation": null,
+                  "kind": "positional"
+                }
+              ],
+              "return_type": "None",
+              "docstring": "Persist all runtime state to disk."
+            },
+            {
+              "name": "set_proactive_enabled",
+              "is_async": false,
+              "params": [
+                {
+                  "name": "self",
+                  "annotation": null,
                   "kind": "positional"
                 },
                 {
-                  "name": "finalize_and_persist",
-                  "annotation": "bool",
-                  "kind": "positional"
-                },
-                {
-                  "name": "environment_context",
+                  "name": "group_id",
                   "annotation": "str",
                   "kind": "positional"
                 },
                 {
-                  "name": "user_profile",
-                  "annotation": "UserProfile | None",
-                  "kind": "positional"
-                },
-                {
-                  "name": "on_reply",
-                  "annotation": "Callable[[Message], Awaitable[None]] | None",
-                  "kind": "positional"
-                },
-                {
-                  "name": "timeout",
-                  "annotation": "float",
-                  "kind": "positional"
-                }
-              ],
-              "return_type": "Transcript",
-              "docstring": null
-            },
-            {
-              "name": "run_live_session",
-              "is_async": true,
-              "params": [
-                {
-                  "name": "self",
-                  "annotation": null,
-                  "kind": "positional"
-                },
-                {
-                  "name": "config",
-                  "annotation": "SessionConfig",
-                  "kind": "positional"
-                },
-                {
-                  "name": "transcript",
-                  "annotation": "Transcript | None",
-                  "kind": "positional"
-                }
-              ],
-              "return_type": "Transcript",
-              "docstring": "Initialize a live session and prepare runtime context.\n\nBreaking change: this method no longer processes user messages.\nUse run_live_message(...) for per-message input/output handling."
-            },
-            {
-              "name": "run_session",
-              "is_async": true,
-              "params": [
-                {
-                  "name": "self",
-                  "annotation": null,
-                  "kind": "positional"
-                },
-                {
-                  "name": "config",
-                  "annotation": "SessionConfig",
-                  "kind": "positional"
-                },
-                {
-                  "name": "transcript",
-                  "annotation": "Transcript | None",
-                  "kind": "positional"
-                }
-              ],
-              "return_type": "Transcript",
-              "docstring": null
-            },
-            {
-              "name": "subscribe",
-              "is_async": false,
-              "params": [
-                {
-                  "name": "self",
-                  "annotation": null,
-                  "kind": "positional"
-                },
-                {
-                  "name": "transcript",
-                  "annotation": "Transcript",
-                  "kind": "positional"
-                },
-                {
-                  "name": "max_queue_size",
-                  "annotation": "int",
-                  "kind": "keyword-only"
-                }
-              ],
-              "return_type": "AsyncIterator[SessionEvent]",
-              "docstring": "Subscribe to real-time session events for the given transcript.\n\nReturns an async iterator that yields :class:`SessionEvent` objects\nas they are produced by the engine (new messages, SKILL status,\nprocessing lifecycle, etc.).\n\nThe iterator terminates when the session's event bus is closed.\n\nArgs:\n    transcript: The transcript (session) to subscribe to.\n    max_queue_size: Maximum buffered events per subscriber.\n\nYields:\n    SessionEvent instances in chronological order."
-            },
-            {
-              "name": "validate_orchestration_config",
-              "is_async": false,
-              "params": [
-                {
-                  "name": "self",
-                  "annotation": null,
-                  "kind": "positional"
-                },
-                {
-                  "name": "config",
-                  "annotation": "SessionConfig",
+                  "name": "enabled",
+                  "annotation": "bool",
                   "kind": "positional"
                 }
               ],
               "return_type": "None",
-              "docstring": "验证多模型协同配置的完整性。\n\n多模型协同必需启用，支持两种配置方案：\n1. unified_model: 所有任务使用同一个模型\n2. task_models: 为每个任务独立配置模型\n\n所有任务默认启用，可通过 task_enabled 字典禁用特定任务。\n\nArgs:\n    config: 会话配置\n    \nRaises:\n    OrchestrationConfigError: 如果配置不完整或冲突"
+              "docstring": "Enable or disable proactive triggers for a specific group."
+            },
+            {
+              "name": "set_skill_runtime",
+              "is_async": false,
+              "params": [
+                {
+                  "name": "self",
+                  "annotation": null,
+                  "kind": "positional"
+                },
+                {
+                  "name": "skill_registry",
+                  "annotation": "Any | None",
+                  "kind": "keyword-only"
+                },
+                {
+                  "name": "skill_executor",
+                  "annotation": "Any | None",
+                  "kind": "keyword-only"
+                }
+              ],
+              "return_type": "None",
+              "docstring": "Attach SKILL registry and executor to the engine."
+            },
+            {
+              "name": "start_background_tasks",
+              "is_async": false,
+              "params": [
+                {
+                  "name": "self",
+                  "annotation": null,
+                  "kind": "positional"
+                }
+              ],
+              "return_type": "None",
+              "docstring": "Start periodic background tasks for delayed queue, proactive triggers,\nand memory promotion. Idempotent: safe to call multiple times."
+            },
+            {
+              "name": "stop_background_tasks",
+              "is_async": false,
+              "params": [
+                {
+                  "name": "self",
+                  "annotation": null,
+                  "kind": "positional"
+                }
+              ],
+              "return_type": "None",
+              "docstring": "Cancel all background tasks."
+            },
+            {
+              "name": "tick_delayed_queue",
+              "is_async": true,
+              "params": [
+                {
+                  "name": "self",
+                  "annotation": null,
+                  "kind": "positional"
+                },
+                {
+                  "name": "group_id",
+                  "annotation": "str",
+                  "kind": "positional"
+                }
+              ],
+              "return_type": "list[dict[str, Any]]",
+              "docstring": "Process delayed response queue for a group.\n\nIf multiple items trigger in the same tick, merge them into a single\nprompt so the model generates only one consolidated reply.\nSupports multi-round SKILL execution similar to immediate responses."
             }
           ]
         },
         {
-          "name": "SessionEvent",
-          "docstring": "A single event emitted by the engine during session processing.\n\nAttributes:\n    type: The category of the event.\n    message: The ``Message`` object, present for ``MESSAGE_ADDED`` events.\n    data: Arbitrary metadata (e.g. skill name, error details).\n    timestamp: Unix timestamp when the event was created.",
-          "methods": []
-        },
-        {
-          "name": "SessionEventBus",
-          "docstring": "Per-session event bus supporting multiple concurrent subscribers.\n\nUsage::\n\n    bus = SessionEventBus()\n    # Subscribe\n    async for event in bus.subscribe():\n        handle(event)\n\n    # Publish (from engine internals)\n    await bus.emit(SessionEvent(type=SessionEventType.MESSAGE_ADDED, message=msg))\n\n    # Close when the session ends\n    await bus.close()",
-          "methods": [
-            {
-              "name": "close",
-              "is_async": true,
-              "params": [
-                {
-                  "name": "self",
-                  "annotation": null,
-                  "kind": "positional"
-                }
-              ],
-              "return_type": "None",
-              "docstring": "Signal all subscribers to stop and clear the subscriber list."
-            },
-            {
-              "name": "emit",
-              "is_async": true,
-              "params": [
-                {
-                  "name": "self",
-                  "annotation": null,
-                  "kind": "positional"
-                },
-                {
-                  "name": "event",
-                  "annotation": "SessionEvent",
-                  "kind": "positional"
-                }
-              ],
-              "return_type": "None",
-              "docstring": "Publish an event to all current subscribers."
-            },
-            {
-              "name": "subscribe",
-              "is_async": false,
-              "params": [
-                {
-                  "name": "self",
-                  "annotation": null,
-                  "kind": "positional"
-                },
-                {
-                  "name": "max_queue_size",
-                  "annotation": "int",
-                  "kind": "keyword-only"
-                }
-              ],
-              "return_type": "AsyncIterator[SessionEvent]",
-              "docstring": "Return an async iterator that yields events as they arrive.\n\nThe iterator terminates when :meth:`close` is called."
-            }
-          ]
-        },
-        {
-          "name": "SessionEventType",
-          "docstring": "Categories of events emitted during session processing.",
+          "name": "UserProfile",
+          "docstring": "Core user identity. Minimal and focused.\n\nAttributes:\n    user_id: Unique identifier.\n    name: Human-readable display name.\n    aliases: Alternative names the user may go by.\n    identities: Mapping from external systems (platform:external_uid).\n    metadata: Additional custom metadata (e.g. is_developer).",
           "methods": []
         }
       ]
@@ -432,369 +310,14 @@
       "functions": [],
       "classes": [
         {
-          "name": "UserMemoryEntry",
-          "docstring": "User memory entry combining profile and runtime state.",
+          "name": "UserProfile",
+          "docstring": "Core user identity. Minimal and focused.\n\nAttributes:\n    user_id: Unique identifier.\n    name: Human-readable display name.\n    aliases: Alternative names the user may go by.\n    identities: Mapping from external systems (platform:external_uid).\n    metadata: Additional custom metadata (e.g. is_developer).",
           "methods": []
         },
         {
-          "name": "UserMemoryManager",
-          "docstring": "Manages user memory entries, facts, and profiles.",
+          "name": "UserManager",
+          "docstring": "Manages user profiles with group-isolated storage.\n\nStructure: {group_id: {user_id: UserProfile}}",
           "methods": [
-            {
-              "name": "add_memory_fact",
-              "is_async": false,
-              "params": [
-                {
-                  "name": "self",
-                  "annotation": null,
-                  "kind": "positional"
-                },
-                {
-                  "name": "user_id",
-                  "annotation": "str",
-                  "kind": "keyword-only"
-                },
-                {
-                  "name": "fact_type",
-                  "annotation": "str",
-                  "kind": "keyword-only"
-                },
-                {
-                  "name": "value",
-                  "annotation": "str",
-                  "kind": "keyword-only"
-                },
-                {
-                  "name": "source",
-                  "annotation": "str",
-                  "kind": "keyword-only"
-                },
-                {
-                  "name": "confidence",
-                  "annotation": "float",
-                  "kind": "keyword-only"
-                },
-                {
-                  "name": "observed_at",
-                  "annotation": "str | None",
-                  "kind": "keyword-only"
-                },
-                {
-                  "name": "max_facts",
-                  "annotation": "int | None",
-                  "kind": "keyword-only"
-                },
-                {
-                  "name": "memory_category",
-                  "annotation": "str",
-                  "kind": "keyword-only"
-                },
-                {
-                  "name": "context_channel",
-                  "annotation": "str",
-                  "kind": "keyword-only"
-                },
-                {
-                  "name": "context_topic",
-                  "annotation": "str",
-                  "kind": "keyword-only"
-                },
-                {
-                  "name": "source_event_id",
-                  "annotation": "str",
-                  "kind": "keyword-only"
-                }
-              ],
-              "return_type": "None",
-              "docstring": "Add memory fact with trait normalization and intelligent upper limit management.\n\nC1 approach: When exceeding max_facts, delete lowest-confidence facts rather than simple FIFO.\nB approach: Auto-apply trait normalization for certain fact_types."
-            },
-            {
-              "name": "add_summary_note",
-              "is_async": false,
-              "params": [
-                {
-                  "name": "self",
-                  "annotation": null,
-                  "kind": "positional"
-                },
-                {
-                  "name": "user_id",
-                  "annotation": "str",
-                  "kind": "keyword-only"
-                },
-                {
-                  "name": "note",
-                  "annotation": "str",
-                  "kind": "keyword-only"
-                },
-                {
-                  "name": "max_notes",
-                  "annotation": "int",
-                  "kind": "keyword-only"
-                }
-              ],
-              "return_type": "None",
-              "docstring": "Add a summary note for user."
-            },
-            {
-              "name": "apply_ai_runtime_update",
-              "is_async": false,
-              "params": [
-                {
-                  "name": "self",
-                  "annotation": null,
-                  "kind": "positional"
-                },
-                {
-                  "name": "user_id",
-                  "annotation": "str",
-                  "kind": "keyword-only"
-                },
-                {
-                  "name": "inferred_persona",
-                  "annotation": "str | None",
-                  "kind": "keyword-only"
-                },
-                {
-                  "name": "inferred_aliases",
-                  "annotation": "list[str] | None",
-                  "kind": "keyword-only"
-                },
-                {
-                  "name": "inferred_traits",
-                  "annotation": "list[str] | None",
-                  "kind": "keyword-only"
-                },
-                {
-                  "name": "preference_tags",
-                  "annotation": "list[str] | None",
-                  "kind": "keyword-only"
-                },
-                {
-                  "name": "summary_note",
-                  "annotation": "str | None",
-                  "kind": "keyword-only"
-                },
-                {
-                  "name": "source",
-                  "annotation": "str",
-                  "kind": "keyword-only"
-                },
-                {
-                  "name": "confidence",
-                  "annotation": "float",
-                  "kind": "keyword-only"
-                }
-              ],
-              "return_type": "None",
-              "docstring": "Apply AI inferred runtime updates to user memory."
-            },
-            {
-              "name": "apply_event_insights",
-              "is_async": false,
-              "params": [
-                {
-                  "name": "self",
-                  "annotation": null,
-                  "kind": "positional"
-                },
-                {
-                  "name": "user_id",
-                  "annotation": "str",
-                  "kind": "positional"
-                },
-                {
-                  "name": "event_features",
-                  "annotation": "dict[str, object]",
-                  "kind": "positional"
-                },
-                {
-                  "name": "source",
-                  "annotation": "str",
-                  "kind": "positional"
-                },
-                {
-                  "name": "base_confidence",
-                  "annotation": "float",
-                  "kind": "positional"
-                },
-                {
-                  "name": "source_event_id",
-                  "annotation": "str",
-                  "kind": "positional"
-                }
-              ],
-              "return_type": "None",
-              "docstring": "Convert event features to user memory facts and feature signals.\n\nAuto-converts event's emotion_tags, keywords, role_slots, time_hints etc.\nto corresponding user memory facts and updates observed feature sets."
-            },
-            {
-              "name": "apply_scheduled_decay",
-              "is_async": false,
-              "params": [
-                {
-                  "name": "self",
-                  "annotation": null,
-                  "kind": "positional"
-                }
-              ],
-              "return_type": "dict[str, int]",
-              "docstring": "Apply scheduled decay to all user memories.\n\nReturns: {user_id: number of decayed memories}"
-            },
-            {
-              "name": "cleanup_expired_memories",
-              "is_async": false,
-              "params": [
-                {
-                  "name": "self",
-                  "annotation": null,
-                  "kind": "positional"
-                },
-                {
-                  "name": "min_quality",
-                  "annotation": "float",
-                  "kind": "positional"
-                }
-              ],
-              "return_type": "dict[str, int]",
-              "docstring": "Clean up expired/low-quality memories for all users.\n\nReturns: {user_id: number of deleted memories}"
-            },
-            {
-              "name": "cleanup_expired_transient_facts",
-              "is_async": false,
-              "params": [
-                {
-                  "name": "self",
-                  "annotation": null,
-                  "kind": "positional"
-                },
-                {
-                  "name": "user_id",
-                  "annotation": "str",
-                  "kind": "positional"
-                },
-                {
-                  "name": "max_age_minutes",
-                  "annotation": "int",
-                  "kind": "positional"
-                },
-                {
-                  "name": "transient_threshold",
-                  "annotation": "float",
-                  "kind": "positional"
-                }
-              ],
-              "return_type": "int",
-              "docstring": "Clean up expired TRANSIENT facts.\n\nTRANSIENT facts (confidence <= threshold) are deleted after max_age_minutes\nfrom their observed_at time. Returns number of deleted facts."
-            },
-            {
-              "name": "compress_memory_facts",
-              "is_async": false,
-              "params": [
-                {
-                  "name": "self",
-                  "annotation": null,
-                  "kind": "positional"
-                },
-                {
-                  "name": "user_id",
-                  "annotation": "str",
-                  "kind": "positional"
-                },
-                {
-                  "name": "similarity_threshold",
-                  "annotation": "float",
-                  "kind": "positional"
-                }
-              ],
-              "return_type": "int",
-              "docstring": "C3 approach: Dynamic memory facts compression.\n\nCluster and merge same-type facts to reduce redundant information.\n\nArgs:\n    user_id: User ID to compress\n    similarity_threshold: Similarity threshold (0.0-1.0)\n\nReturns:\n    Number of compressed/deleted facts"
-            },
-            {
-              "name": "consolidate_memory_facts",
-              "is_async": true,
-              "params": [
-                {
-                  "name": "self",
-                  "annotation": null,
-                  "kind": "positional"
-                },
-                {
-                  "name": "user_id",
-                  "annotation": "str",
-                  "kind": "positional"
-                },
-                {
-                  "name": "provider_async",
-                  "annotation": "Any",
-                  "kind": "positional"
-                },
-                {
-                  "name": "model_name",
-                  "annotation": "str",
-                  "kind": "positional"
-                },
-                {
-                  "name": "min_facts",
-                  "annotation": "int",
-                  "kind": "positional"
-                },
-                {
-                  "name": "temperature",
-                  "annotation": "float",
-                  "kind": "positional"
-                },
-                {
-                  "name": "max_tokens",
-                  "annotation": "int",
-                  "kind": "positional"
-                }
-              ],
-              "return_type": "int",
-              "docstring": "Consolidate memory facts for a user using LLM-based merging.\n\nGroup facts by type, merge similar ones, and produce refined facts.\nReturns the number of facts removed (net reduction)."
-            },
-            {
-              "name": "consolidate_summary_notes",
-              "is_async": true,
-              "params": [
-                {
-                  "name": "self",
-                  "annotation": null,
-                  "kind": "positional"
-                },
-                {
-                  "name": "user_id",
-                  "annotation": "str",
-                  "kind": "positional"
-                },
-                {
-                  "name": "provider_async",
-                  "annotation": "Any",
-                  "kind": "positional"
-                },
-                {
-                  "name": "model_name",
-                  "annotation": "str",
-                  "kind": "positional"
-                },
-                {
-                  "name": "min_notes",
-                  "annotation": "int",
-                  "kind": "positional"
-                },
-                {
-                  "name": "temperature",
-                  "annotation": "float",
-                  "kind": "positional"
-                },
-                {
-                  "name": "max_tokens",
-                  "annotation": "int",
-                  "kind": "positional"
-                }
-              ],
-              "return_type": "int",
-              "docstring": "Consolidate summary notes for a user into fewer, more refined notes.\n\nUses LLM to merge and summarize multiple notes into concise summaries.\nReturns the number of notes removed (net reduction)."
-            },
             {
               "name": "ensure_user",
               "is_async": false,
@@ -810,16 +333,16 @@
                   "kind": "keyword-only"
                 },
                 {
-                  "name": "persona",
+                  "name": "group_id",
                   "annotation": "str",
                   "kind": "keyword-only"
                 }
               ],
               "return_type": "UserProfile",
-              "docstring": "Ensure user exists, creating if necessary."
+              "docstring": "Ensure a user exists, creating if necessary."
             },
             {
-              "name": "get_facts_by_context",
+              "name": "get_user",
               "is_async": false,
               "params": [
                 {
@@ -833,21 +356,16 @@
                   "kind": "positional"
                 },
                 {
-                  "name": "channel",
-                  "annotation": "str | None",
-                  "kind": "positional"
-                },
-                {
-                  "name": "topic",
-                  "annotation": "str | None",
+                  "name": "group_id",
+                  "annotation": "str",
                   "kind": "positional"
                 }
               ],
-              "return_type": "list[MemoryFact]",
-              "docstring": "Get facts filtered by communication channel and/or topic.\n\nArgs:\n    user_id: The user ID to query\n    channel: Optional channel filter (e.g., \"qq\", \"wechat\", \"email\")\n    topic: Optional topic filter (e.g., \"work\", \"hobby\", \"family\")\n\nReturns:\n    List of MemoryFact objects matching the filters"
+              "return_type": "UserProfile | None",
+              "docstring": "Get user profile by exact ID within a group."
             },
             {
-              "name": "get_resident_facts",
+              "name": "list_users",
               "is_async": false,
               "params": [
                 {
@@ -856,128 +374,13 @@
                   "kind": "positional"
                 },
                 {
-                  "name": "user_id",
-                  "annotation": "str",
-                  "kind": "positional"
-                },
-                {
-                  "name": "threshold",
-                  "annotation": "float",
-                  "kind": "positional"
-                }
-              ],
-              "return_type": "list[MemoryFact]",
-              "docstring": "Get high-confidence RESIDENT facts (only for persistence to user.json).\n\nRESIDENT: confidence > threshold, representing core, stable user traits and preferences.\nThese facts should be persisted to storage."
-            },
-            {
-              "name": "get_rich_user_summary",
-              "is_async": false,
-              "params": [
-                {
-                  "name": "self",
-                  "annotation": null,
-                  "kind": "positional"
-                },
-                {
-                  "name": "user_id",
-                  "annotation": "str",
-                  "kind": "positional"
-                },
-                {
-                  "name": "include_transient",
-                  "annotation": "bool",
-                  "kind": "positional"
-                },
-                {
-                  "name": "max_facts_per_type",
-                  "annotation": "int",
-                  "kind": "positional"
-                }
-              ],
-              "return_type": "dict[str, Any]",
-              "docstring": "Generate a model-friendly user summary with rich context.\n\nThis summary is suitable for injection into system prompts or as context\nfor the AI model to provide personalized responses.\n\nArgs:\n    user_id: The user ID to generate summary for\n    include_transient: Whether to include low-confidence transient facts\n    max_facts_per_type: Maximum number of facts per type in the summary\n\nReturns:\n    Dict with keys: profile, summary, traits, interests, recent_facts, \n                   identities, confidence_distribution, channels"
-            },
-            {
-              "name": "get_transient_facts",
-              "is_async": false,
-              "params": [
-                {
-                  "name": "self",
-                  "annotation": null,
-                  "kind": "positional"
-                },
-                {
-                  "name": "user_id",
-                  "annotation": "str",
-                  "kind": "positional"
-                },
-                {
-                  "name": "threshold",
-                  "annotation": "float",
-                  "kind": "positional"
-                }
-              ],
-              "return_type": "list[MemoryFact]",
-              "docstring": "Get low-confidence TRANSIENT facts (stored in session memory).\n\nTRANSIENT: confidence <= threshold, representing recently observed uncertain information.\nThese facts should be stored in session memory and auto-cleaned after 30 minutes."
-            },
-            {
-              "name": "get_user_by_id",
-              "is_async": false,
-              "params": [
-                {
-                  "name": "self",
-                  "annotation": null,
-                  "kind": "positional"
-                },
-                {
-                  "name": "user_id",
+                  "name": "group_id",
                   "annotation": "str",
                   "kind": "positional"
                 }
               ],
-              "return_type": "UserMemoryEntry | None",
-              "docstring": "Get user memory entry by exact user ID.\n\nArgs:\n    user_id: The user ID to look up\n\nReturns:\n    UserMemoryEntry or None if not found"
-            },
-            {
-              "name": "get_user_by_identity",
-              "is_async": false,
-              "params": [
-                {
-                  "name": "self",
-                  "annotation": null,
-                  "kind": "positional"
-                },
-                {
-                  "name": "channel",
-                  "annotation": "str",
-                  "kind": "keyword-only"
-                },
-                {
-                  "name": "external_user_id",
-                  "annotation": "str",
-                  "kind": "keyword-only"
-                }
-              ],
-              "return_type": "UserMemoryEntry | None",
-              "docstring": "Get user memory entry by channel identity."
-            },
-            {
-              "name": "merge_from",
-              "is_async": false,
-              "params": [
-                {
-                  "name": "self",
-                  "annotation": null,
-                  "kind": "positional"
-                },
-                {
-                  "name": "other",
-                  "annotation": "'UserMemoryManager'",
-                  "kind": "positional"
-                }
-              ],
-              "return_type": "None",
-              "docstring": "Merge another UserMemoryManager into this one."
+              "return_type": "list[UserProfile]",
+              "docstring": "List all users in a group."
             },
             {
               "name": "register_user",
@@ -992,48 +395,15 @@
                   "name": "profile",
                   "annotation": "UserProfile",
                   "kind": "positional"
-                }
-              ],
-              "return_type": "None",
-              "docstring": "Register a user profile."
-            },
-            {
-              "name": "remember_message",
-              "is_async": false,
-              "params": [
-                {
-                  "name": "self",
-                  "annotation": null,
-                  "kind": "positional"
                 },
                 {
-                  "name": "profile",
-                  "annotation": "UserProfile",
-                  "kind": "keyword-only"
-                },
-                {
-                  "name": "content",
+                  "name": "group_id",
                   "annotation": "str",
-                  "kind": "keyword-only"
-                },
-                {
-                  "name": "max_recent_messages",
-                  "annotation": "int",
-                  "kind": "keyword-only"
-                },
-                {
-                  "name": "channel",
-                  "annotation": "str | None",
-                  "kind": "keyword-only"
-                },
-                {
-                  "name": "channel_user_id",
-                  "annotation": "str | None",
-                  "kind": "keyword-only"
+                  "kind": "positional"
                 }
               ],
               "return_type": "None",
-              "docstring": "Remember a message from user."
+              "docstring": "Register or update a user in a group."
             },
             {
               "name": "resolve_user_id",
@@ -1050,64 +420,18 @@
                   "kind": "keyword-only"
                 },
                 {
-                  "name": "channel",
+                  "name": "platform",
                   "annotation": "str | None",
                   "kind": "keyword-only"
                 },
                 {
-                  "name": "external_user_id",
+                  "name": "external_uid",
                   "annotation": "str | None",
                   "kind": "keyword-only"
                 }
               ],
               "return_type": "str | None",
-              "docstring": "Resolve user ID from speaker name, channel identity, or external user ID."
-            },
-            {
-              "name": "resolve_user_id_by_identity",
-              "is_async": false,
-              "params": [
-                {
-                  "name": "self",
-                  "annotation": null,
-                  "kind": "positional"
-                },
-                {
-                  "name": "channel",
-                  "annotation": "str",
-                  "kind": "keyword-only"
-                },
-                {
-                  "name": "external_user_id",
-                  "annotation": "str",
-                  "kind": "keyword-only"
-                }
-              ],
-              "return_type": "str | None",
-              "docstring": "Resolve user ID by channel identity."
-            },
-            {
-              "name": "search_users_by_fact",
-              "is_async": false,
-              "params": [
-                {
-                  "name": "self",
-                  "annotation": null,
-                  "kind": "positional"
-                },
-                {
-                  "name": "fact_type",
-                  "annotation": "str",
-                  "kind": "positional"
-                },
-                {
-                  "name": "value",
-                  "annotation": "str | None",
-                  "kind": "positional"
-                }
-              ],
-              "return_type": "dict[str, list[MemoryFact]]",
-              "docstring": "Search for users with specific fact types or values.\n\nArgs:\n    fact_type: The type of fact to search for (e.g., \"job\", \"location\", \"hobby\")\n    value: Optional specific value to match. If None, returns all facts of that type.\n\nReturns:\n    Dict mapping user_id to list of matching MemoryFact objects"
+              "docstring": "Resolve user ID from speaker name, platform identity, or external UID."
             },
             {
               "name": "to_dict",
@@ -1120,343 +444,7 @@
                 }
               ],
               "return_type": "dict[str, Any]",
-              "docstring": "Serialize to dictionary."
-            }
-          ]
-        },
-        {
-          "name": "UserProfile",
-          "docstring": "Initial user profile: provided by external system before session starts.\n\nShould not be arbitrarily overwritten by AI during runtime.",
-          "methods": [
-            {
-              "name": "to_dict",
-              "is_async": false,
-              "params": [
-                {
-                  "name": "self",
-                  "annotation": null,
-                  "kind": "positional"
-                }
-              ],
-              "return_type": "dict[str, Any]",
-              "docstring": "Serialise to a plain dict (recursively via ``dataclasses.asdict``)."
-            }
-          ]
-        },
-        {
-          "name": "EventMemoryManager",
-          "docstring": "Manages user-scoped observations with buffered batch extraction.",
-          "methods": [
-            {
-              "name": "absorb_mention",
-              "is_async": false,
-              "params": [
-                {
-                  "name": "self",
-                  "annotation": null,
-                  "kind": "positional"
-                },
-                {
-                  "name": "content",
-                  "annotation": "str",
-                  "kind": "keyword-only"
-                },
-                {
-                  "name": "known_entities",
-                  "annotation": "list[str]",
-                  "kind": "keyword-only"
-                },
-                {
-                  "name": "extracted_features",
-                  "annotation": "dict[str, object] | None",
-                  "kind": "keyword-only"
-                },
-                {
-                  "name": "high_threshold",
-                  "annotation": "float",
-                  "kind": "keyword-only"
-                },
-                {
-                  "name": "weak_threshold",
-                  "annotation": "float",
-                  "kind": "keyword-only"
-                }
-              ],
-              "return_type": "dict[str, Any]",
-              "docstring": "v1 compatibility shim — buffers the message and returns a hit payload."
-            },
-            {
-              "name": "buffer_message",
-              "is_async": false,
-              "params": [
-                {
-                  "name": "self",
-                  "annotation": null,
-                  "kind": "positional"
-                },
-                {
-                  "name": "user_id",
-                  "annotation": "str",
-                  "kind": "keyword-only"
-                },
-                {
-                  "name": "content",
-                  "annotation": "str",
-                  "kind": "keyword-only"
-                }
-              ],
-              "return_type": "None",
-              "docstring": "Buffer a message for later batch extraction.\n\nVery short / trivial messages are silently discarded."
-            },
-            {
-              "name": "check_relevance",
-              "is_async": false,
-              "params": [
-                {
-                  "name": "self",
-                  "annotation": null,
-                  "kind": "positional"
-                },
-                {
-                  "name": "user_id",
-                  "annotation": "str",
-                  "kind": "keyword-only"
-                },
-                {
-                  "name": "content",
-                  "annotation": "str",
-                  "kind": "keyword-only"
-                }
-              ],
-              "return_type": "dict[str, object]",
-              "docstring": "Lightweight relevance check against existing observations.\n\nReturns a dict compatible with the legacy *hit_payload* shape\nso ``_compute_event_relevance_score`` keeps working."
-            },
-            {
-              "name": "consolidate_entries",
-              "is_async": true,
-              "params": [
-                {
-                  "name": "self",
-                  "annotation": null,
-                  "kind": "positional"
-                },
-                {
-                  "name": "user_id",
-                  "annotation": "str",
-                  "kind": "keyword-only"
-                },
-                {
-                  "name": "provider_async",
-                  "annotation": "Any",
-                  "kind": "keyword-only"
-                },
-                {
-                  "name": "model_name",
-                  "annotation": "str",
-                  "kind": "keyword-only"
-                },
-                {
-                  "name": "min_entries",
-                  "annotation": "int",
-                  "kind": "keyword-only"
-                },
-                {
-                  "name": "temperature",
-                  "annotation": "float",
-                  "kind": "keyword-only"
-                },
-                {
-                  "name": "max_tokens",
-                  "annotation": "int",
-                  "kind": "keyword-only"
-                }
-              ],
-              "return_type": "int",
-              "docstring": "Consolidate observations for a user into fewer, more refined entries.\n\nGroups observations by category, uses LLM to merge and summarize them,\nthen replaces old entries with consolidated ones.\n\nReturns the number of entries removed (net reduction)."
-            },
-            {
-              "name": "extract_observations",
-              "is_async": true,
-              "params": [
-                {
-                  "name": "self",
-                  "annotation": null,
-                  "kind": "positional"
-                },
-                {
-                  "name": "user_id",
-                  "annotation": "str",
-                  "kind": "keyword-only"
-                },
-                {
-                  "name": "user_name",
-                  "annotation": "str",
-                  "kind": "keyword-only"
-                },
-                {
-                  "name": "provider_async",
-                  "annotation": "Any",
-                  "kind": "keyword-only"
-                },
-                {
-                  "name": "model_name",
-                  "annotation": "str",
-                  "kind": "keyword-only"
-                },
-                {
-                  "name": "temperature",
-                  "annotation": "float",
-                  "kind": "keyword-only"
-                },
-                {
-                  "name": "max_tokens",
-                  "annotation": "int",
-                  "kind": "keyword-only"
-                }
-              ],
-              "return_type": "list[EventMemoryEntry]",
-              "docstring": "Consume the buffer for *user_id* and return new/merged observations.\n\n``provider_async`` must expose an async ``generate_async(request)`` method\ncompatible with ``GenerationRequest``."
-            },
-            {
-              "name": "finalize_pending_events",
-              "is_async": true,
-              "params": [
-                {
-                  "name": "self",
-                  "annotation": null,
-                  "kind": "positional"
-                },
-                {
-                  "name": "provider_async",
-                  "annotation": "Any",
-                  "kind": "positional"
-                },
-                {
-                  "name": "model_name",
-                  "annotation": "str",
-                  "kind": "positional"
-                },
-                {
-                  "name": "min_mentions",
-                  "annotation": "int",
-                  "kind": "positional"
-                }
-              ],
-              "return_type": "dict[str, Any]",
-              "docstring": "Flush all remaining buffers at session end.\n\nSignature is kept compatible with v1 for engine integration.\nReturns stats dict with verified_count / rejected_count / pending_count."
-            },
-            {
-              "name": "get_all_user_ids",
-              "is_async": false,
-              "params": [
-                {
-                  "name": "self",
-                  "annotation": null,
-                  "kind": "positional"
-                }
-              ],
-              "return_type": "set[str]",
-              "docstring": "Return all unique user IDs present in entries."
-            },
-            {
-              "name": "get_user_observations",
-              "is_async": false,
-              "params": [
-                {
-                  "name": "self",
-                  "annotation": null,
-                  "kind": "positional"
-                },
-                {
-                  "name": "user_id",
-                  "annotation": "str",
-                  "kind": "positional"
-                },
-                {
-                  "name": "limit",
-                  "annotation": "int",
-                  "kind": "positional"
-                }
-              ],
-              "return_type": "list[EventMemoryEntry]",
-              "docstring": "Get observations for a specific user, ordered by confidence."
-            },
-            {
-              "name": "pending_buffer_counts",
-              "is_async": false,
-              "params": [
-                {
-                  "name": "self",
-                  "annotation": null,
-                  "kind": "positional"
-                }
-              ],
-              "return_type": "dict[str, int]",
-              "docstring": "Return {user_id: buffered_message_count} for diagnostics."
-            },
-            {
-              "name": "should_extract",
-              "is_async": false,
-              "params": [
-                {
-                  "name": "self",
-                  "annotation": null,
-                  "kind": "positional"
-                },
-                {
-                  "name": "user_id",
-                  "annotation": "str",
-                  "kind": "positional"
-                },
-                {
-                  "name": "batch_size",
-                  "annotation": "int",
-                  "kind": "positional"
-                }
-              ],
-              "return_type": "bool",
-              "docstring": "Check whether buffered messages reached the extraction threshold."
-            },
-            {
-              "name": "to_dict",
-              "is_async": false,
-              "params": [
-                {
-                  "name": "self",
-                  "annotation": null,
-                  "kind": "positional"
-                }
-              ],
-              "return_type": "dict[str, Any]",
-              "docstring": null
-            },
-            {
-              "name": "top_events",
-              "is_async": false,
-              "params": [
-                {
-                  "name": "self",
-                  "annotation": null,
-                  "kind": "positional"
-                },
-                {
-                  "name": "limit",
-                  "annotation": "int",
-                  "kind": "positional"
-                },
-                {
-                  "name": "include_pending",
-                  "annotation": "bool",
-                  "kind": "positional"
-                },
-                {
-                  "name": "user_id",
-                  "annotation": "str | None",
-                  "kind": "positional"
-                }
-              ],
-              "return_type": "list[EventMemoryEntry]",
-              "docstring": "Return top observations, optionally filtered by user."
+              "docstring": "Serialize to dict."
             }
           ]
         }
@@ -1482,7 +470,7 @@
         },
         {
           "name": "Message",
-          "docstring": "Message(role: 'str', content: 'str', speaker: 'str | None' = None, channel: 'str | None' = None, channel_user_id: 'str | None' = None, multimodal_inputs: 'list[dict[str, str]]' = <factory>, reply_mode: 'str' = 'always')",
+          "docstring": "Message(role: 'str', content: 'str', speaker: 'str | None' = None, channel: 'str | None' = None, channel_user_id: 'str | None' = None, group_id: 'str | None' = None, multimodal_inputs: 'list[dict[str, str]]' = <factory>, reply_mode: 'str' = 'always')",
           "methods": [
             {
               "name": "to_dict",
@@ -1627,7 +615,7 @@
         },
         {
           "name": "Transcript",
-          "docstring": "Transcript(messages: 'list[Message]' = <factory>, user_memory: 'UserMemoryManager' = <factory>, reply_runtime: 'ReplyRuntimeState' = <factory>, session_summary: 'str' = '', orchestration_stats: 'dict[str, dict[str, int]]' = <factory>, token_usage_records: 'list[TokenUsageRecord]' = <factory>)",
+          "docstring": "Transcript(messages: 'list[Message]' = <factory>, user_memory: 'UserManager' = <factory>, reply_runtime: 'ReplyRuntimeState' = <factory>, session_summary: 'str' = '', orchestration_stats: 'dict[str, dict[str, int]]' = <factory>, token_usage_records: 'list[TokenUsageRecord]' = <factory>)",
           "methods": [
             {
               "name": "add",
@@ -1719,9 +707,14 @@
                   "name": "uid",
                   "annotation": "str",
                   "kind": "keyword-only"
+                },
+                {
+                  "name": "group_id",
+                  "annotation": "str",
+                  "kind": "keyword-only"
                 }
               ],
-              "return_type": "UserMemoryEntry | None",
+              "return_type": "UserProfile | None",
               "docstring": null
             },
             {
@@ -1756,6 +749,11 @@
                 {
                   "name": "channel_user_id",
                   "annotation": "str | None",
+                  "kind": "keyword-only"
+                },
+                {
+                  "name": "group_id",
+                  "annotation": "str",
                   "kind": "keyword-only"
                 }
               ],
@@ -2688,6 +1686,24 @@
               ],
               "return_type": "str",
               "docstring": "Generate one assistant message from the upstream provider."
+            },
+            {
+              "name": "generate_async",
+              "is_async": true,
+              "params": [
+                {
+                  "name": "self",
+                  "annotation": null,
+                  "kind": "positional"
+                },
+                {
+                  "name": "request",
+                  "annotation": "GenerationRequest",
+                  "kind": "positional"
+                }
+              ],
+              "return_type": "str",
+              "docstring": null
             }
           ]
         },
@@ -3128,76 +2144,6 @@
     "session": {
       "functions": [],
       "classes": [
-        {
-          "name": "JsonPersistentSessionRunner",
-          "docstring": "High-level async runner with automatic JSON persistence.\n\nResponsibilities:\n- Manage primary user profile persistence.\n- Manage transcript load/save around each turn.\n- Expose simple send/reset APIs for application callers.",
-          "methods": [
-            {
-              "name": "initialize",
-              "is_async": true,
-              "params": [
-                {
-                  "name": "self",
-                  "annotation": null,
-                  "kind": "positional"
-                },
-                {
-                  "name": "primary_user",
-                  "annotation": "Participant | None",
-                  "kind": "keyword-only"
-                },
-                {
-                  "name": "resume",
-                  "annotation": "bool",
-                  "kind": "keyword-only"
-                }
-              ],
-              "return_type": "None",
-              "docstring": null
-            },
-            {
-              "name": "reset_primary_user",
-              "is_async": true,
-              "params": [
-                {
-                  "name": "self",
-                  "annotation": null,
-                  "kind": "positional"
-                },
-                {
-                  "name": "participant",
-                  "annotation": "Participant",
-                  "kind": "positional"
-                },
-                {
-                  "name": "clear_transcript",
-                  "annotation": "bool",
-                  "kind": "keyword-only"
-                }
-              ],
-              "return_type": "None",
-              "docstring": null
-            },
-            {
-              "name": "send_user_message",
-              "is_async": true,
-              "params": [
-                {
-                  "name": "self",
-                  "annotation": null,
-                  "kind": "positional"
-                },
-                {
-                  "name": "content",
-                  "annotation": "str",
-                  "kind": "positional"
-                }
-              ],
-              "return_type": "Message",
-              "docstring": null
-            }
-          ]
-        },
         {
           "name": "JsonSessionStore",
           "docstring": "JSON-based session store for persisting sessions.",
@@ -3978,6 +2924,29 @@
               "docstring": null
             },
             {
+              "name": "create_emotional_engine",
+              "is_async": false,
+              "params": [
+                {
+                  "name": "self",
+                  "annotation": null,
+                  "kind": "positional"
+                },
+                {
+                  "name": "config",
+                  "annotation": "dict[str, Any] | None",
+                  "kind": "keyword-only"
+                },
+                {
+                  "name": "persona",
+                  "annotation": "Any | None",
+                  "kind": "keyword-only"
+                }
+              ],
+              "return_type": "EmotionalGroupChatEngine",
+              "docstring": "Create an EmotionalGroupChatEngine bound to this workspace.\n\nThe engine shares the workspace's work_path and provider.\nBackground tasks are NOT started automatically—call\n``engine.start_background_tasks()`` after creation if desired."
+            },
+            {
               "name": "delete_session",
               "is_async": true,
               "params": [
@@ -4086,49 +3055,6 @@
                 }
               ],
               "return_type": "list[str]",
-              "docstring": null
-            },
-            {
-              "name": "run_live_message",
-              "is_async": true,
-              "params": [
-                {
-                  "name": "self",
-                  "annotation": null,
-                  "kind": "positional"
-                },
-                {
-                  "name": "session_id",
-                  "annotation": "str",
-                  "kind": "keyword-only"
-                },
-                {
-                  "name": "turn",
-                  "annotation": "Message",
-                  "kind": "keyword-only"
-                },
-                {
-                  "name": "environment_context",
-                  "annotation": "str",
-                  "kind": "keyword-only"
-                },
-                {
-                  "name": "user_profile",
-                  "annotation": "UserProfile | None",
-                  "kind": "keyword-only"
-                },
-                {
-                  "name": "on_reply",
-                  "annotation": "Callable[[Message], Awaitable[None]] | None",
-                  "kind": "keyword-only"
-                },
-                {
-                  "name": "timeout",
-                  "annotation": "float",
-                  "kind": "keyword-only"
-                }
-              ],
-              "return_type": "Transcript",
               "docstring": null
             },
             {

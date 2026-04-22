@@ -116,7 +116,7 @@ def parse_runtime_exports(module_name: str) -> dict:
     try:
         module = importlib.import_module(f"sirius_chat.api.{module_name}")
     except Exception as exc:
-        print(f"⚠️  运行时导入 sirius_chat.api.{module_name} 失败: {exc}", file=sys.stderr)
+        print(f"[WARN] 运行时导入 sirius_chat.api.{module_name} 失败: {exc}", file=sys.stderr)
         return {"functions": [], "classes": []}
 
     exported_names = getattr(module, "__all__", [])
@@ -147,7 +147,7 @@ def parse_api_module(file_path: Path) -> dict:
             content = f.read()
         tree = ast.parse(content)
     except Exception as e:
-        print(f"⚠️  解析 {file_path} 失败: {e}", file=sys.stderr)
+        print(f"[WARN] 解析 {file_path} 失败: {e}", file=sys.stderr)
         return {"functions": [], "classes": []}
     
     functions = []
@@ -290,7 +290,7 @@ if __name__ == "__main__":
     api_dir = Path(__file__).parent.parent / "sirius_chat" / "api"
     
     if not api_dir.exists():
-        print(f"❌ API 目录不存在: {api_dir}")
+        print(f"[FAIL] API 目录不存在: {api_dir}")
         sys.exit(1)
     
     if output_format == "markdown":
@@ -298,7 +298,7 @@ if __name__ == "__main__":
         doc = generate_markdown_doc(api_dir)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(doc, encoding='utf-8')
-        print(f"✅ Markdown API 文档已生成: {output_path}")
+        print(f"[OK] Markdown API 文档已生成: {output_path}")
     
     elif output_format == "json":
         output_path = Path(sys.argv[2]) if len(sys.argv) > 2 else Path("docs/api.json")
@@ -306,9 +306,9 @@ if __name__ == "__main__":
         output_path.parent.mkdir(parents=True, exist_ok=True)
         with open(output_path, 'w', encoding='utf-8') as f:
             json.dump(doc, f, indent=2, ensure_ascii=False)
-        print(f"✅ JSON API 文档已生成: {output_path}")
+        print(f"[OK] JSON API 文档已生成: {output_path}")
     
     else:
-        print(f"❌ 不支持的格式: {output_format}")
+        print(f"[FAIL] 不支持的格式: {output_format}")
         sys.exit(1)
 

@@ -1,15 +1,13 @@
 # Sirius Chat API 文档
 
-> **v0.28+ 重要提示**：本文档包含 Legacy API 和 Emotional Engine API。
-> 新用户应优先使用 `create_emotional_engine()` 和 `EmotionalGroupChatEngine`。
-> Legacy `AsyncRolePlayEngine` 已归档，不再接收新功能。
+自动生成的 Python API 参考文档。
 
 ## 模块索引
 
 - [engine](#engine)
 - [memory](#memory)
 - [models](#models)
-- [orchestration](#orchestration)（Legacy）
+- [orchestration](#orchestration)
 - [prompting](#prompting)
 - [providers](#providers)
 - [session](#session)
@@ -19,176 +17,67 @@
 
 ## engine
 
-### EmotionalGroupChatEngine（v0.28+ 默认）
+### Classes
 
-#### `create_emotional_engine(work_path, *, provider=None, persona=None, config=None)`
+#### `EmotionalGroupChatEngine`
 
-创建 EmotionalGroupChatEngine 实例。
-
-**参数：**
-- `work_path`: workspace 路径（持久化目录）
-- `provider`: LLM provider（可选）
-- `persona`: `PersonaProfile` 或模板名字符串（可选）
-- `config`: 引擎配置字典（可选）
-
-**返回：** `EmotionalGroupChatEngine`
-
-**示例：**
-
-```python
-from sirius_chat.api import create_emotional_engine
-
-engine = create_emotional_engine(
-    work_path="./data",
-    persona="warm_friend",
-    config={"sensitivity": 0.6},
-)
-engine.start_background_tasks()
-```
-
-#### `EmotionalGroupChatEngine.process_message(message, participants, group_id)`
-
-处理单条消息。
-
-**参数：**
-- `message`: `Message` 对象
-- `participants`: `list[Participant]`
-- `group_id`: 群聊 ID
-
-**返回：** `dict[str, Any]` 包含：
-- `strategy`: `"immediate"` / `"delayed"` / `"silent"` / `"proactive"`
-- `reply`: 说出口的话（来自 `<say>`）
-- `thought`: 内心独白（来自 `<think>`）
-- `emotion`: 情绪状态字典
-- `intent`: 意图分析字典
-
-**示例：**
-
-```python
-result = await engine.process_message(
-    message=Message(role="human", content="你好", speaker="u1"),
-    participants=[Participant(name="小王", user_id="u1")],
-    group_id="default",
-)
-print(result["reply"])
-```
-
-#### `EmotionalGroupChatEngine.start_background_tasks()` / `stop_background_tasks()`
-
-启动/停止后台任务（延迟队列、主动触发、记忆晋升、语义整合）。
-
-#### `EmotionalGroupChatEngine.save_state()` / `load_state()`
-
-手动持久化/恢复引擎状态。
-
-#### `EmotionalGroupChatEngine.event_bus`
-
-`SessionEventBus` 实例，可订阅实时事件：
-
-```python
-async for event in engine.event_bus.subscribe():
-    print(event.type, event.data)
-```
-
----
-
-### Legacy API（已归档）
-
-#### `AsyncRolePlayEngine`
-
-AsyncRolePlayEngine(provider: 'LLMProvider | AsyncLLMProvider')
+Next-generation engine for emotional group chat (v0.28+).
 
 **方法：**
 
-- `get_model_for_task(self, config: SessionConfig, task_name: str) -> str` - 根据多模型协同配置获取任务模型。
+- `is_proactive_enabled(self, group_id: str) -> bool` - Check if proactive triggers are enabled for a group.
 
-Args:
-    config: 会话配置
-    task_name: 任务名称（如 'memory_extract'、'event_extract'）
-    
-Returns:
-    该任务应使用的模型名称
-    
-Raises:
-    ValueError: 如果无法确定任务模型
-- `async run_live_message(self, config: SessionConfig, turn: Message, transcript: Transcript | None, session_reply_mode: str | None, finalize_and_persist: bool, environment_context: str, user_profile: UserProfile | None, on_reply: Callable[[Message], Awaitable[None]] | None, timeout: float) -> Transcript`
-- `async run_live_session(self, config: SessionConfig, transcript: Transcript | None) -> Transcript` - Initialize a live session and prepare runtime context.
+Priority:
+1. If group is in disabled list → False
+2. If enabled_groups is not empty and group not in it → False
+3. Otherwise → True
+- `load_state(self) -> None` - Restore runtime state from disk.
+- `async proactive_check(self, group_id: str, _now: datetime | None) -> dict[str, Any] | None` - Check if proactive trigger should fire for a group.
+- `async process_message(self, message: Message, participants: list[Participant], group_id: str) -> dict[str, Any]` - Process a single incoming message through the full pipeline.
 
-Breaking change: this method no longer processes user messages.
-Use run_live_message(...) for per-message input/output handling.
-- `async run_session(self, config: SessionConfig, transcript: Transcript | None) -> Transcript`
-- `subscribe(self, transcript: Transcript, max_queue_size: int) -> AsyncIterator[SessionEvent]` - Subscribe to real-time session events for the given transcript.
+Returns a dict with at least:
+    - strategy: str (immediate / delayed / silent / proactive)
+    - reply: str | None
+    - emotion: dict
+    - intent: dict
+- `save_state(self) -> None` - Persist all runtime state to disk.
+- `set_proactive_enabled(self, group_id: str, enabled: bool) -> None` - Enable or disable proactive triggers for a specific group.
+- `set_skill_runtime(self, skill_registry: Any | None, skill_executor: Any | None) -> None` - Attach SKILL registry and executor to the engine.
+- `start_background_tasks(self) -> None` - Start periodic background tasks for delayed queue, proactive triggers,
+and memory promotion. Idempotent: safe to call multiple times.
+- `stop_background_tasks(self) -> None` - Cancel all background tasks.
+- `async tick_delayed_queue(self, group_id: str) -> list[dict[str, Any]]` - Process delayed response queue for a group.
 
-Returns an async iterator that yields :class:`SessionEvent` objects
-as they are produced by the engine (new messages, SKILL status,
-processing lifecycle, etc.).
+If multiple items trigger in the same tick, merge them into a single
+prompt so the model generates only one consolidated reply.
+Supports multi-round SKILL execution similar to immediate responses.
 
-The iterator terminates when the session's event bus is closed.
+#### `UserProfile`
 
-Args:
-    transcript: The transcript (session) to subscribe to.
-    max_queue_size: Maximum buffered events per subscriber.
-
-Yields:
-    SessionEvent instances in chronological order.
-- `validate_orchestration_config(self, config: SessionConfig) -> None` - 验证多模型协同配置的完整性。
-
-多模型协同必需启用，支持两种配置方案：
-1. unified_model: 所有任务使用同一个模型
-2. task_models: 为每个任务独立配置模型
-
-所有任务默认启用，可通过 task_enabled 字典禁用特定任务。
-
-Args:
-    config: 会话配置
-    
-Raises:
-    OrchestrationConfigError: 如果配置不完整或冲突
-
-#### `SessionEvent`
-
-A single event emitted by the engine during session processing.
+Core user identity. Minimal and focused.
 
 Attributes:
-    type: The category of the event.
-    message: The ``Message`` object, present for ``MESSAGE_ADDED`` events.
-    data: Arbitrary metadata (e.g. skill name, error details).
-    timestamp: Unix timestamp when the event was created.
-
-#### `SessionEventBus`
-
-Per-session event bus supporting multiple concurrent subscribers.
-
-Usage::
-
-    bus = SessionEventBus()
-    # Subscribe
-    async for event in bus.subscribe():
-        handle(event)
-
-    # Publish (from engine internals)
-    await bus.emit(SessionEvent(type=SessionEventType.MESSAGE_ADDED, message=msg))
-
-    # Close when the session ends
-    await bus.close()
-
-**方法：**
-
-- `async close(self) -> None` - Signal all subscribers to stop and clear the subscriber list.
-- `async emit(self, event: SessionEvent) -> None` - Publish an event to all current subscribers.
-- `subscribe(self, max_queue_size: int) -> AsyncIterator[SessionEvent]` - Return an async iterator that yields events as they arrive.
-
-The iterator terminates when :meth:`close` is called.
-
-#### `SessionEventType`
-
-Categories of events emitted during session processing.
+    user_id: Unique identifier.
+    name: Human-readable display name.
+    aliases: Alternative names the user may go by.
+    identities: Mapping from external systems (platform:external_uid).
+    metadata: Additional custom metadata (e.g. is_developer).
 
 ### Functions
 
-#### `create_async_engine(provider: LLMProvider | AsyncLLMProvider) -> AsyncRolePlayEngine`
+#### `create_emotional_engine(work_path, provider: LLMProvider | AsyncLLMProvider | None, persona, config: dict[str, Any] | None) -> EmotionalGroupChatEngine`
 
-Create an async roleplay engine for non-blocking integration.
+Create a new EmotionalGroupChatEngine (v0.28+).
+
+Args:
+    work_path: Workspace path for persistence.
+    provider: Optional LLM provider for async generation tasks.
+    persona: Optional PersonaProfile or string archetype name.
+    config: Optional engine configuration dict. See docs/configuration.md
+        for supported keys.
+
+Returns:
+    Configured EmotionalGroupChatEngine instance.
 
 #### `open_workspace_runtime(work_path, config_path, provider: LLMProvider | AsyncLLMProvider | None, bootstrap: WorkspaceBootstrap | None, persist_bootstrap: bool) -> WorkspaceRuntime`
 
@@ -199,47 +88,7 @@ workspace on the first ``initialize()`` call.  If *persist_bootstrap* is
 ``True`` (default) the merged values are written to the workspace files so
 that subsequent launches recover them automatically.
 
-#### `async ainit_live_session(engine: AsyncRolePlayEngine, config: SessionConfig, transcript: Transcript | None) -> Transcript`
-
-Async facade for live session initialization.
-
-#### `async arun_live_message(engine: AsyncRolePlayEngine, config: SessionConfig, turn: Message, transcript: Transcript | None, environment_context: str, user_profile: UserProfile | None, on_reply: Callable[[Message], Awaitable[None]] | None, timeout: float) -> Transcript`
-
-Async facade for single-message live processing.
-
-.. versionchanged:: 0.12.0
-   Added *user_profile*, *on_reply* and *timeout* parameters.
-   When *on_reply* is provided the engine subscribes to the event stream
-   internally and calls back for each assistant message — no external
-   ``asubscribe`` boilerplate needed.
-
-.. versionchanged:: 0.9.0
-   The ``on_message`` callback has been removed.  Use
-   :func:`asubscribe` to receive real-time session events instead.
-
-#### `async asubscribe(engine: AsyncRolePlayEngine, transcript: Transcript, max_queue_size: int) -> AsyncIterator[SessionEvent]`
-
-Subscribe to real-time session events.
-
-Returns an async iterator that yields :class:`SessionEvent` objects
-(new messages, SKILL execution status, processing lifecycle, etc.)
-as they are produced by the engine.
-
-Example::
-
-    async for event in asubscribe(engine, transcript):
-        if event.type == SessionEventType.MESSAGE_ADDED:
-            send_to_external(event.message)
-
-Args:
-    engine: The engine instance.
-    transcript: The active transcript (session).
-    max_queue_size: Maximum buffered events per subscriber.
-
-Yields:
-    SessionEvent instances in chronological order.
-
-#### `find_user_by_channel_uid(transcript: Transcript, channel: str, uid: str) -> UserMemoryEntry | None`
+#### `find_user_by_channel_uid(transcript: Transcript, channel: str, uid: str) -> UserProfile | None`
 
 Stable external lookup by channel + uid.
 
@@ -256,152 +105,31 @@ Useful for downstream delivery to avoid sending internal system notes.
 
 ### Classes
 
-#### `UserMemoryEntry`
-
-User memory entry combining profile and runtime state.
-
-#### `UserMemoryManager`
-
-Manages user memory entries, facts, and profiles.
-
-**方法：**
-
-- `add_memory_fact(self, user_id: str, fact_type: str, value: str, source: str, confidence: float, observed_at: str | None, max_facts: int | None, memory_category: str, context_channel: str, context_topic: str, source_event_id: str) -> None` - Add memory fact with trait normalization and intelligent upper limit management.
-
-C1 approach: When exceeding max_facts, delete lowest-confidence facts rather than simple FIFO.
-B approach: Auto-apply trait normalization for certain fact_types.
-- `add_summary_note(self, user_id: str, note: str, max_notes: int) -> None` - Add a summary note for user.
-- `apply_ai_runtime_update(self, user_id: str, inferred_persona: str | None, inferred_aliases: list[str] | None, inferred_traits: list[str] | None, preference_tags: list[str] | None, summary_note: str | None, source: str, confidence: float) -> None` - Apply AI inferred runtime updates to user memory.
-- `apply_event_insights(self, user_id: str, event_features: dict[str, object], source: str, base_confidence: float, source_event_id: str) -> None` - Convert event features to user memory facts and feature signals.
-
-Auto-converts event's emotion_tags, keywords, role_slots, time_hints etc.
-to corresponding user memory facts and updates observed feature sets.
-- `apply_scheduled_decay(self) -> dict[str, int]` - Apply scheduled decay to all user memories.
-
-Returns: {user_id: number of decayed memories}
-- `cleanup_expired_memories(self, min_quality: float) -> dict[str, int]` - Clean up expired/low-quality memories for all users.
-
-Returns: {user_id: number of deleted memories}
-- `cleanup_expired_transient_facts(self, user_id: str, max_age_minutes: int, transient_threshold: float) -> int` - Clean up expired TRANSIENT facts.
-
-TRANSIENT facts (confidence <= threshold) are deleted after max_age_minutes
-from their observed_at time. Returns number of deleted facts.
-- `compress_memory_facts(self, user_id: str, similarity_threshold: float) -> int` - C3 approach: Dynamic memory facts compression.
-
-Cluster and merge same-type facts to reduce redundant information.
-
-Args:
-    user_id: User ID to compress
-    similarity_threshold: Similarity threshold (0.0-1.0)
-
-Returns:
-    Number of compressed/deleted facts
-- `async consolidate_memory_facts(self, user_id: str, provider_async: Any, model_name: str, min_facts: int, temperature: float, max_tokens: int) -> int` - Consolidate memory facts for a user using LLM-based merging.
-
-Group facts by type, merge similar ones, and produce refined facts.
-Returns the number of facts removed (net reduction).
-- `async consolidate_summary_notes(self, user_id: str, provider_async: Any, model_name: str, min_notes: int, temperature: float, max_tokens: int) -> int` - Consolidate summary notes for a user into fewer, more refined notes.
-
-Uses LLM to merge and summarize multiple notes into concise summaries.
-Returns the number of notes removed (net reduction).
-- `ensure_user(self, speaker: str, persona: str) -> UserProfile` - Ensure user exists, creating if necessary.
-- `get_facts_by_context(self, user_id: str, channel: str | None, topic: str | None) -> list[MemoryFact]` - Get facts filtered by communication channel and/or topic.
-
-Args:
-    user_id: The user ID to query
-    channel: Optional channel filter (e.g., "qq", "wechat", "email")
-    topic: Optional topic filter (e.g., "work", "hobby", "family")
-
-Returns:
-    List of MemoryFact objects matching the filters
-- `get_resident_facts(self, user_id: str, threshold: float) -> list[MemoryFact]` - Get high-confidence RESIDENT facts (only for persistence to user.json).
-
-RESIDENT: confidence > threshold, representing core, stable user traits and preferences.
-These facts should be persisted to storage.
-- `get_rich_user_summary(self, user_id: str, include_transient: bool, max_facts_per_type: int) -> dict[str, Any]` - Generate a model-friendly user summary with rich context.
-
-This summary is suitable for injection into system prompts or as context
-for the AI model to provide personalized responses.
-
-Args:
-    user_id: The user ID to generate summary for
-    include_transient: Whether to include low-confidence transient facts
-    max_facts_per_type: Maximum number of facts per type in the summary
-
-Returns:
-    Dict with keys: profile, summary, traits, interests, recent_facts, 
-                   identities, confidence_distribution, channels
-- `get_transient_facts(self, user_id: str, threshold: float) -> list[MemoryFact]` - Get low-confidence TRANSIENT facts (stored in session memory).
-
-TRANSIENT: confidence <= threshold, representing recently observed uncertain information.
-These facts should be stored in session memory and auto-cleaned after 30 minutes.
-- `get_user_by_id(self, user_id: str) -> UserMemoryEntry | None` - Get user memory entry by exact user ID.
-
-Args:
-    user_id: The user ID to look up
-
-Returns:
-    UserMemoryEntry or None if not found
-- `get_user_by_identity(self, channel: str, external_user_id: str) -> UserMemoryEntry | None` - Get user memory entry by channel identity.
-- `merge_from(self, other: 'UserMemoryManager') -> None` - Merge another UserMemoryManager into this one.
-- `register_user(self, profile: UserProfile) -> None` - Register a user profile.
-- `remember_message(self, profile: UserProfile, content: str, max_recent_messages: int, channel: str | None, channel_user_id: str | None) -> None` - Remember a message from user.
-- `resolve_user_id(self, speaker: str | None, channel: str | None, external_user_id: str | None) -> str | None` - Resolve user ID from speaker name, channel identity, or external user ID.
-- `resolve_user_id_by_identity(self, channel: str, external_user_id: str) -> str | None` - Resolve user ID by channel identity.
-- `search_users_by_fact(self, fact_type: str, value: str | None) -> dict[str, list[MemoryFact]]` - Search for users with specific fact types or values.
-
-Args:
-    fact_type: The type of fact to search for (e.g., "job", "location", "hobby")
-    value: Optional specific value to match. If None, returns all facts of that type.
-
-Returns:
-    Dict mapping user_id to list of matching MemoryFact objects
-- `to_dict(self) -> dict[str, Any]` - Serialize to dictionary.
-
 #### `UserProfile`
 
-Initial user profile: provided by external system before session starts.
+Core user identity. Minimal and focused.
 
-Should not be arbitrarily overwritten by AI during runtime.
+Attributes:
+    user_id: Unique identifier.
+    name: Human-readable display name.
+    aliases: Alternative names the user may go by.
+    identities: Mapping from external systems (platform:external_uid).
+    metadata: Additional custom metadata (e.g. is_developer).
+
+#### `UserManager`
+
+Manages user profiles with group-isolated storage.
+
+Structure: {group_id: {user_id: UserProfile}}
 
 **方法：**
 
-- `to_dict(self) -> dict[str, Any]` - Serialise to a plain dict (recursively via ``dataclasses.asdict``).
-
-#### `EventMemoryManager`
-
-Manages user-scoped observations with buffered batch extraction.
-
-**方法：**
-
-- `absorb_mention(self, content: str, known_entities: list[str], extracted_features: dict[str, object] | None, high_threshold: float, weak_threshold: float) -> dict[str, Any]` - v1 compatibility shim — buffers the message and returns a hit payload.
-- `buffer_message(self, user_id: str, content: str) -> None` - Buffer a message for later batch extraction.
-
-Very short / trivial messages are silently discarded.
-- `check_relevance(self, user_id: str, content: str) -> dict[str, object]` - Lightweight relevance check against existing observations.
-
-Returns a dict compatible with the legacy *hit_payload* shape
-so ``_compute_event_relevance_score`` keeps working.
-- `async consolidate_entries(self, user_id: str, provider_async: Any, model_name: str, min_entries: int, temperature: float, max_tokens: int) -> int` - Consolidate observations for a user into fewer, more refined entries.
-
-Groups observations by category, uses LLM to merge and summarize them,
-then replaces old entries with consolidated ones.
-
-Returns the number of entries removed (net reduction).
-- `async extract_observations(self, user_id: str, user_name: str, provider_async: Any, model_name: str, temperature: float, max_tokens: int) -> list[EventMemoryEntry]` - Consume the buffer for *user_id* and return new/merged observations.
-
-``provider_async`` must expose an async ``generate_async(request)`` method
-compatible with ``GenerationRequest``.
-- `async finalize_pending_events(self, provider_async: Any, model_name: str, min_mentions: int) -> dict[str, Any]` - Flush all remaining buffers at session end.
-
-Signature is kept compatible with v1 for engine integration.
-Returns stats dict with verified_count / rejected_count / pending_count.
-- `get_all_user_ids(self) -> set[str]` - Return all unique user IDs present in entries.
-- `get_user_observations(self, user_id: str, limit: int) -> list[EventMemoryEntry]` - Get observations for a specific user, ordered by confidence.
-- `pending_buffer_counts(self) -> dict[str, int]` - Return {user_id: buffered_message_count} for diagnostics.
-- `should_extract(self, user_id: str, batch_size: int) -> bool` - Check whether buffered messages reached the extraction threshold.
-- `to_dict(self) -> dict[str, Any]`
-- `top_events(self, limit: int, include_pending: bool, user_id: str | None) -> list[EventMemoryEntry]` - Return top observations, optionally filtered by user.
+- `ensure_user(self, speaker: str, group_id: str) -> UserProfile` - Ensure a user exists, creating if necessary.
+- `get_user(self, user_id: str, group_id: str) -> UserProfile | None` - Get user profile by exact ID within a group.
+- `list_users(self, group_id: str) -> list[UserProfile]` - List all users in a group.
+- `register_user(self, profile: UserProfile, group_id: str) -> None` - Register or update a user in a group.
+- `resolve_user_id(self, speaker: str | None, platform: str | None, external_uid: str | None) -> str | None` - Resolve user ID from speaker name, platform identity, or external UID.
+- `to_dict(self) -> dict[str, Any]` - Serialize to dict.
 
 
 ---
@@ -427,7 +155,7 @@ observed-set caps and prompt-injection budget.
 
 #### `Message`
 
-Message(role: 'str', content: 'str', speaker: 'str | None' = None, channel: 'str | None' = None, channel_user_id: 'str | None' = None, multimodal_inputs: 'list[dict[str, str]]' = <factory>, reply_mode: 'str' = 'always')
+Message(role: 'str', content: 'str', speaker: 'str | None' = None, channel: 'str | None' = None, channel_user_id: 'str | None' = None, group_id: 'str | None' = None, multimodal_inputs: 'list[dict[str, str]]' = <factory>, reply_mode: 'str' = 'always')
 
 **方法：**
 
@@ -500,7 +228,7 @@ Record of token usage for a task execution.
 
 #### `Transcript`
 
-Transcript(messages: 'list[Message]' = <factory>, user_memory: 'UserMemoryManager' = <factory>, reply_runtime: 'ReplyRuntimeState' = <factory>, session_summary: 'str' = '', orchestration_stats: 'dict[str, dict[str, int]]' = <factory>, token_usage_records: 'list[TokenUsageRecord]' = <factory>)
+Transcript(messages: 'list[Message]' = <factory>, user_memory: 'UserManager' = <factory>, reply_runtime: 'ReplyRuntimeState' = <factory>, session_summary: 'str' = '', orchestration_stats: 'dict[str, dict[str, int]]' = <factory>, token_usage_records: 'list[TokenUsageRecord]' = <factory>)
 
 **方法：**
 
@@ -508,8 +236,8 @@ Transcript(messages: 'list[Message]' = <factory>, user_memory: 'UserMemoryManage
 - `add_token_usage_record(self, record: TokenUsageRecord) -> None`
 - `as_chat_history(self) -> list[dict[str, str]]`
 - `compress_for_budget(self, max_messages: int, max_chars: int) -> None`
-- `find_user_by_channel_uid(self, channel: str, uid: str) -> UserMemoryEntry | None`
-- `remember_participant(self, participant: Participant, content: str, max_recent_messages: int, channel: str | None, channel_user_id: str | None) -> None`
+- `find_user_by_channel_uid(self, channel: str, uid: str, group_id: str) -> UserProfile | None`
+- `remember_participant(self, participant: Participant, content: str, max_recent_messages: int, channel: str | None, channel_user_id: str | None, group_id: str) -> None`
 - `to_dict(self) -> dict[str, Any]` - Serialize to dict. Complex fields use custom logic; all other simple
 fields on Transcript are auto-included via reflection so any future
 addition is persisted without touching this method.
@@ -769,6 +497,7 @@ Choose a configured provider automatically on each generation request.
 **方法：**
 
 - `generate(self, request: GenerationRequest) -> str` - Generate one assistant message from the upstream provider.
+- `async generate_async(self, request: GenerationRequest) -> str`
 
 #### `BigModelProvider`
 
@@ -943,21 +672,6 @@ Register provider only after support and availability checks pass.
 
 ### Classes
 
-#### `JsonPersistentSessionRunner`
-
-High-level async runner with automatic JSON persistence.
-
-Responsibilities:
-- Manage primary user profile persistence.
-- Manage transcript load/save around each turn.
-- Expose simple send/reset APIs for application callers.
-
-**方法：**
-
-- `async initialize(self, primary_user: Participant | None, resume: bool) -> None`
-- `async reset_primary_user(self, participant: Participant, clear_transcript: bool) -> None`
-- `async send_user_message(self, content: str) -> Message`
-
 #### `JsonSessionStore`
 
 JSON-based session store for persisting sessions.
@@ -1066,6 +780,11 @@ The caller provides only the fields it wants to change; the runtime
 merges them, validates, persists and triggers a hot-refresh.
 - `async clear_session(self, session_id: str) -> None`
 - `async close(self) -> None`
+- `create_emotional_engine(self, config: dict[str, Any] | None, persona: Any | None) -> EmotionalGroupChatEngine` - Create an EmotionalGroupChatEngine bound to this workspace.
+
+The engine shares the workspace's work_path and provider.
+Background tasks are NOT started automatically—call
+``engine.start_background_tasks()`` after creation if desired.
 - `async delete_session(self, session_id: str) -> None`
 - `export_workspace_defaults(self) -> dict[str, object]` - Return the current workspace defaults as a plain dict.
 
@@ -1076,7 +795,6 @@ understand the underlying file layout.
 - `async get_transcript(self, session_id: str) -> Transcript | None`
 - `async initialize(self) -> None`
 - `async list_sessions(self) -> list[str]`
-- `async run_live_message(self, session_id: str, turn: Message, environment_context: str, user_profile: UserProfile | None, on_reply: Callable[[Message], Awaitable[None]] | None, timeout: float) -> Transcript`
 - `async set_primary_user(self, session_id: str, participant: Participant) -> None`
 - `set_provider(self, provider: LLMProvider | AsyncLLMProvider | None) -> None`
 - `set_provider_entries(self, entries: list[dict[str, object]], persist: bool) -> None` - Inject provider config entries from the host.

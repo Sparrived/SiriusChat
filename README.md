@@ -267,7 +267,7 @@ tests/                            # ✅ 单元测试 (600+ 个)
 
 docs/                             # 📚 文档
 ├── architecture.md               # 架构总览
-├── orchestration-policy.md       # 编排策略
+├── orchestration-policy.md       # 模型编排与任务路由
 ├── configuration.md              # 配置指南
 ├── full-architecture-flow.md     # 详细数据流
 └── external-usage.md             # 库调用指南
@@ -685,11 +685,11 @@ SKILL 系统支持可扩展任务编排：
 | 文件 | 描述 |
 |------|------|
 | [📖 architecture.md](docs/architecture.md) | 完整架构设计、消息流、模块交互 |
-| [⚙️ orchestration-policy.md](docs/orchestration-policy.md) | 多模型编排、任务路由、预算控制 |
+| [⚙️ orchestration-policy.md](docs/orchestration-policy.md) | 任务模型覆盖与动态路由 |
 | [🔧 configuration.md](docs/configuration.md) | 所有配置字段说明和最佳实践 |
 | [📋 full-architecture-flow.md](docs/full-architecture-flow.md) | 详细数据流图解 |
 | [🎬 external-usage.md](docs/external-usage.md) | 库调用指南与集成文档 |
-| [🧠 memory-system.md](docs/memory-system.md) | 四层记忆底座（工作/事件 V2/情景/语义） |
+| [🧠 memory-system.md](docs/memory-system.md) | 两层记忆底座（基础记忆 + 日记）与名词解释 |
 | [🎬 engine-emotional.md](docs/engine-emotional.md) | EmotionalGroupChatEngine 详细说明 |
 | [🗂️ migration-v0.28.md](docs/migration-v0.28.md) | v0.28 Emotional Engine 迁移指南 |
 | [🗂️ migration-v0.27.md](docs/migration-v0.27.md) | v0.27 破坏性变更迁移指南 |

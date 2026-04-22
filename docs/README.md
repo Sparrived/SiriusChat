@@ -13,7 +13,7 @@
 
 | 文档 | 一句话定位 |
 |------|-----------|
-| [情感化群聊引擎](engine-emotional.md) | v0.28+ 默认引擎，四层认知管线让 AI 像真人一样在群里说话 |
+| [情感化群聊引擎](engine-emotional.md) | v1.0 唯一引擎，四层认知管线让 AI 像真人一样在群里说话 |
 | [记忆系统](memory-system.md) | 三层记忆底座（工作→情景→语义）+ 自传体记忆，让引擎记得住、回忆得起、理解得了 |
 | [认知层](emotion-intent-analysis.md) | 统一情绪+意图分析器（CognitionAnalyzer），零成本热路径 + 单次 LLM fallback |
 | [人格系统](persona-system.md) | 可配置、可持久化的角色人格，影响引擎的整个认知管线 |
@@ -41,7 +41,7 @@
 
 | 文档 | 内容 |
 |------|------|
-| [v0.28 迁移指南](migration-v0.28.md) | 从 legacy 引擎迁移到 EmotionalGroupChatEngine |
+| [v0.28 迁移指南](migration-v0.28.md) | 历史迁移文档（legacy 引擎已移除） |
 
 ## 哲学与设计
 
@@ -58,6 +58,6 @@
 
 | 文档 | 说明 |
 |------|------|
-| [Legacy 引擎](engine-legacy.md) | v0.27 及之前的 AsyncRolePlayEngine（已归档） |
+
 
 > 更旧版本的迁移文档已删除。如需查看历史迁移步骤，请查阅对应版本的 Git 标签。

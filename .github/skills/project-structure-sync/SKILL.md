@@ -16,12 +16,12 @@ description: "遍历项目结构变化并同步更新文档。监控模块变化
 ```
 sirius_chat/
 ├── api/                      - 对外 API facade（engine/models/providers/session 等）
-├── core/                     - 编排核心（emotional_engine.py、cognition.py、response_assembler.py、model_router.py、engine_persistence.py）；legacy 归档于 core/_legacy/
+├── core/                     - 编排核心（emotional_engine.py、response_assembler.py、model_router.py、engine_persistence.py、identity_resolver.py）
 ├── async_engine/             - 兼容导出 + prompts/orchestration/utils 辅助层
 ├── workspace/                - WorkspaceLayout / Runtime / Watcher / RoleplayManager
 ├── config/                   - SessionConfig / WorkspaceConfig / JSONC / ConfigManager
 ├── models/                   - Message / Participant / Transcript 等数据契约
-├── memory/                   - user/event/self/quality 子包；v0.28+ 新增 working/episodic/semantic/activation_engine/retrieval_engine
+├── memory/                   - basic/diary/glossary/user 子包；context_assembler.py 组装 OpenAI messages
 ├── session/                  - SessionStore / runner
 ├── providers/                - Provider 实现、路由与 middleware
 ├── token/                    - token 记录、SQLite 持久化与分析
@@ -115,7 +115,7 @@ git diff HEAD~1 --stat
 
 **触发条件**：
 - 修改 `sirius_chat/api/` 中的公开接口
-- 修改 `AsyncRolePlayEngine` 的公开方法签名
+- 修改 `EmotionalGroupChatEngine` 的公开方法签名
 - 新增/删除 CLI 命令（`sirius-chat`）
 - 配置结构变化
 
@@ -127,7 +127,7 @@ git diff HEAD~1 --stat
 
 **示例提示**：
 ```
-检测到 API 变更: AsyncRolePlayEngine.run_live_session() 签名变化
+检测到 API 变更: EmotionalGroupChatEngine.process_message() 签名变化
 请更新：
 1. docs/external-usage.md - 更新方法说明和示例
 2. examples/ - 修改使用示例

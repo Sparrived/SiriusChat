@@ -60,7 +60,7 @@ git diff --cached --stat
 
 **示例摘要**：
 ```
-- feat: 实现记忆质量评估模块（memory/quality/models.py、memory/quality/tools.py）
+- feat: 实现日记索引模块（memory/diary/indexer.py、memory/diary/retriever.py）
 - feat: 新增智能遗忘引擎与衰退调度
 - test: 添加8个记忆质量系统测试（79/79通过）
 - docs: 更新architecture.md中的Phase 2记忆系统说明
@@ -161,18 +161,15 @@ git diff --cached --stat
 # 新增功能类提交
 git commit -m "feat(memory): 实现记忆质量评估与智能遗忘引擎
 
-新增sirius_chat/memory/quality/models.py模块，包含：
-- MemoryQualityAssessor：多维度质量评分（置信度50% + 活跃度30% + 验证15%）
-- MemoryForgetEngine：自动衰退调度与清理规则
-- MemoryQualityReport：报告生成
+新增sirius_chat/memory/diary/indexer.py模块，包含：
+- DiaryIndexer：关键词 + sentence-transformers 向量索引
+- DiaryRetriever：按 token 预算检索相关日记
 
-新增sirius_chat/memory/quality/tools.py，提供CLI工具：
-- analyze: 离线分析所有用户记忆质量
-- cleanup: 按阈值清理低质量记忆
-- decay: 应用衰退表更新置信度
-- all: 完整流程执行
+新增sirius_chat/memory/diary/retriever.py，提供检索工具：
+- retrieve: 按查询检索适配 prompt 的日记列表
+- search: 关键词/向量混合搜索
 
-整合到UserMemoryManager：apply_scheduled_decay()、cleanup_expired_memories()
+整合到DiaryManager：add()、search()、retrieve()
 
 Closes #234"
 

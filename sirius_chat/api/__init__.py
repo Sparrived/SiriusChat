@@ -156,7 +156,6 @@ __all__ = [
     # Engines (v0.28+ preferred)
     "EmotionalGroupChatEngine",
     "create_emotional_engine",
-    "JsonPersistentSessionRunner",
     "RoleplayWorkspaceManager",
     "WorkspaceLayout",
     "WorkspaceRuntime",

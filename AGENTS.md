@@ -41,11 +41,11 @@
 项目采用**分层架构**：
 
 1. **API 层**（`sirius_chat/api/`）：稳定的公开 facade，所有外部调用应通过这里。
-2. **核心编排层**（`sirius_chat/core/`）：v0.28+ 默认引擎 `EmotionalGroupChatEngine`，含四层认知架构（感知→认知→决策→执行）+ 三层记忆底座 + 事件流。旧 `AsyncRolePlayEngine` 已归档至 `core/_legacy/`。
+2. **核心编排层**（`sirius_chat/core/`）：v1.0 唯一引擎 `EmotionalGroupChatEngine`，含四层认知架构（感知→认知→决策→执行）+ 简化两层记忆底座（基础记忆 + 日记记忆）+ 事件流。旧 `AsyncRolePlayEngine` 已完全移除。
 3. **兼容/辅助层**（`sirius_chat/async_engine/`）：历史兼容导出与 prompts/orchestration/utils 辅助。
 4. **Workspace 层**（`sirius_chat/workspace/`）：布局管理、运行时生命周期、文件监听与热刷新。
 5. **配置层**（`sirius_chat/config/`）：WorkspaceConfig / SessionConfig / JSONC 读写管理。
-6. **记忆层**（`sirius_chat/memory/`）：用户记忆、事件记忆、AI 自身记忆（日记 + 名词解释）、记忆质量与遗忘曲线。
+6. **记忆层**（`sirius_chat/memory/`）：基础记忆（BasicMemory）、日记记忆（Diary）、用户画像（UserManager）、名词解释（Glossary）。
 7. **会话层**（`sirius_chat/session/`）：`SessionStore` 协议及 JSON / SQLite 实现。
 8. **Provider 层**（`sirius_chat/providers/`）：Provider 协议、具体实现（OpenAI / DeepSeek / 阿里云百炼 / 智谱 BigModel / SiliconFlow / 火山方舟等）、路由与中间件（重试、熔断、限流、成本监控）。
 9. **SKILL 层**（`sirius_chat/skills/`）：内置 + 外部 SKILL 注册、依赖解析、执行与数据存储。
@@ -64,8 +64,8 @@ sirius_chat/
 ├── cache/                   # 可扩展缓存框架（LRU + TTL）
 ├── config/                  # 配置模型、JSONC 管理、WorkspaceConfig / SessionConfig
 ├── configs/                 # 内置配置模板
-├── core/                    # 编排核心（v0.28 新架构）
-│   ├── emotional_engine.py  # EmotionalGroupChatEngine（主引擎，v0.28+）
+├── core/                    # 编排核心（v1.0 唯一引擎）
+│   ├── emotional_engine.py  # EmotionalGroupChatEngine（主引擎，v1.0）
 │   ├── response_assembler.py # 执行层：Prompt 组装 + 风格适配
 │   ├── emotion.py           # 情感分析（二维模型 + 19 种基础情绪）
 │   ├── intent_v3.py         # 意图分析 v3（目的驱动：求助/情感/社交/沉默）
@@ -75,13 +75,8 @@ sirius_chat/
 │   ├── rhythm.py            # 对话节奏分析（热度/速度/注意力窗口）
 │   ├── threshold_engine.py  # 动态阈值引擎（Base × Activity × Relationship × Time）
 │   ├── events.py            # 会话事件流
-│   ├── chat_builder.py      # 主模型请求构造（legacy 兼容）
-│   └── _legacy/             # 旧引擎归档（不删除，供参考）
-│       ├── engine.py        # AsyncRolePlayEngine（legacy）
-│       ├── engagement.py    # EngagementCoordinator（legacy）
-│       ├── heat.py          # HeatAnalyzer（legacy）
-│       ├── intent_v2.py     # IntentAnalyzer v2（legacy）
-│       └── memory_runner.py # 记忆辅助任务（legacy）
+│   ├── chat_builder.py      # 主模型请求构造
+│   └── identity_resolver.py # 跨平台身份解析
 ├── memory/                  # 记忆子包（v1.0 简化架构）
 │   ├── basic/               # 基础记忆（工作窗口 + 热度 + 归档）
 │   ├── diary/               # 日记记忆（LLM 生成、索引、检索）
@@ -125,7 +120,7 @@ tests/                       # 35+ 测试文件，600+ 单元测试
 docs/                        # 文档
 ├── architecture.md          # 架构总览与模块边界
 ├── configuration.md         # 配置字段说明与最佳实践
-├── orchestration-policy.md  # 多模型编排策略
+├── orchestration-policy.md  # 任务模型覆盖与动态路由
 ├── full-architecture-flow.md # 详细数据流
 ├── external-usage.md        # 库调用指南
 ├── skill-authoring.md       # SKILL 编写规范
@@ -148,8 +143,7 @@ scripts/                     # 开发脚本
 | `sirius-chat` | `sirius_chat/cli.py` | 库内薄 CLI：单轮消息、角色模板导出、legacy session JSON bootstrap |
 | `open_workspace_runtime()` | `sirius_chat/api/engine.py` | **推荐生产入口**：自动恢复 workspace、热刷新、会话恢复、参与者元数据、store 回写 |
 | `create_emotional_engine()` | `sirius_chat/api/engine.py` | **v0.28 推荐工厂**：创建 EmotionalGroupChatEngine 并注入 provider |
-| `EmotionalGroupChatEngine` | `sirius_chat/core/emotional_engine.py` | **v0.28 默认引擎**：群聊情感化编排、四层响应策略、三层记忆底座、事件流、ModelRouter |
-| `AsyncRolePlayEngine` | `sirius_chat/core/_legacy/engine.py` | 底层引擎（legacy，已归档） |
+| `EmotionalGroupChatEngine` | `sirius_chat/core/emotional_engine.py` | **v1.0 唯一引擎**：群聊情感化编排、四层响应策略、简化记忆底座、事件流、ModelRouter |
 
 ---
 
@@ -331,8 +325,8 @@ python scripts/ci_check.py
 - `start_background_tasks()` / `stop_background_tasks()` 幂等启停。
 - 延迟队列 ticker：每 10 秒检查所有活跃群的延迟响应。
 - 主动触发 checker：每 60 秒检查长时间沉默群。
-- 观察提取 promoter：每 5 分钟检查 `EventMemoryManager` 的待处理缓冲；达到阈值的用户触发 `extract_observations()` 批量 LLM 提取，结果写入 `event_memory.entries` 并镜像到 `episodic_memory` 保持兼容。
-- 语义整合 consolidator：每 10 分钟（可配置）将最近 7 天的结构化观察（`event_memory.entries`）按 category 聚合为语义用户画像更新；无 v2 观察时自动回退到旧的 episodic 原始事件统计。
+- 日记生成 promoter：每 5 分钟检查 `BasicMemoryManager` 的冷群候选；触发 `DiaryGenerator` 将归档消息 LLM 总结为 `DiaryEntry`，写入 `DiaryManager` 并建立索引。
+- 语义整合 consolidator：每 10 分钟（可配置）对日记条目进行聚合；当前为 no-op，保留接口供后续扩展。
 
 **群级规范学习（v0.28 新增）**：
 - 被动学习：每处理一条消息自动更新群体统计。
@@ -454,7 +448,7 @@ python scripts/ci_check.py
 | `Makefile` | 开发工作流快捷命令 |
 | `main.py` | 仓库级交互入口 |
 | `sirius_chat/core/emotional_engine.py` | v0.28 核心情感群聊引擎 |
-| `sirius_chat/core/_legacy/engine.py` | legacy 核心编排引擎 |
+
 | `sirius_chat/api/__init__.py` | 公开 API 导出清单 |
 | `tests/conftest.py` | 测试最小 fixture |
 | `scripts/ci_check.py` | 统一 CI 检查脚本 |
