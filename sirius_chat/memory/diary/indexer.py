@@ -33,7 +33,10 @@ class DiaryIndexer:
         self._model: Any | None = None
         if _ST_AVAILABLE:
             try:
-                self._model = SentenceTransformer(self.MODEL_NAME)
+                self._model = SentenceTransformer(
+                    self.MODEL_NAME,
+                    local_files_only=True,
+                )
                 logger.info("日记语义索引已加载模型 %s", self.MODEL_NAME)
             except Exception as exc:
                 logger.warning("日记索引模型加载失败: %s", exc)
