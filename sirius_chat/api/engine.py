@@ -9,7 +9,7 @@ from sirius_chat.core.emotional_engine import EmotionalGroupChatEngine
 from sirius_chat.core.events import SessionEvent, SessionEventBus, SessionEventType
 from sirius_chat.models import Message, Transcript
 from sirius_chat.providers.base import AsyncLLMProvider, LLMProvider
-from sirius_chat.memory import UserMemoryEntry, UserProfile
+from sirius_chat.memory.user.simple import UserProfile
 from sirius_chat.workspace.runtime import WorkspaceRuntime
 
 
@@ -134,7 +134,7 @@ def find_user_by_channel_uid(
     *,
     channel: str,
     uid: str,
-) -> UserMemoryEntry | None:
+) -> UserProfile | None:
     """Stable external lookup by channel + uid."""
     return transcript.find_user_by_channel_uid(channel=channel, uid=uid)
 
@@ -162,11 +162,11 @@ __all__ = [
     # v0.28+
     "EmotionalGroupChatEngine",
     "create_emotional_engine",
-    # Shared
-    "SessionEvent",
-    "SessionEventBus",
-    "SessionEventType",
     "open_workspace_runtime",
     "find_user_by_channel_uid",
     "extract_assistant_messages",
+    "SessionEvent",
+    "SessionEventBus",
+    "SessionEventType",
+    "UserProfile",
 ]

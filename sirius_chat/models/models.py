@@ -6,7 +6,7 @@ from typing import Any
 
 from sirius_chat.developer_profiles import metadata_declares_developer
 from sirius_chat.mixins import JsonSerializable
-from sirius_chat.memory import UserMemoryEntry, UserMemoryManager, UserProfile
+from sirius_chat.memory.user.simple import UserProfile, UserManager
 from sirius_chat.config import TokenUsageRecord, OrchestrationPolicy
 
 
@@ -102,7 +102,7 @@ User = Participant
 @dataclass(slots=True)
 class Transcript:
     messages: list[Message] = field(default_factory=list)
-    user_memory: UserMemoryManager = field(default_factory=UserMemoryManager)
+    user_memory: UserManager = field(default_factory=UserManager)
     reply_runtime: ReplyRuntimeState = field(default_factory=ReplyRuntimeState)
     session_summary: str = ""
     orchestration_stats: dict[str, dict[str, int]] = field(default_factory=dict)
@@ -119,23 +119,19 @@ class Transcript:
         self,
         *,
         participant: Participant,
-        content: str,
+        content: str = "",
         max_recent_messages: int = 5,
         channel: str | None = None,
         channel_user_id: str | None = None,
         group_id: str = "default",
     ) -> None:
-        self.user_memory.remember_message(
-            profile=participant.as_user_profile(),
-            content=content,
-            max_recent_messages=max_recent_messages,
-            channel=channel,
-            channel_user_id=channel_user_id,
-            group_id=group_id,
-        )
+        self.user_memory.register_user(participant.as_user_profile(), group_id=group_id)
 
-    def find_user_by_channel_uid(self, *, channel: str, uid: str, group_id: str = "default") -> UserMemoryEntry | None:
-        return self.user_memory.get_user_by_identity(channel=channel, external_user_id=uid)
+    def find_user_by_channel_uid(self, *, channel: str, uid: str, group_id: str = "default") -> UserProfile | None:
+        user_id = self.user_memory.resolve_user_id(platform=channel, external_uid=uid)
+        if user_id is None:
+            return None
+        return self.user_memory.get_user(user_id, group_id=group_id)
 
     def _generate_summary(self, archived_messages: list[Message], max_items: int = 8) -> str:
         items: list[str] = []
@@ -239,7 +235,7 @@ class Transcript:
         )
 
         if "user_memory" in payload:
-            transcript.user_memory = UserMemoryManager.from_dict(payload.get("user_memory", {}))
+            transcript.user_memory = UserManager.from_dict(payload.get("user_memory", {}))
         else:
             # Backward compatibility for old state files.
             raw_memories = payload.get("participant_memories", {})

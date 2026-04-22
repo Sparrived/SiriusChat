@@ -15,8 +15,11 @@ package level. Internal modules provide specialized functionality:
 
 from __future__ import annotations
 
-# Legacy engine archived to _legacy; re-export preserved for transitional imports.
-from sirius_chat.core._legacy.engine import AsyncRolePlayEngine
+# Legacy engine archived; minimal stub preserved for transitional imports.
+class AsyncRolePlayEngine:
+    def __init__(self, *args, **kwargs) -> None:
+        pass
+
 from sirius_chat.async_engine.orchestration import (
     SUPPORTED_MULTIMODAL_TYPES,
     TASK_EVENT_EXTRACT,

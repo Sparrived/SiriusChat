@@ -20,8 +20,10 @@ class UserProfile:
 
     user_id: str
     name: str
+    persona: str = ""
     aliases: list[str] = field(default_factory=list)
     identities: dict[str, str] = field(default_factory=dict)
+    traits: list[str] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
 
 

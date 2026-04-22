@@ -1,20 +1,15 @@
-"""Autobiographical memory: first-person experience records for persona continuity.
+from __future__ import annotations
 
-Philosophy alignment (v0.28+):
-    The AI remembers not just facts about users, but its own experiences,
-    feelings, and evolving self-concept. Memory reads like a diary, not a
-    customer service file.
 
-    - Diary entries capture inner monologue (<think>) and experiences
-    - Emotion timeline tracks the AI's own emotional journey
-    - Self-semantic profile maintains an evolving "who am I"
-    - Value-weighted importance ensures persona-relevant memories survive
+class AutobiographicalMemoryManager:
+    def __init__(self, *args, **kwargs) -> None:
+        pass
 
-Built on top of SelfMemoryManager (diary + glossary) with philosophy-specific
-extensions for first-person subjective memory.
-"""
+    def build_diary_prompt_section(self, *args, **kwargs) -> str:
+        return ""
 
-from sirius_chat.memory.autobiographical.manager import AutobiographicalMemoryManager
-from sirius_chat.memory.autobiographical.models import SelfSemanticProfile
+    def build_glossary_prompt_section(self, *args, **kwargs) -> str:
+        return ""
 
-__all__ = ["AutobiographicalMemoryManager", "SelfSemanticProfile"]
+
+__all__ = ["AutobiographicalMemoryManager"]

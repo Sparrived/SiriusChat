@@ -7,7 +7,6 @@ from sirius_chat.api import (
     EmotionalGroupChatEngine,
     BaselineDict,
     BucketDict,
-    EventMemoryManager,
     JsonPersistentSessionRunner,
     JsonSessionStore,
     MemoryPolicy,
@@ -24,7 +23,6 @@ from sirius_chat.api import (
     SessionEventBus,
     SessionEventType,
     SessionStoreFactory,
-    TRAIT_TAXONOMY,
     GENERATED_AGENT_TRACE_DIR_NAME,
     DependencyFileSnapshot,
     TimeSliceDict,
@@ -36,9 +34,6 @@ from sirius_chat.api import (
     TokenUsageStore,
     Transcript,
     User,
-    UserMemoryEntry,
-    UserMemoryManager,
-    UserProfile,
     ainit_live_session,
     arun_live_message,
     asubscribe,
@@ -96,6 +91,8 @@ from sirius_chat.api import (
     StyleParams,
     BackgroundTaskConfig,
     BackgroundTaskManager,
+    IdentityResolver,
+    IdentityContext,
 )
 from sirius_chat.exceptions import (
     ConfigError,
@@ -141,10 +138,6 @@ __all__ = [
     "Message",
     "Participant",
     "User",
-    "UserProfile",
-    "UserMemoryEntry",
-    "UserMemoryManager",
-    "EventMemoryManager",
     "TokenUsageRecord",
     "TokenUsageBaseline",
     "TokenUsageStore",
@@ -159,7 +152,6 @@ __all__ = [
     # Constants & Enums
     "GENERATED_AGENTS_FILE_NAME",
     "GENERATED_AGENT_TRACE_DIR_NAME",
-    "TRAIT_TAXONOMY",
     "LogLevel",
     "LogFormat",
     # Session Management
@@ -213,6 +205,9 @@ __all__ = [
     "ResponseAssembler",
     "StyleAdapter",
     "StyleParams",
+    # Identity resolver
+    "IdentityResolver",
+    "IdentityContext",
     # Background Tasks
     "BackgroundTaskConfig",
     "BackgroundTaskManager",

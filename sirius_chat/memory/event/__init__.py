@@ -1,17 +1,5 @@
-"""Event memory management module (v2 — observation-based)."""
+from __future__ import annotations
 
-from sirius_chat.memory.event.manager import EventMemoryManager
-from sirius_chat.memory.event.models import (
-    ContextualEventInterpretation,
-    EventMemoryEntry,
-    OBSERVATION_CATEGORIES,
-)
-from sirius_chat.memory.event.store import EventMemoryFileStore
+from sirius_chat.memory.event.manager import EventMemoryManager, EventMemoryEntry
 
-__all__ = [
-    "ContextualEventInterpretation",
-    "EventMemoryEntry",
-    "EventMemoryFileStore",
-    "EventMemoryManager",
-    "OBSERVATION_CATEGORIES",
-]
+__all__ = ["EventMemoryManager", "EventMemoryEntry"]
