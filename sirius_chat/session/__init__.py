@@ -5,7 +5,6 @@ __all__ = [
     "SqliteSessionStore",
     "SessionStore",
     "SessionStoreFactory",
-    "JsonPersistentSessionRunner",
 ]
 
 
@@ -24,8 +23,4 @@ def __getattr__(name: str):
             "SessionStoreFactory": SessionStoreFactory,
             "SqliteSessionStore": SqliteSessionStore,
         }[name]
-    if name == "JsonPersistentSessionRunner":
-        from sirius_chat.session.runner import JsonPersistentSessionRunner
-
-        return JsonPersistentSessionRunner
     raise AttributeError(name)

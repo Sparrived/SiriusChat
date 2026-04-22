@@ -1,18 +1,11 @@
 from sirius_chat.api.engine import (
-    AsyncRolePlayEngine,
     EmotionalGroupChatEngine,
-    SessionEvent,
-    SessionEventBus,
-    SessionEventType,
-    ainit_live_session,
-    arun_live_message,
-    asubscribe,
-    create_async_engine,
     create_emotional_engine,
     extract_assistant_messages,
     find_user_by_channel_uid,
     open_workspace_runtime,
 )
+from sirius_chat.core.events import SessionEvent, SessionEventBus, SessionEventType
 from sirius_chat.api.models import (
     Agent,
     AgentPreset,
@@ -87,7 +80,6 @@ from sirius_chat.api.providers import (
     run_provider_detection_flow,
 )
 from sirius_chat.api.session import (
-    JsonPersistentSessionRunner,
     JsonSessionStore,
     RoleplayWorkspaceManager,
     SessionStoreFactory,
@@ -164,9 +156,6 @@ __all__ = [
     # Engines (v0.28+ preferred)
     "EmotionalGroupChatEngine",
     "create_emotional_engine",
-    # Legacy engines (kept for reference)
-    "AsyncRolePlayEngine",
-    "create_async_engine",
     "JsonPersistentSessionRunner",
     "RoleplayWorkspaceManager",
     "WorkspaceLayout",
@@ -193,14 +182,11 @@ __all__ = [
     "register_provider_with_validation",
     "LLMProvider",
     "AsyncLLMProvider",
+    "open_workspace_runtime",
+    "extract_assistant_messages",
     "SessionEvent",
     "SessionEventBus",
     "SessionEventType",
-    "open_workspace_runtime",
-    "ainit_live_session",
-    "arun_live_message",
-    "asubscribe",
-    "extract_assistant_messages",
     "find_user_by_channel_uid",
     "generate_humanized_roleplay_questions",
     "list_roleplay_question_templates",

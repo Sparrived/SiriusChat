@@ -989,28 +989,10 @@ class TestEnvironmentContext:
         assert "environment_context" not in prompt
 
     def test_run_live_message_accepts_environment_context(self):
-        """Verify run_live_message signature includes environment_context."""
-        import inspect
-
-        from sirius_chat.async_engine import AsyncRolePlayEngine
-
-        sig = inspect.signature(AsyncRolePlayEngine.run_live_message) if hasattr(AsyncRolePlayEngine, 'run_live_message') else None
-        if sig is None:
-            pytest.skip("AsyncRolePlayEngine.run_live_message not available in stub")
-        assert "environment_context" in sig.parameters
-        param = sig.parameters["environment_context"]
-        assert param.default == ""
+        pytest.skip("Legacy AsyncRolePlayEngine removed in v1.0")
 
     def test_arun_live_message_facade_accepts_environment_context(self):
-        """Verify the API facade passes environment_context."""
-        import inspect
-
-        from sirius_chat.api.engine import arun_live_message
-
-        sig = inspect.signature(arun_live_message)
-        assert "environment_context" in sig.parameters
-        param = sig.parameters["environment_context"]
-        assert param.default == ""
+        pytest.skip("Legacy arun_live_message facade removed in v1.0")
 
 
 class TestSystemPromptSlimming:

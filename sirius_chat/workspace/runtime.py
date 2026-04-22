@@ -12,7 +12,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Awaitable, Callable
 
-from sirius_chat.async_engine import AsyncRolePlayEngine
 from sirius_chat.config import SessionConfig, WorkspaceConfig
 from sirius_chat.core.emotional_engine import EmotionalGroupChatEngine
 from sirius_chat.config.manager import ConfigManager
@@ -32,16 +31,6 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
-class _QueuedLiveMessageRequest:
-    turn: Message
-    environment_context: str = ""
-    user_profile: UserProfile | None = None
-    on_reply: Callable[[Message], Awaitable[None]] | None = None
-    timeout: float = 0.0
-    future: asyncio.Future[Transcript] | None = field(default=None, repr=False)
-
-
-@dataclass(slots=True)
 class WorkspaceRuntime:
     work_path: Path
     config_path: Path | None = None
@@ -53,16 +42,12 @@ class WorkspaceRuntime:
     layout: WorkspaceLayout = field(init=False)
     _config_manager: ConfigManager = field(init=False, repr=False)
     _provider_manager: WorkspaceProviderManager = field(init=False, repr=False)
-    _engine: AsyncRolePlayEngine | None = field(default=None, init=False, repr=False)
     _workspace_config: WorkspaceConfig | None = field(default=None, init=False, repr=False)
     _config_signature: str | None = field(default=None, init=False, repr=False)
     _refresh_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
     _watch_loop: asyncio.AbstractEventLoop | None = field(default=None, init=False, repr=False)
     _config_watcher: WorkspaceConfigWatcher | None = field(default=None, init=False, repr=False)
     _watcher_refresh_task: asyncio.Task[None] | None = field(default=None, init=False, repr=False)
-    _session_locks: dict[str, asyncio.Lock] = field(default_factory=dict, init=False, repr=False)
-    _session_queues: dict[str, deque[_QueuedLiveMessageRequest]] = field(default_factory=dict, init=False, repr=False)
-    _session_processors: dict[str, asyncio.Task[None]] = field(default_factory=dict, init=False, repr=False)
     _transcripts: dict[str, Transcript] = field(default_factory=dict, init=False, repr=False)
     _stores: dict[str, SessionStore] = field(default_factory=dict, init=False, repr=False)
     _skill_registry: SkillRegistry | None = field(default=None, init=False, repr=False)
@@ -108,7 +93,6 @@ class WorkspaceRuntime:
         if self._initialized:
             return
         self.layout.ensure_directories(session_id="default")
-        self._initialize_skill_runtime()
         self._apply_bootstrap()
         await self._refresh_workspace_config(force=True, persist_defaults=True)
         self._initialized = True
@@ -120,18 +104,6 @@ class WorkspaceRuntime:
         if task is not None:
             with contextlib.suppress(asyncio.CancelledError):
                 await task
-        for queue in self._session_queues.values():
-            for request in queue:
-                if request.future is not None and not request.future.done():
-                    request.future.set_exception(RuntimeError("WorkspaceRuntime 已关闭。"))
-        for processor in self._session_processors.values():
-            processor.cancel()
-        for processor in list(self._session_processors.values()):
-            with contextlib.suppress(asyncio.CancelledError):
-                await processor
-        self._session_processors.clear()
-        self._session_queues.clear()
-        await self._reset_engine_state()
         for store in self._stores.values():
             close = getattr(store, "close", None)
             if callable(close):
@@ -143,252 +115,6 @@ class WorkspaceRuntime:
 
     def __del__(self) -> None:
         self._stop_config_watcher()
-
-    async def run_live_message(
-        self,
-        *,
-        session_id: str,
-        turn: Message,
-        environment_context: str = "",
-        user_profile: UserProfile | None = None,
-        on_reply: Callable[[Message], Awaitable[None]] | None = None,
-        timeout: float = 0,
-    ) -> Transcript:
-        await self.initialize()
-        await self._refresh_workspace_config()
-        request = _QueuedLiveMessageRequest(
-            turn=turn,
-            environment_context=environment_context,
-            user_profile=user_profile,
-            on_reply=on_reply,
-            timeout=timeout,
-            future=asyncio.get_running_loop().create_future(),
-        )
-        assert request.future is not None
-        self._session_queues.setdefault(session_id, deque()).append(request)
-        self._ensure_session_processor(session_id)
-
-        if timeout > 0:
-            return await asyncio.wait_for(asyncio.shield(request.future), timeout=timeout)
-        return await request.future
-
-    def _ensure_session_processor(self, session_id: str) -> None:
-        existing = self._session_processors.get(session_id)
-        if existing is not None and not existing.done():
-            return
-        task = asyncio.create_task(self._drain_session_queue(session_id))
-        self._session_processors[session_id] = task
-        task.add_done_callback(lambda done, sid=session_id: self._clear_session_processor(sid, done))
-
-    def _clear_session_processor(self, session_id: str, task: asyncio.Task[None]) -> None:
-        if self._session_processors.get(session_id) is task:
-            self._session_processors.pop(session_id, None)
-        if task.cancelled():
-            return
-        exc = task.exception()
-        if exc is None:
-            return
-        logger.error("会话消息处理器失败: %s", session_id, exc_info=exc)
-        queue = self._session_queues.pop(session_id, None)
-        if queue is None:
-            return
-        for request in queue:
-            if request.future is not None and not request.future.done():
-                request.future.set_exception(exc)
-
-    @staticmethod
-    def _can_batch_requests(
-        left: _QueuedLiveMessageRequest,
-        right: _QueuedLiveMessageRequest,
-    ) -> bool:
-        if left.turn.speaker != right.turn.speaker:
-            return False
-        if left.turn.channel != right.turn.channel:
-            return False
-        if left.turn.channel_user_id != right.turn.channel_user_id:
-            return False
-        if left.turn.reply_mode != right.turn.reply_mode:
-            return False
-        if left.user_profile is None or right.user_profile is None:
-            return True
-        return left.user_profile.user_id == right.user_profile.user_id
-
-    def _dequeue_runtime_batch(
-        self,
-        *,
-        session_id: str,
-        pending_message_threshold: int,
-        force_batch: bool = False,
-    ) -> tuple[list[_QueuedLiveMessageRequest], int]:
-        queue = self._session_queues.setdefault(session_id, deque())
-        pending_count = len(queue)
-        if not queue:
-            return [], pending_count
-        if not force_batch and (
-            pending_message_threshold <= 0 or pending_count <= pending_message_threshold
-        ):
-            return [queue.popleft()], pending_count
-
-        batch = [queue.popleft()]
-        while queue and self._can_batch_requests(batch[-1], queue[0]):
-            batch.append(queue.popleft())
-        return batch, pending_count
-
-    @staticmethod
-    def _parse_runtime_datetime(raw: str) -> datetime | None:
-        text = str(raw or "").strip()
-        if not text:
-            return None
-        try:
-            parsed = datetime.fromisoformat(text)
-        except ValueError:
-            return None
-        if parsed.tzinfo is None:
-            return parsed.replace(tzinfo=timezone.utc)
-        return parsed.astimezone(timezone.utc)
-
-    @staticmethod
-    def _utcnow() -> datetime:
-        return datetime.now(timezone.utc)
-
-    def _compute_reply_cooldown_wait(
-        self,
-        *,
-        session_config: SessionConfig,
-        transcript: Transcript,
-    ) -> float:
-        min_interval = float(getattr(session_config.orchestration, "min_reply_interval_seconds", 0.0))
-        if min_interval <= 0:
-            return 0.0
-        last_assistant_reply_at = self._parse_runtime_datetime(
-            transcript.reply_runtime.last_assistant_reply_at
-        )
-        if last_assistant_reply_at is None:
-            return 0.0
-        elapsed = (self._utcnow() - last_assistant_reply_at).total_seconds()
-        return max(0.0, min_interval - elapsed)
-
-    @staticmethod
-    def _merge_environment_contexts(batch: list[_QueuedLiveMessageRequest]) -> str:
-        merged: list[str] = []
-        for request in batch:
-            text = str(request.environment_context or "").strip()
-            if text and text not in merged:
-                merged.append(text)
-        return "\n\n".join(merged)
-
-    @staticmethod
-    def _pick_primary_user_id(batch: list[_QueuedLiveMessageRequest]) -> str:
-        for request in reversed(batch):
-            if request.user_profile is not None and request.user_profile.user_id:
-                return request.user_profile.user_id
-        return ""
-
-    @staticmethod
-    def _pick_engine_timeout(batch: list[_QueuedLiveMessageRequest]) -> float:
-        timeouts = [float(request.timeout) for request in batch if float(request.timeout) > 0]
-        if not timeouts:
-            return 0.0
-        return max(timeouts)
-
-    @staticmethod
-    def _build_batch_on_reply(
-        batch: list[_QueuedLiveMessageRequest],
-    ) -> Callable[[Message], Awaitable[None]] | None:
-        callbacks = [request.on_reply for request in batch if request.on_reply is not None]
-        if not callbacks:
-            return None
-
-        async def _dispatch(message: Message) -> None:
-            for callback in callbacks:
-                if callback is None:
-                    continue
-                await callback(message)
-
-        return _dispatch
-
-    async def _drain_session_queue(self, session_id: str) -> None:
-        force_batch_after_wait = False
-        while True:
-            queue = self._session_queues.get(session_id)
-            if not queue:
-                self._session_queues.pop(session_id, None)
-                return
-
-            await self._refresh_workspace_config()
-            lock = self._session_locks.setdefault(session_id, asyncio.Lock())
-            cooldown_wait = 0.0
-            async with lock:
-                session_config = self._build_session_config(session_id)
-                transcript = await self._load_session_for_runtime(session_id, session_config)
-                cooldown_wait = self._compute_reply_cooldown_wait(
-                    session_config=session_config,
-                    transcript=transcript,
-                )
-                if cooldown_wait > 0:
-                    logger.info(
-                        "会话 %s 还在冷静期，我先等 %.2f 秒再开口；这期间消息先排着队呢",
-                        session_id,
-                        cooldown_wait,
-                    )
-                    force_batch_after_wait = True
-                else:
-                    batch, pending_count = self._dequeue_runtime_batch(
-                        session_id=session_id,
-                        pending_message_threshold=int(session_config.orchestration.pending_message_threshold),
-                        force_batch=force_batch_after_wait,
-                    )
-                    force_batch_after_wait = False
-                    if not batch:
-                        continue
-
-                    for request in batch:
-                        if request.user_profile is not None:
-                            transcript.user_memory.register_user(request.user_profile)
-
-                    merged_turn = batch[0].turn
-                    if len(batch) > 1:
-                        merged_turn = self._get_engine()._merge_pending_turns([request.turn for request in batch])
-                        logger.info(
-                            "会话 %s 堆了 %d 条消息，我悄悄把 %d 条来自 %s 的话揉在一起处理",
-                            session_id,
-                            pending_count,
-                            len(batch),
-                            merged_turn.speaker or "unknown",
-                        )
-
-                    try:
-                        transcript = await self._get_engine().run_live_message(
-                            config=session_config,
-                            turn=merged_turn,
-                            transcript=transcript,
-                            environment_context=self._merge_environment_contexts(batch),
-                            user_profile=None,
-                            on_reply=self._build_batch_on_reply(batch),
-                            timeout=self._pick_engine_timeout(batch),
-                            finalize_and_persist=True,
-                        )
-                    except Exception as exc:
-                        self._drop_cached_session(session_id)
-                        for request in batch:
-                            if request.future is not None and not request.future.done():
-                                request.future.set_exception(exc)
-                        continue
-
-                    self._transcripts[session_id] = transcript
-                    store = self.get_session_store(session_id)
-                    store.save(transcript)
-                    self._persist_participants(
-                        session_id,
-                        transcript=transcript,
-                        primary_user_id=self._pick_primary_user_id(batch),
-                    )
-                    for request in batch:
-                        if request.future is not None and not request.future.done():
-                            request.future.set_result(transcript)
-
-            if cooldown_wait > 0:
-                await asyncio.sleep(cooldown_wait)
 
     async def get_transcript(self, session_id: str) -> Transcript | None:
         await self.initialize()
@@ -404,22 +130,20 @@ class WorkspaceRuntime:
 
     async def set_primary_user(self, session_id: str, participant: Participant) -> None:
         await self.initialize()
-        lock = self._session_locks.setdefault(session_id, asyncio.Lock())
-        async with lock:
-            payload = self._load_participants_payload(session_id)
-            participants_raw = payload.get("participants", [])
-            if not isinstance(participants_raw, list):
-                participants_raw = []
-            participants = {
-                str(item.get("user_id", "")).strip(): item
-                for item in participants_raw
-                if isinstance(item, dict) and str(item.get("user_id", "")).strip()
-            }
-            participants[participant.user_id] = participant.to_dict()
-            payload["session_id"] = session_id
-            payload["primary_user_id"] = participant.user_id
-            payload["participants"] = list(participants.values())
-            self._write_participants_payload(session_id, payload)
+        payload = self._load_participants_payload(session_id)
+        participants_raw = payload.get("participants", [])
+        if not isinstance(participants_raw, list):
+            participants_raw = []
+        participants = {
+            str(item.get("user_id", "")).strip(): item
+            for item in participants_raw
+            if isinstance(item, dict) and str(item.get("user_id", "")).strip()
+        }
+        participants[participant.user_id] = participant.to_dict()
+        payload["session_id"] = session_id
+        payload["primary_user_id"] = participant.user_id
+        payload["participants"] = list(participants.values())
+        self._write_participants_payload(session_id, payload)
 
     async def get_primary_user(self, session_id: str) -> Participant | None:
         await self.initialize()
@@ -438,13 +162,11 @@ class WorkspaceRuntime:
 
     async def clear_session(self, session_id: str) -> None:
         await self.initialize()
-        lock = self._session_locks.setdefault(session_id, asyncio.Lock())
-        async with lock:
-            store = self.get_session_store(session_id)
-            if store.exists():
-                store.clear()
-            self.layout.session_participants_path(session_id).unlink(missing_ok=True)
-            self._drop_cached_session(session_id)
+        store = self.get_session_store(session_id)
+        if store.exists():
+            store.clear()
+        self.layout.session_participants_path(session_id).unlink(missing_ok=True)
+        self._transcripts.pop(session_id, None)
 
     async def delete_session(self, session_id: str) -> None:
         await self.clear_session(session_id)
@@ -486,7 +208,6 @@ class WorkspaceRuntime:
     def set_provider(self, provider: LLMProvider | AsyncLLMProvider | None) -> None:
         self.provider = provider
         self._prefer_workspace_registry_provider = provider is None or isinstance(provider, AutoRoutingProvider)
-        self._engine = None
 
     def set_provider_entries(self, entries: list[dict[str, object]], *, persist: bool = True) -> None:
         """Inject provider config entries from the host.
@@ -500,12 +221,10 @@ class WorkspaceRuntime:
         if persist:
             self.provider = None
             self._prefer_workspace_registry_provider = True
-            self._engine = None
             return
         if saved:
             self.provider = AutoRoutingProvider(saved)
             self._prefer_workspace_registry_provider = False
-            self._engine = None
 
     def export_workspace_defaults(self) -> dict[str, object]:
         """Return the current workspace defaults as a plain dict.
@@ -703,47 +422,6 @@ class WorkspaceRuntime:
             pass
         return None
 
-    def _get_engine(self) -> AsyncRolePlayEngine:
-        if self._engine is not None:
-            return self._engine
-        provider = self.provider
-        if self._prefer_workspace_registry_provider:
-            providers = self._provider_manager.load()
-            if providers:
-                provider = AutoRoutingProvider(providers)
-            elif provider is None:
-                raise RuntimeError("当前 workspace 尚未配置可用 provider。")
-        elif provider is None:
-            raise RuntimeError("当前 workspace 尚未配置可用 provider。")
-        self._engine = AsyncRolePlayEngine(provider)
-        self._inject_skill_runtime_into_engine()
-        return self._engine
-
-    def _initialize_skill_runtime(self) -> None:
-        skills_dir = self.layout.skills_dir()
-        SkillRegistry.ensure_skills_directory(skills_dir)
-
-        registry = self._skill_registry or SkillRegistry()
-        registry.reload_from_directory(
-            skills_dir,
-            auto_install_deps=self._workspace_auto_install_skill_deps(),
-            include_builtin=True,
-        )
-        self._skill_registry = registry
-
-        if self._skill_executor is None:
-            self._skill_executor = SkillExecutor(self.layout)
-
-        self._inject_skill_runtime_into_engine()
-
-    def _inject_skill_runtime_into_engine(self) -> None:
-        if self._engine is None:
-            return
-        self._engine.set_shared_skill_runtime(
-            skill_registry=self._skill_registry,
-            skill_executor=self._skill_executor,
-        )
-
     def _workspace_auto_install_skill_deps(self) -> bool:
         workspace = self._workspace_config
         orchestration_defaults = workspace.orchestration_defaults if workspace is not None else {}
@@ -758,29 +436,6 @@ class WorkspaceRuntime:
             session_id=session_id,
         )
 
-    async def _load_session_for_runtime(
-        self,
-        session_id: str,
-        session_config: SessionConfig,
-    ) -> Transcript:
-        cached = self._transcripts.get(session_id)
-        transcript = cached
-        if transcript is None:
-            store = self.get_session_store(session_id)
-            if store.exists():
-                transcript = store.load()
-        transcript = await self._get_engine().run_live_session(
-            config=session_config,
-            transcript=transcript,
-        )
-        self._transcripts[session_id] = transcript
-        return transcript
-
-    def _drop_cached_session(self, session_id: str) -> None:
-        transcript = self._transcripts.pop(session_id, None)
-        if transcript is not None and self._engine is not None:
-            self._engine._live_session_contexts.pop(id(transcript), None)
-
     def _calculate_config_signature(self) -> str:
         digest = hashlib.sha256()
         digest.update(str(self.layout.config_root).encode("utf-8"))
@@ -794,16 +449,6 @@ class WorkspaceRuntime:
             digest.update(str(stat.st_mtime_ns).encode("utf-8"))
             digest.update(str(stat.st_size).encode("utf-8"))
         return digest.hexdigest()
-
-    async def _reset_engine_state(self) -> None:
-        if self._engine is None:
-            return
-        for context in list(self._engine._live_session_contexts.values()):
-            manager = context.subsystems.bg_task_manager
-            if manager is not None:
-                await manager.stop()
-        self._engine._live_session_contexts.clear()
-        self._engine = None
 
     async def _refresh_workspace_config(
         self,
@@ -835,12 +480,8 @@ class WorkspaceRuntime:
                     return
                 raise
 
-            if self._config_signature is not None and self._config_signature != signature:
-                await self._reset_engine_state()
-
             self._workspace_config = workspace_config
             self._config_signature = signature
-            self._initialize_skill_runtime()
 
     def _start_config_watcher(self) -> None:
         if self._config_watcher is not None:

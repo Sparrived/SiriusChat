@@ -88,7 +88,6 @@ class TestAPILayerHiding:
         import sirius_chat
         
         required = {
-            'AsyncRolePlayEngine',
             'EmotionalGroupChatEngine',
             'SessionConfig',
             'OrchestrationPolicy',
