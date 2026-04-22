@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from sirius_chat.developer_profiles import metadata_declares_developer
+
 
 @dataclass(slots=True)
 class UserProfile:
@@ -25,6 +27,10 @@ class UserProfile:
     identities: dict[str, str] = field(default_factory=dict)
     traits: list[str] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def is_developer(self) -> bool:
+        return metadata_declares_developer(self.metadata)
 
 
 class UserManager:
