@@ -1,0 +1,56 @@
+"""Basic memory data models."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Any
+
+
+@dataclass(slots=True)
+class BasicMemoryEntry:
+    """A single entry in the basic memory window.
+
+    All messages (human, assistant, system) are stored verbatim
+    for full archival and later diary promotion.
+    """
+
+    entry_id: str
+    group_id: str
+    user_id: str           # real user_id, "assistant", or "system"
+    role: str              # "human" | "assistant" | "system"
+    content: str
+    timestamp: str         # ISO 8601
+    system_prompt: str = ""  # system prompt used for this assistant turn
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "entry_id": self.entry_id,
+            "group_id": self.group_id,
+            "user_id": self.user_id,
+            "role": self.role,
+            "content": self.content,
+            "timestamp": self.timestamp,
+            "system_prompt": self.system_prompt,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "BasicMemoryEntry":
+        return cls(
+            entry_id=data.get("entry_id", ""),
+            group_id=data.get("group_id", ""),
+            user_id=data.get("user_id", ""),
+            role=data.get("role", "human"),
+            content=data.get("content", ""),
+            timestamp=data.get("timestamp", ""),
+            system_prompt=data.get("system_prompt", ""),
+        )
+
+
+@dataclass(slots=True)
+class HeatState:
+    """Per-group heat tracking for cold-detection."""
+
+    message_count_5min: int = 0
+    last_message_at: str = ""
+    unique_speakers_5min: int = 0
+    avg_interval_sec: float = 0.0
