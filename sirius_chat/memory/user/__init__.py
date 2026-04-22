@@ -19,22 +19,25 @@ from sirius_chat.memory.user.store import UserMemoryFileStore
 
 # New v2 simplified exports
 from sirius_chat.memory.user.simple import (
-    UserProfile,
+    UserProfile as SimpleUserProfile,
     UserManager,
 )
+
+# Keep old UserProfile available under canonical name for backward compat
+UserProfile = _LegacyUserProfile
 
 __all__ = [
     # Legacy
     "MAX_MEMORY_FACTS",
     "MAX_OBSERVED_SET_SIZE",
     "EVENT_DEDUP_WINDOW_MINUTES",
-    "_LegacyUserProfile",
+    "UserProfile",
     "UserRuntimeState",
     "MemoryFact",
     "UserMemoryEntry",
     "UserMemoryManager",
     "UserMemoryFileStore",
     # New v2
-    "UserProfile",
+    "SimpleUserProfile",
     "UserManager",
 ]
