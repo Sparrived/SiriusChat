@@ -7,7 +7,6 @@ import asyncio
 import pytest
 
 from sirius_chat import (
-    AsyncRolePlayEngine,
     Message,
     MockProvider,
     Participant,
