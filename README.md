@@ -38,11 +38,11 @@
 - **结构化 Transcript**：完整记录交互过程，便于下游系统消费
 
 ### 🧠 **智能记忆系统**
-- **结构化用户记忆**：按分类（身份/偏好/情绪/事件）组织，并区分可信身份锚点与弱别称线索
-- **低开销记忆注入**：主提示词只拼接当前发言者与直接相关参与者，`session_summary` 也会做尾部压缩
-- **AI 自身记忆**：日记系统 (Diary) 与名词解释系统 (Glossary)，支持遗忘曲线，并在长上下文或达到回复阈值时自动提取
-- **跨环境身份识别**：通过 `identities` 映射不同平台的外部账号到同一用户
-- **事件记忆管理 V2**：按用户缓冲原始消息，后台批量 LLM 提取结构化观察（preference/trait/relationship/experience/emotion/goal），自动去重合并，驱动语义画像更新
+- **结构化用户记忆**：极简 `UserProfile`（user_id, name, aliases, identities, metadata），群隔离存储，区分可信身份锚点与弱别称线索
+- **低开销记忆注入**：主提示词通过 `ContextAssembler` 拼接基础记忆最近窗口 + 日记检索结果；日记内容注入 system_prompt，不污染消息历史
+- **AI 自身记忆**：日记系统 (`DiaryManager`，LLM 生成群聊摘要，支持嵌入索引与 token 预算检索) 与名词解释系统 (`GlossaryManager`)
+- **跨环境身份识别**：`IdentityResolver` 解耦平台特定身份（QQ/discord 等），通过 `identities` 映射不同平台的外部账号到同一用户
+- **基础记忆管理**：`BasicMemoryManager` 维护按群滑动窗口（硬限制 30 条，上下文窗口 5 条），含热度计算；冷群归档消息自动晋升为日记素材
 
 ### 🚀 **性能与扩展**
 - **智能缓存框架**：内存 LRU + TTL 缓存，支持 LLM 响应缓存
@@ -238,10 +238,12 @@ sirius_chat/
 ├── workspace/                    # 🗂️ layout/runtime/watcher/roleplay bootstrap
 ├── config/                       # ⚙️ WorkspaceConfig / SessionConfig / JSONC 管理
 ├── memory/                       # 📝 记忆子包
-│   ├── user/
-│   ├── event/
-│   ├── self/
-│   └── quality/
+│   ├── basic/                    # 基础记忆（工作窗口 + 热度 + 归档）
+│   ├── diary/                    # 日记记忆（LLM 生成、索引、检索）
+│   ├── glossary/                 # 名词解释（AI 自身知识库）
+│   ├── user/                     # 用户管理（简化 UserProfile + UserManager）
+│   ├── context_assembler.py      # 上下文组装器（basic + diary → OpenAI messages）
+│   └── semantic/                 # 语义记忆 stub（兼容保留）
 ├── session/                      # 💾 SessionStore 与高层兼容 runner
 ├── providers/                    # 🔗 Provider 实现、路由与中间件
 │   ├── routing.py
@@ -254,9 +256,12 @@ sirius_chat/
 └── cli.py                        # 🖥️ 库内薄 CLI
 
 tests/                            # ✅ 单元测试 (600+ 个)
-├── test_engine.py                # 编排核心
-├── test_workspace_runtime.py     # workspace 持久化与热刷新
-├── test_provider_routing.py      # provider 注册表与自动路由
+├── test_api_integrity.py         # 公开 API 完整性
+├── test_basic_memory.py          # 基础记忆
+├── test_diary_memory.py          # 日记记忆
+├── test_context_assembler.py     # 上下文组装
+├── test_identity_resolver.py     # 身份解析
+├── test_skill_system.py          # SKILL 系统
 ├── test_providers.py             # 各 provider 一致性
 └── ...
 
