@@ -14,6 +14,7 @@ from sirius_chat.memory.user import (
     UserMemoryManager,
     UserProfile,
     UserRuntimeState,
+    UserManager,  # new v2
 )
 
 # Event memory exports
@@ -69,6 +70,7 @@ __all__ = [
     "UserMemoryEntry",
     "UserMemoryManager",
     "UserMemoryFileStore",
+    "UserManager",  # new v2
     # Event memory
     "ContextualEventInterpretation",
     "EventMemoryEntry",
