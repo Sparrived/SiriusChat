@@ -377,7 +377,7 @@ class SqliteSessionStore:
         )
 
         for group_entries in transcript.user_memory.entries.values():
-            for user_id, entry in group_entries.items():
+            for user_id, profile in group_entries.items():
                 conn.execute(
                     """
                     INSERT INTO session_user_profiles(
@@ -386,14 +386,15 @@ class SqliteSessionStore:
                     """,
                     (
                         user_id,
-                        entry.profile.name,
-                        entry.profile.persona,
-                        self._json_dumps(entry.profile.identities),
-                        self._json_dumps(entry.profile.aliases),
-                        self._json_dumps(entry.profile.traits),
-                        self._json_dumps(entry.profile.metadata),
+                        profile.name,
+                        profile.persona,
+                        self._json_dumps(profile.identities),
+                        self._json_dumps(profile.aliases),
+                        self._json_dumps(profile.traits),
+                        self._json_dumps(profile.metadata),
                     ),
                 )
+                # Legacy runtime/facts tables kept for schema compat; insert minimal rows
                 conn.execute(
                     """
                     INSERT INTO session_user_runtime(
@@ -403,54 +404,10 @@ class SqliteSessionStore:
                         observed_entities, last_event_processed_at
                     ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (
-                        user_id,
-                        entry.runtime.inferred_persona,
-                        self._json_dumps(entry.runtime.inferred_traits),
-                        self._json_dumps(entry.runtime.preference_tags),
-                        self._json_dumps(entry.runtime.recent_messages),
-                        self._json_dumps(entry.runtime.summary_notes),
-                        entry.runtime.last_seen_channel,
-                        entry.runtime.last_seen_uid,
-                        self._json_dumps(sorted(entry.runtime.observed_keywords)),
-                        self._json_dumps(sorted(entry.runtime.observed_roles)),
-                        self._json_dumps(sorted(entry.runtime.observed_emotions)),
-                        self._json_dumps(sorted(entry.runtime.observed_entities)),
-                        entry.runtime.last_event_processed_at.isoformat()
-                        if entry.runtime.last_event_processed_at is not None
-                        else None,
-                    ),
+                    (user_id, "", "[]", "[]", "[]", "[]", "", "", "[]", "[]", "[]", "[]", None),
                 )
-                conn.executemany(
-                    """
-                    INSERT INTO session_user_memory_facts(
-                        user_id, fact_index, fact_type, value, source, confidence,
-                        observed_at, observed_time_desc, memory_category, validated,
-                        conflict_with, context_channel, context_topic, context_metadata,
-                        mention_count, source_event_id
-                    ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    [
-                        (
-                            user_id,
-                            index,
-                            fact.fact_type,
-                            fact.value,
-                            fact.source,
-                            fact.confidence,
-                            fact.observed_at,
-                            fact.observed_time_desc,
-                            fact.memory_category,
-                            1 if fact.validated else 0,
-                            self._json_dumps(fact.conflict_with),
-                            fact.context_channel,
-                            fact.context_topic,
-                            self._json_dumps(fact.context_metadata),
-                            fact.mention_count,
-                            fact.source_event_id,
-                        )
-                        for index, fact in enumerate(entry.runtime.memory_facts)
-                    ],
+                conn.execute(
+                    "DELETE FROM session_user_memory_facts WHERE user_id = ?", (user_id,)
                 )
 
         conn.executemany(
@@ -499,53 +456,17 @@ class SqliteSessionStore:
         ).fetchall():
             fact_rows_by_user.setdefault(str(row["user_id"]), []).append(row)
 
-        entries: dict[str, dict[str, object]] = {}
+        entries: dict[str, dict[str, Any]] = {}
         for profile_row in profile_rows:
             user_id = str(profile_row["user_id"])
-            runtime_row = runtime_rows.get(user_id)
             entries[user_id] = {
-                "profile": {
-                    "user_id": user_id,
-                    "name": str(profile_row["name"]),
-                    "persona": str(profile_row["persona"]),
-                    "identities": self._json_loads_dict(str(profile_row["identities"])),
-                    "aliases": self._json_loads_list(str(profile_row["aliases"])),
-                    "traits": self._json_loads_list(str(profile_row["traits"])),
-                    "metadata": self._json_loads_dict(str(profile_row["metadata"])),
-                },
-                "runtime": {
-                    "inferred_persona": str(runtime_row["inferred_persona"]) if runtime_row is not None else "",
-                    "inferred_traits": self._json_loads_list(str(runtime_row["inferred_traits"])) if runtime_row is not None else [],
-                    "preference_tags": self._json_loads_list(str(runtime_row["preference_tags"])) if runtime_row is not None else [],
-                    "recent_messages": self._json_loads_list(str(runtime_row["recent_messages"])) if runtime_row is not None else [],
-                    "summary_notes": self._json_loads_list(str(runtime_row["summary_notes"])) if runtime_row is not None else [],
-                    "memory_facts": [
-                        {
-                            "fact_type": str(fact_row["fact_type"]),
-                            "value": str(fact_row["value"]),
-                            "source": str(fact_row["source"]),
-                            "confidence": float(fact_row["confidence"]),
-                            "observed_at": str(fact_row["observed_at"]),
-                            "observed_time_desc": str(fact_row["observed_time_desc"]),
-                            "memory_category": str(fact_row["memory_category"]),
-                            "validated": bool(int(fact_row["validated"])),
-                            "conflict_with": self._json_loads_list(str(fact_row["conflict_with"])),
-                            "context_channel": str(fact_row["context_channel"]),
-                            "context_topic": str(fact_row["context_topic"]),
-                            "context_metadata": self._json_loads_dict(str(fact_row["context_metadata"])),
-                            "mention_count": int(fact_row["mention_count"]),
-                            "source_event_id": str(fact_row["source_event_id"]),
-                        }
-                        for fact_row in fact_rows_by_user.get(user_id, [])
-                    ],
-                    "last_seen_channel": str(runtime_row["last_seen_channel"]) if runtime_row is not None else "",
-                    "last_seen_uid": str(runtime_row["last_seen_uid"]) if runtime_row is not None else "",
-                    "observed_keywords": self._json_loads_list(str(runtime_row["observed_keywords"])) if runtime_row is not None else [],
-                    "observed_roles": self._json_loads_list(str(runtime_row["observed_roles"])) if runtime_row is not None else [],
-                    "observed_emotions": self._json_loads_list(str(runtime_row["observed_emotions"])) if runtime_row is not None else [],
-                    "observed_entities": self._json_loads_list(str(runtime_row["observed_entities"])) if runtime_row is not None else [],
-                    "last_event_processed_at": runtime_row["last_event_processed_at"] if runtime_row is not None else None,
-                },
+                "user_id": user_id,
+                "name": str(profile_row["name"]),
+                "persona": str(profile_row["persona"]),
+                "identities": self._json_loads_dict(str(profile_row["identities"])),
+                "aliases": self._json_loads_list(str(profile_row["aliases"])),
+                "traits": self._json_loads_list(str(profile_row["traits"])),
+                "metadata": self._json_loads_dict(str(profile_row["metadata"])),
             }
 
         return {
@@ -563,7 +484,7 @@ class SqliteSessionStore:
                     "SELECT * FROM session_messages ORDER BY message_index"
                 ).fetchall()
             ],
-            "user_memory": {"entries": {"default": entries}},
+            "user_memory": {"default": entries},
             "reply_runtime": {
                 "user_last_turn_at": {
                     str(row["user_id"]): str(row["last_turn_at"])

@@ -12,9 +12,9 @@ from __future__ import annotations
 import json
 import logging
 import re
+from typing import Any
 
 from sirius_chat.config import SessionConfig
-from sirius_chat.memory import SelfMemoryManager
 from sirius_chat.models import Transcript
 from sirius_chat.async_engine.prompts import build_system_prompt
 from sirius_chat.core.markers import SKILL_RESULT_CHANNEL_MARKER
@@ -242,7 +242,7 @@ def build_chat_main_request_context(
     skill_descriptions: str = "",
     environment_context: str = "",
     skip_sections: list[str] | None = None,
-    self_memory: SelfMemoryManager | None = None,
+    self_memory: Any | None = None,
 ) -> tuple[str, list[dict[str, object]]]:
     """构建主聊天请求所需的系统提示词与消息历史。
 

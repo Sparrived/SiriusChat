@@ -72,6 +72,16 @@ class EngineStateStore:
         path = self._base / "event_memory.json"
         _atomic_write(path, state)
 
+    def save_basic_memory(self, state: dict[str, Any]) -> None:
+        """Save basic memory state."""
+        path = self._base / "basic_memory.json"
+        _atomic_write(path, state)
+
+    def save_diary_state(self, state: dict[str, Any]) -> None:
+        """Save diary manager state."""
+        path = self._base / "diary_state.json"
+        _atomic_write(path, state)
+
     def save_all(
         self,
         *,
@@ -81,6 +91,8 @@ class EngineStateStore:
         group_timestamps: dict[str, str],
         token_usage_records: list[dict[str, Any]] | None = None,
         event_memory: dict[str, Any] | None = None,
+        basic_memory: dict[str, Any] | None = None,
+        diary_state: dict[str, Any] | None = None,
     ) -> None:
         """Convenience: save all state in one call."""
         for group_id, entries in working_memories.items():
@@ -92,6 +104,10 @@ class EngineStateStore:
             self.save_token_usage_records(token_usage_records)
         if event_memory is not None:
             self.save_event_memory(event_memory)
+        if basic_memory is not None:
+            self.save_basic_memory(basic_memory)
+        if diary_state is not None:
+            self.save_diary_state(diary_state)
         logger.info("把现在的状态记下来啦，%d 个群的上下文都好好存着呢。", len(working_memories))
 
     # ------------------------------------------------------------------
@@ -153,6 +169,26 @@ class EngineStateStore:
         except (OSError, json.JSONDecodeError):
             return None
 
+    def load_basic_memory(self) -> dict[str, Any] | None:
+        """Load basic memory state."""
+        path = self._base / "basic_memory.json"
+        if not path.exists():
+            return None
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+
+    def load_diary_state(self) -> dict[str, Any] | None:
+        """Load diary manager state."""
+        path = self._base / "diary_state.json"
+        if not path.exists():
+            return None
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+
     def load_all(self) -> dict[str, Any]:
         """Convenience: load all state in one call.
 
@@ -162,6 +198,8 @@ class EngineStateStore:
             delayed_queue: list[dict]
             group_timestamps: dict[str, str]
             event_memory: dict | None
+            basic_memory: dict | None
+            diary_state: dict | None
         """
         # Discover saved groups
         groups_dir = self._base / "groups"
@@ -184,6 +222,8 @@ class EngineStateStore:
             "delayed_queue": self.load_delayed_queue(),
             "group_timestamps": self.load_group_timestamps(),
             "event_memory": self.load_event_memory(),
+            "basic_memory": self.load_basic_memory(),
+            "diary_state": self.load_diary_state(),
         }
 
     # ------------------------------------------------------------------

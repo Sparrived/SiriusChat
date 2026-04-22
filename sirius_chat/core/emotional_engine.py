@@ -36,6 +36,14 @@ from sirius_chat.memory.semantic.manager import SemanticMemoryManager
 from sirius_chat.memory.user.manager import UserMemoryManager
 from sirius_chat.memory.working.manager import WorkingMemoryManager
 
+# New v2 memory system (refactor)
+from sirius_chat.memory.basic import BasicMemoryManager, BasicMemoryFileStore
+from sirius_chat.memory.diary import DiaryManager
+from sirius_chat.memory.context_assembler import ContextAssembler
+from sirius_chat.memory.user.simple import UserManager
+from sirius_chat.core.identity_resolver import IdentityResolver, IdentityContext
+from sirius_chat.memory.glossary import GlossaryManager, GlossaryTerm
+
 from sirius_chat.core.events import SessionEvent, SessionEventBus, SessionEventType
 from sirius_chat.models.emotion import AssistantEmotionState, EmotionState
 from sirius_chat.models.intent_v3 import IntentAnalysisV3
@@ -107,7 +115,7 @@ class EmotionalGroupChatEngine:
         # 允许外部通过 config 直接覆盖具体任务模型
         self._task_models.update(self.config.get("task_models", {}))
 
-        # Memory foundation
+        # Memory foundation (old - kept for compat during refactor)
         self.working_memory = WorkingMemoryManager(
             max_size=self.config.get("working_memory_max_size", 20)
         )
@@ -116,6 +124,20 @@ class EmotionalGroupChatEngine:
         self.semantic_memory = SemanticMemoryManager(work_path)
         self.user_memory = UserMemoryManager()
         self.activation_engine = ActivationEngine()
+
+        # New v2 memory system
+        self.basic_memory = BasicMemoryManager(
+            hard_limit=self.config.get("basic_memory_hard_limit", 30),
+            context_window=self.config.get("basic_memory_context_window", 5),
+        )
+        self.basic_store = BasicMemoryFileStore(work_path)
+        self.diary_manager = DiaryManager(work_path)
+        self.user_manager = UserManager()
+        self.identity_resolver = IdentityResolver()
+        self.context_assembler = ContextAssembler(
+            self.basic_memory,
+            self.diary_manager._retriever,
+        )
 
         # Cognitive layer (unified emotion + intent)
         self.cognition_analyzer = CognitionAnalyzer(
@@ -189,6 +211,8 @@ class EmotionalGroupChatEngine:
             work_path=work_path,
             persona=self.persona,
         )
+        # Glossary (migrated from autobiographical)
+        self.glossary_manager = GlossaryManager(work_path)
 
         # Background tasks
         self._bg_tasks: set[asyncio.Task] = set()
@@ -365,8 +389,8 @@ class EmotionalGroupChatEngine:
         tasks = [
             asyncio.create_task(self._bg_delayed_queue_ticker(), name="delayed_queue"),
             asyncio.create_task(self._bg_proactive_checker(), name="proactive_check"),
-            asyncio.create_task(self._bg_memory_promoter(), name="memory_promote"),
-            asyncio.create_task(self._bg_consolidator(), name="consolidator"),
+            asyncio.create_task(self._bg_diary_promoter(), name="diary_promote"),
+            asyncio.create_task(self._bg_diary_consolidator(), name="diary_consolidator"),
 
         ]
         for t in tasks:
@@ -422,76 +446,61 @@ class EmotionalGroupChatEngine:
                 except Exception as exc:
                     logger.warning("Proactive check failed for %s: %s", group_id, exc)
 
-    async def _bg_memory_promoter(self) -> None:
-        """Periodically extract structured observations from buffered messages.
-
-        Uses EventMemoryManager's batch LLM extraction instead of raw
-        working-memory promotion.
-        """
+    async def _bg_diary_promoter(self) -> None:
+        """Periodically promote cold basic memory entries to diary summaries."""
         interval = self.config.get("memory_promote_interval_seconds", 300)
-        batch_size = self.config.get("event_memory_batch_size", 5)
         while self._bg_running:
             await asyncio.sleep(interval)
             try:
                 if self.provider_async is None:
                     continue
 
-                pending = self.event_memory.pending_buffer_counts()
-                if not pending:
-                    continue
-
-                extracted_total = 0
-                for user_id, count in list(pending.items()):
-                    if count < batch_size:
+                promoted_total = 0
+                for group_id in list(self.basic_memory.list_groups()):
+                    if not self.basic_memory.is_cold(group_id):
                         continue
 
-                    group_id = self.event_memory._get_group_id_for_user(user_id)
-                    user_entry = self.user_memory.get_user_by_id(user_id, group_id)
-                    user_name = (
-                        user_entry.name
-                        if user_entry and getattr(user_entry, "name", None)
-                        else user_id
-                    )
+                    candidates = self.basic_memory.get_archive_candidates(group_id)
+                    if not candidates:
+                        continue
 
-                    cfg = self.model_router.resolve("event_extract")
-                    new_entries = await self.event_memory.extract_observations(
-                        user_id=user_id,
-                        user_name=user_name,
+                    # Filter out already diarized candidates
+                    candidates = [
+                        c for c in candidates
+                        if not self.diary_manager.is_source_diarized(group_id, c.entry_id)
+                    ]
+                    if not candidates:
+                        continue
+
+                    cfg = self.model_router.resolve("memory_extract")
+                    entry = await self.diary_manager.generate_from_candidates(
+                        group_id=group_id,
+                        candidates=candidates,
+                        persona_name=self.persona.name,
+                        persona_description=self.persona.description,
                         provider_async=self.provider_async,
                         model_name=cfg.model_name,
-                        temperature=cfg.temperature,
-                        max_tokens=cfg.max_tokens,
                     )
-                    extracted_total += len(new_entries)
+                    if entry:
+                        promoted_total += 1
 
-                    # Mirror to episodic memory for backward-compat retrieval
-                    for entry in new_entries:
-                        self.episodic_memory.add_event(
-                            group_id=entry.group_id or group_id,
-                            user_id=entry.user_id,
-                            content=entry.summary,
-                            emotion_valence=0.0,
-                            importance=entry.confidence,
-                        )
-
-                if extracted_total > 0:
+                if promoted_total > 0:
                     self._log_inner_thought(
-                        f"从大家的对话里提炼了 {extracted_total} 条观察，对每个人的了解又深了一点点～"
+                        f"整理了 {promoted_total} 个群的对话日记，过去的回忆又清晰了一点～"
                     )
             except Exception as exc:
-                logger.warning("Observation extraction failed: %s", exc)
+                logger.warning("Diary promotion failed: %s", exc)
 
-    async def _bg_consolidator(self) -> None:
-        """Periodically consolidate episodic memories into semantic profiles."""
+    async def _bg_diary_consolidator(self) -> None:
+        """Periodically consolidate diary entries (no-op for now)."""
         interval = self.config.get("consolidation_interval_seconds", 600)
         while self._bg_running:
             await asyncio.sleep(interval)
             try:
-                for group_id in self.working_memory.list_groups():
-                    await self._consolidate_group(group_id)
-                self._log_inner_thought("刚整理完大家的画像，对每个人的了解又深了一点点～")
+                # Placeholder: deduplication or merging can be added later
+                pass
             except Exception as exc:
-                logger.warning("Consolidation failed: %s", exc)
+                logger.warning("Diary consolidation failed: %s", exc)
 
     async def _consolidate_group(self, group_id: str) -> None:
         """Consolidate structured event-memory observations into semantic profiles."""
@@ -821,8 +830,9 @@ class EmotionalGroupChatEngine:
                             term = params.get("term", "")
                             definition = params.get("definition", "")
                             if term and definition:
-                                self.autobiographical_memory.add_glossary_term(
-                                    term, definition, source="skill"
+                                self.glossary_manager.add_or_update(
+                                    group_id,
+                                    GlossaryTerm(term=term, definition=definition, source="skill"),
                                 )
                     else:
                         err = result.error or "未知错误"
@@ -941,6 +951,13 @@ class EmotionalGroupChatEngine:
             group_timestamps=dict(self._group_last_message_at),
             token_usage_records=[r.to_dict() for r in self.token_usage_records],
             event_memory=self.event_memory.to_dict(),
+            basic_memory=self.basic_memory.to_dict(),
+            diary_state={
+                "diarized_sources": {
+                    gid: list(sids)
+                    for gid, sids in self.diary_manager._diarized_sources.items()
+                }
+            },
         )
 
         # Save proactive state
@@ -996,6 +1013,36 @@ class EmotionalGroupChatEngine:
                 except Exception as exc:
                     logger.warning("事件记忆恢复失败，使用空实例: %s", exc)
                     self.event_memory = EventMemoryManager()
+
+            # Basic memory
+            basic_mem_data = state.get("basic_memory")
+            if basic_mem_data:
+                try:
+                    self.basic_memory = BasicMemoryManager.from_dict(basic_mem_data)
+                except Exception as exc:
+                    logger.warning("基础记忆恢复失败，使用空实例: %s", exc)
+                    self.basic_memory = BasicMemoryManager(
+                        hard_limit=self.config.get("basic_memory_hard_limit", 30),
+                        context_window=self.config.get("basic_memory_context_window", 5),
+                    )
+
+            # Diary state
+            diary_state = state.get("diary_state")
+            if diary_state:
+                try:
+                    sources = diary_state.get("diarized_sources", {})
+                    self.diary_manager._diarized_sources = {
+                        gid: set(sids)
+                        for gid, sids in sources.items()
+                    }
+                except Exception as exc:
+                    logger.warning("日记状态恢复失败: %s", exc)
+
+            # Re-bind context assembler to restored basic_memory
+            self.context_assembler = ContextAssembler(
+                self.basic_memory,
+                self.diary_manager._retriever,
+            )
 
             # Token usage records
             from sirius_chat.config import TokenUsageRecord
@@ -1133,7 +1180,18 @@ class EmotionalGroupChatEngine:
         participants: list[Participant],
     ) -> None:
         """Perception layer: normalize, register participants, update transcript."""
-        # Register participants in user memory
+        # New: Register participants via identity resolver and user manager
+        for p in participants:
+            ctx = IdentityContext(
+                speaker_name=p.name,
+                user_id=p.user_id,
+                platform_uid=p.identities.get(message.channel) if message.channel else None,
+                platform=message.channel,
+                is_developer=p.is_developer,
+            )
+            self.identity_resolver.resolve(ctx, self.user_manager, group_id)
+
+        # Old: Register participants in legacy user memory (kept for compat)
         for p in participants:
             self.user_memory.register_user(
                 profile=p.as_user_profile(),
@@ -1143,7 +1201,16 @@ class EmotionalGroupChatEngine:
         # Compute dynamic importance for working-memory retention
         importance = self._compute_message_importance(message.content or "")
 
-        # Add to working memory
+        # New: Add to basic memory and archive to disk
+        entry = self.basic_memory.add_entry(
+            group_id=group_id,
+            user_id=message.speaker or "unknown",
+            role="human",
+            content=message.content,
+        )
+        self.basic_store.append(entry)
+
+        # Old: Add to working memory
         self.working_memory.add_entry(
             group_id=group_id,
             user_id=message.speaker or "unknown",
@@ -1155,7 +1222,7 @@ class EmotionalGroupChatEngine:
             multimodal_inputs=list(message.multimodal_inputs) if message.multimodal_inputs else None,
         )
 
-        # Buffer raw message for structured observation extraction
+        # Old: Buffer raw message for structured observation extraction
         if message.content and message.speaker:
             self.event_memory.buffer_message(
                 user_id=message.speaker,
@@ -1186,14 +1253,8 @@ class EmotionalGroupChatEngine:
             content, user_id, group_id, context_messages
         )
 
-        # Memory retrieval (working → episodic → semantic)
-        memories = await self.memory_retriever.retrieve(
-            query=content,
-            group_id=group_id,
-            user_id=user_id,
-            top_k=5,
-            enable_semantic=self.config.get("enable_semantic_retrieval", False),
-        )
+        # Memory retrieval now happens in execution via ContextAssembler
+        memories = []
 
         return intent, emotion, memories, empathy
 
@@ -1320,8 +1381,8 @@ class EmotionalGroupChatEngine:
                         "aliases": entry.profile.aliases,
                         "qq_id": qq_id or uid,
                     })
-            glossary = self.autobiographical_memory.build_glossary_prompt_section(
-                text=message.content, max_terms=5
+            glossary = self.glossary_manager.build_prompt_section(
+                group_id, text=message.content, max_terms=5
             )
             bundle = self.response_assembler.assemble(
                 message=message,
@@ -1348,13 +1409,22 @@ class EmotionalGroupChatEngine:
                 is_group_chat=is_group_chat,
             )
 
-            # Build standard OpenAI messages from working memory.
-            # The last entry is the current message (added by perception); replace
-            # it with the richer user_content produced by the assembler.
-            history = self._build_history_messages(group_id, n=10)
-            if history and history[-1]["role"] == "user":
-                history.pop()
-            messages = history + [{"role": "user", "content": bundle.user_content}]
+            # Build messages via new context assembler (basic memory + diary RAG)
+            messages = self.context_assembler.build_messages(
+                group_id=group_id,
+                current_query=message.content,
+                system_prompt=bundle.system_prompt,
+                recent_n=self.config.get("basic_memory_context_window", 5),
+                diary_top_k=self.config.get("diary_top_k", 5),
+                diary_token_budget=self.config.get("diary_token_budget", 800),
+            )
+            # Avoid duplicating system prompt in _generate by passing enriched
+            # system prompt separately and stripping it from messages.
+            if messages and messages[0]["role"] == "system":
+                system_prompt_for_generate = messages[0]["content"]
+                messages = messages[1:]
+            else:
+                system_prompt_for_generate = bundle.system_prompt
 
             # Multi-round skill calling: generate → detect SKILL_CALL →
             # emit partial reply → execute skill → re-generate with result injected.
@@ -1367,7 +1437,7 @@ class EmotionalGroupChatEngine:
 
             for _round in range(max_skill_rounds + 1):
                 raw_reply = await self._generate(
-                    bundle.system_prompt, messages, group_id, style
+                    system_prompt_for_generate, messages, group_id, style
                 )
                 say = raw_reply.strip()
 
@@ -1434,8 +1504,9 @@ class EmotionalGroupChatEngine:
                                 term = params.get("term", "")
                                 definition = params.get("definition", "")
                                 if term and definition:
-                                    self.autobiographical_memory.add_glossary_term(
-                                        term, definition, source="skill"
+                                    self.glossary_manager.add_or_update(
+                                        group_id,
+                                        GlossaryTerm(term=term, definition=definition, source="skill"),
                                     )
                         else:
                             err = result.error or "未知错误"
@@ -1483,6 +1554,14 @@ class EmotionalGroupChatEngine:
                     role="assistant",
                     content=clean_reply,
                     importance=0.6,
+                )
+                # New: Also record into basic memory
+                self.basic_memory.add_entry(
+                    group_id=group_id,
+                    user_id="assistant",
+                    role="assistant",
+                    content=clean_reply,
+                    system_prompt=bundle.system_prompt,
                 )
 
             # Record reply timestamp for cooldown tracking
@@ -1534,24 +1613,13 @@ class EmotionalGroupChatEngine:
         intent: IntentAnalysisV3,
     ) -> None:
         """Background updates after main pipeline."""
-        # Update group atmosphere
-        group_profile = self.semantic_memory.ensure_group_profile(group_id)
-        from sirius_chat.memory.semantic.models import AtmosphereSnapshot
-        group_profile.atmosphere_history.append(AtmosphereSnapshot(
-            timestamp=_now_iso(),
-            group_valence=emotion.valence,
-            group_arousal=emotion.arousal,
-        ))
-        if len(group_profile.atmosphere_history) > 1000:
-            group_profile.atmosphere_history = group_profile.atmosphere_history[-1000:]
-
         # Update group sentiment cache for emotion island detection
         self.cognition_analyzer.update_group_sentiment(group_id, emotion)
 
-        # Passive group norm learning
-        self._learn_group_norms(group_profile, message, intent)
-
-        self.semantic_memory.save_group_profile(group_profile)
+        # Update assistant emotion based on interaction
+        self.assistant_emotion.update_from_interaction(
+            emotion, message.speaker or "unknown"
+        )
 
     def _learn_group_norms(
         self,
@@ -1672,8 +1740,8 @@ class EmotionalGroupChatEngine:
             for idx, item in enumerate(items, 1):
                 lines.append(f"{idx}. {item.message_content}")
             message_content = "\n".join(lines)
-        glossary = self.autobiographical_memory.build_glossary_prompt_section(
-            text=message_content, max_terms=5
+        glossary = self.glossary_manager.build_prompt_section(
+            group_id, text=message_content, max_terms=5
         )
         return self.response_assembler.assemble_delayed(
             message_content=message_content,
@@ -1730,8 +1798,8 @@ class EmotionalGroupChatEngine:
 
     def _build_proactive_prompt(self, trigger: dict[str, Any], group_id: str):
         """Build prompt bundle for proactive initiation."""
-        glossary = self.autobiographical_memory.build_glossary_prompt_section(
-            text=trigger.get("trigger_type", ""), max_terms=3
+        glossary = self.glossary_manager.build_prompt_section(
+            group_id, text=trigger.get("trigger_type", ""), max_terms=3
         )
         topic = self._pick_proactive_topic(group_id)
         return self.response_assembler.assemble_proactive(
@@ -1893,8 +1961,9 @@ class EmotionalGroupChatEngine:
                         term = params.get("term", "")
                         definition = params.get("definition", "")
                         if term and definition:
-                            self.autobiographical_memory.add_glossary_term(
-                                term, definition, source="skill"
+                            self.glossary_manager.add_or_update(
+                                group_id,
+                                GlossaryTerm(term=term, definition=definition, source="skill"),
                             )
                 else:
                     skill_results.append(f"[SKILL '{skill_name}' 失败] {result.error or '未知错误'}")

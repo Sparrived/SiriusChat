@@ -82,16 +82,13 @@ sirius_chat/
 │       ├── heat.py          # HeatAnalyzer（legacy）
 │       ├── intent_v2.py     # IntentAnalyzer v2（legacy）
 │       └── memory_runner.py # 记忆辅助任务（legacy）
-├── memory/                  # 记忆子包（v0.28 三层记忆底座）
-│   ├── user/                # 用户记忆管理（UserMemoryManager，已群隔离）
-│   ├── event/               # 事件记忆 V2（observation-based、批量提取、去重）
-│   ├── working/             # 工作记忆（按群滑动窗口，重要性加权）
-│   ├── episodic/            # 情景记忆（结构化事件，按群存储，激活度管理）
-│   ├── semantic/            # 语义记忆（用户画像 + 群体画像 + 兴趣图谱）
-│   ├── self/                # AI 自身记忆（Diary + Glossary）
-│   ├── quality/             # 记忆质量评估与遗忘引擎
-│   ├── activation_engine.py # 激活度引擎（遗忘曲线 + 访问增强 + 分类衰减）
-│   └── retrieval_engine.py  # 统一检索引擎（三层检索 + 打分排序）
+├── memory/                  # 记忆子包（v1.0 简化架构）
+│   ├── basic/               # 基础记忆（工作窗口 + 热度 + 归档）
+│   ├── diary/               # 日记记忆（LLM 生成、索引、检索）
+│   ├── glossary/            # 名词解释（AI 自身知识）
+│   ├── user/                # 用户管理（简化 UserProfile + UserManager）
+│   ├── context_assembler.py # 上下文组装器（basic + diary → OpenAI messages）
+│   └── semantic/            # 语义记忆 stub（向后兼容，保留 GroupSemanticProfile）
 ├── models/                  # 核心数据模型（dataclass）
 │   ├── emotion.py           # EmotionState / AssistantEmotionState / EmpathyStrategy
 │   ├── intent_v3.py         # IntentAnalysisV3 / SocialIntent
@@ -265,9 +262,8 @@ python scripts/ci_check.py
 | `test_workspace_runtime.py` | workspace 生命周期、持久化、热刷新 |
 | `test_skill_system.py` | SKILL 注册、执行、链式调用、权限 |
 | `test_roleplay_prompting.py` | 人格问卷、资产生成、选择与轨迹 |
-| `test_self_memory.py` / `test_memory_system_v2.py` / `test_event_user_memory_integration.py` | 记忆各子系统 |
-| `test_emotional_engine_basic.py` | v0.28 引擎基础冒烟测试（9 项） |
-| `test_emotional_engine_advanced.py` | v0.28 子系统测试（激活引擎、检索引擎、阈值引擎、用户记忆群隔离，34 项） |
+| `test_basic_memory.py` / `test_diary_memory.py` / `test_context_assembler.py` | 新记忆子系统 |
+| `test_identity_resolver.py` / `test_user_system.py` | 身份解析与用户管理 |
 | `test_response_assembler.py` | 执行层测试（StyleAdapter + ResponseAssembler，12 项） |
 | `test_model_router.py` | 模型路由层（任务感知选择、urgency 升级、heat 适配，18 项） |
 | `test_engine_persistence.py` | 引擎状态持久化（group-isolated save/load，9 项） |
@@ -317,29 +313,12 @@ python scripts/ci_check.py
 
 ### 记忆架构要点
 
-**三层记忆底座（v0.28 新增）**：
-- **工作记忆（Working）**：按 `group_id` 维护内存中的对话滑动窗口（默认 20 条），同时记录用户消息与 assistant 回复；按动态 `importance` 与 `timestamp` 排序截断，消息名称经过 sanitized 处理；高重要性消息自动晋升到情景记忆。
-- **情景记忆（Episodic）**：按群存储为 `{group_id}.jsonl`，包含情绪标签、重要性、激活度；支持关键词搜索与批量归档（激活度低于阈值时移入 archive）。
-- **语义记忆（Semantic）**：用户语义画像（兴趣图谱、关系状态、禁忌边界）+ 群体语义画像（氛围历史、群体规范、典型交互风格）。
-
-**用户记忆（已群隔离）**：
-- `UserMemoryManager.entries` 结构：`{group_id: {user_id: UserMemoryEntry}}`
-- 按 `memory_category`（identity / preference / emotion / event / custom）组织。
-- **事实置信度分层**：`transient_confidence_threshold`（默认 0.85）将事实分为 *RESIDENT*（持久化）与 *TRANSIENT*（会话级，30 分钟后自动清理）。
-- **智能上限**：当 `memory_facts` 超过 `MAX_MEMORY_FACTS`（50）时，删除置信度最低的 10%，而非简单 FIFO。
-
-**激活度与遗忘（v0.28 新增）**：
-- 公式：`activation = importance × exp(-λ × hours) × (1 + γ × access_count)`
-- 分类衰减：`identity/preference`（λ=0.001，几乎永久）、`emotion/transient`（λ=0.05，数周衰减）、`event/timely`（λ=0.1，事件后快速衰减）。
-
-**事件记忆 V2（observation-based，v0.28+ 核心）**：
-- **按用户缓冲**：每条 human 消息经 `_perception` 进入 `EventMemoryManager.buffer_message(user_id, content, group_id)`；过短（<6 字符）内容被丢弃。
-- **批量 LLM 提取**：后台 `_bg_memory_promoter` 每 5 分钟检查缓冲；当单用户缓冲达到 `event_memory_batch_size`（默认 5）时，调用 `extract_observations()` 通过 LLM 批量提取结构化观察。
-- **结构化观察**：每条观察为 `EventMemoryEntry`，含 `category`（preference/trait/relationship/experience/emotion/goal）、`summary`（≤50 字）、`confidence`（0.0-1.0）、`evidence_samples`（原始消息片段）。
-- **去重合并**：同一用户同一 category 下，字符集 Jaccard 相似度 ≥0.55 的观察会被合并（mention_count++、confidence 取 max、evidence 去重追加）。
-- **群隔离**：`EventMemoryEntry.group_id` 确保观察归属特定群；`buffer_message` 和 `extract_observations` 均携带 group_id。
-
-**AI 自身记忆**：日记（Diary，最多 100 条）+ 名词解释（Glossary，最多 200 条），支持遗忘曲线与衰减。
+**简化记忆架构（v1.0）**：
+- **基础记忆（BasicMemory）**：按 `group_id` 维护内存中的对话滑动窗口（硬限制 30 条，上下文窗口 5 条）。含热度计算器（HeatCalculator），基于消息速率、独特发言者和最近度计算群体热度（0-1）。当群体变冷（heat < 0.25）且沉默超过 300 秒时，上下文窗口外的消息归档为日记素材。
+- **日记记忆（DiaryMemory）**：LLM 生成的群聊摘要，含关键词和 source_ids 回链基础记忆。支持 sentence-transformers 嵌入索引（可选）和关键词回退搜索。检索时按 token 预算（默认 800 tokens）截断，通过 ContextAssembler 注入系统提示词。
+- **用户管理（UserManager）**：极简 `UserProfile`（user_id, name, aliases, identities, metadata），群隔离存储 `{group_id: {user_id: UserProfile}}`。跨平台身份追踪通过 `IdentityResolver` 解耦，支持 speaker_name → user_id → platform_uid 的多级解析。
+- **名词解释（GlossaryManager）**：AI 自身知识库，替代旧 AutobiographicalMemory。`learn_term` SKILL 路由至此。
+- **上下文组装（ContextAssembler）**：将基础记忆的最近 n 条 + 日记检索的 top_k 条组装为标准 OpenAI messages 数组。日记内容注入 system_prompt 作为「历史日记」，不污染消息历史。
 
 **模型路由层（v0.28 新增）**：
 - `ModelRouter` 按任务类型（`emotion_analyze` / `intent_analyze` / `response_generate` / `memory_extract`）自动选择模型、温度、token 上限。
@@ -381,10 +360,10 @@ python scripts/ci_check.py
 ```
 群消息进入（感知层）
     │
-    ├─ 注册参与者 → user_memory (group-isolated)
-    ├─ 写入工作记忆 → working_memory
-    ├─ 缓冲原始消息 → event_memory.buffer_message(user_id, content, group_id)
-    └─ 更新 group_last_message_at
+    ├─ 注册参与者 → IdentityResolver.resolve() → UserManager.register()
+    ├─ 写入基础记忆 → BasicMemoryManager.add_entry(group_id, user_id, role, content)
+    ├─ 更新 group_last_message_at
+    └─ 更新热度 → HeatCalculator.compute_heat(group_id)
     │
     ▼
 认知层（并行 + 可选 LLM fallback）
@@ -392,7 +371,7 @@ python scripts/ci_check.py
     │     └─ 规则 confidence < 0.8 → LLM 高精度分类（JSON 输出）
     ├─ EmotionAnalyzer → EmotionState(valence, arousal, basic_emotion)
     │     └─ 规则 confidence < 0.6 → LLM 高精度情感分析（JSON 输出）
-    └─ MemoryRetriever → 3-tier memory retrieval (working → episodic → semantic)
+    └─ 记忆检索 → DiaryManager.retrieve(query, group_id) + BasicMemoryManager.get_context(group_id)
     │
     ▼
 决策层
@@ -402,20 +381,19 @@ python scripts/ci_check.py
     │
     ▼
 执行层
-    ├─ ResponseAssembler → PromptBundle（system_prompt：persona + 情绪 + 共情 + 记忆 + skill + 输出格式；user_content：当前消息）
-    ├─ _build_history_messages() → working_memory 转标准 OpenAI messages（user / assistant / system）
+    ├─ ResponseAssembler → PromptBundle（system_prompt：persona + 情绪 + 共情 + 日记 + skill + 输出格式；user_content：当前消息）
+    ├─ ContextAssembler.build_messages() → basic 最近 n 条 + diary 检索 top_k 条 → OpenAI messages
     ├─ StyleAdapter → max_tokens / temperature / tone 动态适配
     ├─ ModelRouter → 任务感知模型选择（urgency / heat / 用户风格）
     └─ LLM 生成回复（provider_async.generate_async / generate），传入标准 messages 数组
     │
-    ├─ 记录 assistant 回复到 working_memory（含动态 importance 与 sanitized 名称）
+    ├─ 记录 assistant 回复到 BasicMemoryManager
     │
     ▼
 后台更新层
-    ├─ 批量提取观察 → event_memory.extract_observations() → 写入 episodic_memory
-    ├─ 更新群氛围 → semantic_memory.atmosphere_history
+    ├─ 日记生成 → 当群体变冷（heat < 0.25）且沉默 > 300s 时，基础记忆归档消息经 DiaryGenerator 生成日记
+    ├─ 更新群氛围 → semantic_memory stub（保留 GroupSemanticProfile.atmosphere_history）
     ├─ 被动学习群规范 → semantic_memory.group_norms
-    ├─ 语义整合 → event_memory.entries 按 category 更新 semantic 用户画像
     ├─ 更新用户情感轨迹 → emotion_analyzer.trajectories
     └─ 触发事件 → event_bus (PERCEPTION/COGNITION/DECISION/EXECUTION_COMPLETED)
 ```

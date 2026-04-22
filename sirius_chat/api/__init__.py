@@ -13,13 +13,6 @@ from sirius_chat.api.engine import (
     find_user_by_channel_uid,
     open_workspace_runtime,
 )
-from sirius_chat.api.memory import (
-    EventMemoryManager,
-    TRAIT_TAXONOMY,
-    UserMemoryEntry,
-    UserMemoryManager,
-    UserProfile,
-)
 from sirius_chat.api.models import (
     Agent,
     AgentPreset,
@@ -46,6 +39,8 @@ from sirius_chat.core.model_router import ModelRouter, TaskConfig
 from sirius_chat.core.proactive_trigger import ProactiveTrigger
 from sirius_chat.core.response_assembler import ResponseAssembler, StyleAdapter, StyleParams
 from sirius_chat.core.threshold_engine import ThresholdEngine
+from sirius_chat.core.identity_resolver import IdentityResolver, IdentityContext
+from sirius_chat.memory.user.simple import UserProfile
 from sirius_chat.background_tasks import BackgroundTaskConfig, BackgroundTaskManager
 from sirius_chat.api.prompting import (
     GENERATED_AGENTS_FILE_NAME,
@@ -148,14 +143,10 @@ __all__ = [
     "MockProvider",
     "Participant",
     "User",
+    "UserProfile",
     "ProviderPolicy",
     "OrchestrationPolicy",
     "SessionDefaults",
-    "UserProfile",
-    "UserMemoryEntry",
-    "UserMemoryManager",
-    "EventMemoryManager",
-    "TRAIT_TAXONOMY",
     "TokenUsageRecord",
     "TokenUsageBaseline",
     "MultiModelConfig",
@@ -270,6 +261,9 @@ __all__ = [
     "ResponseAssembler",
     "StyleAdapter",
     "StyleParams",
+    # Identity resolver
+    "IdentityResolver",
+    "IdentityContext",
     # Background tasks
     "BackgroundTaskConfig",
     "BackgroundTaskManager",
