@@ -449,8 +449,14 @@ class EmotionalGroupChatEngine:
                     logger.warning("Proactive check failed for %s: %s", group_id, exc)
 
     async def _bg_diary_promoter(self) -> None:
-        """Periodically promote cold basic memory entries to diary summaries."""
-        interval = self.config.get("memory_promote_interval_seconds", 300)
+        """Periodically promote basic memory entries to diary summaries.
+
+        Trigger conditions (OR):
+        1. Group is cold (heat < threshold AND silence >= threshold).
+        2. Sufficient volume of undiarized archive candidates.
+        """
+        interval = self.config.get("memory_promote_interval_seconds", 180)
+        volume_threshold = self.config.get("diary_volume_threshold", 8)
         while self._bg_running:
             await asyncio.sleep(interval)
             try:
@@ -459,9 +465,6 @@ class EmotionalGroupChatEngine:
 
                 promoted_total = 0
                 for group_id in list(self.basic_memory.list_groups()):
-                    if not self.basic_memory.is_cold(group_id):
-                        continue
-
                     candidates = self.basic_memory.get_archive_candidates(group_id)
                     if not candidates:
                         continue
@@ -472,6 +475,14 @@ class EmotionalGroupChatEngine:
                         if not self.diary_manager.is_source_diarized(group_id, c.entry_id)
                     ]
                     if not candidates:
+                        continue
+
+                    # Trigger: cold group OR sufficient undiarized volume
+                    should_promote = (
+                        self.basic_memory.is_cold(group_id)
+                        or len(candidates) >= volume_threshold
+                    )
+                    if not should_promote:
                         continue
 
                     cfg = self.model_router.resolve("memory_extract")
