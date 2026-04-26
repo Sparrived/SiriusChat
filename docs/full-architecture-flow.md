@@ -43,7 +43,7 @@ flowchart TD
 - 推荐外部入口是 `open_workspace_runtime(...)` / `WorkspaceRuntime`，而不是让调用方自己管理文件布局。
 - `WorkspaceLayout` 是路径的单一事实来源，决定配置资产与运行态数据分别落在哪里。
 - **v1.0.0 默认引擎** `EmotionalGroupChatEngine` 的实现位于 `sirius_chat/core/emotional_engine.py`，采用四层认知架构（感知→认知→决策→执行）与简化记忆模型（基础记忆 → 日记记忆）。
-- **Legacy 引擎 `AsyncRolePlayEngine` 已移除**；最小 stub 保留在 `sirius_chat/async_engine/__init__.py` 仅供过渡导入。
+- **Legacy 引擎 `AsyncRolePlayEngine` 已完全移除**；`sirius_chat/async_engine/` 仅保留辅助导出与配置常量。
 - `sirius_chat/async_engine/` 承担 legacy 兼容导出、提示词与工具函数。
 - `UserManager` 采用简化 `UserProfile`（user_id, name, aliases, identities, metadata），群隔离存储 `{group_id: {user_id: UserProfile}}`。跨平台身份解析由 `IdentityResolver` 解耦。
 - SKILL runtime 会先加载包内置技能（`system_info`、`desktop_screenshot`、`learn_term`、`url_content_reader`、`bing_search`），再加载 workspace `skills/`；同名 workspace 文件覆盖内置实现。

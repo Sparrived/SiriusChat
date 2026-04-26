@@ -228,12 +228,15 @@ sirius_chat/
 ├── api/                          # 🔌 公开 API facade（engine/models/providers/session 等）
 ├── core/                         # 🧠 编排核心真实实现
 │   ├── emotional_engine.py       # EmotionalGroupChatEngine（v1.0.0 默认引擎）
-│   ├── chat_builder.py           # 主模型请求构造
-│   ├── memory_runner.py          # 记忆相关辅助任务
-│   ├── engagement_pipeline.py    # 热度/意图/参与协调流水线
-│   ├── heat.py                   # 群聊热度分析
-│   ├── intent_v2.py              # 意图分析
-│   └── events.py                 # 会话事件流
+│   ├── cognition.py              # 统一认知分析器（情感 + 意图）
+│   ├── response_assembler.py     # 执行层：Prompt 组装 + 风格适配
+│   ├── response_strategy.py      # 四层响应策略（立即/延迟/沉默/主动）
+│   ├── delayed_response_queue.py # 延迟响应队列（话题间隙检测）
+│   ├── proactive_trigger.py      # 主动触发器（时间/记忆/情感触发）
+│   ├── rhythm.py                 # 对话节奏分析（热度/速度/注意力窗口）
+│   ├── threshold_engine.py       # 动态阈值引擎（Base × Activity × Relationship × Time）
+│   ├── events.py                 # 会话事件流
+│   └── identity_resolver.py      # 跨平台身份解析
 ├── async_engine/                 # 🧩 兼容导出 + prompts/orchestration/utils 辅助层
 ├── workspace/                    # 🗂️ layout/runtime/watcher/roleplay bootstrap
 ├── config/                       # ⚙️ WorkspaceConfig / SessionConfig / JSONC 管理

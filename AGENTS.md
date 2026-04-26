@@ -131,15 +131,13 @@ sirius_chat/
 ├── core/                    # 编排核心（v1.0 唯一引擎）
 │   ├── emotional_engine.py  # EmotionalGroupChatEngine（主引擎，v1.0）
 │   ├── response_assembler.py # 执行层：Prompt 组装 + 风格适配
-│   ├── emotion.py           # 情感分析（二维模型 + 19 种基础情绪）
-│   ├── intent_v3.py         # 意图分析 v3（目的驱动：求助/情感/社交/沉默）
+│   ├── cognition.py         # 统一认知分析器（情感 + 意图）
 │   ├── response_strategy.py # 四层响应策略（立即/延迟/沉默/主动）
 │   ├── delayed_response_queue.py # 延迟响应队列（话题间隙检测）
 │   ├── proactive_trigger.py # 主动触发器（时间/记忆/情感触发）
 │   ├── rhythm.py            # 对话节奏分析（热度/速度/注意力窗口）
 │   ├── threshold_engine.py  # 动态阈值引擎（Base × Activity × Relationship × Time）
 │   ├── events.py            # 会话事件流
-│   ├── chat_builder.py      # 主模型请求构造
 │   └── identity_resolver.py # 跨平台身份解析
 ├── memory/                  # 记忆子包（v1.0 简化架构）
 │   ├── basic/               # 基础记忆（工作窗口 + 热度 + 归档）
