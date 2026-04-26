@@ -23,8 +23,6 @@ from sirius_chat.api.models import (
     WorkspaceConfig,
 )
 # v0.28+ new cognitive layer exports
-from sirius_chat.core.intent_v3 import IntentAnalyzerV3
-from sirius_chat.core.emotion import EmotionAnalyzer
 from sirius_chat.core.rhythm import RhythmAnalysis, RhythmAnalyzer
 from sirius_chat.core.response_strategy import ResponseStrategyEngine
 from sirius_chat.core.delayed_response_queue import DelayedResponseQueue
@@ -233,8 +231,6 @@ __all__ = [
     "SkillExecutor",
     "SkillDataStore",
     # v0.28+ cognitive layer
-    "IntentAnalyzerV3",
-    "EmotionAnalyzer",
     "RhythmAnalysis",
     "RhythmAnalyzer",
     "ResponseStrategyEngine",

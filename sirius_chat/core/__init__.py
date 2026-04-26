@@ -6,8 +6,6 @@ EmotionalGroupChatEngine 是默认引擎。
 
 from sirius_chat.core.emotional_engine import EmotionalGroupChatEngine
 from sirius_chat.core.events import SessionEvent, SessionEventBus, SessionEventType
-from sirius_chat.core.intent_v3 import IntentAnalyzerV3
-from sirius_chat.core.emotion import EmotionAnalyzer
 from sirius_chat.core.rhythm import RhythmAnalysis, RhythmAnalyzer
 from sirius_chat.core.response_strategy import ResponseStrategyEngine
 from sirius_chat.core.delayed_response_queue import DelayedResponseQueue
