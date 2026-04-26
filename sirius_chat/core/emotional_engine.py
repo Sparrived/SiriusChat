@@ -200,8 +200,8 @@ class EmotionalGroupChatEngine:
         self._bg_running = False
 
         # Track which delayed-queue items have already emitted trigger events
-        # to avoid duplicate events across smart-sleep ticks.
-        self._delayed_event_emitted: set[str] = set()
+        # per group_id to avoid duplicate events across smart-sleep ticks.
+        self._delayed_event_emitted: dict[str, set[str]] = {}
 
         # Active private-chat groups (so external loop can tick delayed queue)
         self._active_private_groups: set[str] = set()
@@ -300,13 +300,17 @@ class EmotionalGroupChatEngine:
             },
         ))
 
-        # 5. Track developer private chats for proactive memory conversations
+        # 5. Track all private chats so the delivery loop can tick their delayed queue
+        if group_id.startswith("private_"):
+            self._active_private_groups.add(group_id)
+
+        # 6. Track developer private chats for proactive memory conversations
         if group_id.startswith("private_") and participants:
             from sirius_chat.developer_profiles import metadata_declares_developer
             if metadata_declares_developer(participants[0].metadata):
                 self._developer_private_groups.add(group_id)
 
-        # 6. Background memory updates
+        # 7. Background memory updates
         self._background_update(group_id, message, emotion, intent, user_id)
 
         return result
@@ -440,15 +444,22 @@ class EmotionalGroupChatEngine:
                 if next_wake <= 0:
                     break
 
+            # Guard against busy-loop when items are already expired but not yet
+            # consumed by the external delivery loop.
+            if next_wake <= 0:
+                next_wake = 1.0
+
             await asyncio.sleep(next_wake)
 
             now = datetime.now(timezone.utc)
             for group_id in list(self._group_last_message_at.keys()):
                 try:
                     pending = self.delayed_queue.get_pending(group_id)
-                    # Clean up emitted tracking for items that no longer exist
+                    # Per-group emitted tracking: only clean up IDs that no longer
+                    # exist in this group's pending list.
+                    emitted = self._delayed_event_emitted.setdefault(group_id, set())
                     existing_ids = {i.item_id for i in pending}
-                    self._delayed_event_emitted &= existing_ids
+                    emitted &= existing_ids
 
                     expired = []
                     for item in pending:
@@ -456,12 +467,11 @@ class EmotionalGroupChatEngine:
                         if enqueue_dt and (now - enqueue_dt).total_seconds() >= item.window_seconds:
                             expired.append(item)
 
-                    if expired:
+                    newly_expired = [i for i in expired if i.item_id not in emitted]
+                    if newly_expired:
                         self._log_inner_thought("之前记下的延迟回复，现在该开口了～")
-                        for item in expired:
-                            if item.item_id in self._delayed_event_emitted:
-                                continue
-                            self._delayed_event_emitted.add(item.item_id)
+                        for item in newly_expired:
+                            emitted.add(item.item_id)
                             await self.event_bus.emit(SessionEvent(
                                 type=SessionEventType.DELAYED_RESPONSE_TRIGGERED,
                                 data={
@@ -1056,7 +1066,7 @@ class EmotionalGroupChatEngine:
                     for gid, sids in self.diary_manager._diarized_sources.items()
                 }
             },
-            user_manager=self.user_manager.to_dict(),
+
         )
 
         # Save proactive state
