@@ -213,11 +213,3 @@ class TestAnalytics:
         assert report["baseline"]["total_calls"] == 3
         store.close()
 
-
-# ── Engine integration (unit-level) ──────────────────────────────
-
-class TestEngineTokenStoreIntegration:
-    """Verify that LiveSessionContext stores token_store in SessionStores."""
-
-    def test_live_session_context_has_token_store_field(self) -> None:
-        pytest.skip("LiveSessionContext/SessionStores removed in v0.28 refactor")
