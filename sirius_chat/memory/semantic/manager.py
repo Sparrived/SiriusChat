@@ -44,6 +44,7 @@ class SemanticMemoryManager:
         self._store = SemanticProfileStore(work_path)
         self._groups: dict[str, GroupSemanticProfile] = {}
         self._users: dict[str, UserSemanticProfile] = {}
+        self._global_users: dict[str, UserSemanticProfile] = {}
 
     # ------------------------------------------------------------------
     # Group profiles
@@ -67,11 +68,53 @@ class SemanticMemoryManager:
     # User profiles
     # ------------------------------------------------------------------
 
+    def _ensure_global_user(self, user_id: str) -> UserSemanticProfile:
+        if user_id not in self._global_users:
+            loaded = self._store.load_global_user_profile(user_id)
+            self._global_users[user_id] = loaded or UserSemanticProfile(user_id=user_id)
+        return self._global_users[user_id]
+
+    def _sync_to_global(self, user_id: str, local: UserSemanticProfile) -> None:
+        """Merge group-local user profile into global shared profile.
+        Relationship state stays group-local; communication style and
+        interest graph are shared cross-group."""
+        global_profile = self._ensure_global_user(user_id)
+        if local.communication_style and not global_profile.communication_style:
+            global_profile.communication_style = local.communication_style
+        for item in local.interest_graph:
+            if item not in global_profile.interest_graph:
+                global_profile.interest_graph.append(item)
+
+    def _seed_from_global(self, group_id: str, user_id: str) -> UserSemanticProfile | None:
+        """If a global profile exists, copy cross-group fields into a new
+        group-local profile."""
+        global_profile = self._global_users.get(user_id)
+        if global_profile is None:
+            loaded = self._store.load_global_user_profile(user_id)
+            if loaded is None:
+                return None
+            global_profile = loaded
+            self._global_users[user_id] = global_profile
+
+        local = UserSemanticProfile(user_id=user_id)
+        local.communication_style = global_profile.communication_style
+        local.interest_graph = list(global_profile.interest_graph)
+        # relationship_state stays default (group-local)
+        key = f"{group_id}:{user_id}"
+        self._users[key] = local
+        return local
+
     def get_user_profile(self, group_id: str, user_id: str) -> UserSemanticProfile:
         key = f"{group_id}:{user_id}"
         if key not in self._users:
             loaded = self._store.load_user_profile(group_id, user_id)
-            self._users[key] = loaded or UserSemanticProfile(user_id=user_id)
+            if loaded is not None:
+                self._users[key] = loaded
+            else:
+                # Try seed from global profile
+                seeded = self._seed_from_global(group_id, user_id)
+                if seeded is None:
+                    self._users[key] = UserSemanticProfile(user_id=user_id)
         return self._users[key]
 
     def save_user_profile(self, group_id: str, user_id: str) -> None:
@@ -79,6 +122,12 @@ class SemanticMemoryManager:
         profile = self._users.get(key)
         if profile is not None:
             self._store.save_user_profile(group_id, user_id, profile)
+            self._sync_to_global(user_id, profile)
+            self._store.save_global_user_profile(user_id, self._global_users[user_id])
+
+    def get_global_user_profile(self, user_id: str) -> UserSemanticProfile | None:
+        """Get the cross-group shared semantic profile for a user."""
+        return self._ensure_global_user(user_id)
 
     def list_group_user_profiles(self, group_id: str) -> list[UserSemanticProfile]:
         return self._store.list_group_user_profiles(group_id)

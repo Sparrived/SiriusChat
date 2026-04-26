@@ -170,6 +170,12 @@ class ResponseAssembler:
         self.enable_dual_output = enable_dual_output
         self.skill_registry = skill_registry
 
+    @staticmethod
+    def _build_cross_group_context(cross_group_text: str) -> str:
+        if not cross_group_text:
+            return ""
+        return f"[跨群认知]\n{cross_group_text}"
+
     def assemble(
         self,
         *,
@@ -189,6 +195,7 @@ class ResponseAssembler:
         recent_participants: list[dict[str, Any]] | None = None,
         caller_is_developer: bool = False,
         glossary_section: str = "",
+        cross_group_context: str = "",
     ) -> PromptBundle:
         """Build a structured prompt for response generation.
 
@@ -260,6 +267,10 @@ class ResponseAssembler:
         # 6. Recent participants context (group members)
         if recent_participants:
             sections.append(self._build_participants_context(recent_participants))
+
+        # 6b. Cross-group user awareness (if available)
+        if cross_group_context:
+            sections.append(self._build_cross_group_context(cross_group_context))
 
         # 7. Available skills
         if self.skill_registry is not None:

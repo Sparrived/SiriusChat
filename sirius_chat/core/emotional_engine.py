@@ -822,6 +822,7 @@ class EmotionalGroupChatEngine:
                     for gid, sids in self.diary_manager._diarized_sources.items()
                 }
             },
+            user_manager=self.user_manager.to_dict(),
         )
 
         # Save proactive state
@@ -900,6 +901,14 @@ class EmotionalGroupChatEngine:
                     }
                 except Exception as exc:
                     logger.warning("日记状态恢复失败: %s", exc)
+
+            # User manager (with cross-group global profiles)
+            user_mgr_data = state.get("user_manager")
+            if user_mgr_data:
+                try:
+                    self.user_manager = UserManager.from_dict(user_mgr_data)
+                except Exception as exc:
+                    logger.warning("用户管理器恢复失败，使用空实例: %s", exc)
 
             # Re-bind context assembler to restored basic_memory
             self.context_assembler = ContextAssembler(
@@ -1213,6 +1222,30 @@ class EmotionalGroupChatEngine:
 
         is_group_chat = not group_id.startswith("private_")
 
+        # Build cross-group awareness for the current user
+        cross_group_context = ""
+        if user_id:
+            global_user = self.user_manager.get_global_user(user_id)
+            global_semantic = self.semantic_memory.get_global_user_profile(user_id)
+            # Only generate if user has activity in multiple groups
+            group_count = sum(
+                1 for gid, group in self.user_manager.entries.items()
+                if user_id in group and gid != group_id
+            )
+            if group_count > 0 or (global_semantic and global_semantic.communication_style):
+                parts: list[str] = []
+                if group_count > 0:
+                    parts.append(f"你在 {group_count} 个其他群中也认识 {message.speaker or 'TA'}")
+                if global_user and global_user.aliases:
+                    parts.append(f"TA 的别名/昵称有：{', '.join(global_user.aliases[:3])}")
+                if global_semantic:
+                    if global_semantic.communication_style:
+                        parts.append(f"沟通风格：{global_semantic.communication_style}")
+                    if global_semantic.interest_graph:
+                        topics = [str(item) for item in global_semantic.interest_graph[:3]]
+                        parts.append(f"兴趣话题：{', '.join(topics)}")
+                cross_group_context = "；".join(parts) + "。"
+
         # Determine if the current sender is a developer
         caller_profile = None
         if message.channel_user_id and message.channel:
@@ -1256,6 +1289,7 @@ class EmotionalGroupChatEngine:
                 recent_participants=recent_participants if recent_participants else None,
                 caller_is_developer=caller_is_developer,
                 glossary_section=glossary,
+                cross_group_context=cross_group_context,
             )
             style = self.style_adapter.adapt(
                 heat_level=rhythm.heat_level,
