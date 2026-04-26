@@ -1309,6 +1309,8 @@ class EmotionalGroupChatEngine:
                 recent_n=self.config.get("basic_memory_context_window", 5),
                 diary_top_k=self.config.get("diary_top_k", 5),
                 diary_token_budget=self.config.get("diary_token_budget", 800),
+                cross_group_user_id=user_id,
+                cross_group_enabled=self.config.get("cross_group_memory_enabled", True),
             )
             # Avoid duplicating system prompt in _generate by passing enriched
             # system prompt separately and stripping it from messages.

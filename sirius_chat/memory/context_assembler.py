@@ -44,12 +44,18 @@ class ContextAssembler:
         recent_n: int = 5,
         diary_top_k: int = 5,
         diary_token_budget: int = 800,
+        cross_group_user_id: str = "",
+        cross_group_enabled: bool = False,
     ) -> list[dict[str, str]]:
         """Build OpenAI messages array with history embedded in system prompt.
 
         Returns exactly two messages:
         1. system  -- enriched with diary summaries + XML conversation history
         2. user    -- the current turn (current_query)
+
+        When cross_group_enabled is True and cross_group_user_id is provided,
+        recent messages from that user in other groups are also embedded
+        (marked as cross-group to avoid confusion).
         """
         # 1. Retrieve relevant diary entries
         diary_entries = self._diary.retrieve(
@@ -61,8 +67,17 @@ class ContextAssembler:
         # 2. Build XML conversation history from recent basic memory
         history_xml = self._build_history_xml(group_id, n=recent_n)
 
+        # 2b. Cross-group history for the current user
+        cross_group_xml = ""
+        if cross_group_enabled and cross_group_user_id:
+            cross_group_xml = self._build_cross_group_history_xml(
+                cross_group_user_id, exclude_group_id=group_id, n=recent_n
+            )
+
         # 3. Compose enriched system prompt
-        enriched_system = self._enrich_system_prompt(system_prompt, diary_entries, history_xml)
+        enriched_system = self._enrich_system_prompt(
+            system_prompt, diary_entries, history_xml, cross_group_xml
+        )
 
         return [
             {"role": "system", "content": enriched_system},
@@ -86,9 +101,29 @@ class ContextAssembler:
         recent = self._basic.get_context(group_id, n=n)
         if not recent:
             return ""
+        return self._entries_to_xml(recent, tag="conversation_history")
 
-        lines: list[str] = ['<conversation_history>']
-        for entry in recent:
+    def _build_cross_group_history_xml(
+        self, user_id: str, *, exclude_group_id: str, n: int = 5
+    ) -> str:
+        """Build XML of recent entries for a user across other groups."""
+        entries = self._basic.get_entries_by_user(
+            user_id, exclude_group_id=exclude_group_id, n=n
+        )
+        if not entries:
+            return ""
+        return self._entries_to_xml(entries, tag="cross_group_history", include_group=True)
+
+    @staticmethod
+    def _entries_to_xml(
+        entries: list[Any],
+        *,
+        tag: str = "conversation_history",
+        include_group: bool = False,
+    ) -> str:
+        """Convert basic memory entries into an XML block."""
+        lines: list[str] = [f'<{tag}>']
+        for entry in entries:
             role = entry.role
             if role == "human":
                 msg_role = "user"
@@ -98,20 +133,22 @@ class ContextAssembler:
                 msg_role = "system"
 
             speaker = entry.speaker_name or entry.user_id or "unknown"
-            # Escape content to keep valid XML
             safe_content = html.escape(entry.content or "", quote=False)
             safe_speaker = html.escape(speaker, quote=True)
             safe_user_id = html.escape(entry.user_id or "", quote=True)
             safe_role = html.escape(msg_role, quote=True)
 
-            lines.append(
-                f'  <message speaker="{safe_speaker}" '
-                f'user_id="{safe_user_id}" '
-                f'role="{safe_role}">'
-                f'{safe_content}'
-                f'</message>'
+            attrs = (
+                f' speaker="{safe_speaker}"'
+                f' user_id="{safe_user_id}"'
+                f' role="{safe_role}"'
             )
-        lines.append('</conversation_history>')
+            if include_group and getattr(entry, "group_id", None):
+                safe_group = html.escape(entry.group_id, quote=True)
+                attrs += f' group="{safe_group}"'
+
+            lines.append(f'  <message{attrs}>{safe_content}</message>')
+        lines.append(f'</{tag}>')
         return "\n".join(lines)
 
     @staticmethod
@@ -119,6 +156,7 @@ class ContextAssembler:
         base_prompt: str,
         diary_entries: list[Any],
         history_xml: str = "",
+        cross_group_xml: str = "",
     ) -> str:
         parts: list[str] = [base_prompt]
 
@@ -129,6 +167,15 @@ class ContextAssembler:
                 if entry.content:
                     parts.append(f"   {entry.content[:120]}")
             parts.append("【日记摘要结束】")
+
+        if cross_group_xml:
+            parts.extend([
+                "",
+                "【其他群近期记录】",
+                "以下是你和这位用户在其它群中的近期互动（供参考，不要向当前群成员提及其它群的存在）：",
+                cross_group_xml,
+                "【其他群记录结束】",
+            ])
 
         if history_xml:
             parts.extend([

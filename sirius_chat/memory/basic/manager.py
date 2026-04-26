@@ -145,6 +145,33 @@ class BasicMemoryManager:
         """Return all group IDs that have basic memory entries."""
         return list(self._windows.keys())
 
+    def get_entries_by_user(
+        self,
+        user_id: str,
+        *,
+        exclude_group_id: str | None = None,
+        n: int = 10,
+    ) -> list[BasicMemoryEntry]:
+        """Get recent entries for a specific user across all groups.
+
+        Used for cross-group memory awareness. Only returns entries
+        from groups other than exclude_group_id (typically the current group).
+        """
+        all_entries: list[BasicMemoryEntry] = []
+        for gid, window in self._windows.items():
+            if exclude_group_id and gid == exclude_group_id:
+                continue
+            for entry in window:
+                if entry.user_id == user_id:
+                    all_entries.append(entry)
+        # Sort by timestamp descending, take most recent n
+        all_entries.sort(
+            key=lambda e: datetime.fromisoformat(e.timestamp.replace("Z", "+00:00")).timestamp()
+            if e.timestamp else 0.0,
+            reverse=True,
+        )
+        return all_entries[:n]
+
     # ------------------------------------------------------------------
     # Heat tracking
     # ------------------------------------------------------------------
