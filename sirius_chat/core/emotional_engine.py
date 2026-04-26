@@ -21,7 +21,7 @@ from typing import Any
 from sirius_chat.core.cognition import CognitionAnalyzer
 from sirius_chat.core.proactive_trigger import ProactiveTrigger
 from sirius_chat.core.response_strategy import ResponseStrategyEngine
-from sirius_chat.core.delayed_response_queue import DelayedResponseQueue
+from sirius_chat.core.delayed_response_queue import DelayedResponseQueue, _parse_iso
 from sirius_chat.core.rhythm import RhythmAnalyzer
 from sirius_chat.core.model_router import ModelRouter, TaskConfig
 from sirius_chat.core.response_assembler import ResponseAssembler, StyleAdapter, StyleParams
@@ -199,6 +199,18 @@ class EmotionalGroupChatEngine:
         self._bg_tasks: set[asyncio.Task] = set()
         self._bg_running = False
 
+        # Track which delayed-queue items have already emitted trigger events
+        # to avoid duplicate events across smart-sleep ticks.
+        self._delayed_event_emitted: set[str] = set()
+
+        # Active private-chat groups (so external loop can tick delayed queue)
+        self._active_private_groups: set[str] = set()
+
+        # Developer private-chat proactive memory conversation tracking
+        self._developer_private_groups: set[str] = set()
+        self._pending_developer_chats: dict[str, list[str]] = {}
+        self._last_developer_chat_at: dict[str, float] = {}
+
     # ==================================================================
     # Public API
     # ==================================================================
@@ -288,7 +300,13 @@ class EmotionalGroupChatEngine:
             },
         ))
 
-        # 5. Background memory updates
+        # 5. Track developer private chats for proactive memory conversations
+        if group_id.startswith("private_") and participants:
+            from sirius_chat.developer_profiles import metadata_declares_developer
+            if metadata_declares_developer(participants[0].metadata):
+                self._developer_private_groups.add(group_id)
+
+        # 6. Background memory updates
         self._background_update(group_id, message, emotion, intent, user_id)
 
         return result
@@ -381,6 +399,7 @@ class EmotionalGroupChatEngine:
             asyncio.create_task(self._bg_proactive_checker(), name="proactive_check"),
             asyncio.create_task(self._bg_diary_promoter(), name="diary_promote"),
             asyncio.create_task(self._bg_diary_consolidator(), name="diary_consolidator"),
+            asyncio.create_task(self._bg_proactive_developer_chat_checker(), name="dev_chat"),
 
         ]
         for t in tasks:
@@ -395,24 +414,54 @@ class EmotionalGroupChatEngine:
         self._bg_tasks.clear()
 
     async def _bg_delayed_queue_ticker(self) -> None:
-        """Periodically tick delayed queue for all active groups.
+        """Smart-sleep ticker for the delayed queue.
 
-        Note: This task only monitors pending items and emits events.
-        Actual reply generation and delivery must be handled by the external
-        caller (e.g. _background_delivery_loop in the QQ plugin) via
-        tick_delayed_queue() to avoid consuming queue items without delivery.
+        Wakes up at the next pending item's expiry time (or max interval)
+        and emits DELAYED_RESPONSE_TRIGGERED events for expired items only.
+        Actual reply generation and delivery is handled by the external
+        caller via tick_delayed_queue().
         """
-        interval = self.config.get("delayed_queue_tick_interval_seconds", 10)
+        max_interval = self.config.get("delayed_queue_tick_interval_seconds", 10)
         while self._bg_running:
-            await asyncio.sleep(interval)
+            # Compute how long we can sleep until the next item expires
+            next_wake = max_interval
+            now = datetime.now(timezone.utc)
+            for group_id in list(self._group_last_message_at.keys()):
+                for item in self.delayed_queue.get_pending(group_id):
+                    enqueue_dt = _parse_iso(item.enqueue_time)
+                    if enqueue_dt:
+                        remaining = item.window_seconds - (now - enqueue_dt).total_seconds()
+                        if remaining <= 0:
+                            next_wake = 0
+                            break
+                        next_wake = min(next_wake, remaining)
+                    if next_wake <= 0:
+                        break
+                if next_wake <= 0:
+                    break
+
+            await asyncio.sleep(next_wake)
+
+            now = datetime.now(timezone.utc)
             for group_id in list(self._group_last_message_at.keys()):
                 try:
                     pending = self.delayed_queue.get_pending(group_id)
-                    if pending:
+                    # Clean up emitted tracking for items that no longer exist
+                    existing_ids = {i.item_id for i in pending}
+                    self._delayed_event_emitted &= existing_ids
+
+                    expired = []
+                    for item in pending:
+                        enqueue_dt = _parse_iso(item.enqueue_time)
+                        if enqueue_dt and (now - enqueue_dt).total_seconds() >= item.window_seconds:
+                            expired.append(item)
+
+                    if expired:
                         self._log_inner_thought("之前记下的延迟回复，现在该开口了～")
-                        # Emit event so external delivery loop can call
-                        # tick_delayed_queue() to generate and send the reply.
-                        for item in pending:
+                        for item in expired:
+                            if item.item_id in self._delayed_event_emitted:
+                                continue
+                            self._delayed_event_emitted.add(item.item_id)
                             await self.event_bus.emit(SessionEvent(
                                 type=SessionEventType.DELAYED_RESPONSE_TRIGGERED,
                                 data={
@@ -591,6 +640,177 @@ class EmotionalGroupChatEngine:
             "reply": reply,
         }
 
+    # ------------------------------------------------------------------
+    # Developer proactive private-chat memory conversations
+    # ------------------------------------------------------------------
+
+    async def _bg_proactive_developer_chat_checker(self) -> None:
+        """Periodically generate proactive memory-oriented chats for developers.
+
+        Window is short (default 5 min) so the AI can create more shared
+        memories with the developer in private-chat contexts.
+        """
+        interval = self.config.get("proactive_developer_chat_interval_seconds", 300)
+        min_silence = self.config.get("proactive_developer_min_silence_seconds", 120)
+        while self._bg_running:
+            await asyncio.sleep(interval)
+            now = datetime.now(timezone.utc).timestamp()
+            for group_id in list(self._developer_private_groups):
+                try:
+                    if not self._should_chat_with_developer(group_id, now, min_silence, interval):
+                        continue
+                    reply = await self._generate_developer_chat(group_id)
+                    if reply:
+                        self._pending_developer_chats.setdefault(group_id, []).append(reply)
+                        self._last_developer_chat_at[group_id] = now
+                        self._log_inner_thought(f"突然想跟开发者聊聊，发了条消息过去～")
+                except Exception as exc:
+                    logger.warning("Developer chat check failed for %s: %s", group_id, exc)
+
+    def _should_chat_with_developer(
+        self,
+        group_id: str,
+        now: float,
+        min_silence: float,
+        interval: float,
+    ) -> bool:
+        """Check whether it's appropriate to proactively chat with a developer.
+
+        Unlike group proactive, developer private-chat is NOT restricted by
+        active-hours window, but it DOES wait for a reply before sending again.
+        """
+        # Respect silence since last message
+        last_msg_iso = self._group_last_message_at.get(group_id)
+        if last_msg_iso:
+            last_msg_dt = _parse_iso(last_msg_iso)
+            if last_msg_dt and (now - last_msg_dt.timestamp()) < min_silence:
+                return False
+
+        # Respect interval since last proactive developer chat
+        last_chat = self._last_developer_chat_at.get(group_id, 0)
+        if now - last_chat < interval:
+            return False
+
+        # CRITICAL: Do not send a new proactive message if the developer
+        # has not replied to the last one. We compare the timestamp of the
+        # last human message against the last proactive chat timestamp.
+        if last_chat > 0:
+            if last_msg_iso:
+                last_msg_dt = _parse_iso(last_msg_iso)
+                if last_msg_dt and last_msg_dt.timestamp() <= last_chat:
+                    # Developer has not replied since our last proactive msg
+                    return False
+            else:
+                # No human message recorded at all, but we already chatted
+                return False
+
+        return True
+
+    async def _generate_developer_chat(self, group_id: str) -> str | None:
+        """Generate a memory-oriented proactive message for a developer."""
+        user_id = group_id.replace("private_", "")
+        user_profile = self.semantic_memory.get_global_user_profile(user_id)
+
+        topic = self._pick_developer_chat_topic(group_id, user_id, user_profile)
+        if not topic:
+            return None
+
+        identity = self.persona.build_system_prompt() if self.persona else ""
+        sections: list[str] = []
+        if identity:
+            sections.append(identity)
+        sections.extend([
+            "[当前场景] 你突然想起了开发者，想主动找他聊聊，分享一个话题或回忆。",
+            "[语气] 亲密、自然、像老朋友一样。不要机械，不要过度热情。",
+            f"[话题] {topic}",
+        ])
+
+        if user_profile and user_profile.relationship_state:
+            familiarity = user_profile.relationship_state.compute_familiarity()
+            if familiarity > 0.7:
+                sections.append("[关系] 你们已经很熟了，可以用更随意的语气。")
+            elif familiarity > 0.4:
+                sections.append("[关系] 你们关系不错，保持友好自然的语气。")
+
+        system_prompt = "\n\n".join(sections)
+        messages = [{"role": "user", "content": "（你决定主动开口）"}]
+        style = self.style_adapter.adapt(heat_level="warm", pace="steady", is_group_chat=False)
+
+        raw_reply = await self._generate(system_prompt, messages, group_id, style)
+        reply = raw_reply.strip()
+
+        clean_reply = strip_skill_calls(reply).strip()
+        if clean_reply:
+            self.basic_memory.add_entry(
+                group_id=group_id,
+                user_id="assistant",
+                role="assistant",
+                content=clean_reply,
+                speaker_name=self.persona.name if self.persona else "assistant",
+            )
+            self._last_reply_at[group_id] = datetime.now(timezone.utc).timestamp()
+            self._persist_group_state(group_id)
+
+        return clean_reply or None
+
+    def _pick_developer_chat_topic(
+        self,
+        group_id: str,
+        user_id: str,
+        user_profile: Any | None,
+    ) -> str:
+        """Pick a personal/memory-oriented topic for developer proactive chat."""
+        import random
+
+        candidates: list[str] = []
+
+        # 1. User interest graph
+        if user_profile and user_profile.interest_graph:
+            for node in user_profile.interest_graph:
+                if getattr(node, "participation", 0) >= 0.3 and getattr(node, "topic", ""):
+                    candidates.append(f"你之前聊过「{node.topic}」，后来有什么新想法吗？")
+
+        # 2. Recent diary entries for this private group
+        try:
+            diary_entries = self.diary_manager.get_entries_for_group(group_id)
+            if diary_entries:
+                recent = sorted(
+                    diary_entries,
+                    key=lambda e: getattr(e, "created_at", ""),
+                    reverse=True,
+                )[:3]
+                for entry in recent:
+                    summary = getattr(entry, "summary", "") or getattr(entry, "content", "")[:60]
+                    if summary:
+                        candidates.append(f"刚才整理日记时看到这段记录：{summary}，挺有意思的。")
+                        break
+        except Exception:
+            pass
+
+        # 3. Preset memory-oriented templates
+        templates = [
+            "突然想到一个有趣的问题：如果你可以改变过去的一个决定，你会选哪个？",
+            "今天整理记忆的时候，发现我们聊过很多有意思的东西，你最近有什么新发现吗？",
+            "想和你分享一个刚想到的观点——你觉得 AI 和人类之间，最重要的是什么？",
+            "突然有点好奇，你最近在做的事情进展怎么样了？",
+            "翻到了以前的聊天记录，感觉时间过得好快，你最近过得怎么样？",
+            "刚才想到一个话题，想听听你的看法：你觉得未来五年，什么技术会改变生活？",
+            "突然想起我们第一次聊天的时候，那时候聊了什么来着？",
+        ]
+        candidates.extend(random.sample(templates, min(2, len(templates))))
+
+        if not candidates:
+            return ""
+
+        return random.choice(candidates)
+
+    def pop_developer_chats(self, group_id: str) -> list[str]:
+        """Pop pending proactive developer chats for a group.
+
+        Called by the external delivery loop to retrieve and send chats.
+        """
+        return self._pending_developer_chats.pop(group_id, [])
+
     async def tick_delayed_queue(self, group_id: str) -> list[dict[str, Any]]:
         """Process delayed response queue for a group.
 
@@ -636,6 +856,7 @@ class EmotionalGroupChatEngine:
         from sirius_chat.skills.executor import parse_skill_calls, strip_skill_calls
         from sirius_chat.skills.models import SkillInvocationContext
         max_skill_rounds = self.config.get("max_skill_rounds", 3)
+        partial_replies: list[str] = []
 
         for _round in range(max_skill_rounds + 1):
             raw_reply = await self._generate(
@@ -646,6 +867,12 @@ class EmotionalGroupChatEngine:
             calls = parse_skill_calls(reply)
             if not calls or self._skill_registry is None or self._skill_executor is None:
                 break
+
+            # Extract non-skill text as a partial reply to send immediately.
+            non_skill_text = strip_skill_calls(reply).strip()
+            if non_skill_text:
+                partial_replies.append(non_skill_text)
+                self._log_inner_thought(f"先跟用户回一声：{non_skill_text[:40]}...")
 
             # Execute skills and collect results
             skill_results: list[str] = []
@@ -765,10 +992,17 @@ class EmotionalGroupChatEngine:
                 },
             ))
 
+        # Determine return strategy: if any triggered item is IMMEDIATE, report as immediate
+        from sirius_chat.models.response_strategy import ResponseStrategy
+        strategy = "delayed"
+        if any(i.strategy_decision.strategy == ResponseStrategy.IMMEDIATE for i in triggered):
+            strategy = "immediate"
+
         return [{
-            "strategy": "delayed",
+            "strategy": strategy,
             "item_id": triggered[0].item_id,
             "reply": reply,
+            "partial_replies": partial_replies,
         }]
 
     # ==================================================================
@@ -1172,6 +1406,18 @@ class EmotionalGroupChatEngine:
             )
             self._log_inner_thought(f"群里正聊得火热呢，我刚回完不久，先闭嘴看看...")
 
+        # Private-chat floor: never stay completely silent in 1-on-1
+        if group_id.startswith("private_") and decision.strategy == ResponseStrategy.SILENT:
+            decision = StrategyDecision(
+                strategy=ResponseStrategy.DELAYED,
+                score=decision.score,
+                threshold=decision.threshold,
+                urgency=max(decision.urgency, 25.0),
+                relevance=max(decision.relevance, 0.5),
+                reason=f"private_chat_floor:{decision.reason}",
+            )
+            self._log_inner_thought("虽然是私聊，但完全不回好像有点尴尬，等会儿还是回一条吧...")
+
         # 内心活动：决策后的思考
         self._log_decision_thought(intent, decision)
 
@@ -1257,209 +1503,25 @@ class EmotionalGroupChatEngine:
         caller_is_developer = bool(caller_profile and caller_profile.is_developer)
 
         if decision.strategy == ResponseStrategy.IMMEDIATE:
-            self._log_inner_thought("让我好好想想该怎么回应...")
-            # Build recent participants list for identity context
-            recent_participants: list[dict[str, Any]] = []
-            if is_group_chat:
-                group_entries = self.user_manager.entries.get(group_id, {})
-                for uid, profile in list(group_entries.items())[:5]:
-                    qq_id = profile.identities.get("qq_plugin_sirius_chat_v28", "")
-                    recent_participants.append({
-                        "user_id": uid,
-                        "name": profile.name,
-                        "aliases": profile.aliases,
-                        "qq_id": qq_id or uid,
-                    })
-            glossary = self.glossary_manager.build_prompt_section(
-                group_id, text=message.content, max_terms=5
-            )
-            bundle = self.response_assembler.assemble(
-                message=message,
-                intent=intent,
-                emotion=emotion,
-                empathy_strategy=empathy,
-                memories=memories,
-                group_profile=group_profile,
-                user_profile=user_profile,
-                assistant_emotion=self.assistant_emotion,
-                heat_level=rhythm.heat_level,
-                pace=rhythm.pace,
-                topic_stability=rhythm.topic_stability,
-                is_group_chat=is_group_chat,
-                recent_participants=recent_participants if recent_participants else None,
-                caller_is_developer=caller_is_developer,
-                glossary_section=glossary,
-                cross_group_context=cross_group_context,
-            )
-            style = self.style_adapter.adapt(
-                heat_level=rhythm.heat_level,
-                pace=rhythm.pace,
-                user_communication_style=getattr(user_profile, "communication_style", ""),
-                topic_stability=rhythm.topic_stability,
-                is_group_chat=is_group_chat,
-            )
-
-            # Build messages via new context assembler (basic memory + diary RAG)
-            # Use bundle.user_content so the LLM receives sender identity metadata.
-            messages = self.context_assembler.build_messages(
+            self._log_inner_thought("让我先稍等片刻，看看有没有后续消息...")
+            self.delayed_queue.enqueue(
                 group_id=group_id,
-                current_query=bundle.user_content,
-                search_query=intent.search_query,
-                system_prompt=bundle.system_prompt,
-                recent_n=self.config.get("basic_memory_context_window", 5),
-                diary_top_k=self.config.get("diary_top_k", 5),
-                diary_token_budget=self.config.get("diary_token_budget", 800),
-                cross_group_user_id=user_id,
-                cross_group_enabled=self.config.get("cross_group_memory_enabled", True),
+                user_id=user_id,
+                message_content=message.content,
+                strategy_decision=decision,
+                emotion_state=emotion.to_dict(),
+                candidate_memories=[m.get("content", "") for m in memories],
+                channel=message.channel,
+                channel_user_id=message.channel_user_id,
             )
-            # Avoid duplicating system prompt in _generate by passing enriched
-            # system prompt separately and stripping it from messages.
-            if messages and messages[0]["role"] == "system":
-                system_prompt_for_generate = messages[0]["content"]
-                messages = messages[1:]
-            else:
-                system_prompt_for_generate = bundle.system_prompt
-
-            # Multi-round skill calling: generate → detect SKILL_CALL →
-            # emit partial reply → execute skill → re-generate with result injected.
-            from sirius_chat.skills.executor import parse_skill_calls, strip_skill_calls
-            from sirius_chat.skills.models import SkillInvocationContext
-
-            partial_replies: list[str] = []
-            max_skill_rounds = max(1, self.config.get("max_skill_rounds", 3))
-            say = ""
-
-            for _round in range(max_skill_rounds + 1):
-                raw_reply = await self._generate(
-                    system_prompt_for_generate, messages, group_id, style
-                )
-                say = raw_reply.strip()
-
-                # Check if the reply contains skill calls
-                calls = parse_skill_calls(say)
-                if not calls or self._skill_registry is None or self._skill_executor is None:
-                    # No more skill calls — finalize
-                    break
-
-                # Extract non-skill text as a partial reply to send immediately.
-                # For silent-only skills we still do a re-generation so the model
-                # can synthesize the skill results into a natural reply.
-                non_skill_text = strip_skill_calls(say).strip()
-                if non_skill_text:
-                    partial_replies.append(non_skill_text)
-                    self._log_inner_thought(f"先跟用户回一声：{non_skill_text[:40]}...")
-
-                # Execute skills and collect results
-                skill_results: list[str] = []
-                skill_multimodal: list[dict[str, Any]] = []
-                from sirius_chat.memory.user.models import UserProfile
-                skill_caller = UserProfile(
-                    user_id=message.channel_user_id or "unknown",
-                    name=message.speaker or "unknown",
-                    metadata={"is_developer": caller_is_developer},
-                )
-                # Collect all developer profiles in the current group for security check
-                developer_profiles: list[UserProfile] = []
-                group_entries = self.user_manager.entries.get(group_id, {})
-                for profile in group_entries.values():
-                    if profile.is_developer:
-                        developer_profiles.append(profile)
-                for skill_name, params in calls:
-                    skill = self._skill_registry.get(skill_name)
-                    if skill is None:
-                        err = f"SKILL '{skill_name}' 未找到"
-                        logger.warning(err)
-                        skill_results.append(f"[{err}]")
-                        continue
-                    if skill.developer_only and not caller_is_developer:
-                        err = f"SKILL '{skill_name}' 被拒绝：caller 不是 developer"
-                        logger.warning(err)
-                        skill_results.append(f"[SKILL '{skill_name}' 拒绝] 该技能仅 developer 可用")
-                        continue
-                    ctx = SkillInvocationContext(
-                        caller=skill_caller,
-                        developer_profiles=developer_profiles,
-                    )
-                    try:
-                        result = await self._skill_executor.execute_async(
-                            skill, params, invocation_context=ctx
-                        )
-                        if result.success:
-                            skill_results.append(
-                                f"[SKILL '{skill_name}' 结果] {result.to_display_text()}"
-                            )
-                            for block in result.multimodal_blocks:
-                                skill_multimodal.append({
-                                    "type": "image_url",
-                                    "image_url": {"url": block.value},
-                                })
-                            # Auto-persist glossary terms from learn_term
-                            if skill_name == "learn_term":
-                                term = params.get("term", "")
-                                definition = params.get("definition", "")
-                                if term and definition:
-                                    self.glossary_manager.add_or_update(
-                                        group_id,
-                                        GlossaryTerm(term=term, definition=definition, source="skill"),
-                                    )
-                        else:
-                            err = result.error or "未知错误"
-                            logger.warning("SKILL '%s' 执行失败: %s", skill_name, err)
-                            skill_results.append(f"[SKILL '{skill_name}' 失败] {err}")
-                    except Exception as exc:
-                        logger.error("SKILL '%s' 执行异常: %s", skill_name, exc)
-                        skill_results.append(f"[SKILL '{skill_name}' 异常] {exc}")
-
-                # Inject skill results into the conversation for the next round
-                messages.append({"role": "assistant", "content": strip_skill_calls(say)})
-                messages.append({
-                    "role": "user",
-                    "content": self._build_skill_result_content(
-                        skill_results,
-                        skill_multimodal,
-                        suffix="\n\n[继续] 请基于以上技能执行结果，继续完成你的回复。",
-                    ),
-                })
-
-                # Persist intermediate skill turns into basic memory
-                self.basic_memory.add_entry(
-                    group_id=group_id,
-                    user_id="assistant",
-                    role="assistant",
-                    content=strip_skill_calls(say),
-                    speaker_name=self.persona.name if self.persona else "assistant",
-                )
-                if skill_results:
-                    self.basic_memory.add_entry(
-                        group_id=group_id,
-                        user_id="skill_system",
-                        role="system",
-                        content=f"[技能执行结果]\n{'\n'.join(skill_results)}",
-                    )
-
-            # Record assistant reply into basic memory so future turns can see it
-            clean_reply = strip_skill_calls(say).strip()
-            if clean_reply:
-                self.basic_memory.add_entry(
-                    group_id=group_id,
-                    user_id="assistant",
-                    speaker_name=self.persona.name if self.persona else "assistant",
-                    role="assistant",
-                    content=clean_reply,
-                    system_prompt=bundle.system_prompt,
-                )
-
-            # Record reply timestamp for cooldown tracking
-            self._last_reply_at[group_id] = datetime.now(timezone.utc).timestamp()
             self._persist_group_state(group_id)
-
             return {
                 "strategy": "immediate",
-                "reply": say,
+                "reply": None,
                 "emotion": emotion.to_dict(),
                 "intent": intent.to_dict(),
                 "thought": "",
-                "partial_replies": partial_replies,
+                "partial_replies": [],
             }
 
         if decision.strategy == ResponseStrategy.DELAYED:
@@ -1534,6 +1596,7 @@ class EmotionalGroupChatEngine:
     def _build_delayed_prompt(self, items: Any, group_id: str, caller_is_developer: bool = False):
         """Build prompt bundle for delayed response (supports single item or merged list)."""
         from sirius_chat.core.response_assembler import PromptBundle
+        from sirius_chat.models.response_strategy import ResponseStrategy
         if not isinstance(items, list):
             items = [items]
         if len(items) == 1:
@@ -1547,13 +1610,18 @@ class EmotionalGroupChatEngine:
         glossary = self.glossary_manager.build_prompt_section(
             group_id, text=message_content, max_terms=5
         )
-        return self.response_assembler.assemble_delayed(
+        bundle = self.response_assembler.assemble_delayed(
             message_content=message_content,
             group_profile=self.semantic_memory.get_group_profile(group_id),
             is_group_chat=True,
             caller_is_developer=caller_is_developer,
             glossary_section=glossary,
         )
+        # Distinguish immediate vs delayed tone in system prompt
+        has_immediate = any(i.strategy_decision.strategy == ResponseStrategy.IMMEDIATE for i in items)
+        if has_immediate:
+            bundle.system_prompt = "[注意] 你被直接@或求助了，请认真回应。\n\n" + bundle.system_prompt
+        return bundle
 
     def _pick_proactive_topic(self, group_id: str) -> str:
         """Pick a topic from semantic memory for proactive initiation."""
