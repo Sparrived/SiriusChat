@@ -118,7 +118,7 @@ flowchart TD
 
   subgraph Execution["④ 执行层"]
     E3 --> G1{"策略？"}
-    G1 -- IMMEDIATE --> G2["ResponseAssembler 返回 PromptBundle\nsystem_prompt（persona + 情绪 + 日记 + glossary + skill + 格式）\nuser_content（当前消息）\nContextAssembler.build_messages() 将 basic + diary 转为标准 messages"]
+    G1 -- IMMEDIATE --> G2["ResponseAssembler 返回 PromptBundle\nsystem_prompt（persona + 情绪 + 日记 + glossary + skill + 格式）\nuser_content（当前消息）\nContextAssembler.build_messages() → XML 历史嵌入 system prompt + diary 检索 → [system, user] 2 条消息"]
     G1 -- DELAYED --> G3["入 DelayedResponseQueue\n等待话题间隙或合并触发"]
     G1 -- SILENT --> G4["仅更新内部状态\n不生成回复"]
     G1 -- PROACTIVE --> G5["由 ProactiveTrigger 外部触发\n生成自然开场白"]
@@ -144,18 +144,19 @@ flowchart TD
 - **简化记忆模型**：
   - `BasicMemoryManager`：按群滑动窗口（硬限制 30 条，上下文窗口 5 条），含热度计算（HeatCalculator）。当群体变冷（heat < 0.25）且沉默 > 300s 时，上下文窗口外消息归档为日记素材。
   - `DiaryManager`：LLM 生成的群聊摘要，含关键词和 source_ids 回链基础记忆。支持 sentence-transformers 嵌入索引（可选）和关键词回退搜索。检索按 token 预算（默认 800 tokens）截断。
-  - `ContextAssembler`：将基础记忆最近 n 条 + 日记检索 top_k 条组装为标准 OpenAI messages 数组。日记内容注入 system_prompt 作为「历史日记」，不污染消息历史。
+  - `ContextAssembler`：将基础记忆最近 n 条以 XML 格式嵌入 system prompt（`<conversation_history><message speaker="..." user_id="..." role="...">content</message></conversation_history>`），日记检索 top_k 条同样注入 system_prompt，最终只返回 `[system, user]` 2 条消息；`_generate()` 自动清洗模型仿写的 `<conversation_history>` 标签。
   - `GlossaryManager`：AI 自身名词解释，替代旧 AutobiographicalMemory。
+  - `SemanticMemoryManager`：群语义画像（氛围历史、群体规范、关系状态），已实装持久化、被动学习、氛围记录与关系状态更新，不再是 stub。
 - **四种响应策略**：
-  - `IMMEDIATE`：直接生成回复（高 urgency 或被 @ 时）。
-  - `DELAYED`：入延迟队列，等待话题间隙或合并后触发。
+  - `IMMEDIATE`：直接生成回复（高 urgency 或被 @ 时）；被 @ 时直接返回 IMMEDIATE，overheated 除外降级为 DELAYED。
+  - `DELAYED`：入延迟队列，等待话题间隙或合并后触发；reply cooldown 只抑制 DELAYED，不抑制 IMMEDIATE。
   - `SILENT`：不回复，仅后台观察与学习。
   - `PROACTIVE`：由外部触发器（时间/记忆/情感）决定何时发起。
 - **后台任务**（`start_background_tasks()` / `stop_background_tasks()`）：
   - 延迟队列 ticker（每 10 秒）
   - 主动触发 checker（每 60 秒）
   - 日记生成 promoter：检查冷群的基础记忆归档，经 `DiaryGenerator` 生成日记并写入 `DiaryManager`
-- **状态持久化**：`save_state()` / `load_state()` 持久化 basic memory、assistant emotion、group timestamps、diary index 到 `memory/` 目录。
+- **状态持久化**：`save_state()` / `load_state()` 持久化 basic memory、assistant emotion、group timestamps、diary index 到 `memory/` 目录；`working_memory` 已迁移为 `basic_memory`（`BasicMemoryManager`），`user_memory` 已迁移为 `user_manager`（`UserManager`）。
 - **Token 追踪**：`_generate()` 中估算 input/output tokens，记录到 `token_usage_records`，随状态持久化。
 
 ---
@@ -179,7 +180,7 @@ flowchart TD
 
 - **v1.0.0 默认引擎**：`EmotionalGroupChatEngine` 的实现位于 `sirius_chat/core/emotional_engine.py`。
 - `sirius_chat/core/cognition.py`：统一情绪+意图分析器（`CognitionAnalyzer`）。
-- `sirius_chat/core/response_assembler.py`：返回 `PromptBundle`（system_prompt + user_content），负责指令级上下文组装；`<think>` / `<say>` 双输出解析。历史消息由引擎通过 `_build_history_messages()` 独立管理为标准 OpenAI messages。
+- `sirius_chat/core/response_assembler.py`：返回 `PromptBundle`（system_prompt + user_content），负责指令级上下文组装；`<think>` / `<say>` 双输出解析。历史消息由 `ContextAssembler` 以 XML 格式嵌入 system prompt。
 - `sirius_chat/memory/glossary/`：名词解释（AI 自身知识库）。
 - `sirius_chat/memory/basic/`：基础记忆（按群滑动窗口、热度跟踪、归档存储）。
 - `sirius_chat/memory/diary/`：日记记忆（LLM 生成摘要、索引、token 预算检索）。
@@ -271,7 +272,7 @@ flowchart TD
 - `roleplay_prompting.py` 只负责生成、持久化和选择 agent 资产。
 - `WorkspaceRuntime` 不生成人格，只消费已经选中的资产。
 - `RoleplayWorkspaceManager` 是“选中 agent + 更新 workspace 默认值”的组合封装。
-- **v1.0 说明**：`EmotionalGroupChatEngine` 不直接消费 roleplay 资产；`ResponseAssembler` 负责构建 `PromptBundle`（system_prompt 注入 persona、情绪、共情、日记记忆、glossary、skill 与输出格式；user_content 为当前消息格式化内容）。历史对话通过 `ContextAssembler.build_messages()` 从 `basic_memory` 提取，转为标准 `user`/`assistant` messages 数组传入 LLM。
+- **v1.0 说明**：`EmotionalGroupChatEngine` 不直接消费 roleplay 资产；`ResponseAssembler` 负责构建 `PromptBundle`（system_prompt 注入 persona、情绪、共情、日记记忆、glossary、skill 与输出格式；user_content 为当前消息格式化内容）。历史对话通过 `ContextAssembler.build_messages()` 从 `basic_memory` 提取，以 XML 格式嵌入 system prompt，最终只返回 `[system, user]` 2 条消息传入 LLM。
 
 ---
 
@@ -280,14 +281,14 @@ flowchart TD
 | 产物 | 来源 | 被谁消费 |
 | --- | --- | --- |
 | `Transcript.messages` | `EmotionalGroupChatEngine` | 对话展示、session store |
-| `Transcript.user_memory` | `UserManager` | 提示词注入、识人、participants 写回；`profile.aliases` 为强绑定，`profile.metadata` 存放扩展属性 |
+| `Transcript.user_manager` | `UserManager` | 提示词注入、识人、participants 写回；`profile.aliases` 为强绑定，`profile.metadata` 存放扩展属性 |
 | `Transcript.reply_runtime` | 引擎运行时 | `reply_mode=auto` 节奏控制（legacy 路径） |
 | `Transcript.session_summary` | 自动压缩逻辑 | 后续主模型上下文（legacy 路径） |
 | `Transcript.token_usage_records` | provider 调用后 | 内存统计与 `TokenUsageStore` 持久化（legacy 路径） |
 | `SessionEventBus` 事件流 | `EmotionalGroupChatEngine` | `on_reply` 外部回调 |
 | `BasicMemoryManager` 窗口 | `EmotionalGroupChatEngine` | 当前群对话上下文、RhythmAnalyzer 输入、热度计算 |
 | `DiaryManager` 条目 | `EmotionalGroupChatEngine._bg_diary_promoter()` | 群聊摘要、长期记忆检索素材 |
-| `SemanticMemoryManager` 画像 | `EmotionalGroupChatEngine`（stub） | ThresholdEngine 关系因子、ResponseAssembler 群风格（保留兼容） |
+| `SemanticMemoryManager` 画像 | `EmotionalGroupChatEngine` | ThresholdEngine 关系因子、ResponseAssembler 群风格；已实装持久化、被动学习、氛围记录与关系状态更新 |
 | `EngineStateStore` 快照 | `EmotionalGroupChatEngine.save_state()` / `load_state()` | 引擎重启后状态恢复 |
 | `engine.token_usage_records` | `EmotionalGroupChatEngine._generate()` | Token 使用追踪与持久化；`_generate()` 接收 `system_prompt` + 标准 `messages` 列表，不再做字符串分割 |
 
@@ -315,5 +316,5 @@ flowchart TD
 ---
 
 > **文档版本**：v1.0.0  
-> **最后更新**：2026-04-22  
+> **最后更新**：2026-04-26  
 > **对应代码分支**：`master`

@@ -84,9 +84,16 @@ class EmotionalGroupChatEngine:
         # Load orchestration config (unified model configuration)
         from sirius_chat.core.orchestration_store import OrchestrationStore
         orch = OrchestrationStore.load(work_path)
-        analysis_model = orch.get("analysis_model", "gpt-4o-mini") if orch else "gpt-4o-mini"
-        chat_model = orch.get("chat_model", "gpt-4o") if orch else "gpt-4o"
-        vision_model = orch.get("vision_model", chat_model) if orch else chat_model
+        if not orch:
+            orch = {
+                "analysis_model": "gpt-4o-mini",
+                "chat_model": "gpt-4o",
+                "vision_model": "gpt-4o",
+            }
+            OrchestrationStore.save(work_path, orch)
+        analysis_model = orch.get("analysis_model", "gpt-4o-mini")
+        chat_model = orch.get("chat_model", "gpt-4o")
+        vision_model = orch.get("vision_model", chat_model)
         self._default_model = analysis_model
         self._task_models = {
             # 分析类
@@ -1138,13 +1145,14 @@ class EmotionalGroupChatEngine:
             heat_level=rhythm.heat_level,
         )
 
-        # Reply cooldown suppression: if we replied recently, force silent
+        # Reply cooldown suppression: delayed responses are throttled,
+        # but immediate responses (e.g. direct mentions) bypass cooldown.
         from sirius_chat.models.response_strategy import ResponseStrategy
         now = datetime.now(timezone.utc).timestamp()
         last_reply = self._last_reply_at.get(group_id, 0)
         seconds_since_reply = now - last_reply
         cooldown = self.config.get("reply_cooldown_seconds", 30)
-        if seconds_since_reply < cooldown and decision.strategy != ResponseStrategy.SILENT:
+        if seconds_since_reply < cooldown and decision.strategy == ResponseStrategy.DELAYED:
             decision = StrategyDecision(
                 strategy=ResponseStrategy.SILENT,
                 score=0.0,

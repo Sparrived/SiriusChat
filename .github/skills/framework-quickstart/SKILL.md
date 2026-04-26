@@ -63,18 +63,18 @@ description: "当你需要在不通读全部代码的情况下快速理解 Siriu
 ## 心智模型
 
 - 当前推荐入口是 `WorkspaceRuntime`；它负责文件布局、session 恢复、participants 写回、watcher 热刷新和 provider 注册表联动。
-- **v0.28+ 默认引擎** `EmotionalGroupChatEngine` 直接处理消息，不经过 `run_live_message` 的 legacy 队列系统。
+- **v1.0 默认引擎** `EmotionalGroupChatEngine` 直接处理消息，不经过 `run_live_message` 的 legacy 队列系统。
 - `WorkspaceRuntime.initialize()` 会预先初始化共享 SKILL runtime，并在 `skills/` 目录变化时通过 watcher 触发全量 reload，不再在消息路径按次扫描目录。SKILL runtime 会先加载包内置技能（当前包含 `system_info`、`learn_term`、`url_content_reader`、`bing_search` 与 developer-only 的 `desktop_screenshot`），再加载 workspace `skills/`；同名 workspace 文件覆盖内置实现。
 - 内置 SKILL 与 workspace SKILL 共用依赖自动安装路径；`SKILL_META["dependencies"]` 会在模块真正导入前参与解析。
-- SKILL 执行结果现在支持结构化 `text_blocks` / `multimodal_blocks` / `internal_metadata`；`core/emotional_engine.py` 负责把结果注入 working memory，`core/response_assembler.py` 负责把可用文本与图片转成隐藏模型上下文，并在最近少量 assistant turn 内继续保留这些内部结果，避免模型在短期追问里立刻忘掉刚拿到的观察，同时避免把元信息泄露到用户回复中。
+- SKILL 执行结果现在支持结构化 `text_blocks` / `multimodal_blocks` / `internal_metadata`；`core/emotional_engine.py` 负责把结果注入 basic memory，`core/response_assembler.py` 负责把可用文本与图片转成隐藏模型上下文，并在最近少量 assistant turn 内继续保留这些内部结果，避免模型在短期追问里立刻忘掉刚拿到的观察，同时避免把元信息泄露到用户回复中。
 - `Participant.metadata` / `UserProfile.metadata` 中的 `is_developer` 是 SKILL 安全模型的显式权限来源；engine 会据此构建 `SkillInvocationContext`，让 developer-only 工具在非 developer 当前轮次中自动隐藏，并在执行时再次校验。
 - 会话事件流包含 PERCEPTION/COGNITION/DECISION/EXECUTION 四层管道事件，以及 DELAYED/PROACTIVE 触发事件。技能执行结果由 `response_assembler` 注入 assistant 回复，不通过独立事件暴露。
 - `WorkspaceRuntime` 会把 `WorkspaceBootstrap` 的签名记入 `workspace.json`；同一份 bootstrap 只在首次命中时持久化一次，后续重启会保留用户在 config root 下的手工修改。
 - `WorkspaceLayout` 是路径语义的单一事实来源：config root 放配置与资产，data root 放运行态数据。
-- **v1.0.0 默认引擎** `EmotionalGroupChatEngine` 的真实实现位于 `sirius_chat/core/emotional_engine.py`；采用四层认知架构（感知→认知→决策→执行）与简化记忆模型（基础记忆 → 日记记忆）。
+- **v1.0.0 默认引擎** `EmotionalGroupChatEngine` 的真实实现位于 `sirius_chat/core/emotional_engine.py`；采用四层认知架构（感知→认知→决策→执行）与简化记忆模型（基础记忆 → 日记记忆 → 语义记忆）。
 - `sirius_chat/async_engine/` 只承担兼容导出与 prompts/orchestration/utils 辅助层。
 - 一个 `SessionConfig` 只对应一个主 AI，主 AI 由 `preset=AgentPreset(...)` 描述，不再推荐在外部配置里手写完整 agent prompt。
-- `User` 只是 `Participant` 的别名；运行时识人与记忆的事实来源是 `transcript.user_memory`，而不是旧版 `participants` 配置字段。`profile.identities/name/aliases` 是可信身份锚点，`runtime.inferred_aliases` 只是弱线索，不参与稳定识人绑定。
+- `User` 只是 `Participant` 的别名；运行时识人与记忆的事实来源是 `engine.user_manager`，而不是旧版 `participants` 配置字段。`profile.identities/name/aliases` 是可信身份锚点，`runtime.inferred_aliases` 只是弱线索，不参与稳定识人绑定。
 - provider 注册表由 `WorkspaceProviderManager` 管理，路由顺序是 `models` 列表优先、`healthcheck_model` 次之、最后回退到第一个启用 provider。
 - roleplay 资产统一存放在 `roleplay/generated_agents.json` 与 `roleplay/generated_agent_traces/`，`active_agent_key` 决定 `SessionConfig` 使用哪份资产。
 - session store、token store、memory store、SKILL data store 都已经收敛到 workspace 语义下，修改这些层时必须同时检查路径文档。

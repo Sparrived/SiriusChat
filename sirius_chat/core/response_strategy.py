@@ -98,6 +98,26 @@ class ResponseStrategyEngine:
                 reason="silent_intent",
             )
 
+        # Direct mention override: being called out always gets immediate response
+        if is_mentioned:
+            if heat_level == "overheated":
+                return StrategyDecision(
+                    strategy=ResponseStrategy.DELAYED,
+                    score=0.8,
+                    threshold=threshold,
+                    urgency=urgency,
+                    relevance=relevance,
+                    reason="direct_mention_overheated",
+                )
+            return StrategyDecision(
+                strategy=ResponseStrategy.IMMEDIATE,
+                score=1.0,
+                threshold=threshold,
+                urgency=urgency,
+                relevance=relevance,
+                reason="direct_mention",
+            )
+
         # Standard matrix (with higher thresholds)
         if urgency >= 80 and relevance >= 0.7:
             strategy = ResponseStrategy.IMMEDIATE

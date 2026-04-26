@@ -39,7 +39,7 @@
 
 ### 🧠 **智能记忆系统**
 - **结构化用户记忆**：极简 `UserProfile`（user_id, name, aliases, identities, metadata），群隔离存储，区分可信身份锚点与弱别称线索
-- **低开销记忆注入**：主提示词通过 `ContextAssembler` 拼接基础记忆最近窗口 + 日记检索结果；日记内容注入 system_prompt，不污染消息历史
+- **低开销记忆注入**：`ContextAssembler` 将基础记忆最近窗口以 XML 格式嵌入 system prompt（`<conversation_history>`），日记检索结果也注入 system_prompt；最终只返回 `[system, user]` 2 条标准 OpenAI messages，不再生成多条历史 message
 - **AI 自身记忆**：日记系统 (`DiaryManager`，LLM 生成群聊摘要，支持嵌入索引与 token 预算检索) 与名词解释系统 (`GlossaryManager`)
 - **跨环境身份识别**：`IdentityResolver` 解耦平台特定身份（QQ/discord 等），通过 `identities` 映射不同平台的外部账号到同一用户
 - **基础记忆管理**：`BasicMemoryManager` 维护按群滑动窗口（硬限制 30 条，上下文窗口 5 条），含热度计算；冷群归档消息自动晋升为日记素材
@@ -246,7 +246,7 @@ sirius_chat/
 │   ├── glossary/                 # 名词解释（AI 自身知识库）
 │   ├── user/                     # 用户管理（简化 UserProfile + UserManager）
 │   ├── context_assembler.py      # 上下文组装器（basic + diary → OpenAI messages）
-│   └── semantic/                 # 语义记忆 stub（兼容保留）
+│   └── semantic/                 # 语义记忆（群规范学习、氛围记录、关系状态、持久化）
 ├── session/                      # 💾 SessionStore 与高层兼容 runner
 ├── providers/                    # 🔗 Provider 实现、路由与中间件
 │   ├── routing.py
@@ -738,19 +738,17 @@ python -m pytest tests/test_engine.py::test_roleplay_engine_multi_human_single_a
 
 ## 🆕 最新变更
 
-### ✨ **v0.28 重大变更**
-- **EmotionalGroupChatEngine 成为默认引擎**：四层认知架构（感知→认知→决策→执行），支持情感分析、延迟响应、主动发言、群隔离记忆
-- **事件记忆 V2**：按用户缓冲原始消息，后台批量 LLM 提取结构化观察（preference/trait/relationship/experience/emotion/goal），自动去重合并
-- **工作记忆 FIFO**：改为按时间戳 FIFO + protected 截断，确保 human 和 assistant 消息公平保留
-- **移除 `<think>/<say>` dual-output**：模型输出纯文本，`SKILL_CALL` 内联解析
-- **新增存储路径**：`episodic/`（JSON 数组）、`semantic/`（用户/群体画像）、`engine_state/event_memory.json`
-
-### 🚀 **改进**
-- **系统提示词会更明确鼓励截图再回答**：当 developer 可见的 SKILL 列表中包含 `desktop_screenshot` 时，主提示词会明确要求模型在判断主机当前状态前优先截图，而不是直接猜测。
-- **截图结果自带分析护栏**：桌面截图返回的内部文本会强调优先观察前台窗口、可见应用和页面标题；无法从截图确认的后台动作需要明确标注不确定。
+### ✨ **v1.0 重大变更**
+- **EmotionalGroupChatEngine 成为唯一默认引擎**：四层认知架构（感知→认知→决策→执行），支持情感分析、延迟响应、主动发言、群隔离记忆
+- **XML 短期记忆**：`ContextAssembler` 将历史消息以 XML 格式嵌入 system prompt，只返回 `[system, user]` 2 条消息；`_generate()` 自动清洗模型仿写的 `<conversation_history>`
+- **工作记忆 → 基础记忆迁移**：`WorkingMemoryManager` 删除，`BasicMemoryManager` 接管按群滑动窗口（硬限制 30，上下文窗口 5）
+- **用户记忆 → UserManager 迁移**：`UserMemoryManager` 删除，`UserManager` 接管群隔离用户档案
+- **SemanticMemory 实装**：`SemanticMemoryManager` + `SemanticProfileStore` 实现群规范学习、氛围记录、关系状态、持久化；`DiaryGenerator` 同步提取 `dominant_topic` + `interest_topics`
+- **响应策略调整**：被直接@或叫到名字时直接返回 IMMEDIATE（跳过 reply cooldown）；reply cooldown 仅抑制 DELAYED
+- **OrchestrationStore 自动生成**：引擎初始化时若 `orchestration.json` 不存在，自动生成默认模型配置
 
 **迁移提示：**
-> v0.28+ 用户请阅读 `docs/migration-v0.28.md`。若你希望模型能更稳定地通过截图判断主机当前在做什么，请阅读 `docs/migration-v0.27.12.md`，并确认当前发言者具备 developer 权限。
+> v1.0 用户请阅读 `docs/migration-v1.0.md`（若存在）或 `docs/migration-v0.28.md`。
 
 更多信息见 [CHANGELOG.md](CHANGELOG.md)。
 

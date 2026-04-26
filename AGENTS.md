@@ -109,7 +109,7 @@
 3. **兼容/辅助层**（`sirius_chat/async_engine/`）：历史兼容导出与 prompts/orchestration/utils 辅助。
 4. **Workspace 层**（`sirius_chat/workspace/`）：布局管理、运行时生命周期、文件监听与热刷新。
 5. **配置层**（`sirius_chat/config/`）：WorkspaceConfig / SessionConfig / JSONC 读写管理。
-6. **记忆层**（`sirius_chat/memory/`）：基础记忆（BasicMemory）、日记记忆（Diary）、用户画像（UserManager）、名词解释（Glossary）。
+6. **记忆层**（`sirius_chat/memory/`）：基础记忆（BasicMemory）、日记记忆（Diary）、用户画像（UserManager）、名词解释（Glossary）、语义记忆（SemanticMemory）。
 7. **会话层**（`sirius_chat/session/`）：`SessionStore` 协议及 JSON / SQLite 实现。
 8. **Provider 层**（`sirius_chat/providers/`）：Provider 协议、具体实现（OpenAI / DeepSeek / 阿里云百炼 / 智谱 BigModel / SiliconFlow / 火山方舟等）、路由与中间件（重试、熔断、限流、成本监控）。
 9. **SKILL 层**（`sirius_chat/skills/`）：内置 + 外部 SKILL 注册、依赖解析、执行与数据存储。
@@ -145,7 +145,7 @@ sirius_chat/
 │   ├── glossary/            # 名词解释（AI 自身知识）
 │   ├── user/                # 用户管理（简化 UserProfile + UserManager）
 │   ├── context_assembler.py # 上下文组装器（basic + diary → OpenAI messages）
-│   └── semantic/            # 语义记忆 stub（向后兼容，保留 GroupSemanticProfile）
+│   └── semantic/            # 语义记忆（SemanticMemoryManager + SemanticProfileStore）：群规范学习、氛围记录、关系状态、持久化
 ├── models/                  # 核心数据模型（dataclass）
 │   ├── emotion.py           # EmotionState / AssistantEmotionState / EmpathyStrategy
 │   ├── intent_v3.py         # IntentAnalysisV3 / SocialIntent
@@ -204,7 +204,7 @@ scripts/                     # 开发脚本
 | `python main.py` | `main.py`（~1008 行） | 仓库级交互入口：持续会话、provider 管理、主用户档案、transcript 输出、首次引导向导 |
 | `sirius-chat` | `sirius_chat/cli.py` | 库内薄 CLI：单轮消息、角色模板导出、legacy session JSON bootstrap |
 | `open_workspace_runtime()` | `sirius_chat/api/engine.py` | **推荐生产入口**：自动恢复 workspace、热刷新、会话恢复、参与者元数据、store 回写 |
-| `create_emotional_engine()` | `sirius_chat/api/engine.py` | **v0.28 推荐工厂**：创建 EmotionalGroupChatEngine 并注入 provider |
+| `create_emotional_engine()` | `sirius_chat/api/engine.py` | **v1.0 推荐工厂**：创建 EmotionalGroupChatEngine 并注入 provider |
 | `EmotionalGroupChatEngine` | `sirius_chat/core/emotional_engine.py` | **v1.0 唯一引擎**：群聊情感化编排、四层响应策略、简化记忆底座、事件流、ModelRouter |
 
 ---
@@ -374,7 +374,7 @@ python scripts/ci_check.py
 - **日记记忆（DiaryMemory）**：LLM 生成的群聊摘要，含关键词和 source_ids 回链基础记忆。支持 sentence-transformers 嵌入索引（可选）和关键词回退搜索。检索时按 token 预算（默认 800 tokens）截断，通过 ContextAssembler 注入系统提示词。
 - **用户管理（UserManager）**：极简 `UserProfile`（user_id, name, aliases, identities, metadata），群隔离存储 `{group_id: {user_id: UserProfile}}`。跨平台身份追踪通过 `IdentityResolver` 解耦，支持 speaker_name → user_id → platform_uid 的多级解析。
 - **名词解释（GlossaryManager）**：AI 自身知识库，替代旧 AutobiographicalMemory。`learn_term` SKILL 路由至此。
-- **上下文组装（ContextAssembler）**：将基础记忆的最近 n 条 + 日记检索的 top_k 条组装为标准 OpenAI messages 数组。日记内容注入 system_prompt 作为「历史日记」，不污染消息历史。
+- **上下文组装（ContextAssembler）**：将基础记忆的最近 n 条以 XML 格式嵌入 system prompt（`<conversation_history>`），日记检索结果也注入 system_prompt；最终只返回 `[system, user]` 2 条标准 OpenAI messages，不再生成多条历史 message。
 
 **模型路由层（v0.28 新增）**：
 - `ModelRouter` 按任务类型（`emotion_analyze` / `intent_analyze` / `response_generate` / `memory_extract`）自动选择模型、温度、token 上限。
@@ -409,7 +409,7 @@ python scripts/ci_check.py
 - **结构化返回**：支持 `summary`、`text_blocks`、`multimodal_blocks`、`internal_metadata`；`internal_metadata` 不得泄露到用户可见输出。
 - **AI 调用语法**：`[SKILL_CALL: skill_name | {"param": "value"}]`
 
-### v0.28 认知架构
+### v1.0 认知架构
 
 运行时数据流（四层 + 后台）：
 
@@ -438,7 +438,7 @@ python scripts/ci_check.py
     ▼
 执行层
     ├─ ResponseAssembler → PromptBundle（system_prompt：persona + 情绪 + 共情 + 日记 + skill + 输出格式；user_content：当前消息）
-    ├─ ContextAssembler.build_messages() → basic 最近 n 条 + diary 检索 top_k 条 → OpenAI messages
+    ├─ ContextAssembler.build_messages() → XML 历史嵌入 system prompt + diary 检索 → [system, user] 2 条消息
     ├─ StyleAdapter → max_tokens / temperature / tone 动态适配
     ├─ ModelRouter → 任务感知模型选择（urgency / heat / 用户风格）
     └─ LLM 生成回复（provider_async.generate_async / generate），传入标准 messages 数组
@@ -447,23 +447,25 @@ python scripts/ci_check.py
     │
     ▼
 后台更新层
-    ├─ 日记生成 → 当群体变冷（heat < 0.25）且沉默 > 300s 时，基础记忆归档消息经 DiaryGenerator 生成日记
-    ├─ 更新群氛围 → semantic_memory stub（保留 GroupSemanticProfile.atmosphere_history）
-    ├─ 被动学习群规范 → semantic_memory.group_norms
-    ├─ 更新用户情感轨迹 → emotion_analyzer.trajectories
+    ├─ 日记生成 → 当群体变冷（heat < 0.25）且沉默 > 300s 时，基础记忆归档消息经 DiaryGenerator 生成日记（同步提取 dominant_topic + interest_topics）
+    ├─ 更新群氛围 → semantic_memory.record_atmosphere()
+    ├─ 被动学习群规范 → semantic_memory.learn_from_message()
+    ├─ 更新用户关系状态 → semantic_memory.update_relationship()
+    ├─ 更新用户情感轨迹 → cognition_analyzer.trajectories
     └─ 触发事件 → event_bus (PERCEPTION/COGNITION/DECISION/EXECUTION_COMPLETED)
 ```
 
 四层响应策略：
-- **IMMEDIATE**：高 urgency / 被直接@ → 立即生成回复
-- **DELAYED**：中等 relevance → 进入延迟队列，等待话题间隙后回复
+- **IMMEDIATE**：被直接@或叫到名字 → 立即生成回复（跳过 reply cooldown）；高 urgency / 求助时也触发
+- **DELAYED**：中等 relevance → 进入延迟队列；如果在 reply cooldown 期内会被抑制为 SILENT
 - **SILENT**：低 relevance / 日常闲聊 → 不回复，仅更新记忆
 - **PROACTIVE**：长时间沉默 / 记忆触发 / 情感触发 → AI 主动开启话题
 
 **持久化与恢复**：
-- `save_state()` → 原子写入 `engine_state/`（working_memory.json、assistant_emotion.json、group_timestamps.json、event_memory.json）
-- `load_state()` → 从磁盘恢复所有群的运行态，含 `event_memory` 缓冲与已提取观察
-- 语义记忆和情景记忆已自带文件持久化，无需额外处理
+- `save_state()` → 原子写入 `engine_state/`（basic_memory.json、assistant_emotion.json、group_timestamps.json、event_memory.json）
+- `load_state()` → 从磁盘恢复所有群的运行态，含 basic_memory、event_memory 缓冲与已提取观察
+- 语义记忆（semantic_memory）和日记记忆（diary）已自带文件持久化，无需额外处理
+- orchestration.json：引擎初始化时若不存在，自动生成默认模型配置（analysis_model/chat_model/vision_model）
 
 ---
 
@@ -509,7 +511,7 @@ python scripts/ci_check.py
 | `pyproject.toml` | 项目元数据、依赖、pytest 配置、setuptools 配置 |
 | `Makefile` | 开发工作流快捷命令 |
 | `main.py` | 仓库级交互入口 |
-| `sirius_chat/core/emotional_engine.py` | v0.28 核心情感群聊引擎 |
+| `sirius_chat/core/emotional_engine.py` | v1.0 核心情感群聊引擎 |
 
 | `sirius_chat/api/__init__.py` | 公开 API 导出清单 |
 | `tests/conftest.py` | 测试最小 fixture |
