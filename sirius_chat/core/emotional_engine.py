@@ -544,13 +544,14 @@ class EmotionalGroupChatEngine:
         style = self.style_adapter.adapt(
             heat_level="warm", pace="steady", is_group_chat=True,
         )
-        # Proactive uses history only; append an empty user turn if needed
-        # so the model sees "continue the conversation" rather than a blank prompt.
-        messages = self._build_history_messages(group_id, n=10)
-        if not messages or messages[-1]["role"] != "user":
-            messages.append({"role": "user", "content": bundle.user_content or "..."})
+        # Embed recent history as XML in system prompt; only current turn as user msg
+        history_xml = self.context_assembler.build_history_xml(group_id, n=10)
+        system_prompt = bundle.system_prompt
+        if history_xml:
+            system_prompt = system_prompt + "\n\n" + history_xml
+        messages = [{"role": "user", "content": bundle.user_content or "..."}]
         raw_reply = await self._generate(
-            bundle.system_prompt, messages, group_id, style
+            system_prompt, messages, group_id, style
         )
         reply = raw_reply.strip()
 
@@ -617,13 +618,12 @@ class EmotionalGroupChatEngine:
         # Merge all triggered items into one prompt and one generation call
         bundle = self._build_delayed_prompt(triggered, group_id, caller_is_developer=caller_is_developer)
 
-        # Build standard OpenAI messages from working memory.
-        # The last entry is the original user message (added by perception);
-        # replace it with the richer user_content produced by the assembler.
-        history = self._build_history_messages(group_id, n=10)
-        if history and history[-1]["role"] == "user":
-            history.pop()
-        messages = history + [{"role": "user", "content": bundle.user_content}]
+        # Embed recent history as XML in system prompt; only current turn as user msg
+        history_xml = self.context_assembler.build_history_xml(group_id, n=10)
+        system_prompt = bundle.system_prompt
+        if history_xml:
+            system_prompt = system_prompt + "\n\n" + history_xml
+        messages = [{"role": "user", "content": bundle.user_content}]
 
         # Multi-round generation with SKILL support
         from sirius_chat.skills.executor import parse_skill_calls, strip_skill_calls
@@ -632,7 +632,7 @@ class EmotionalGroupChatEngine:
 
         for _round in range(max_skill_rounds + 1):
             raw_reply = await self._generate(
-                bundle.system_prompt, messages, group_id
+                system_prompt, messages, group_id
             )
             reply = raw_reply.strip()
 
@@ -1647,6 +1647,9 @@ class EmotionalGroupChatEngine:
         else:
             raise RuntimeError("配置的提供商未实现 generate/generate_async 方法。")
 
+        # Sanitise: strip any echoed <conversation_history> XML blocks
+        reply = self._strip_conversation_history_xml(reply)
+
         # Record token usage
         output_chars = len(reply)
         estimated_output_tokens = max(1, (output_chars + 3) // 4)
@@ -1699,46 +1702,20 @@ class EmotionalGroupChatEngine:
             for e in entries
         ]
 
-    def _build_history_messages(self, group_id: str, n: int = 10) -> list[dict[str, Any]]:
-        """Convert basic-memory entries to standard OpenAI messages format.
+    @staticmethod
+    def _strip_conversation_history_xml(text: str) -> str:
+        """Remove any <conversation_history> blocks that the model may echo back.
 
-        The most recent entry (the current message just added by perception)
-        is included so the caller can decide whether to keep or replace it.
-        Supports multimodal inputs (image URLs) when present.
+        Because short-term memory is embedded in the system prompt as XML,
+        some models may imitate the format in their output. This sanitiser
+        strips those accidental blocks.
         """
-        entries = self.basic_memory.get_all(group_id)[-n:]
-        messages: list[dict[str, Any]] = []
-        for e in entries:
-            role = "user" if e.role == "human" else e.role
-            msg: dict[str, Any] = {"role": role}
-            # Build content: str for text-only, list for multimodal
-            image_inputs = [
-                item for item in e.multimodal_inputs
-                if item.get("type") == "image" and item.get("value")
-            ]
-            if image_inputs and role == "user":
-                content_parts: list[dict[str, object]] = [
-                    {"type": "text", "text": e.content or ""},
-                ]
-                for img in image_inputs:
-                    content_parts.append({
-                        "type": "image_url",
-                        "image_url": {"url": str(img["value"])},
-                    })
-                msg["content"] = content_parts
-            else:
-                msg["content"] = e.content
-            if role == "user":
-                # Prefer channel_user_id (QQ number) because it is pure digits
-                # and always fits OpenAI's name constraints (a-zA-Z0-9_-).
-                # Fallback to sanitized user_id.
-                raw_name = e.channel_user_id or e.user_id
-                if raw_name:
-                    sanitized = re.sub(r"[^a-zA-Z0-9_-]", "_", raw_name)[:64]
-                    if sanitized:
-                        msg["name"] = sanitized
-            messages.append(msg)
-        return messages
+        import re
+        # Remove <conversation_history>...</conversation_history> (non-greedy, multiline)
+        cleaned = re.sub(r"<conversation_history>.*?</conversation_history>", "", text, flags=re.DOTALL)
+        # Also clean up stray opening/closing tags just in case
+        cleaned = re.sub(r"</?conversation_history>", "", cleaned)
+        return cleaned.strip()
 
     @staticmethod
     def _message_rate_per_minute(recent_msgs: list[dict[str, Any]]) -> float:
