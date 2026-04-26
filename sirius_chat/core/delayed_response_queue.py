@@ -39,6 +39,7 @@ class DelayedResponseQueue:
         channel_user_id: str | None = None,
     ) -> DelayedResponseItem:
         """Add an item to the delayed queue."""
+        from sirius_chat.core.utils import now_iso
         item = DelayedResponseItem(
             item_id=f"dri_{uuid.uuid4().hex[:12]}",
             group_id=group_id,
@@ -49,8 +50,7 @@ class DelayedResponseQueue:
             strategy_decision=strategy_decision,
             emotion_state=dict(emotion_state or {}),
             candidate_memories=list(candidate_memories or []),
-            enqueue_time=_now_iso(),
-            window_seconds=self._window_for_priority(strategy_decision.urgency),
+            enqueue_time=now_iso(),            window_seconds=self._window_for_priority(strategy_decision.urgency),
             status="pending",
         )
         if group_id not in self._queues:
@@ -170,8 +170,6 @@ class DelayedResponseQueue:
         return 60.0
 
 
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 def _parse_iso(ts: str) -> datetime | None:

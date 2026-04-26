@@ -52,10 +52,6 @@ class UserMemoryManager:
         return f"{channel.strip().lower()}:{external_user_id.strip().lower()}"
 
     @staticmethod
-    def _now_iso() -> str:
-        return datetime.now().isoformat(timespec="seconds")
-
-    @staticmethod
     def _normalize_summary_note(note: str) -> str:
         value = note.strip().lower()
         prefixes = ("事件摘要：", "多模态证据：")
@@ -173,7 +169,8 @@ class UserMemoryManager:
             if normalized_trait:
                 text = normalized_trait
         
-        timestamp = observed_at or self._now_iso()
+        from sirius_chat.core.utils import now_iso
+        timestamp = observed_at or now_iso()
         normalized = self._normalize_summary_note(text)
         
         # Check if similar fact exists, update confidence and increment mention_count
@@ -958,7 +955,8 @@ class UserMemoryManager:
             return 0
 
         old_count = len(facts)
-        now_iso = self._now_iso()
+        from sirius_chat.core.utils import now_iso
+        _now = now_iso()
         new_facts = []
         for item in parsed:
             value = str(item.get("value", "")).strip()[:100]
@@ -969,7 +967,7 @@ class UserMemoryManager:
                 value=value,
                 source="consolidation",
                 confidence=max(0.0, min(1.0, float(item.get("confidence", 0.5)))),
-                observed_at=now_iso,
+                observed_at=_now,
                 memory_category=str(item.get("category", "custom")).strip() or "custom",
                 validated=True,
                 mention_count=max(1, int(item.get("mention_count", 1))),

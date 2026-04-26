@@ -92,6 +92,7 @@ class BasicMemoryManager:
     ) -> BasicMemoryEntry:
         """Add an entry to a group's basic memory window."""
         gid = group_id or "default"
+        from sirius_chat.core.utils import now_iso
         entry = BasicMemoryEntry(
             entry_id=f"bme_{uuid.uuid4().hex[:12]}",
             group_id=gid,
@@ -99,7 +100,7 @@ class BasicMemoryManager:
             speaker_name=speaker_name,
             role=role,
             content=content,
-            timestamp=timestamp or self._now_iso(),
+            timestamp=timestamp or now_iso(),
             system_prompt=system_prompt,
         )
 
@@ -202,7 +203,3 @@ class BasicMemoryManager:
                     )
             mgr._update_heat(gid)
         return mgr
-
-    @staticmethod
-    def _now_iso() -> str:
-        return datetime.now(timezone.utc).isoformat()

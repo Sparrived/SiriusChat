@@ -293,7 +293,8 @@ class EmotionAnalyzer:
     def _update_trajectory(self, user_id: str, emotion: EmotionState) -> None:
         if user_id not in self.trajectories:
             self.trajectories[user_id] = []
-        self.trajectories[user_id].append((self._now_iso(), emotion))
+        from sirius_chat.core.utils import now_iso
+        self.trajectories[user_id].append((now_iso(), emotion))
         if len(self.trajectories[user_id]) > 100:
             self.trajectories[user_id] = self.trajectories[user_id][-100:]
 
@@ -405,5 +406,3 @@ class EmotionAnalyzer:
         )
 
     @staticmethod
-    def _now_iso() -> str:
-        return datetime.now(timezone.utc).isoformat()

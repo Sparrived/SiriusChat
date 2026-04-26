@@ -52,13 +52,14 @@ class WorkingMemoryManager:
     ) -> WorkingMemoryEntry:
         """Add an entry to a group's working memory and manage the window."""
         gid = group_id or "default"
+        from sirius_chat.core.utils import now_iso
         entry = WorkingMemoryEntry(
             entry_id=f"wme_{uuid.uuid4().hex[:12]}",
             group_id=gid,
             user_id=user_id,
             role=role,
             content=content,
-            timestamp=timestamp or self._now_iso(),
+            timestamp=timestamp or now_iso(),
             importance=importance,
             protected=_is_protected(content, importance),
             emotion_state=dict(emotion_state or {}),
@@ -195,10 +196,6 @@ class WorkingMemoryManager:
                 WorkingMemoryEntry.from_dict(e) for e in entries if isinstance(e, dict)
             ]
         return mgr
-
-    @staticmethod
-    def _now_iso() -> str:
-        return datetime.now(timezone.utc).isoformat()
 
 
 # ------------------------------------------------------------------

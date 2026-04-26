@@ -1097,7 +1097,8 @@ class EmotionalGroupChatEngine:
             )
 
         # Update group last message time
-        self._group_last_message_at[group_id] = _now_iso()
+        from sirius_chat.core.utils import now_iso
+        self._group_last_message_at[group_id] = now_iso()
         self._persist_group_state(group_id)
         return resolved_user_id
 
@@ -1805,5 +1806,3 @@ class EmotionalGroupChatEngine:
         return not cleaned
 
 
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
