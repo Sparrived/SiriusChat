@@ -55,3 +55,12 @@ class DiaryEntry:
             summary=data.get("summary", ""),
             embedding=list(emb) if isinstance(emb, list) else None,
         )
+
+
+@dataclass(slots=True)
+class DiaryGenerationResult:
+    """Result of diary generation, including extracted semantic topics."""
+
+    entry: DiaryEntry
+    dominant_topic: str = ""
+    interest_topics: list[str] = field(default_factory=list)

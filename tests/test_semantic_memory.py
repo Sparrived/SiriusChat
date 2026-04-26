@@ -124,13 +124,15 @@ class TestPassiveLearning:
         profile = manager.ensure_group_profile("g1")
         assert profile.group_norms.get("topic_switches") == 2
 
-    def test_keyword_extraction(self, manager):
+    def test_keyword_extraction_no_longer_in_passive_learning(self, manager):
+        # Interest topics are now extracted via LLM in DiaryGenerator.
+        # Passive learning only tracks message stats.
         for _ in range(5):
             manager.learn_from_message("g1", "python asyncio", social_intent="chat")
         profile = manager.ensure_group_profile("g1")
-        assert "python" in profile.interest_topics
-        assert "asyncio" in profile.interest_topics
-        assert profile.dominant_topic in ("python", "asyncio")
+        # interest_topics and dominant_topic should be empty (set by LLM only)
+        assert profile.interest_topics == []
+        assert profile.dominant_topic == ""
 
 
 # ==================================================================
@@ -197,10 +199,12 @@ class TestProactiveTopicSelection:
         assert "gaming" in candidates
 
     def test_pick_topic_from_dominant_topic(self, manager):
-        for _ in range(5):
-            manager.learn_from_message("g1", "artificial intelligence", social_intent="chat")
+        # dominant_topic is set by LLM during diary generation
         profile = manager.ensure_group_profile("g1")
-        assert profile.dominant_topic != ""
+        profile.dominant_topic = "artificial intelligence"
+        manager.save_group_profile("g1")
+        loaded = manager.ensure_group_profile("g1")
+        assert loaded.dominant_topic == "artificial intelligence"
 
     def test_user_level_interests(self, manager):
         profile = manager.get_user_profile("g1", "u1")

@@ -467,7 +467,7 @@ class EmotionalGroupChatEngine:
                         continue
 
                     cfg = self.model_router.resolve("memory_extract")
-                    entry = await self.diary_manager.generate_from_candidates(
+                    result = await self.diary_manager.generate_from_candidates(
                         group_id=group_id,
                         candidates=candidates,
                         persona_name=self.persona.name,
@@ -479,8 +479,16 @@ class EmotionalGroupChatEngine:
                         provider_async=self.provider_async,
                         model_name=cfg.model_name,
                     )
-                    if entry:
+                    if result:
                         promoted_total += 1
+                        # Update semantic memory with LLM-extracted topics
+                        profile = self.semantic_memory.ensure_group_profile(group_id)
+                        if result.dominant_topic:
+                            profile.dominant_topic = result.dominant_topic
+                        for topic in result.interest_topics:
+                            if topic and topic not in profile.interest_topics:
+                                profile.interest_topics.append(topic)
+                        self.semantic_memory.save_group_profile(group_id)
 
                 if promoted_total > 0:
                     self._log_inner_thought(

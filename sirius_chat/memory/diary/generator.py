@@ -9,12 +9,13 @@ from datetime import datetime, timezone
 from typing import Any
 
 from sirius_chat.memory.basic.models import BasicMemoryEntry
-from sirius_chat.memory.diary.models import DiaryEntry
+from sirius_chat.memory.diary.models import DiaryEntry, DiaryGenerationResult
 
 logger = logging.getLogger(__name__)
 
 _DIARY_SYSTEM_PROMPT = (
-    "你是日记整理助手。请根据提供的对话记录，以第一人称口吻整理成一段日记。\n"
+    "你是日记整理助手。请根据提供的对话记录，以第一人称口吻整理成一段日记，\n"
+    "并分析群聊中大家最感兴趣的话题。\n"
     "\n"
     "【对话记录格式说明】\n"
     "每条记录格式为：[稳定ID (显示名称)] 内容\n"
@@ -30,8 +31,15 @@ _DIARY_SYSTEM_PROMPT = (
     "- 口吻自然，像AI本人在回顾群聊经历\n"
     "- 正文不超过300字\n"
     "\n"
+    "【话题分析要求】\n"
+    "- dominant_topic: 本次对话最核心的一个话题（不超过10字）\n"
+    "- interest_topics: 本次对话涉及的2-5个兴趣话题，按重要性排序\n"
+    "\n"
     "严格输出 JSON，包含以下字段：\n"
-    '{"content": "日记正文", "keywords": ["关键词1", "关键词2"], "summary": "一句话摘要（不超过50字）"}'
+    '{"content": "日记正文", "keywords": ["关键词1", "关键词2"], '
+    '"summary": "一句话摘要（不超过50字）", '
+    '"dominant_topic": "主导话题", '
+    '"interest_topics": ["话题1", "话题2"]}'
 )
 
 
@@ -50,7 +58,7 @@ def _build_diary_user_prompt(
         f"人格设定：{persona_name}，{persona_description}\n\n"
         f"以下是对话记录（格式：[稳定ID (显示名称)] 内容）：\n"
         f"{conversation}\n\n"
-        "请整理成日记。记住：稳定ID是识别人的主要依据，显示名称只是辅助。"
+        "请整理成日记并分析话题。记住：稳定ID是识别人的主要依据，显示名称只是辅助。"
     )
 
 
@@ -68,7 +76,7 @@ class DiaryGenerator:
         model_name: str,
         temperature: float = 0.5,
         max_tokens: int = 512,
-    ) -> DiaryEntry | None:
+    ) -> DiaryGenerationResult | None:
         """Generate a diary entry from candidate messages.
 
         Returns None if generation fails or candidates are empty.
@@ -103,7 +111,7 @@ class DiaryGenerator:
             return None
 
         now_iso = datetime.now(timezone.utc).isoformat()
-        return DiaryEntry(
+        entry = DiaryEntry(
             entry_id=f"dgy_{uuid.uuid4().hex[:12]}",
             group_id=group_id,
             created_at=now_iso,
@@ -111,6 +119,16 @@ class DiaryGenerator:
             content=parsed.get("content", "")[:300],
             keywords=[str(k).strip() for k in parsed.get("keywords", []) if str(k).strip()][:10],
             summary=parsed.get("summary", "")[:50],
+        )
+        dominant_topic = str(parsed.get("dominant_topic", "")).strip()[:20]
+        interest_topics = [
+            str(t).strip() for t in parsed.get("interest_topics", [])
+            if str(t).strip()
+        ][:10]
+        return DiaryGenerationResult(
+            entry=entry,
+            dominant_topic=dominant_topic,
+            interest_topics=interest_topics,
         )
 
     @staticmethod

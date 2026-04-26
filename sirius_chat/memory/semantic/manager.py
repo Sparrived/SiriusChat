@@ -152,8 +152,9 @@ class SemanticMemoryManager:
             switches = norms.get("topic_switches", 0)
             norms["topic_switch_frequency"] = round(switches / new_count, 4)
 
-        # 8. Heuristic interest topic extraction (keyword counting)
-        self._extract_keywords(profile, text)
+        # 8. Interest topics are now extracted via LLM during diary generation
+        # (see DiaryGenerator for dominant_topic / interest_topics extraction).
+        # Passive learning only tracks message stats here.
 
         self.save_group_profile(group_id)
 

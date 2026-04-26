@@ -8,7 +8,7 @@ from typing import Any
 from sirius_chat.memory.basic.models import BasicMemoryEntry
 from sirius_chat.memory.diary.generator import DiaryGenerator
 from sirius_chat.memory.diary.indexer import DiaryIndexer, DiaryRetriever
-from sirius_chat.memory.diary.models import DiaryEntry
+from sirius_chat.memory.diary.models import DiaryEntry, DiaryGenerationResult
 from sirius_chat.memory.diary.store import DiaryFileStore
 
 logger = logging.getLogger(__name__)
@@ -45,12 +45,12 @@ class DiaryManager:
         persona_description: str,
         provider_async: Any,
         model_name: str,
-    ) -> DiaryEntry | None:
+    ) -> DiaryGenerationResult | None:
         """Generate a diary entry from candidates and index it."""
         if not candidates:
             return None
 
-        entry = await self._generator.generate(
+        result = await self._generator.generate(
             group_id=group_id,
             candidates=candidates,
             persona_name=persona_name,
@@ -58,21 +58,21 @@ class DiaryManager:
             provider_async=provider_async,
             model_name=model_name,
         )
-        if entry is None:
+        if result is None:
             return None
 
-        self.add_entry(group_id, entry)
+        self.add_entry(group_id, result.entry)
 
         # Mark sources as diarized
         sources = self._diarized_sources.setdefault(group_id, set())
-        sources.update(entry.source_ids)
+        sources.update(result.entry.source_ids)
 
         logger.info(
             "群 %s 的日记写好了，总结了 %d 条对话。",
             group_id,
-            len(entry.source_ids),
+            len(result.entry.source_ids),
         )
-        return entry
+        return result
 
     def ensure_group_loaded(self, group_id: str) -> None:
         """Lazy-load persisted entries for a group if not already loaded.

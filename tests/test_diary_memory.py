@@ -10,6 +10,7 @@ import pytest
 
 from sirius_chat.memory.diary import (
     DiaryEntry,
+    DiaryGenerationResult,
     DiaryGenerator,
     DiaryIndexer,
     DiaryRetriever,
@@ -26,13 +27,15 @@ class TestDiaryGenerator:
         mock_provider.generate_async.return_value = (
             '{"content": "大家聊了很多有趣的话题", '
             '"keywords": ["闲聊", "兴趣"], '
-            '"summary": "群聊日常"}'
+            '"summary": "群聊日常", '
+            '"dominant_topic": "闲聊", '
+            '"interest_topics": ["游戏", "音乐"]}'
         )
         candidates = [
             BasicMemoryEntry("b1", "g1", "alice", "human", "你好", "2026-04-22T10:00:00+00:00"),
             BasicMemoryEntry("b2", "g1", "bob", "human", "你好呀", "2026-04-22T10:01:00+00:00"),
         ]
-        entry = await gen.generate(
+        result = await gen.generate(
             group_id="g1",
             candidates=candidates,
             persona_name="小星",
@@ -40,16 +43,20 @@ class TestDiaryGenerator:
             provider_async=mock_provider,
             model_name="gpt-4o-mini",
         )
-        assert entry is not None
+        assert result is not None
+        assert isinstance(result, DiaryGenerationResult)
+        entry = result.entry
         assert entry.group_id == "g1"
         assert "大家聊了很多有趣的话题" in entry.content
         assert entry.source_ids == ["b1", "b2"]
         assert len(entry.keywords) == 2
+        assert result.dominant_topic == "闲聊"
+        assert result.interest_topics == ["游戏", "音乐"]
 
     @pytest.mark.asyncio
     async def test_generate_empty_candidates(self) -> None:
         gen = DiaryGenerator()
-        entry = await gen.generate(
+        result = await gen.generate(
             group_id="g1",
             candidates=[],
             persona_name="小星",
@@ -57,7 +64,7 @@ class TestDiaryGenerator:
             provider_async=AsyncMock(),
             model_name="gpt-4o-mini",
         )
-        assert entry is None
+        assert result is None
 
     @pytest.mark.asyncio
     async def test_generate_llm_failure(self) -> None:
@@ -67,7 +74,7 @@ class TestDiaryGenerator:
         candidates = [
             BasicMemoryEntry("b1", "g1", "alice", "human", "hello", "2026-04-22T10:00:00+00:00"),
         ]
-        entry = await gen.generate(
+        result = await gen.generate(
             group_id="g1",
             candidates=candidates,
             persona_name="小星",
@@ -75,7 +82,7 @@ class TestDiaryGenerator:
             provider_async=mock_provider,
             model_name="gpt-4o-mini",
         )
-        assert entry is None
+        assert result is None
 
 
 class TestDiaryIndexer:
