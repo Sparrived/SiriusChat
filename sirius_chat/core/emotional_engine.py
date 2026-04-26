@@ -19,7 +19,6 @@ from pathlib import Path
 from typing import Any
 
 from sirius_chat.core.cognition import CognitionAnalyzer
-from sirius_chat.memory.autobiographical import AutobiographicalMemoryManager
 from sirius_chat.core.proactive_trigger import ProactiveTrigger
 from sirius_chat.core.response_strategy import ResponseStrategyEngine
 from sirius_chat.core.delayed_response_queue import DelayedResponseQueue
@@ -28,10 +27,7 @@ from sirius_chat.core.model_router import ModelRouter, TaskConfig
 from sirius_chat.core.response_assembler import ResponseAssembler, StyleAdapter, StyleParams
 from sirius_chat.core.threshold_engine import ThresholdEngine
 
-from sirius_chat.memory.activation_engine import ActivationEngine
-from sirius_chat.memory.episodic.manager import EpisodicMemoryManager
 from sirius_chat.memory.event.manager import EventMemoryManager
-from sirius_chat.memory.retrieval_engine import MemoryRetriever
 from sirius_chat.memory.semantic.manager import SemanticMemoryManager
 from sirius_chat.memory.user.manager import UserMemoryManager
 from sirius_chat.memory.working.manager import WorkingMemoryManager
@@ -119,11 +115,9 @@ class EmotionalGroupChatEngine:
         self.working_memory = WorkingMemoryManager(
             max_size=self.config.get("working_memory_max_size", 20)
         )
-        self.episodic_memory = EpisodicMemoryManager(work_path)
         self.event_memory = EventMemoryManager()
         self.semantic_memory = SemanticMemoryManager(work_path)
         self.user_memory = UserMemoryManager()
-        self.activation_engine = ActivationEngine()
 
         # New v2 memory system
         self.basic_memory = BasicMemoryManager(
@@ -147,13 +141,6 @@ class EmotionalGroupChatEngine:
             ai_aliases=self.persona.aliases,
             persona=self.persona,
         )
-        self.memory_retriever = MemoryRetriever(
-            working_mgr=self.working_memory,
-            episodic_mgr=self.episodic_memory,
-            semantic_mgr=self.semantic_memory,
-            activation_engine=self.activation_engine,
-        )
-
         # Decision layer
         self.threshold_engine = ThresholdEngine()
         self.strategy_engine = ResponseStrategyEngine()
@@ -206,12 +193,6 @@ class EmotionalGroupChatEngine:
         self._skill_registry: Any | None = None
         self._skill_executor: Any | None = None
 
-        # Autobiographical memory (first-person experience records)
-        self.autobiographical_memory = AutobiographicalMemoryManager(
-            work_path=work_path,
-            persona=self.persona,
-        )
-        # Glossary (migrated from autobiographical)
         self.glossary_manager = GlossaryManager(work_path)
 
         # Background tasks
@@ -236,11 +217,10 @@ class EmotionalGroupChatEngine:
             - emotion: dict
             - intent: dict
         """
-        user_id = message.speaker or "unknown"
         content = message.content
 
-        # 1. Perception
-        self._perception(group_id, message, participants)
+        # 1. Perception (resolves stable user_id for the sender)
+        user_id = self._perception(group_id, message, participants)
         speaker = message.speaker or "有人"
         self._log_inner_thought(f"{speaker} 在群里说话了，让我仔细听听看～")
         await self.event_bus.emit(SessionEvent(
@@ -288,7 +268,7 @@ class EmotionalGroupChatEngine:
         # 4. Execution
         # Warm up diary index for this group (lazy-loads from disk on first call)
         self.diary_manager.ensure_group_loaded(group_id)
-        result = await self._execution(decision, message, intent, emotion, memories, group_id, empathy)
+        result = await self._execution(decision, message, intent, emotion, memories, group_id, empathy, user_id)
         # 内心活动：执行后的反馈
         self._log_execution_thought(speaker, decision, result)
         await self.event_bus.emit(SessionEvent(
@@ -301,7 +281,7 @@ class EmotionalGroupChatEngine:
         ))
 
         # 5. Background memory updates
-        self._background_update(group_id, message, emotion, intent)
+        self._background_update(group_id, message, emotion, intent, user_id)
 
         return result
 
@@ -490,7 +470,11 @@ class EmotionalGroupChatEngine:
                         group_id=group_id,
                         candidates=candidates,
                         persona_name=self.persona.name,
-                        persona_description=self.persona.description,
+                        persona_description=(
+                            self.persona.persona_summary
+                            or self.persona.backstory
+                            or ""
+                        ),
                         provider_async=self.provider_async,
                         model_name=cfg.model_name,
                     )
@@ -514,153 +498,6 @@ class EmotionalGroupChatEngine:
                 pass
             except Exception as exc:
                 logger.warning("Diary consolidation failed: %s", exc)
-
-    async def _consolidate_group(self, group_id: str) -> None:
-        """Consolidate structured event-memory observations into semantic profiles."""
-        from datetime import datetime, timedelta, timezone
-        from sirius_chat.memory.semantic.models import UserSemanticProfile
-
-        cutoff = datetime.now(timezone.utc) - timedelta(days=7)
-
-        # ── 1. Structured observations from event memory v2 ──────────────
-        recent_obs = [
-            e for e in self.event_memory.entries
-            if e.group_id == group_id and e.verified
-            and e.created_at
-            and datetime.fromisoformat(e.created_at.replace("Z", "+00:00")) > cutoff
-        ]
-
-        # ── Fallback to raw episodic events when no v2 observations ──────
-        if not recent_obs:
-            entries = self.episodic_memory.get_entries(group_id, limit=500)
-            if not entries:
-                return
-            recent_ep = [
-                e for e in entries
-                if e.created_at and datetime.fromisoformat(e.created_at.replace("Z", "+00:00")) > cutoff
-            ]
-            if not recent_ep:
-                return
-
-            user_stats: dict[str, dict[str, Any]] = {}
-            for e in recent_ep:
-                uid = e.user_id or "unknown"
-                if uid not in user_stats:
-                    user_stats[uid] = {
-                        "count": 0, "valence_sum": 0.0, "help_count": 0,
-                        "last_at": e.created_at,
-                    }
-                user_stats[uid]["count"] += 1
-                valence = 0.0
-                if e.summary:
-                    s = e.summary.lower()
-                    pos = sum(1 for w in ["开心", "高兴", "喜欢", "棒", "好"] if w in s)
-                    neg = sum(1 for w in ["难受", "难过", "伤心", "烦", "累", "生气"] if w in s)
-                    valence = (pos - neg) * 0.2
-                user_stats[uid]["valence_sum"] += valence
-                if "help" in e.summary.lower() or "求助" in e.summary or "怎么办" in e.summary:
-                    user_stats[uid]["help_count"] += 1
-
-            for uid, stats in user_stats.items():
-                profile = self.semantic_memory.get_user_profile(group_id, uid)
-                if profile is None:
-                    profile = UserSemanticProfile(user_id=uid)
-                rs = profile.relationship_state
-                rs.interaction_frequency_7d = stats["count"] / 7.0
-                avg_valence = stats["valence_sum"] / stats["count"] if stats["count"] > 0 else 0.0
-                rs.emotional_intimacy = round(
-                    rs.emotional_intimacy * 0.7 + abs(avg_valence) * 0.3, 3
-                )
-                rs.dependency_score = round(
-                    rs.dependency_score * 0.7 + min(1.0, stats["help_count"] / max(1, stats["count"])) * 0.3, 3
-                )
-                rs.compute_familiarity()
-                rs.last_interaction_at = stats["last_at"]
-                if not rs.first_interaction_at:
-                    rs.first_interaction_at = stats["last_at"]
-                self.semantic_memory.save_user_profile(group_id, profile)
-            return
-
-        # ── 2. Aggregate structured observations per user ────────────────
-        user_stats: dict[str, dict[str, Any]] = {}
-        for e in recent_obs:
-            uid = e.user_id or "unknown"
-            if uid not in user_stats:
-                user_stats[uid] = {
-                    "count": 0,
-                    "emotion_count": 0,
-                    "relationship_count": 0,
-                    "preference_count": 0,
-                    "trait_count": 0,
-                    "last_at": e.created_at,
-                    "observations": [],
-                }
-            user_stats[uid]["count"] += 1
-            user_stats[uid]["observations"].append(e)
-            if e.category == "emotion":
-                user_stats[uid]["emotion_count"] += 1
-            elif e.category == "relationship":
-                user_stats[uid]["relationship_count"] += 1
-            elif e.category == "preference":
-                user_stats[uid]["preference_count"] += 1
-            elif e.category == "trait":
-                user_stats[uid]["trait_count"] += 1
-
-        # ── 3. Raw message frequency from episodic memory (accuracy) ─────
-        episodic_entries = self.episodic_memory.get_entries(group_id, limit=500)
-        msg_count: dict[str, int] = {}
-        for e in episodic_entries:
-            if (
-                e.created_at
-                and datetime.fromisoformat(e.created_at.replace("Z", "+00:00")) > cutoff
-            ):
-                uid = e.user_id or "unknown"
-                msg_count[uid] = msg_count.get(uid, 0) + 1
-
-        # ── 4. Update semantic profiles ──────────────────────────────────
-        for uid, stats in user_stats.items():
-            profile = self.semantic_memory.get_user_profile(group_id, uid)
-            if profile is None:
-                profile = UserSemanticProfile(user_id=uid)
-
-            rs = profile.relationship_state
-            raw_count = msg_count.get(uid, stats["count"])
-            rs.interaction_frequency_7d = raw_count / 7.0
-
-            # Emotional intimacy from emotion-category observations
-            emotion_ratio = stats["emotion_count"] / max(1, stats["count"])
-            rs.emotional_intimacy = round(
-                rs.emotional_intimacy * 0.7 + emotion_ratio * 0.3, 3
-            )
-
-            # Trust score from relationship-category observations
-            rel_ratio = stats["relationship_count"] / max(1, stats["count"])
-            rs.trust_score = round(
-                rs.trust_score * 0.7 + rel_ratio * 0.3, 3
-            )
-
-            # Dependency score (smoothed engagement proxy)
-            rs.dependency_score = round(
-                rs.dependency_score * 0.8 + min(1.0, raw_count / 50.0) * 0.2, 3
-            )
-
-            rs.compute_familiarity()
-            rs.last_interaction_at = stats["last_at"]
-            if not rs.first_interaction_at:
-                rs.first_interaction_at = stats["last_at"]
-
-            # Update base_attributes from preference/trait/experience/goal
-            for obs in stats["observations"]:
-                if obs.category in ("preference", "trait", "experience", "goal"):
-                    attr_key = f"{obs.category}_{len(profile.base_attributes)}"
-                    profile.base_attributes[attr_key] = {
-                        "content": obs.summary,
-                        "confidence": obs.confidence,
-                        "updated_at": obs.created_at,
-                    }
-
-            profile.updated_at = stats["last_at"]
-            self.semantic_memory.save_user_profile(group_id, profile)
 
     async def proactive_check(
         self,
@@ -1211,14 +1048,29 @@ class EmotionalGroupChatEngine:
                 group_id=group_id,
             )
 
+        # Resolve current sender to a stable user_id (may reuse UUID from
+        # participants or fall back to speaker name / platform_uid lookup).
+        sender_ctx = IdentityContext(
+            speaker_name=message.speaker or "unknown",
+            user_id=None,
+            platform_uid=message.channel_user_id,
+            platform=message.channel,
+            is_developer=False,
+        )
+        sender_profile = self.identity_resolver.resolve(
+            sender_ctx, self.user_manager, group_id
+        )
+        resolved_user_id = sender_profile.user_id
+        resolved_speaker_name = sender_profile.name
+
         # Compute dynamic importance for working-memory retention
         importance = self._compute_message_importance(message.content or "")
 
         # New: Add to basic memory and archive to disk
         entry = self.basic_memory.add_entry(
             group_id=group_id,
-            user_id=message.speaker or "unknown",
-            speaker_name=message.speaker or "unknown",
+            user_id=resolved_user_id,
+            speaker_name=resolved_speaker_name,
             role="human",
             content=message.content,
         )
@@ -1227,7 +1079,7 @@ class EmotionalGroupChatEngine:
         # Old: Add to working memory
         self.working_memory.add_entry(
             group_id=group_id,
-            user_id=message.speaker or "unknown",
+            user_id=resolved_user_id,
             role="human",
             content=message.content,
             channel=message.channel or "",
@@ -1237,9 +1089,9 @@ class EmotionalGroupChatEngine:
         )
 
         # Old: Buffer raw message for structured observation extraction
-        if message.content and message.speaker:
+        if message.content and resolved_user_id:
             self.event_memory.buffer_message(
-                user_id=message.speaker,
+                user_id=resolved_user_id,
                 content=message.content,
                 group_id=group_id,
             )
@@ -1247,6 +1099,7 @@ class EmotionalGroupChatEngine:
         # Update group last message time
         self._group_last_message_at[group_id] = _now_iso()
         self._persist_group_state(group_id)
+        return resolved_user_id
 
     async def _cognition(
         self,
@@ -1329,7 +1182,7 @@ class EmotionalGroupChatEngine:
         now = datetime.now(timezone.utc).timestamp()
         last_reply = self._last_reply_at.get(group_id, 0)
         seconds_since_reply = now - last_reply
-        cooldown = self.config.get("reply_cooldown_seconds", 12)
+        cooldown = self.config.get("reply_cooldown_seconds", 30)
         if seconds_since_reply < cooldown and decision.strategy != ResponseStrategy.SILENT:
             decision = StrategyDecision(
                 strategy=ResponseStrategy.SILENT,
@@ -1358,6 +1211,7 @@ class EmotionalGroupChatEngine:
         memories: list[dict[str, Any]],
         group_id: str,
         empathy: Any,
+        user_id: str,
     ) -> dict[str, Any]:
         """Execution layer: generate or queue reply."""
         # Rhythm context for style adaptation
@@ -1367,8 +1221,8 @@ class EmotionalGroupChatEngine:
         # Profiles
         group_profile = self.semantic_memory.get_group_profile(group_id)
         user_profile = (
-            self.semantic_memory.get_user_profile(group_id, message.speaker or "")
-            if message.speaker else None
+            self.semantic_memory.get_user_profile(group_id, user_id)
+            if user_id else None
         )
 
         is_group_chat = not group_id.startswith("private_")
@@ -1424,9 +1278,10 @@ class EmotionalGroupChatEngine:
             )
 
             # Build messages via new context assembler (basic memory + diary RAG)
+            # Use bundle.user_content so the LLM receives sender identity metadata.
             messages = self.context_assembler.build_messages(
                 group_id=group_id,
-                current_query=message.content,
+                current_query=bundle.user_content,
                 search_query=intent.search_query,
                 system_prompt=bundle.system_prompt,
                 recent_n=self.config.get("basic_memory_context_window", 5),
@@ -1597,7 +1452,7 @@ class EmotionalGroupChatEngine:
             self._log_inner_thought("现在不是最佳时机，我先把这个话题记在小本本上，等会儿再回。")
             self.delayed_queue.enqueue(
                 group_id=group_id,
-                user_id=message.speaker or "unknown",
+                user_id=user_id,
                 message_content=message.content,
                 strategy_decision=decision,
                 emotion_state=emotion.to_dict(),
@@ -1627,6 +1482,7 @@ class EmotionalGroupChatEngine:
         message: Message,
         emotion: EmotionState,
         intent: IntentAnalysisV3,
+        user_id: str,
     ) -> None:
         """Background updates after main pipeline."""
         # Update group sentiment cache for emotion island detection
@@ -1634,90 +1490,8 @@ class EmotionalGroupChatEngine:
 
         # Update assistant emotion based on interaction
         self.assistant_emotion.update_from_interaction(
-            emotion, message.speaker or "unknown"
+            emotion, user_id
         )
-
-    def _learn_group_norms(
-        self,
-        group_profile: Any,
-        message: Message,
-        intent: IntentAnalysisV3,
-    ) -> None:
-        """Passive learning of group interaction norms from observed messages.
-
-        Updates group_profile.group_norms with rolling statistics:
-        - avg_message_length, message_length_distribution
-        - emoji_usage_rate, mention_rate
-        - most_active_hours
-        - topic_switch_frequency
-        """
-        norms = group_profile.group_norms
-        content = message.content or ""
-
-        # 1. Message length rolling average
-        length = len(content)
-        old_avg = norms.get("avg_message_length", 0.0)
-        old_count = norms.get("message_count", 0)
-        new_count = old_count + 1
-        norms["avg_message_length"] = (old_avg * old_count + length) / new_count
-        norms["message_count"] = new_count
-
-        # Length distribution buckets
-        bucket = "short" if length < 20 else "medium" if length < 100 else "long"
-        dist = norms.get("length_distribution", {})
-        dist[bucket] = dist.get(bucket, 0) + 1
-        norms["length_distribution"] = dist
-
-        # 2. Emoji / emoticon usage
-        emoji_pattern = re.compile(
-            r"[\U0001F600-\U0001F64F\U0001F300-\U0001F5FF\U0001F680-\U0001F6FF"
-            r"\U0001F1E0-\U0001F1FF\U00002702-\U000027B0\U000024C2-\U0001F251"
-            r"\u4e00-\u9fff]{1,2}[\uD83C-\uDBFF\uDC00-\uDFFF]"
-            r"|[\u2600-\u26FF\u2700-\u27BF]"
-            r"|\[.+?\]|\(.+?\)"  # ASCII emoticons like [doge], (facepalm)
-        )
-        has_emoji = bool(emoji_pattern.search(content)) or any(
-            e in content for e in ("😀", "😂", "👍", "❤️", "🎉", "😭", "😡", "🙏", "😊", "😅")
-        )
-        emoji_total = norms.get("emoji_total", 0)
-        if has_emoji:
-            emoji_total += 1
-        norms["emoji_total"] = emoji_total
-        norms["emoji_usage_rate"] = emoji_total / new_count if new_count else 0.0
-
-        # 3. @mention rate
-        has_mention = "@" in content
-        mention_total = norms.get("mention_total", 0)
-        if has_mention:
-            mention_total += 1
-        norms["mention_total"] = mention_total
-        norms["mention_rate"] = mention_total / new_count if new_count else 0.0
-
-        # 4. Active hours histogram
-        hour = datetime.now(timezone.utc).hour
-        hours = norms.get("active_hours", {})
-        hours[str(hour)] = hours.get(str(hour), 0) + 1
-        norms["active_hours"] = hours
-
-        # 5. Topic switch tracking
-        topic_switches = norms.get("topic_switches", 0)
-        if intent.social_intent.value != norms.get("last_intent", ""):
-            topic_switches += 1
-        norms["topic_switches"] = topic_switches
-        norms["last_intent"] = intent.social_intent.value
-        norms["topic_switch_frequency"] = topic_switches / new_count if new_count else 0.0
-
-        # 6. Interaction style inference
-        short_ratio = dist.get("short", 0) / new_count if new_count else 0
-        if short_ratio > 0.6:
-            inferred_style = "active"
-        elif norms.get("emoji_usage_rate", 0) > 0.3:
-            inferred_style = "humorous"
-        elif norms.get("mention_rate", 0) > 0.2:
-            inferred_style = "formal"
-        else:
-            inferred_style = "balanced"
-        group_profile.typical_interaction_style = inferred_style
 
     # ==================================================================
     # Prompt builders & generation
@@ -1886,6 +1660,15 @@ class EmotionalGroupChatEngine:
         from sirius_chat.providers.base import estimate_generation_request_input_tokens
         estimated_input_tokens = estimate_generation_request_input_tokens(request)
 
+        # Debug: log the full prompt sent to the LLM
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "LLM prompt for group=%s:\nSYSTEM:\n%s\n\nMESSAGES:\n%s",
+                group_id,
+                system_prompt,
+                "\n".join(f"  [{m.get('role')}] {m.get('content', '')[:200]}" for m in messages),
+            )
+
         # Call provider (async or sync via thread)
         if hasattr(self.provider_async, "generate_async"):
             reply = await self.provider_async.generate_async(request)
@@ -1934,64 +1717,6 @@ class EmotionalGroupChatEngine:
         # skill descriptions in the system prompt.
         if skill_registry is not None:
             self.response_assembler.skill_registry = skill_registry
-
-    async def _process_skill_calls(self, reply: str, group_id: str) -> str:
-        """Parse and execute SKILL_CALL markers in the assistant reply.
-
-        If no skill runtime is attached, strips markers and returns clean text.
-        """
-        if self._skill_registry is None or self._skill_executor is None:
-            from sirius_chat.skills.executor import strip_skill_calls
-            return strip_skill_calls(reply)
-
-        from sirius_chat.skills.executor import parse_skill_calls
-        from sirius_chat.skills.models import SkillInvocationContext
-
-        calls = parse_skill_calls(reply)
-        if not calls:
-            return reply
-
-        # Strip markers from the reply text first
-        from sirius_chat.skills.executor import strip_skill_calls
-        clean_reply = strip_skill_calls(reply)
-
-        # Execute each skill and collect results
-        skill_results: list[str] = []
-        for skill_name, params in calls:
-            skill = self._skill_registry.get(skill_name)
-            if skill is None:
-                skill_results.append(f"[SKILL '{skill_name}' 未找到]")
-                continue
-
-            ctx = SkillInvocationContext()
-            try:
-                result = await self._skill_executor.execute_async(
-                    skill, params, invocation_context=ctx
-                )
-                if result.success:
-                    skill_results.append(
-                        f"[SKILL '{skill_name}' 结果] {result.to_display_text()}"
-                    )
-                    # Auto-persist glossary terms from learn_term
-                    if skill_name == "learn_term":
-                        term = params.get("term", "")
-                        definition = params.get("definition", "")
-                        if term and definition:
-                            self.glossary_manager.add_or_update(
-                                group_id,
-                                GlossaryTerm(term=term, definition=definition, source="skill"),
-                            )
-                else:
-                    skill_results.append(f"[SKILL '{skill_name}' 失败] {result.error or '未知错误'}")
-            except Exception as exc:
-                skill_results.append(f"[SKILL '{skill_name}' 异常] {exc}")
-
-        # Inject skill results into the reply so the model (and user) sees them.
-        if skill_results:
-            results_text = "\n".join(skill_results)
-            clean_reply += "\n\n" + results_text
-
-        return clean_reply
 
     def _get_recent_messages(self, group_id: str, n: int = 10) -> list[dict[str, Any]]:
         entries = self.working_memory.get_recent_entries(group_id, n=n)
@@ -2078,12 +1803,6 @@ class EmotionalGroupChatEngine:
             return False
         cleaned = re.sub(r"\[图片\d*: [^\]]+\]", "", content).strip()
         return not cleaned
-
-    def _describe_atmosphere(self, group_id: str) -> str:
-        recent = self._get_recent_messages(group_id, n=5)
-        rhythm = self.rhythm_analyzer.analyze(group_id, recent)
-        mood = "轻松" if rhythm.heat_level in ("warm", "hot") else "安静"
-        return f"{mood} ({rhythm.heat_level})"
 
 
 def _now_iso() -> str:
