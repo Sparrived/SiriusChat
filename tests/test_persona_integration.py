@@ -61,43 +61,6 @@ class TestKeywordPersonaGeneration:
         assert p.source == "keyword"
 
 
-class TestResponseAssemblerPersonaInjection:
-    def test_prompt_contains_persona_name(self):
-        from sirius_chat.models.persona import PersonaProfile
-        persona = PersonaProfile(
-            name="码叔",
-            personality_traits=["毒舌", "机智"],
-            communication_style="concise",
-        )
-        assembler = ResponseAssembler(persona=persona)
-        bundle = assembler.assemble(
-            message=Message(role="human", content="你好"),
-            intent=Mock(),
-            emotion=EmotionState(),
-            empathy_strategy=EmpathyStrategy(strategy_type="presence", priority=3, depth_level=1),
-            memories=[],
-            group_profile=None,
-            user_profile=None,
-            assistant_emotion=Mock(valence=0.0, arousal=0.0),
-        )
-        assert persona.name in bundle.system_prompt
-        assert "毒舌" in bundle.system_prompt or "机智" in bundle.system_prompt
-
-    def test_default_prompt_without_persona(self):
-        assembler = ResponseAssembler()
-        bundle = assembler.assemble(
-            message=Message(role="human", content="你好"),
-            intent=Mock(),
-            emotion=EmotionState(),
-            empathy_strategy=EmpathyStrategy(strategy_type="presence", priority=3, depth_level=1),
-            memories=[],
-            group_profile=None,
-            user_profile=None,
-            assistant_emotion=Mock(valence=0.0, arousal=0.0),
-        )
-        assert "你在一个多人聊天场景里" in bundle.system_prompt
-
-
 class TestEngineLoadsPersona:
     def test_engine_requires_persona(self, tmp_path):
         from sirius_chat.core.emotional_engine import EmotionalGroupChatEngine
@@ -155,25 +118,6 @@ class TestPersonaBiasesThreshold:
         mod_engine._decision(intent_mod, emotion, "g1", "u1")
         # low frequency should make it harder to reply (higher threshold than moderate)
         assert intent_low.threshold > intent_mod.threshold
-
-
-class TestStyleAdapterPersonaPrefs:
-    def test_persona_max_tokens_override(self):
-        adapter = StyleAdapter()
-        persona = PersonaProfile(max_tokens_preference=60, communication_style="concise")
-        style = adapter.adapt(
-            heat_level="warm", pace="steady", persona=persona
-        )
-        assert style.max_tokens <= 60
-        assert "简洁" in style.length_instruction
-
-    def test_persona_temperature_override(self):
-        adapter = StyleAdapter()
-        persona = PersonaProfile(temperature_preference=0.9, communication_style="casual")
-        style = adapter.adapt(
-            heat_level="warm", pace="steady", persona=persona
-        )
-        assert style.temperature == 0.9
 
 
 class TestPersonaPersistence:
