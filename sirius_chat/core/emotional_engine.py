@@ -247,6 +247,14 @@ class EmotionalGroupChatEngine:
             },
         ))
 
+        # Semantic: passive group norm learning from message content + intent
+        social_intent = getattr(intent, "social_intent", None)
+        self.semantic_memory.learn_from_message(
+            group_id=group_id,
+            content=content or "",
+            social_intent=str(social_intent) if social_intent else "",
+        )
+
         # 3. Decision
         decision = self._decision(intent, emotion, group_id, user_id)
         await self.event_bus.emit(SessionEvent(
@@ -1144,6 +1152,23 @@ class EmotionalGroupChatEngine:
 
         # Update assistant emotion
         self.assistant_emotion.update_from_interaction(emotion, user_id)
+
+        # Semantic: record atmosphere snapshot and update user relationship
+        recent_msgs = self._get_recent_messages(group_id, n=10)
+        self.semantic_memory.record_atmosphere(
+            group_id=group_id,
+            valence=emotion.valence,
+            arousal=emotion.arousal,
+            active_participants=len({m.get("user_id") for m in recent_msgs}),
+        )
+        social_intent = getattr(intent, "social_intent", None)
+        self.semantic_memory.update_relationship(
+            group_id=group_id,
+            user_id=user_id,
+            valence=emotion.valence,
+            urgency_score=getattr(intent, "urgency_score", 0),
+            social_intent=str(social_intent) if social_intent else "",
+        )
 
         return decision
 
