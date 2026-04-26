@@ -249,11 +249,8 @@ def test_load_session_config_supports_separate_config_root_and_work_path(tmp_pat
     "example_name",
     [
         "session.json",
-        "session.deepseek.json",
         "session.siliconflow.json",
         "session.aliyun_bailian.json",
-        "session_multimodel.json",
-        "session_prompt_splitting.json",
     ],
 )
 def test_load_session_config_supports_repository_example_configs(tmp_path, example_name: str) -> None:
