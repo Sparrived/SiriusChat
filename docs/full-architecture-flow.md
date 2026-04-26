@@ -167,8 +167,8 @@ flowchart TD
 | 入口层 | `main.py`、`sirius_chat/cli.py`、`sirius_chat/api/*` | 接收外部输入、暴露稳定 API、拼接最少的运行参数。**v1.0.0 新增**：`main.py --engine {legacy,emotional}` 切换 |
 | Workspace 层 | `workspace/layout.py`、`workspace/runtime.py`、`workspace/config_watcher.py`、`workspace/roleplay_manager.py` | 路径布局、配置热刷新、session 队列与锁、静默批处理、participants 元数据、roleplay 资产与 workspace 默认值联动。**v1.0.0 新增**：`create_emotional_engine()` 工厂方法 |
 | 配置构建层 | `config/models.py`、`config/manager.py`、`config/jsonc.py`、`config/helpers.py` | `WorkspaceConfig` / `SessionConfig` / `OrchestrationPolicy` 契约、JSON/JSONC 读写、workspace 默认值与 orchestration 构造 |
-| **认知编排层** | `core/emotional_engine.py`、`core/response_assembler.py`、`core/response_strategy.py`、`core/threshold_engine.py`、`core/rhythm.py`、`core/intent_v3.py`、`core/emotion.py` | 四层认知架构（感知→认知→决策→执行）、回复策略、阈值引擎、节奏分析 |
-| **v0.28 新编排核心层** | `core/emotional_engine.py`、`core/intent_v3.py`、`core/emotion.py`、`core/response_strategy.py`、`core/threshold_engine.py`、`core/rhythm.py`、`core/response_assembler.py`、`core/delayed_response_queue.py`、`core/proactive_trigger.py`、`core/model_router.py`、`core/engine_persistence.py` | 四层认知架构、情感分析、响应策略、动态阈值、对话节奏、共情生成、延迟队列、主动触发、模型路由、状态持久化 |
+| **认知编排层** | `core/emotional_engine.py`、`core/response_assembler.py`、`core/response_strategy.py`、`core/threshold_engine.py`、`core/rhythm.py`、`core/cognition.py` | 四层认知架构（感知→认知→决策→执行）、回复策略、阈值引擎、节奏分析 |
+| **v0.28 新编排核心层** | `core/emotional_engine.py`、`core/cognition.py`、`core/response_strategy.py`、`core/threshold_engine.py`、`core/rhythm.py`、`core/response_assembler.py`、`core/delayed_response_queue.py`、`core/proactive_trigger.py`、`core/model_router.py`、`core/engine_persistence.py` | 四层认知架构、统一认知分析、响应策略、动态阈值、对话节奏、共情生成、延迟队列、主动触发、模型路由、状态持久化 |
 | 兼容与辅助层 | `async_engine/prompts.py`、`async_engine/orchestration.py`、`async_engine/utils.py`、`async_engine/__init__.py` | 提示词生成、任务常量与配置、辅助工具、向后兼容导出 |
 | 记忆层 | `memory/basic/`、`memory/diary/`、`memory/user/`、`memory/glossary/`、`memory/context_assembler.py` | 基础记忆（工作窗口+热度+归档）、日记记忆（LLM生成+检索）、用户管理（简化UserProfile）、名词解释、上下文组装器 |
 | Provider 层 | `providers/base.py`、`providers/routing.py`、各 provider 文件、`providers/middleware/` | 统一请求协议、provider 注册表、自动路由、具体上游接入、中间件增强 |
@@ -302,7 +302,7 @@ flowchart TD
 3. provider 行为改变：路由规则、注册表格式、支持平台变化。
 4. engine 主流程改变：辅助任务、参与决策、SKILL 循环、消息压缩逻辑变化。
 5. roleplay 资产流改变：`generated_agents.json`、trace、选中 agent 语义变化。
-6. **v1.0.0 新增**：新引擎模块（`emotional_engine.py`、`intent_v3.py`、`emotion.py` 等）的行为或数据流变化。
+6. **v1.0.0 新增**：`emotional_engine.py` 与 `cognition.py` 统一认知架构的行为或数据流变化。
 7. **v1.0.0 新增**：记忆存储布局变化（群隔离、新增 `episodic/` / `semantic/` / `engine_state/` 路径）。
 
 推荐同步顺序：
