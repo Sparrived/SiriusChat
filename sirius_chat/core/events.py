@@ -22,23 +22,6 @@ logger = logging.getLogger(__name__)
 class SessionEventType(enum.Enum):
     """Categories of events emitted during session processing."""
 
-    # A new message was added to the transcript (user, assistant, or system).
-    MESSAGE_ADDED = "message_added"
-    # AI response generation has started.
-    PROCESSING_STARTED = "processing_started"
-    # AI response generation has completed (including all SKILL rounds).
-    PROCESSING_COMPLETED = "processing_completed"
-    # A SKILL call was detected and execution is starting.
-    SKILL_STARTED = "skill_started"
-    # A SKILL execution finished (success or failure). Result text stays
-    # internal until it is turned into assistant output.
-    SKILL_COMPLETED = "skill_completed"
-    # The engagement check decided to skip this turn.
-    REPLY_SKIPPED = "reply_skipped"
-    # An error occurred during processing.
-    ERROR = "error"
-
-    # v0.28+ Emotional Group Chat pipeline events
     PERCEPTION_COMPLETED = "perception_completed"
     COGNITION_COMPLETED = "cognition_completed"
     DECISION_COMPLETED = "decision_completed"
@@ -53,7 +36,7 @@ class SessionEvent:
 
     Attributes:
         type: The category of the event.
-        message: The ``Message`` object, present for ``MESSAGE_ADDED`` events.
+        message: The ``Message`` object, present for message-related events.
         data: Arbitrary metadata (e.g. skill name, error details).
         timestamp: Unix timestamp when the event was created.
     """
@@ -75,7 +58,7 @@ class SessionEventBus:
             handle(event)
 
         # Publish (from engine internals)
-        await bus.emit(SessionEvent(type=SessionEventType.MESSAGE_ADDED, message=msg))
+        await bus.emit(SessionEvent(type=SessionEventType.PERCEPTION_COMPLETED, data={"message": msg}))
 
         # Close when the session ends
         await bus.close()
