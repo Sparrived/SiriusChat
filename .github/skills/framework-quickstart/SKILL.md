@@ -57,7 +57,7 @@ description: "当你需要在不通读全部代码的情况下快速理解 Siriu
 30. `tests/test_emotional_engine_basic.py`
 
 - `models/models.py` ✨ **（包重构）** 定义数据契约（多人用户 + 单 AI 主助手）。
-- `OrchestrationPolicy` 用于任务路由与任务级参数控制，支持 `memory_extract`、`event_extract`、`intent_analysis` 等任务的模型配置。`reply_mode=auto` 下的 LLM 意图分析已纳入 `intent_analysis` 任务；关闭该任务时才会走关键词回退，任务启用后若调用失败或解析失败，本轮不会再回退关键词意图推断。多 AI 群聊里，`intent_analysis` 会先从名字/别称中提取 AI 证据（如 `AI`、`bot`、`助手`、`Claude` 等），再把无明确证据的对象作为 possible-AI 候选交给模型结合最近交互链、aliases 和 `environment_context` 判断，从而减少把其他对象误判成当前模型自身。对未明确点名当前模型的群控/停用类命令，还会在 engagement 前做硬抑制。同时支持提示词驱动的内容分割（`enable_prompt_driven_splitting=True`）、基于 `pending_message_threshold` 的 runtime 积压静默批处理，以及基于 `min_reply_interval_seconds` 的最小回复间隔冷却。
+- 任务路由与模型选择由 `ModelRouter` 管理，通过 `emotional_engine.task_model_overrides` 配置。v1.0 中 `OrchestrationPolicy` dataclass 已废弃，不再用于任务控制。
 - 兼容层面，旧 `enable_intent_analysis` / `intent_analysis_model` 仅作为读取时的映射入口存在；当前模板、workspace 持久化与示例应统一使用 `task_enabled/task_models`。
 
 ## 心智模型
@@ -68,7 +68,7 @@ description: "当你需要在不通读全部代码的情况下快速理解 Siriu
 - 内置 SKILL 与 workspace SKILL 共用依赖自动安装路径；`SKILL_META["dependencies"]` 会在模块真正导入前参与解析。
 - SKILL 执行结果现在支持结构化 `text_blocks` / `multimodal_blocks` / `internal_metadata`；`core/emotional_engine.py` 负责把结果注入 working memory，`core/response_assembler.py` 负责把可用文本与图片转成隐藏模型上下文，并在最近少量 assistant turn 内继续保留这些内部结果，避免模型在短期追问里立刻忘掉刚拿到的观察，同时避免把元信息泄露到用户回复中。
 - `Participant.metadata` / `UserProfile.metadata` 中的 `is_developer` 是 SKILL 安全模型的显式权限来源；engine 会据此构建 `SkillInvocationContext`，让 developer-only 工具在非 developer 当前轮次中自动隐藏，并在执行时再次校验。
-- 会话事件流里的 `SKILL_COMPLETED` 仅表示技能执行状态，技能结果正文不会直接通过该事件暴露；只有落成 assistant 回复后才会进入外部消息流或 `on_reply`。
+- 会话事件流包含 PERCEPTION/COGNITION/DECISION/EXECUTION 四层管道事件，以及 DELAYED/PROACTIVE 触发事件。技能执行结果由 `response_assembler` 注入 assistant 回复，不通过独立事件暴露。
 - `WorkspaceRuntime` 会把 `WorkspaceBootstrap` 的签名记入 `workspace.json`；同一份 bootstrap 只在首次命中时持久化一次，后续重启会保留用户在 config root 下的手工修改。
 - `WorkspaceLayout` 是路径语义的单一事实来源：config root 放配置与资产，data root 放运行态数据。
 - **v1.0.0 默认引擎** `EmotionalGroupChatEngine` 的真实实现位于 `sirius_chat/core/emotional_engine.py`；采用四层认知架构（感知→认知→决策→执行）与简化记忆模型（基础记忆 → 日记记忆）。
