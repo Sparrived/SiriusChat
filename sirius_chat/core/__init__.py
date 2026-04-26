@@ -17,8 +17,6 @@ from sirius_chat.core.threshold_engine import ThresholdEngine
 __all__ = [
     # v0.28+ Emotional Group Chat
     "EmotionalGroupChatEngine",
-    "IntentAnalyzerV3",
-    "EmotionAnalyzer",
     "RhythmAnalysis",
     "RhythmAnalyzer",
     "ResponseStrategyEngine",
