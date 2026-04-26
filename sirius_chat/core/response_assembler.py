@@ -231,6 +231,14 @@ class ResponseAssembler:
             "如果有人改了群名片冒充别人，请以QQ号为准。"
         )
 
+        # 1c. Output constraint to prevent the model from imitating speaker prefixes
+        sections.append(
+            "[输出约束]\n"
+            "历史对话中会出现 ``[上下文] 下一条消息来自...`` 的系统标注，"
+            "这只是为了帮你识别不同说话者，你的回复中绝对不要输出任何 ``[上下文]`` 开头的内容。\n"
+            "直接输出你要说的话即可，不要添加任何说话者前缀或系统标记。"
+        )
+
         # 2. Emotional context
         sections.append(
             self._build_emotion_context(emotion, assistant_emotion, group_profile)
@@ -290,19 +298,6 @@ class ResponseAssembler:
             alias_str = f"（又名：{', '.join(aliases)}）" if aliases else ""
             qq = p.get("qq_id") or p.get("user_id", "")
             lines.append(f"- {name}{alias_str} QQ：{qq}")
-        return "\n".join(lines)
-
-    @staticmethod
-    def _build_recent_messages_context(messages: list[dict[str, Any]]) -> str:
-        """Build a section summarising recent conversation history."""
-        lines = ["[最近对话]"]
-        for m in messages[-10:]:
-            uid = m.get("user_id", "某人")
-            content = m.get("content", "")
-            # Truncate very long messages for prompt brevity
-            if len(content) > 200:
-                content = content[:197] + "..."
-            lines.append(f"{uid}: {content}")
         return "\n".join(lines)
 
     @staticmethod
@@ -469,34 +464,6 @@ class ResponseAssembler:
         the entire response is treated as the spoken reply.
         """
         return "", raw.strip()
-
-    @staticmethod
-    def _build_persona_context(persona: PersonaProfile) -> str:
-        """Build persona-specific behavioral instructions."""
-        lines: list[str] = ["[角色行为指引]"]
-
-        if persona.catchphrases:
-            cp = "，".join(f'"{c}"' for c in persona.catchphrases[:3])
-            lines.append(f"你偶尔会说：{cp}")
-
-        if persona.boundaries:
-            bounds = "；".join(persona.boundaries[:3])
-            lines.append(f"行为边界：{bounds}")
-
-        if persona.taboo_topics:
-            taboos = "、".join(persona.taboo_topics[:3])
-            lines.append(f"避免谈论：{taboos}")
-
-        if persona.preferred_topics:
-            topics = "、".join(persona.preferred_topics[:3])
-            lines.append(f"擅长话题：{topics}")
-
-        if persona.stress_response:
-            lines.append(f"压力下你会：{persona.stress_response}")
-
-        if not lines[1:]:
-            return ""
-        return "\n".join(lines)
 
     # ------------------------------------------------------------------
     # Convenience helpers for non-immediate strategies
