@@ -89,6 +89,8 @@ class BasicMemoryManager:
         speaker_name: str = "",
         system_prompt: str = "",
         timestamp: str | None = None,
+        channel_user_id: str = "",
+        multimodal_inputs: list[dict[str, str]] | None = None,
     ) -> BasicMemoryEntry:
         """Add an entry to a group's basic memory window."""
         gid = group_id or "default"
@@ -102,6 +104,11 @@ class BasicMemoryManager:
             content=content,
             timestamp=timestamp or now_iso(),
             system_prompt=system_prompt,
+            channel_user_id=channel_user_id,
+            multimodal_inputs=[
+                dict(item) for item in (multimodal_inputs or [])
+                if isinstance(item, dict)
+            ],
         )
 
         window = self._windows.setdefault(gid, deque(maxlen=self.hard_limit))

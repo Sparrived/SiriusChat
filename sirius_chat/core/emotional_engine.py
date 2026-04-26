@@ -29,8 +29,6 @@ from sirius_chat.core.threshold_engine import ThresholdEngine
 
 from sirius_chat.memory.event.manager import EventMemoryManager
 from sirius_chat.memory.semantic.manager import SemanticMemoryManager
-from sirius_chat.memory.user.manager import UserMemoryManager
-from sirius_chat.memory.working.manager import WorkingMemoryManager
 
 # New v2 memory system (refactor)
 from sirius_chat.memory.basic import BasicMemoryManager, BasicMemoryFileStore
@@ -111,15 +109,10 @@ class EmotionalGroupChatEngine:
         # 允许外部通过 config 直接覆盖具体任务模型
         self._task_models.update(self.config.get("task_models", {}))
 
-        # Memory foundation (old - kept for compat during refactor)
-        self.working_memory = WorkingMemoryManager(
-            max_size=self.config.get("working_memory_max_size", 20)
-        )
+        # Memory foundation
         self.event_memory = EventMemoryManager()
         self.semantic_memory = SemanticMemoryManager(work_path)
-        self.user_memory = UserMemoryManager()
 
-        # New v2 memory system
         self.basic_memory = BasicMemoryManager(
             hard_limit=self.config.get("basic_memory_hard_limit", 30),
             context_window=self.config.get("basic_memory_context_window", 5),
@@ -553,15 +546,15 @@ class EmotionalGroupChatEngine:
             },
         ))
 
-        # Record assistant reply into working memory so future turns can see it
+        # Record assistant reply into basic memory so future turns can see it
         clean_reply = strip_skill_calls(reply).strip()
         if clean_reply:
-            self.working_memory.add_entry(
+            self.basic_memory.add_entry(
                 group_id=group_id,
                 user_id="assistant",
                 role="assistant",
                 content=clean_reply,
-                importance=0.6,
+                speaker_name=self.persona.name if self.persona else "assistant",
             )
 
         # Record reply timestamp for cooldown tracking
@@ -587,21 +580,22 @@ class EmotionalGroupChatEngine:
             return []
 
         # Determine caller from the first triggered item
-        caller_entry = None
+        caller_profile = None
         item = triggered[0]
         if item.channel and item.channel_user_id:
-            caller_entry = self.user_memory.get_user_by_identity(
-                channel=item.channel,
-                external_user_id=item.channel_user_id,
+            resolved_uid = self.user_manager.resolve_user_id(
+                platform=item.channel,
+                external_uid=item.channel_user_id,
             )
-        if caller_entry is None:
+            if resolved_uid:
+                caller_profile = self.user_manager.get_user(resolved_uid, group_id)
+        if caller_profile is None:
             # Fallback: search by user_id (nickname) across all groups
-            for gid, group in self.user_memory.entries.items():
-                if item.user_id in group:
-                    caller_entry = group[item.user_id]
-                    break
+            resolved_uid = self.user_manager.resolve_user_id(speaker=item.user_id)
+            if resolved_uid:
+                caller_profile = self.user_manager.get_user(resolved_uid, group_id)
         caller_is_developer = bool(
-            caller_entry and caller_entry.profile.is_developer
+            caller_profile and caller_profile.is_developer
         )
 
         # Merge all triggered items into one prompt and one generation call
@@ -637,14 +631,14 @@ class EmotionalGroupChatEngine:
             caller_user_id = item.user_id
             skill_caller = UserProfile(
                 user_id=caller_user_id,
-                name=caller_entry.profile.name if caller_entry else caller_user_id,
+                name=caller_profile.name if caller_profile else caller_user_id,
                 metadata={"is_developer": caller_is_developer},
             )
             developer_profiles: list[UserProfile] = []
-            group_entries = self.user_memory.entries.get(group_id, {})
-            for entry in group_entries.values():
-                if entry.profile.is_developer:
-                    developer_profiles.append(entry.profile)
+            group_entries = self.user_manager.entries.get(group_id, {})
+            for profile in group_entries.values():
+                if profile.is_developer:
+                    developer_profiles.append(profile)
 
             for skill_name, params in calls:
                 skill = self._skill_registry.get(skill_name)
@@ -707,32 +701,31 @@ class EmotionalGroupChatEngine:
                 ),
             })
 
-            # Persist intermediate skill turns into working memory
-            self.working_memory.add_entry(
+            # Persist intermediate skill turns into basic memory
+            self.basic_memory.add_entry(
                 group_id=group_id,
                 user_id="assistant",
                 role="assistant",
                 content=strip_skill_calls(reply),
-                importance=0.3,
+                speaker_name=self.persona.name if self.persona else "assistant",
             )
             if skill_results:
-                self.working_memory.add_entry(
+                self.basic_memory.add_entry(
                     group_id=group_id,
                     user_id="skill_system",
                     role="system",
                     content=f"[技能执行结果]\n{'\n'.join(skill_results)}",
-                    importance=0.3,
                 )
 
-        # Record assistant reply into working memory so future turns can see it
+        # Record assistant reply into basic memory so future turns can see it
         clean_reply = strip_skill_calls(reply).strip()
         if clean_reply:
-            self.working_memory.add_entry(
+            self.basic_memory.add_entry(
                 group_id=group_id,
                 user_id="assistant",
                 role="assistant",
                 content=clean_reply,
-                importance=0.6,
+                speaker_name=self.persona.name if self.persona else "assistant",
             )
 
         # Record reply timestamp for cooldown tracking (once per tick)
@@ -760,8 +753,8 @@ class EmotionalGroupChatEngine:
     # ==================================================================
 
     def _persist_group_state(self, group_id: str) -> None:
-        """Persist working memory and timestamps for a single group in real-time."""
-        entries = self.working_memory.get_recent_entries(group_id, n=100)
+        """Persist basic memory and timestamps for a single group in real-time."""
+        entries = self.basic_memory.get_all(group_id)[-100:]
         self._state_store.save_working_memory(
             group_id,
             [
@@ -770,7 +763,6 @@ class EmotionalGroupChatEngine:
                     "role": e.role,
                     "content": e.content,
                     "timestamp": e.timestamp,
-                    "importance": e.importance,
                 }
                 for e in entries
             ],
@@ -780,15 +772,14 @@ class EmotionalGroupChatEngine:
     def _persist_full_state(self) -> None:
         """Persist all runtime state to disk (used on graceful shutdown)."""
         working_memories: dict[str, list[dict[str, Any]]] = {}
-        for group_id in self.working_memory.list_groups():
-            entries = self.working_memory.get_recent_entries(group_id, n=100)
+        for group_id in self.basic_memory.list_groups():
+            entries = self.basic_memory.get_all(group_id)[-100:]
             working_memories[group_id] = [
                 {
                     "user_id": e.user_id,
                     "role": e.role,
                     "content": e.content,
                     "timestamp": e.timestamp,
-                    "importance": e.importance,
                 }
                 for e in entries
             ]
@@ -826,17 +817,28 @@ class EmotionalGroupChatEngine:
         try:
             state = self._state_store.load_all()
 
-            # Working memory
-            for group_id, entries in state.get("working_memories", {}).items():
-                for e in entries:
-                    self.working_memory.add_entry(
-                        group_id=group_id,
-                        user_id=e.get("user_id", "unknown"),
-                        role=e.get("role", "human"),
-                        content=e.get("content", ""),
-                        importance=e.get("importance", 0.5),
-                        timestamp=e.get("timestamp"),
+            # Basic memory (fallback: migrate from old working_memories snapshots)
+            basic_mem_data = state.get("basic_memory")
+            if basic_mem_data:
+                try:
+                    self.basic_memory = BasicMemoryManager.from_dict(basic_mem_data)
+                except Exception as exc:
+                    logger.warning("基础记忆恢复失败，使用空实例: %s", exc)
+                    self.basic_memory = BasicMemoryManager(
+                        hard_limit=self.config.get("basic_memory_hard_limit", 30),
+                        context_window=self.config.get("basic_memory_context_window", 5),
                     )
+            else:
+                # Migration fallback: load from legacy working_memories format
+                for group_id, entries in state.get("working_memories", {}).items():
+                    for e in entries:
+                        self.basic_memory.add_entry(
+                            group_id=group_id,
+                            user_id=e.get("user_id", "unknown"),
+                            role=e.get("role", "human"),
+                            content=e.get("content", ""),
+                            timestamp=e.get("timestamp"),
+                        )
 
             # Assistant emotion
             ae = state.get("assistant_emotion")
@@ -863,18 +865,6 @@ class EmotionalGroupChatEngine:
                 except Exception as exc:
                     logger.warning("事件记忆恢复失败，使用空实例: %s", exc)
                     self.event_memory = EventMemoryManager()
-
-            # Basic memory
-            basic_mem_data = state.get("basic_memory")
-            if basic_mem_data:
-                try:
-                    self.basic_memory = BasicMemoryManager.from_dict(basic_mem_data)
-                except Exception as exc:
-                    logger.warning("基础记忆恢复失败，使用空实例: %s", exc)
-                    self.basic_memory = BasicMemoryManager(
-                        hard_limit=self.config.get("basic_memory_hard_limit", 30),
-                        context_window=self.config.get("basic_memory_context_window", 5),
-                    )
 
             # Diary state
             diary_state = state.get("diary_state")
@@ -995,34 +985,6 @@ class EmotionalGroupChatEngine:
     # Pipeline stages
     # ==================================================================
 
-    @staticmethod
-    def _compute_message_importance(content: str) -> float:
-        """Score message importance for working-memory retention.
-
-        Returns a float between 0.0 and 1.0.
-        """
-        importance = 0.5
-        lowered = content.lower()
-
-        # Mentioned / addressed → higher importance
-        if "@" in content:
-            importance += 0.2
-
-        # Crisis / urgency keywords
-        crisis_keywords = ["紧急", "救命", "危险", "help", "crisis", "urgent", "自杀", "死亡"]
-        if any(kw in lowered for kw in crisis_keywords):
-            importance += 0.3
-
-        # Substantial content → slightly higher
-        if len(content) > 100:
-            importance += 0.1
-
-        # Question marks → user is seeking info / engagement
-        if "?" in content or "？" in content:
-            importance += 0.05
-
-        return min(1.0, importance)
-
     def _perception(
         self,
         group_id: str,
@@ -1041,13 +1003,6 @@ class EmotionalGroupChatEngine:
             )
             self.identity_resolver.resolve(ctx, self.user_manager, group_id)
 
-        # Old: Register participants in legacy user memory (kept for compat)
-        for p in participants:
-            self.user_memory.register_user(
-                profile=p.as_user_profile(),
-                group_id=group_id,
-            )
-
         # Resolve current sender to a stable user_id (may reuse UUID from
         # participants or fall back to speaker name / platform_uid lookup).
         sender_ctx = IdentityContext(
@@ -1063,30 +1018,19 @@ class EmotionalGroupChatEngine:
         resolved_user_id = sender_profile.user_id
         resolved_speaker_name = sender_profile.name
 
-        # Compute dynamic importance for working-memory retention
-        importance = self._compute_message_importance(message.content or "")
-
-        # New: Add to basic memory and archive to disk
+        # Add to basic memory and archive to disk
         entry = self.basic_memory.add_entry(
             group_id=group_id,
             user_id=resolved_user_id,
             speaker_name=resolved_speaker_name,
             role="human",
             content=message.content,
+            channel_user_id=message.channel_user_id or "",
+            multimodal_inputs=[
+                dict(item) for item in message.multimodal_inputs
+            ] if message.multimodal_inputs else None,
         )
         self.basic_store.append(entry)
-
-        # Old: Add to working memory
-        self.working_memory.add_entry(
-            group_id=group_id,
-            user_id=resolved_user_id,
-            role="human",
-            content=message.content,
-            channel=message.channel or "",
-            channel_user_id=message.channel_user_id or "",
-            importance=importance,
-            multimodal_inputs=list(message.multimodal_inputs) if message.multimodal_inputs else None,
-        )
 
         # Old: Buffer raw message for structured observation extraction
         if message.content and resolved_user_id:
@@ -1229,25 +1173,27 @@ class EmotionalGroupChatEngine:
         is_group_chat = not group_id.startswith("private_")
 
         # Determine if the current sender is a developer
-        caller_entry = None
+        caller_profile = None
         if message.channel_user_id and message.channel:
-            caller_entry = self.user_memory.get_user_by_identity(
-                channel=message.channel, external_user_id=message.channel_user_id
+            resolved_uid = self.user_manager.resolve_user_id(
+                platform=message.channel, external_uid=message.channel_user_id
             )
-        caller_is_developer = bool(caller_entry and caller_entry.profile.is_developer)
+            if resolved_uid:
+                caller_profile = self.user_manager.get_user(resolved_uid, group_id)
+        caller_is_developer = bool(caller_profile and caller_profile.is_developer)
 
         if decision.strategy == ResponseStrategy.IMMEDIATE:
             self._log_inner_thought("让我好好想想该怎么回应...")
             # Build recent participants list for identity context
             recent_participants: list[dict[str, Any]] = []
             if is_group_chat:
-                group_entries = self.user_memory.entries.get(group_id, {})
-                for uid, entry in list(group_entries.items())[:5]:
-                    qq_id = entry.profile.identities.get("qq_plugin_sirius_chat_v28", "")
+                group_entries = self.user_manager.entries.get(group_id, {})
+                for uid, profile in list(group_entries.items())[:5]:
+                    qq_id = profile.identities.get("qq_plugin_sirius_chat_v28", "")
                     recent_participants.append({
                         "user_id": uid,
-                        "name": entry.profile.name,
-                        "aliases": entry.profile.aliases,
+                        "name": profile.name,
+                        "aliases": profile.aliases,
                         "qq_id": qq_id or uid,
                     })
             glossary = self.glossary_manager.build_prompt_section(
@@ -1337,10 +1283,10 @@ class EmotionalGroupChatEngine:
                 )
                 # Collect all developer profiles in the current group for security check
                 developer_profiles: list[UserProfile] = []
-                group_entries = self.user_memory.entries.get(group_id, {})
-                for entry in group_entries.values():
-                    if entry.profile.is_developer:
-                        developer_profiles.append(entry.profile)
+                group_entries = self.user_manager.entries.get(group_id, {})
+                for profile in group_entries.values():
+                    if profile.is_developer:
+                        developer_profiles.append(profile)
                 for skill_name, params in calls:
                     skill = self._skill_registry.get(skill_name)
                     if skill is None:
@@ -1398,35 +1344,25 @@ class EmotionalGroupChatEngine:
                     ),
                 })
 
-                # Persist intermediate skill turns into working memory with low
-                # importance so they fade naturally when the conversation moves on.
-                self.working_memory.add_entry(
+                # Persist intermediate skill turns into basic memory
+                self.basic_memory.add_entry(
                     group_id=group_id,
                     user_id="assistant",
                     role="assistant",
                     content=strip_skill_calls(say),
-                    importance=0.3,
+                    speaker_name=self.persona.name if self.persona else "assistant",
                 )
                 if skill_results:
-                    self.working_memory.add_entry(
+                    self.basic_memory.add_entry(
                         group_id=group_id,
                         user_id="skill_system",
                         role="system",
                         content=f"[技能执行结果]\n{'\n'.join(skill_results)}",
-                        importance=0.3,
                     )
 
-            # Record assistant reply into working memory so future turns can see it
+            # Record assistant reply into basic memory so future turns can see it
             clean_reply = strip_skill_calls(say).strip()
             if clean_reply:
-                self.working_memory.add_entry(
-                    group_id=group_id,
-                    user_id="assistant",
-                    role="assistant",
-                    content=clean_reply,
-                    importance=0.6,
-                )
-                # New: Also record into basic memory
                 self.basic_memory.add_entry(
                     group_id=group_id,
                     user_id="assistant",
@@ -1720,7 +1656,7 @@ class EmotionalGroupChatEngine:
             self.response_assembler.skill_registry = skill_registry
 
     def _get_recent_messages(self, group_id: str, n: int = 10) -> list[dict[str, Any]]:
-        entries = self.working_memory.get_recent_entries(group_id, n=n)
+        entries = self.basic_memory.get_all(group_id)[-n:]
         return [
             {
                 "user_id": e.user_id,
@@ -1731,13 +1667,13 @@ class EmotionalGroupChatEngine:
         ]
 
     def _build_history_messages(self, group_id: str, n: int = 10) -> list[dict[str, Any]]:
-        """Convert working-memory entries to standard OpenAI messages format.
+        """Convert basic-memory entries to standard OpenAI messages format.
 
         The most recent entry (the current message just added by perception)
         is included so the caller can decide whether to keep or replace it.
         Supports multimodal inputs (image URLs) when present.
         """
-        entries = self.working_memory.get_recent_entries(group_id, n=n)
+        entries = self.basic_memory.get_all(group_id)[-n:]
         messages: list[dict[str, Any]] = []
         for e in entries:
             role = "user" if e.role == "human" else e.role

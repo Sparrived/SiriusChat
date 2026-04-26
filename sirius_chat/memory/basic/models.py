@@ -22,6 +22,8 @@ class BasicMemoryEntry:
     timestamp: str         # ISO 8601
     speaker_name: str = "" # display name (nickname, card, or persona name)
     system_prompt: str = ""  # system prompt used for this assistant turn
+    channel_user_id: str = ""  # platform raw id (e.g. QQ number) for name constraints
+    multimodal_inputs: list[dict[str, str]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -33,6 +35,8 @@ class BasicMemoryEntry:
             "content": self.content,
             "timestamp": self.timestamp,
             "system_prompt": self.system_prompt,
+            "channel_user_id": self.channel_user_id,
+            "multimodal_inputs": self.multimodal_inputs,
         }
 
     @classmethod
@@ -46,6 +50,11 @@ class BasicMemoryEntry:
             content=data.get("content", ""),
             timestamp=data.get("timestamp", ""),
             system_prompt=data.get("system_prompt", ""),
+            channel_user_id=data.get("channel_user_id", ""),
+            multimodal_inputs=[
+                dict(item) for item in data.get("multimodal_inputs", [])
+                if isinstance(item, dict)
+            ],
         )
 
 
