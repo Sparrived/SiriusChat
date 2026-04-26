@@ -519,3 +519,5 @@ python scripts/ci_check.py
 | `docs/architecture.md` | 架构边界与模块交互权威文档 |
 | `docs/skill-authoring.md` | SKILL 编写规范 |
 | `docs/best-practices.md` | 开发最佳实践 |
+
+> **注意**：`ncatbot_env/` 是项目实际的 QQ Bot 运行测试环境（基于 NcatBot/NapCat），与 `sirius_chat` 主源码无直接耦合，清理代码时**不要删除或修改**此目录。

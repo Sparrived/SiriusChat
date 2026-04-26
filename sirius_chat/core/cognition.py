@@ -8,8 +8,6 @@ Philosophy alignment (v0.28+):
     - Single LLM fallback covers the remaining ~10% with one cheap call.
     - Emotion flows naturally into intent scoring without async boundary.
 
-Merged from EmotionAnalyzer + IntentAnalyzerV3 (kept standalone for
-backward compatibility but no longer used by EmotionalGroupChatEngine).
 """
 
 from __future__ import annotations
