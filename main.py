@@ -93,13 +93,6 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         help="检查配置文件（指定配置路径）",
     )
     parser.add_argument(
-        "--engine",
-        type=str,
-        default="legacy",
-        choices=["legacy", "emotional"],
-        help="选择引擎类型：legacy（AsyncRolePlayEngine，默认）或 emotional（EmotionalGroupChatEngine，v0.28+）",
-    )
-    parser.add_argument(
         "--persona",
         type=str,
         default="",
@@ -765,79 +758,6 @@ def _bootstrap_primary_user(
     return participant
 
 
-def run_interactive_session(
-    config: SessionConfig,
-    primary_user: Participant,
-    runtime: WorkspaceRuntime,
-    work_path: Path,
-    provider_registry: ProviderRegistry,
-    refresh_provider: Callable[[], LLMProvider | None],
-    transcript: Transcript | None,
-    *,
-    input_func: InputFunc = input,
-    print_func: PrintFunc = print,
-) -> Transcript:
-    active_transcript = transcript
-    current_primary_user = primary_user
-    primary_speaker = current_primary_user.name
-    print_func(
-        f"当前模式：与 {config.agent.name} 一对一对话（你是 {primary_speaker}）。"
-        f"输入 {RESET_USER_COMMAND} 可重置用户，输入 {PROVIDER_COMMAND_PREFIX} 管理 provider，输入 exit/quit 结束。"
-    )
-    while True:
-        raw_text = input_func("你> ").strip()
-        if raw_text.lower() in {"exit", "quit", "q"}:
-            break
-        if raw_text == RESET_USER_COMMAND:
-            print_func("开始重置主用户档案。")
-            participant = _collect_primary_user_from_input(input_func=input_func, print_func=print_func)
-            current_primary_user = participant
-            primary_speaker = participant.name
-            _persist_primary_user(work_path=work_path, participant=participant, transcript=None, print_func=print_func)
-            asyncio.run(runtime.clear_session(config.session_id))
-            asyncio.run(runtime.set_primary_user(config.session_id, participant))
-            active_transcript = None
-            print_func(f"已重置主用户：{participant.name}(id={participant.user_id})，会话上下文已清空。")
-            continue
-        if not raw_text:
-            continue
-
-        provider_handled, provider_changed = _handle_provider_command(
-            raw_text,
-            provider_registry=provider_registry,
-            print_func=print_func,
-        )
-        if provider_handled:
-            if provider_changed:
-                runtime.set_provider(refresh_provider())
-            continue
-
-        human_turn = _parse_user_turn(raw_text)
-        human_turn.speaker = primary_speaker
-        try:
-            active_transcript = asyncio.run(
-                runtime.run_live_message(
-                    session_id=config.session_id,
-                    turn=human_turn,
-                    user_profile=current_primary_user.as_user_profile(),
-                )
-            )
-        except RuntimeError as exc:
-            print_func(f"调用模型失败：{exc}")
-            print_func("你可以检查网络或配置后继续输入重试。")
-            continue
-        latest_message = active_transcript.messages[-1]
-        print_func(f"[{latest_message.speaker}] {latest_message.content}")
-        _persist_primary_user(
-            work_path=work_path,
-            participant=current_primary_user,
-            transcript=active_transcript,
-            print_func=print_func,
-        )
-
-    return active_transcript or Transcript()
-
-
 def main(
     argv: list[str] | None = None,
     *,
@@ -992,66 +912,47 @@ def main(
             transcript = asyncio.run(runtime.get_transcript(session_config.session_id))
         asyncio.run(runtime.set_primary_user(session_config.session_id, primary_user))
 
-        if args.engine == "emotional":
-            persona = None
-            if args.persona:
-                if args.persona == "generated":
-                    persona = "generated"  # Will be resolved by WorkspaceRuntime
-                else:
-                    from sirius_chat.core.persona_generator import PersonaGenerator
-                    try:
-                        persona = PersonaGenerator.from_template(args.persona)
-                        print_func(f"已加载人格模板：{persona.name}")
-                    except ValueError as e:
-                        print_func(f"未知人格模板：{e}")
-            # Load emotional engine config from config file if available
-            emotional_config: dict[str, Any] | None = None
-            try:
-                raw_cfg = load_json_document(config_path)
-                if isinstance(raw_cfg, dict):
-                    emotional_config = raw_cfg.get("emotional_engine")
-                    # Also load persona from config if not overridden on CLI
-                    if persona is None:
-                        cfg_persona = raw_cfg.get("persona")
-                        if cfg_persona and cfg_persona != "generated":
-                            from sirius_chat.core.persona_generator import PersonaGenerator
-                            try:
-                                persona = PersonaGenerator.from_template(str(cfg_persona))
-                                print_func(f"已从配置加载人格模板：{persona.name}")
-                            except ValueError:
-                                pass
-            except Exception:
-                pass
+        persona = None
+        if args.persona:
+            if args.persona == "generated":
+                persona = "generated"  # Will be resolved by WorkspaceRuntime
+            else:
+                from sirius_chat.core.persona_generator import PersonaGenerator
+                try:
+                    persona = PersonaGenerator.from_template(args.persona)
+                    print_func(f"已加载人格模板：{persona.name}")
+                except ValueError as e:
+                    print_func(f"未知人格模板：{e}")
+        # Load emotional engine config from config file if available
+        emotional_config: dict[str, Any] | None = None
+        try:
+            raw_cfg = load_json_document(config_path)
+            if isinstance(raw_cfg, dict):
+                emotional_config = raw_cfg.get("emotional_engine")
+                # Also load persona from config if not overridden on CLI
+                if persona is None:
+                    cfg_persona = raw_cfg.get("persona")
+                    if cfg_persona and cfg_persona != "generated":
+                        from sirius_chat.core.persona_generator import PersonaGenerator
+                        try:
+                            persona = PersonaGenerator.from_template(str(cfg_persona))
+                            print_func(f"已从配置加载人格模板：{persona.name}")
+                        except ValueError:
+                            pass
+        except Exception:
+            pass
 
-            transcript = _run_emotional_interactive_session(
-                work_path=work_path,
-                primary_user=primary_user,
-                provider_factory=lambda: _build_provider(providers_config, config_root, provider_factory) if provider_factory is not None else None,
-                input_func=input_func,
-                print_func=print_func,
-                persona=persona,
-                config=emotional_config,
-            )
-        else:
-            transcript = run_interactive_session(
-                session_config,
-                primary_user,
-                runtime,
-                work_path,
-                provider_registry,
-                lambda: _build_provider(providers_config, config_root, provider_factory) if provider_factory is not None else None,
-                transcript,
-                input_func=input_func,
-                print_func=print_func,
-            )
+        _run_emotional_interactive_session(
+            work_path=work_path,
+            primary_user=primary_user,
+            provider_factory=lambda: _build_provider(providers_config, config_root, provider_factory) if provider_factory is not None else None,
+            input_func=input_func,
+            print_func=print_func,
+            persona=persona,
+            config=emotional_config,
+        )
 
-        if args.engine == "emotional":
-            print_func("\n[emotional engine 会话结束]")
-        else:
-            output_path = Path(args.output) if args.output else Path("transcript.json")
-            if not output_path.is_absolute():
-                output_path = work_path / output_path
-            _write_transcript_output(transcript, output_path)
+        print_func("\n[emotional engine 会话结束]")
 
         return 0
     except KeyboardInterrupt:

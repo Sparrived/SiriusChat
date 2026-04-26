@@ -498,42 +498,33 @@ def _setup_resume_monkeypatch(monkeypatch, tmp_path, runtime):
 
 def test_main_auto_resumes_by_default(monkeypatch, tmp_path) -> None:
     loaded_transcript = object()
-    captured = {"transcript": None}
     runtime = _FakeRuntime(loaded_transcript)
     _setup_resume_monkeypatch(monkeypatch, tmp_path, runtime)
 
-    def _fake_run(*_args, **kwargs):  # noqa: ANN001
-        captured["transcript"] = _args[6] if len(_args) > 6 else kwargs.get("transcript")
-        return main_module.Transcript()
-
-    monkeypatch.setattr(main_module, "run_interactive_session", _fake_run)
+    monkeypatch.setattr(
+        main_module, "_run_emotional_interactive_session", lambda **_k: main_module.Transcript()
+    )
     exit_code = main_module.main([], input_func=lambda _p: "", print_func=lambda _m: None)
     assert exit_code == 0
-    assert captured["transcript"] is loaded_transcript
     assert runtime.cleared_sessions == []
 
 
 def test_main_no_resume_disables_auto_resume(monkeypatch, tmp_path) -> None:
-    captured: dict[str, object | None] = {"transcript": "sentinel"}
     runtime = _FakeRuntime(object())
     _setup_resume_monkeypatch(monkeypatch, tmp_path, runtime)
 
-    def _fake_run(*_args, **kwargs):  # noqa: ANN001
-        captured["transcript"] = _args[6] if len(_args) > 6 else kwargs.get("transcript")
-        return main_module.Transcript()
-
-    monkeypatch.setattr(main_module, "run_interactive_session", _fake_run)
+    monkeypatch.setattr(
+        main_module, "_run_emotional_interactive_session", lambda **_k: main_module.Transcript()
+    )
     exit_code = main_module.main(["--no-resume"], input_func=lambda _p: "", print_func=lambda _m: None)
     assert exit_code == 0
-    assert captured["transcript"] is None
     assert runtime.cleared_sessions == ["default"]
 
 
-def test_main_writes_default_output_under_relative_work_path(monkeypatch, tmp_path) -> None:
+def test_main_emotional_path_runs_without_error(monkeypatch, tmp_path) -> None:
     relative_work_path = Path("runtime")
     config_path = tmp_path / "config.json"
     config_path.write_text("{}", encoding="utf-8")
-    captured: dict[str, Path | None] = {"output_path": None}
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(main_module, "_resolve_runtime_paths", lambda *_a, **_k: (config_path, relative_work_path))
@@ -559,17 +550,13 @@ def test_main_writes_default_output_under_relative_work_path(monkeypatch, tmp_pa
     )
     monkeypatch.setattr(main_module, "_build_provider", lambda *_a, **_k: object())
     monkeypatch.setattr(main_module, "_build_runtime", lambda **_k: _FakeRuntime(None))
-    monkeypatch.setattr(main_module, "run_interactive_session", lambda *_a, **_k: main_module.Transcript())
     monkeypatch.setattr(
-        main_module,
-        "_write_transcript_output",
-        lambda _transcript, output_path: captured.__setitem__("output_path", output_path),
+        main_module, "_run_emotional_interactive_session", lambda **_k: main_module.Transcript()
     )
 
     exit_code = main_module.main([], input_func=lambda _p: "", print_func=lambda _m: None)
 
     assert exit_code == 0
-    assert captured["output_path"] == relative_work_path / "transcript.json"
 
 
 def test_handle_provider_command_registers_under_workspace_root(monkeypatch, tmp_path) -> None:
