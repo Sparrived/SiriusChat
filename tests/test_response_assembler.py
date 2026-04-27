@@ -19,14 +19,14 @@ class TestStyleAdapter:
     def test_hot_accelerating_limits_tokens(self):
         adapter = StyleAdapter()
         style = adapter.adapt(heat_level="hot", pace="accelerating")
-        assert style.max_tokens <= 80
+        assert style.max_tokens <= 256
         assert style.temperature == 0.7
 
     def test_cold_stable_allows_longer(self):
         adapter = StyleAdapter()
         style = adapter.adapt(heat_level="cold", pace="decelerating", topic_stability=0.8)
         assert style.max_tokens > 128
-        assert style.max_tokens <= 400
+        assert style.max_tokens <= 1600
 
     def test_user_concise_override(self):
         adapter = StyleAdapter()
@@ -44,7 +44,7 @@ class TestStyleAdapter:
     def test_overheated_very_short(self):
         adapter = StyleAdapter()
         style = adapter.adapt(heat_level="overheated", pace="accelerating")
-        assert style.max_tokens == 50
+        assert style.max_tokens <= 128
 
 
 class TestResponseAssembler:

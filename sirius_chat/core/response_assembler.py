@@ -54,18 +54,18 @@ class StyleAdapter:
 
     # Token caps by heat level (paper §5.4.2)
     _HEAT_LIMITS: dict[str, int] = {
-        "cold": 256,
-        "warm": 128,
-        "hot": 80,
-        "overheated": 50,
+        "cold": 1024,
+        "warm": 512,
+        "hot": 256,
+        "overheated": 128,
     }
 
     # Token caps by conversation pace
     _PACE_LIMITS: dict[str, int] = {
-        "accelerating": 80,
-        "steady": 128,
-        "decelerating": 200,
-        "silent": 256,
+        "accelerating": 256,
+        "steady": 512,
+        "decelerating": 1024,
+        "silent": 1024,
     }
 
     def adapt(
@@ -94,10 +94,10 @@ class StyleAdapter:
         tone_instruction = "保持自然友好"
         length_instruction = ""
 
-        # Group chat short-sentence preference (3-10 Chinese chars)
+        # Group chat short-sentence preference (capped at 50 Chinese chars)
         if is_group_chat:
-            max_tokens = min(max_tokens, 256)
-            length_instruction = "群聊请用 不多于30 字的短句回复，像真实群友一样自然接话。"
+            max_tokens = min(max_tokens, 512)
+            length_instruction = "群聊回复请控制在 30 字以内，不要换行，像真实群友一样自然接话。"
 
         # Persona style override (highest priority)
         if persona:
@@ -109,7 +109,7 @@ class StyleAdapter:
                 style = persona.communication_style.strip().lower()
                 if style == "concise":
                     max_tokens = min(max_tokens, 80)
-                    length_instruction = "请用1-2句话简洁回复。"
+                    length_instruction = "请控制在 30 字以内，用1-2句话简洁回复，不要换行。"
                 elif style == "detailed":
                     length_instruction = "可以给出较详细的解释。"
                 elif style == "formal":
@@ -131,7 +131,7 @@ class StyleAdapter:
             style = (user_communication_style or "").strip().lower()
             if style == "concise":
                 max_tokens = min(max_tokens, 80)
-                length_instruction = "请用1-2句话简洁回复。"
+                length_instruction = "请控制在 30 字以内，用1-2句话简洁回复，不要换行。"
                 temperature = 0.5
             elif style == "detailed":
                 length_instruction = "可以给出较详细的解释。"
@@ -227,7 +227,7 @@ class ResponseAssembler:
             sections.append(
                 "[场景定位]\n"
                 "你在一个多人聊天场景里。看到消息时，按自己的性格和情绪决定是否回应。\n"
-                "回应时用自然口语，短句优先，不解释、不总结、不机械关怀。"
+                "回应时请控制在 30 字以内，用自然口语，短句优先，不解释、不总结、不机械关怀，不要换行。"
             )
 
         # 1b. Identity verification note (anti-spoofing)
@@ -434,7 +434,8 @@ class ResponseAssembler:
         """Instruct the model to produce plain spoken reply."""
         return (
             "[输出格式]\n"
-            "直接输出你要说的话，不要添加任何额外标签或格式标记。"
+            "直接输出你要说的话，不要添加任何额外标签或格式标记。\n"
+            "回复内容请控制在 30 字以内，禁止换行，连续输出，不要刷屏。"
         )
 
     def _build_skill_descriptions(self, caller_is_developer: bool = False) -> str:
@@ -515,7 +516,7 @@ class ResponseAssembler:
             skill_desc = self._build_skill_descriptions(caller_is_developer=caller_is_developer)
             if skill_desc:
                 sections.append(skill_desc)
-        sections.append(f"[长度要求] {style_params.length_instruction or '保持简洁自然'}")
+        sections.append(f"[长度要求] {style_params.length_instruction or '保持简洁，控制在 30 字以内，禁止换行'}")
         # Dual-output format must land in system prompt
         if self.enable_dual_output:
             sections.append(self._build_output_format())
@@ -549,7 +550,7 @@ class ResponseAssembler:
                 f"[话题建议] 你可以基于这段群聊记忆自然地开启话题：{topic_context}"
             )
         if is_group_chat:
-            sections.append("[长度要求] 群聊请用 3-10 字的短句回复，像真实群友一样自然接话。")
+            sections.append("[长度要求] 群聊请控制在 30 字以内，不要换行，像真实群友一样自然接话。")
         if group_profile and group_profile.interest_topics:
             topics = ", ".join(group_profile.interest_topics[:3])
             sections.append(f"[群体兴趣] {topics}")

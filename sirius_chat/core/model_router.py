@@ -60,21 +60,21 @@ _DEFAULT_TASK_REGISTRY: dict[str, TaskConfig] = {
     "response_generate": TaskConfig(
         model_name="gpt-4o",
         temperature=0.7,
-        max_tokens=512,
+        max_tokens=4096,
         timeout=30.0,
         fallback_model="deepseek-reasoner",
     ),
     "proactive_generate": TaskConfig(
         model_name="gpt-4o",
         temperature=0.8,
-        max_tokens=256,
+        max_tokens=1024,
         timeout=20.0,
         fallback_model="deepseek-chat",
     ),
     "empathy_generate": TaskConfig(
         model_name="gpt-4o",
         temperature=0.6,
-        max_tokens=256,
+        max_tokens=512,
         timeout=20.0,
         fallback_model="deepseek-chat",
     ),
@@ -158,12 +158,12 @@ class ModelRouter:
             # Critical → strongest available, very focused
             model = self._stronger_model(model)
             temperature = max(0.1, temperature - 0.3)
-            max_tokens = min(1024, int(max_tokens * 1.3))
+            max_tokens = max(max_tokens, min(8192, int(max_tokens * 1.3)))
         elif urgency > _URGENCY_ESCALATE:
             # High urgency → stronger model, slightly lower temperature
             model = self._stronger_model(model)
             temperature = max(0.2, temperature - 0.2)
-            max_tokens = min(768, int(max_tokens * 1.1))
+            max_tokens = max(max_tokens, min(4096, int(max_tokens * 1.1)))
 
         # Heat adaptation
         if heat_level == "overheated":
@@ -176,7 +176,7 @@ class ModelRouter:
         if style == "concise":
             max_tokens = min(max_tokens, 80)
         elif style == "detailed":
-            max_tokens = min(1024, int(max_tokens * 1.2))
+            max_tokens = max(max_tokens, min(8192, int(max_tokens * 1.2)))
 
         return TaskConfig(
             model_name=model,

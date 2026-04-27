@@ -660,7 +660,7 @@ class EmotionalGroupChatEngine:
         Window is short (default 5 min) so the AI can create more shared
         memories with the developer in private-chat contexts.
         """
-        interval = self.config.get("proactive_developer_chat_interval_seconds", 300)
+        interval = self.config.get("proactive_developer_chat_interval_seconds", 1800)
         min_silence = self.config.get("proactive_developer_min_silence_seconds", 120)
         while self._bg_running:
             await asyncio.sleep(interval)
@@ -821,12 +821,23 @@ class EmotionalGroupChatEngine:
         """
         return self._pending_developer_chats.pop(group_id, [])
 
-    async def tick_delayed_queue(self, group_id: str) -> list[dict[str, Any]]:
+    async def tick_delayed_queue(
+        self,
+        group_id: str,
+        on_partial_reply: Callable[[str], Any] | None = None,
+    ) -> list[dict[str, Any]]:
         """Process delayed response queue for a group.
 
         If multiple items trigger in the same tick, merge them into a single
         prompt so the model generates only one consolidated reply.
         Supports multi-round SKILL execution similar to immediate responses.
+
+        Args:
+            group_id: The group / private chat to tick.
+            on_partial_reply: Optional async callable invoked immediately
+                when non-skill text is extracted *before* skills are executed.
+                This lets callers send "让我查一下…" in real time while
+                the skill runs, rather than batching everything at the end.
         """
         recent = self._get_recent_messages(group_id, n=10)
         triggered = self.delayed_queue.tick(group_id, recent)
@@ -881,8 +892,14 @@ class EmotionalGroupChatEngine:
             # Extract non-skill text as a partial reply to send immediately.
             non_skill_text = strip_skill_calls(reply).strip()
             if non_skill_text:
-                partial_replies.append(non_skill_text)
                 self._log_inner_thought(f"先跟用户回一声：{non_skill_text[:40]}...")
+                if on_partial_reply is not None:
+                    try:
+                        await on_partial_reply(non_skill_text)
+                    except Exception as exc:
+                        logger.warning("on_partial_reply failed: %s", exc)
+                else:
+                    partial_replies.append(non_skill_text)
 
             # Execute skills and collect results
             skill_results: list[str] = []
@@ -1594,8 +1611,23 @@ class EmotionalGroupChatEngine:
         If *multimodal_blocks* is non-empty, returns an OpenAI-compatible
         ``content`` list (text + image_url parts) so local image paths are
         later converted to base64 data URLs by the transport layer.
+
+        Long text results are truncated to avoid consuming excessive context
+        window tokens, leaving room for the model's final reply.
         """
+        _SKILL_RESULT_CHAR_LIMIT = 12000  # ~4k tokens, leaves headroom for reply
         results_text = "\n".join(skill_results)
+        if len(results_text) > _SKILL_RESULT_CHAR_LIMIT:
+            truncated = results_text[:_SKILL_RESULT_CHAR_LIMIT]
+            # Try to cut at a newline boundary for cleanliness
+            last_nl = truncated.rfind("\n")
+            if last_nl > _SKILL_RESULT_CHAR_LIMIT * 0.8:
+                truncated = truncated[:last_nl]
+            results_text = (
+                f"{truncated}\n\n"
+                f"[注：技能结果过长，已截断至前 {_SKILL_RESULT_CHAR_LIMIT} 字符，"
+                f"原始长度 {len(results_text)} 字符]"
+            )
         text = f"[技能执行结果]\n{results_text}{suffix}"
         if not multimodal_blocks:
             return text
@@ -1627,10 +1659,6 @@ class EmotionalGroupChatEngine:
             caller_is_developer=caller_is_developer,
             glossary_section=glossary,
         )
-        # Distinguish immediate vs delayed tone in system prompt
-        has_immediate = any(i.strategy_decision.strategy == ResponseStrategy.IMMEDIATE for i in items)
-        if has_immediate:
-            bundle.system_prompt = "[注意] 你被直接@或求助了，请认真回应。\n\n" + bundle.system_prompt
         return bundle
 
     def _pick_proactive_topic(self, group_id: str) -> str:
