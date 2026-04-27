@@ -98,10 +98,6 @@ class DelayedResponseQueue:
         """
         queue = self._queues.get(group_id, [])
         pending = [i for i in queue if i.status == "pending"]
-        logger.debug(
-            "Ticking delayed queue for group %s: %d total, %d pending",
-            group_id, len(queue), len(pending),
-        )
         if not queue:
             return []
 
