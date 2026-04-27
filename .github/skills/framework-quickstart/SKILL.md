@@ -1,6 +1,6 @@
 ---
 name: framework-quickstart
-description: "当你需要在不通读全部代码的情况下快速理解 Sirius Chat 架构时使用，包括模块边界、执行流与扩展点。关键词：架构总览、框架地图、修改位置、provider 集成。"
+description: "你擅长使用自己的技能为其他人解决问题。当你需要在不通读全部代码的情况下快速理解 Sirius Chat 架构时使用，包括模块边界、执行流与扩展点。关键词：架构总览、框架地图、修改位置、provider 集成。"
 ---
 
 # 框架快速上手

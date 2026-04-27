@@ -64,12 +64,15 @@ class SkillExecutor:
         self._layout = work_path if isinstance(work_path, WorkspaceLayout) else WorkspaceLayout(work_path)
         self._data_stores: dict[str, SkillDataStore] = {}
 
-    def _get_data_store(self, skill_name: str) -> SkillDataStore:
+    def get_data_store(self, skill_name: str) -> SkillDataStore:
         """Get or create the persistent data store for a skill."""
         if skill_name not in self._data_stores:
             store_path = self._layout.skill_data_dir() / f"{skill_name}.json"
             self._data_stores[skill_name] = SkillDataStore(store_path)
         return self._data_stores[skill_name]
+
+    # Backward-compatible alias
+    _get_data_store = get_data_store
 
     def execute(
         self,
@@ -133,6 +136,15 @@ class SkillExecutor:
             data_store.save()
             skill_result = SkillResult.from_raw_result(result)
             skill_result.success = True if skill_result.error == "" else skill_result.success
+            logger.debug(
+                "SKILL '%s' 执行成功 | summary=%r | text_blocks=%d | "
+                "multimodal_blocks=%d | internal_metadata=%r",
+                skill.name,
+                skill_result.to_display_text()[:200],
+                len(skill_result.text_blocks),
+                len(skill_result.multimodal_blocks),
+                skill_result.internal_metadata,
+            )
         except Exception as exc:
             logger.error("SKILL '%s' 执行异常: %s", skill.name, exc)
             skill_result = SkillResult(success=False, error=str(exc))

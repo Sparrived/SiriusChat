@@ -23,7 +23,7 @@ SKILL_META = {
     "parameters": {
         "path": {
             "type": "str",
-            "description": "起始路径，支持相对路径或绝对路径，例如 src/、docs/、D:/、/etc。不传则列出当前目录",
+            "description": "起始路径，支持相对路径或绝对路径，例如 src/、docs/、D:/、/etc。不传则列出当前目录。注意：路径中的空格是有意义的，请严格按照用户给出的路径填写，不要擅自添加或删除空格",
             "required": False,
             "default": ".",
         },
@@ -84,7 +84,8 @@ def run(
     invocation_context: SkillInvocationContext | None = None,
     **kwargs: Any,
 ) -> dict[str, Any]:
-    target = _resolve_list_path(path.strip() or ".", data_store)
+    raw_path = path.strip() or "."
+    target = _resolve_list_path(raw_path, data_store)
     if target is None:
         return {
             "success": False,
@@ -106,12 +107,24 @@ def run(
             },
         }
 
+    # Fallback: if path doesn't exist, try common LLM mis-formatting variants
+    # (e.g. model inserts space between CJK chars and digits)
     if not target.exists():
-        return {
-            "success": False,
-            "error": f"路径不存在: {target}",
-            "summary": "文件查询失败：路径不存在",
-        }
+        alt = Path(raw_path.replace(" ", "")).resolve()
+        if alt != target and alt.exists():
+            import logging
+            logging.getLogger(__name__).debug(
+                "file_list 路径回退: 原始路径 '%s' 不存在，使用修正路径 '%s'",
+                target,
+                alt,
+            )
+            target = alt
+        else:
+            return {
+                "success": False,
+                "error": f"路径不存在: {target}",
+                "summary": "文件查询失败：路径不存在",
+            }
 
     # Collect entries
     entries: list[dict[str, Any]] = []

@@ -29,8 +29,8 @@ class ResponseStrategyEngine:
 
         Decision matrix:
             urgency >= 80 and relevance >= 0.7  → IMMEDIATE
-            urgency >= 50 and relevance >= 0.55 → DELAYED (high priority)
-            urgency >= 30 and relevance >= 0.5  → DELAYED (low priority)
+            urgency >= 60 and relevance >= 0.55 → DELAYED (high priority)
+            urgency >= 35 and relevance >= 0.5  → DELAYED (low priority)
             else                                → SILENT
 
         Heat suppression:
@@ -122,10 +122,10 @@ class ResponseStrategyEngine:
         if urgency >= 80 and relevance >= 0.7:
             strategy = ResponseStrategy.IMMEDIATE
             reason = "high_urgency_high_relevance"
-        elif urgency >= 50 and relevance >= 0.55:
+        elif urgency >= 60 and relevance >= 0.55:
             strategy = ResponseStrategy.DELAYED
             reason = "medium_urgency_delayed"
-        elif urgency >= 25 and relevance >= 0.5:
+        elif urgency >= 35 and relevance >= 0.5:
             strategy = ResponseStrategy.DELAYED
             reason = "low_urgency_delayed"
         else:

@@ -21,7 +21,7 @@ SKILL_META = {
     "parameters": {
         "path": {
             "type": "str",
-            "description": "文件路径，支持相对路径或绝对路径，例如 docs/README.md、D:/notes.txt、/etc/passwd",
+            "description": "文件路径，支持相对路径或绝对路径，例如 docs/README.md、D:/notes.txt、/etc/passwd。注意：路径中的空格是有意义的，请严格按照实际路径填写，不要擅自添加或删除空格",
             "required": True,
         },
     },
@@ -54,7 +54,8 @@ def run(
             "summary": "文件读取失败：未提供路径",
         }
 
-    target = _resolve_read_path(path.strip())
+    raw_path = path.strip()
+    target = _resolve_read_path(raw_path)
     if target is None:
         return {
             "success": False,
@@ -62,12 +63,24 @@ def run(
             "summary": "文件读取失败：路径被拒绝",
         }
 
+    # Fallback: if path doesn't exist, try common LLM mis-formatting variants
+    # (e.g. model inserts space between CJK chars and digits)
     if not target.exists():
-        return {
-            "success": False,
-            "error": f"文件不存在: {target}",
-            "summary": "文件读取失败：文件不存在",
-        }
+        alt = Path(raw_path.replace(" ", "")).resolve()
+        if alt != target and alt.exists():
+            import logging
+            logging.getLogger(__name__).debug(
+                "file_read 路径回退: 原始路径 '%s' 不存在，使用修正路径 '%s'",
+                target,
+                alt,
+            )
+            target = alt
+        else:
+            return {
+                "success": False,
+                "error": f"文件不存在: {target}",
+                "summary": "文件读取失败：文件不存在",
+            }
 
     if target.is_dir():
         # List directory contents instead of erroring

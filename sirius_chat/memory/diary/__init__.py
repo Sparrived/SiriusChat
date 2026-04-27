@@ -6,6 +6,7 @@ from sirius_chat.memory.diary.models import DiaryEntry, DiaryGenerationResult
 from sirius_chat.memory.diary.manager import DiaryManager
 from sirius_chat.memory.diary.generator import DiaryGenerator
 from sirius_chat.memory.diary.indexer import DiaryIndexer, DiaryRetriever
+from sirius_chat.memory.diary.consolidator import DiaryConsolidator
 
 __all__ = [
     "DiaryEntry",
@@ -14,4 +15,5 @@ __all__ = [
     "DiaryGenerator",
     "DiaryIndexer",
     "DiaryRetriever",
+    "DiaryConsolidator",
 ]

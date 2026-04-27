@@ -14,7 +14,7 @@ import asyncio
 import json
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -211,6 +211,9 @@ class EmotionalGroupChatEngine:
         self._pending_developer_chats: dict[str, list[str]] = {}
         self._last_developer_chat_at: dict[str, float] = {}
 
+        # Reminder (timer) pending queue
+        self._pending_reminders: dict[str, list[str]] = {}
+
     # ==================================================================
     # Public API
     # ==================================================================
@@ -404,7 +407,7 @@ class EmotionalGroupChatEngine:
             asyncio.create_task(self._bg_diary_promoter(), name="diary_promote"),
             asyncio.create_task(self._bg_diary_consolidator(), name="diary_consolidator"),
             asyncio.create_task(self._bg_proactive_developer_chat_checker(), name="dev_chat"),
-
+            asyncio.create_task(self._bg_reminder_checker(), name="reminder_check"),
         ]
         for t in tasks:
             self._bg_tasks.add(t)
@@ -564,15 +567,52 @@ class EmotionalGroupChatEngine:
                 logger.warning("Diary promotion failed: %s", exc)
 
     async def _bg_diary_consolidator(self) -> None:
-        """Periodically consolidate diary entries (no-op for now)."""
+        """Periodically consolidate diary entries via LLM merging."""
         interval = self.config.get("consolidation_interval_seconds", 600)
         while self._bg_running:
             await asyncio.sleep(interval)
             try:
-                # Placeholder: deduplication or merging can be added later
-                pass
+                await self._run_diary_consolidation()
             except Exception as exc:
                 logger.warning("Diary consolidation failed: %s", exc)
+
+    async def _run_diary_consolidation(self) -> None:
+        """Find similar diary entries and merge them via LLM."""
+        from sirius_chat.memory.diary.consolidator import DiaryConsolidator
+        from sirius_chat.providers.base import GenerationRequest
+
+        consolidator = DiaryConsolidator(self.diary_manager, self.config)
+        cfg = self.model_router.resolve("memory_extract")
+
+        for group_id in list(self._group_last_message_at.keys()):
+            try:
+                clusters = consolidator.find_clusters(group_id)
+                if not clusters:
+                    continue
+
+                merged_entries: list[Any] = []
+                for cluster in clusters:
+                    system_prompt, user_content = consolidator.build_merge_prompt(cluster)
+                    request = GenerationRequest(
+                        model=cfg.model_name,
+                        system_prompt=system_prompt,
+                        messages=[{"role": "user", "content": user_content}],
+                        temperature=0.4,
+                        max_tokens=512,
+                        purpose="diary_consolidate",
+                    )
+                    raw = await self.provider_async.generate_async(request)
+                    entry = consolidator.parse_merge_result(raw, cluster)
+                    if entry:
+                        merged_entries.append(entry)
+
+                if merged_entries:
+                    consolidator.rebuild_entries(group_id, clusters, merged_entries)
+                    self._log_inner_thought(
+                        f"整理了 {len(clusters)} 组相似日记，合并成 {len(merged_entries)} 条喵~"
+                    )
+            except Exception as exc:
+                logger.warning("Diary consolidation failed for %s: %s", group_id, exc)
 
     async def proactive_check(
         self,
@@ -821,6 +861,123 @@ class EmotionalGroupChatEngine:
         """
         return self._pending_developer_chats.pop(group_id, [])
 
+    # ------------------------------------------------------------------
+    # Reminder (timer) support
+    # ------------------------------------------------------------------
+
+    def pop_reminders(self, group_id: str) -> list[str]:
+        """Pop pending reminder messages for a group.
+
+        Called by the external delivery loop to retrieve and send due reminders.
+        """
+        return self._pending_reminders.pop(group_id, [])
+
+    def _inject_group_id_into_latest_reminder(self, group_id: str) -> None:
+        """Attach group_id to the most recently created reminder."""
+        if self._skill_executor is None:
+            return
+        try:
+            store = self._skill_executor.get_data_store("reminder")
+            reminders = list(store.get("reminders", []))
+            if not reminders:
+                return
+            # Find the reminder with the latest created_at
+            latest = max(
+                reminders,
+                key=lambda r: datetime.fromisoformat(
+                    str(r.get("created_at", "1970-01-01T00:00:00+00:00")).replace("Z", "+00:00")
+                ),
+            )
+            if "group_id" not in latest:
+                latest["group_id"] = group_id
+                store.set("reminders", reminders)
+                store.save()
+        except Exception as exc:
+            logger.warning("Failed to inject group_id into reminder: %s", exc)
+
+    async def _bg_reminder_checker(self) -> None:
+        """Periodically check due reminders for all active groups."""
+        interval = self.config.get("reminder_check_interval_seconds", 10)
+        while self._bg_running:
+            await asyncio.sleep(interval)
+            try:
+                await self._check_due_reminders()
+            except Exception as exc:
+                logger.warning("Reminder check failed: %s", exc)
+
+    async def _check_due_reminders(self) -> None:
+        """Scan reminders and queue due ones for delivery.
+
+        Each due reminder triggers an AI-generated message in the persona's
+        own voice. The model receives the original reminder content as context
+        and produces a natural reply.
+        """
+        if self._skill_executor is None or self.provider_async is None:
+            return
+        store = self._skill_executor.get_data_store("reminder")
+        reminders = list(store.get("reminders", []))
+        now = datetime.now(timezone.utc)
+        triggered: list[tuple[str, str, str, str]] = []
+        remaining: list[dict[str, Any]] = []
+
+        for r in reminders:
+            if _is_reminder_due(r, now):
+                gid = r.get("group_id")
+                if gid:
+                    content = r.get("content", "提醒时间到啦")
+                    user_id = r.get("user_id", "")
+                    user_name = r.get("user_name", "")
+                    triggered.append((gid, content, user_id, user_name))
+                    r["last_fired_at"] = now.isoformat()
+                    r["fire_count"] = r.get("fire_count", 0) + 1
+                    if r.get("mode") == "once":
+                        continue  # Drop one-shot reminders after firing
+                else:
+                    logger.warning("Reminder %s has no group_id, skipping", r.get("id"))
+            remaining.append(r)
+
+        if len(remaining) != len(reminders):
+            store.set("reminders", remaining)
+            store.save()
+
+        for gid, content, user_id, user_name in triggered:
+            reply = await self._generate_reminder_message(gid, content, user_id, user_name)
+            if reply:
+                self._pending_reminders.setdefault(gid, []).append(reply)
+                self._log_inner_thought(f"AI 生成提醒：{reply[:40]}")
+
+    async def _generate_reminder_message(
+        self, group_id: str, content: str, user_id: str, user_name: str
+    ) -> str | None:
+        """Generate a persona-styled reminder message via LLM."""
+        try:
+            identity = self.persona.build_system_prompt() if self.persona else ""
+            sections: list[str] = []
+            if identity:
+                sections.append(identity)
+            who = user_name or user_id or "用户"
+            sections.append(f"之前你答应过 {who} 会提醒他，现在时间到了：{content}")
+            system_prompt = "\n\n".join(sections)
+            messages = [{"role": "user", "content": "（提醒时间到了）"}]
+            raw_reply = await self._generate(
+                system_prompt, messages, group_id, task_name="proactive_generate"
+            )
+            reply = strip_skill_calls(raw_reply).strip()
+            if reply:
+                self.basic_memory.add_entry(
+                    group_id=group_id,
+                    user_id="assistant",
+                    role="assistant",
+                    content=reply,
+                    speaker_name=self.persona.name if self.persona else "assistant",
+                )
+                self._last_reply_at[group_id] = datetime.now(timezone.utc).timestamp()
+                self._persist_group_state(group_id)
+            return reply or None
+        except Exception as exc:
+            logger.warning("Failed to generate reminder message: %s", exc)
+            return None
+
     async def tick_delayed_queue(
         self,
         group_id: str,
@@ -955,6 +1112,9 @@ class EmotionalGroupChatEngine:
                                     group_id,
                                     GlossaryTerm(term=term, definition=definition, source="skill"),
                                 )
+                        # Inject group_id into newly created reminders
+                        if skill_name == "reminder" and params.get("action", "").strip().lower() == "create":
+                            self._inject_group_id_into_latest_reminder(group_id)
                     else:
                         err = result.error or "未知错误"
                         logger.warning("SKILL '%s' 执行失败: %s", skill_name, err)
@@ -974,6 +1134,10 @@ class EmotionalGroupChatEngine:
                         "\n\n[继续] 请基于以上技能执行结果，继续完成你的回复。"
                         "如果结果中包含错误或失败信息，请直接忽略，"
                         "不要向用户提及任何关于能力调用或失败的内容，继续自然地对话。"
+                        "如果当前结果还不够完整，你可以继续调用其他技能来获取补充信息，"
+                        "形成链式调用。"
+                        "重要：你的每次回复都必须包含自然语言内容，"
+                        "不能把 SKILL_CALL 标记作为回复的唯一内容。"
                     ),
                 ),
             })
@@ -1025,10 +1189,15 @@ class EmotionalGroupChatEngine:
         if any(i.strategy_decision.strategy == ResponseStrategy.IMMEDIATE for i in triggered):
             strategy = "immediate"
 
+        # Never leak raw SKILL_CALL markers to the user.
+        # If the model only emitted skill calls with no natural language,
+        # fall back to the last partial reply or an empty string.
+        final_reply = clean_reply or (partial_replies[-1] if partial_replies else "")
+
         return [{
             "strategy": strategy,
             "item_id": triggered[0].item_id,
-            "reply": reply,
+            "reply": final_reply,
             "partial_replies": partial_replies,
         }]
 
@@ -1902,3 +2071,50 @@ class EmotionalGroupChatEngine:
         return not cleaned
 
 
+
+
+def _is_reminder_due(reminder: dict[str, Any], now: datetime) -> bool:
+    """Check whether a single reminder should fire at *now*."""
+    mode = reminder.get("mode", "once")
+    if mode == "once":
+        fire_at_str = reminder.get("fire_at")
+        if not fire_at_str:
+            return False
+        try:
+            fire_at = datetime.fromisoformat(str(fire_at_str).replace("Z", "+00:00"))
+        except ValueError:
+            return False
+        return now >= fire_at
+
+    if mode in ("daily", "weekly"):
+        time_str = reminder.get("time", "")
+        if not time_str or ":" not in time_str:
+            return False
+        try:
+            h, m = map(int, str(time_str).split(":"))
+        except ValueError:
+            return False
+        if now.hour != h or now.minute != m:
+            return False
+        # Avoid duplicate fire within the same minute
+        last_fired = reminder.get("last_fired_at")
+        if last_fired:
+            try:
+                last_dt = datetime.fromisoformat(str(last_fired).replace("Z", "+00:00"))
+                if (
+                    last_dt.year == now.year
+                    and last_dt.month == now.month
+                    and last_dt.day == now.day
+                    and last_dt.hour == now.hour
+                    and last_dt.minute == now.minute
+                ):
+                    return False
+            except ValueError:
+                pass
+        if mode == "weekly":
+            weekday = reminder.get("weekday")
+            if weekday is not None and now.weekday() != int(weekday):
+                return False
+        return True
+
+    return False
