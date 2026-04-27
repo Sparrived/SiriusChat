@@ -21,7 +21,7 @@ from sirius_chat.models.response_strategy import DelayedResponseItem, ResponseSt
 logger = logging.getLogger(__name__)
 
 _GAP_TRIGGER_SECONDS = 10.0
-_IMMEDIATE_DEBOUNCE_SECONDS = 3.0
+_IMMEDIATE_DEBOUNCE_SECONDS = 8.0
 
 
 class DelayedResponseQueue:
