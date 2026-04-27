@@ -16,7 +16,11 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from sirius_chat.models.response_strategy import DelayedResponseItem, ResponseStrategy, StrategyDecision
+from sirius_chat.models.response_strategy import (
+    DelayedResponseItem,
+    ResponseStrategy,
+    StrategyDecision,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -50,22 +54,37 @@ class DelayedResponseQueue:
         """
         from sirius_chat.core.utils import now_iso
 
-        # IMMEDIATE debounce: merge with existing pending item in the same group
-        if strategy_decision.strategy == ResponseStrategy.IMMEDIATE:
-            queue = self._queues.get(group_id, [])
-            for item in queue:
-                if item.status == "pending" and item.strategy_decision.strategy == ResponseStrategy.IMMEDIATE:
-                    item.message_content += f"\n{message_content}"
-                    item.enqueue_time = now_iso()
-                    item.window_seconds = self._window_for_item(strategy_decision)
-                    item.emotion_state.update(emotion_state or {})
-                    if candidate_memories:
-                        item.candidate_memories.extend(candidate_memories)
-                    logger.debug(
-                        "Merged immediate item %s for group %s (content now %d chars)",
-                        item.item_id, group_id, len(item.message_content),
-                    )
-                    return item
+        # Debounce: merge with any existing pending item in the same group.
+        # This prevents multiple independent replies during high-frequency
+        # message bursts; all messages within the debounce window are
+        # consolidated into one prompt.
+        queue = self._queues.get(group_id, [])
+        for item in queue:
+            if item.status == "pending":
+                item.message_content += f"\n{message_content}"
+                item.enqueue_time = now_iso()
+                # Keep the shorter window so urgent messages are not delayed
+                new_window = self._window_for_item(strategy_decision)
+                item.window_seconds = min(item.window_seconds, new_window)
+                # Upgrade strategy to IMMEDIATE if any merged message is immediate
+                if strategy_decision.strategy == ResponseStrategy.IMMEDIATE:
+                    item.strategy_decision = strategy_decision
+                item.emotion_state.update(emotion_state or {})
+                if candidate_memories:
+                    item.candidate_memories.extend(candidate_memories)
+                # Update caller identity to the latest message (most relevant for skill auth)
+                item.user_id = user_id
+                item.channel = channel
+                item.channel_user_id = channel_user_id
+                logger.debug(
+                    "Merged %s item %s for group %s (content now %d chars, window %.1fs)",
+                    strategy_decision.strategy.value,
+                    item.item_id,
+                    group_id,
+                    len(item.message_content),
+                    item.window_seconds,
+                )
+                return item
 
         item = DelayedResponseItem(
             item_id=f"dri_{uuid.uuid4().hex[:12]}",
@@ -84,7 +103,12 @@ class DelayedResponseQueue:
         if group_id not in self._queues:
             self._queues[group_id] = []
         self._queues[group_id].append(item)
-        logger.debug("Enqueued %s item %s for group %s", strategy_decision.strategy.value, item.item_id, group_id)
+        logger.debug(
+            "Enqueued %s item %s for group %s",
+            strategy_decision.strategy.value,
+            item.item_id,
+            group_id,
+        )
         return item
 
     def tick(
@@ -158,12 +182,16 @@ class DelayedResponseQueue:
             if elapsed >= item.window_seconds:
                 logger.debug(
                     "Item %s triggered (window expired: %.1fs >= %.1fs)",
-                    item.item_id, elapsed, item.window_seconds,
+                    item.item_id,
+                    elapsed,
+                    item.window_seconds,
                 )
                 return "trigger"
             logger.debug(
                 "Item %s waiting (elapsed %.1fs < window %.1fs)",
-                item.item_id, elapsed, item.window_seconds,
+                item.item_id,
+                elapsed,
+                item.window_seconds,
             )
 
         # IMMEDIATE items only check window expiration (no topic gap)
@@ -179,12 +207,16 @@ class DelayedResponseQueue:
                 if gap >= _GAP_TRIGGER_SECONDS:
                     logger.debug(
                         "Delayed item %s triggered (topic gap: %.1fs >= %.1fs)",
-                        item.item_id, gap, _GAP_TRIGGER_SECONDS,
+                        item.item_id,
+                        gap,
+                        _GAP_TRIGGER_SECONDS,
                     )
                     return "trigger"
                 logger.debug(
                     "Delayed item %s waiting (topic gap: %.1fs < %.1fs)",
-                    item.item_id, gap, _GAP_TRIGGER_SECONDS,
+                    item.item_id,
+                    gap,
+                    _GAP_TRIGGER_SECONDS,
                 )
 
         return "wait"
@@ -199,8 +231,6 @@ class DelayedResponseQueue:
         if strategy_decision.urgency >= 40:
             return 30.0
         return 60.0
-
-
 
 
 def _parse_iso(ts: str) -> datetime | None:

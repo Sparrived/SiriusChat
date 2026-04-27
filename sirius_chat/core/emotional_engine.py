@@ -19,31 +19,29 @@ from pathlib import Path
 from typing import Any
 
 from sirius_chat.core.cognition import CognitionAnalyzer
-from sirius_chat.core.proactive_trigger import ProactiveTrigger
-from sirius_chat.core.response_strategy import ResponseStrategyEngine
 from sirius_chat.core.delayed_response_queue import DelayedResponseQueue, _parse_iso
-from sirius_chat.core.rhythm import RhythmAnalyzer
+from sirius_chat.core.events import SessionEvent, SessionEventBus, SessionEventType
+from sirius_chat.core.identity_resolver import IdentityContext, IdentityResolver
 from sirius_chat.core.model_router import ModelRouter, TaskConfig
+from sirius_chat.core.proactive_trigger import ProactiveTrigger
 from sirius_chat.core.response_assembler import ResponseAssembler, StyleAdapter, StyleParams
+from sirius_chat.core.response_strategy import ResponseStrategyEngine
+from sirius_chat.core.rhythm import RhythmAnalyzer
 from sirius_chat.core.threshold_engine import ThresholdEngine
 
-from sirius_chat.memory.event.manager import EventMemoryManager
-from sirius_chat.memory.semantic.manager import SemanticMemoryManager
-
 # New v2 memory system (refactor)
-from sirius_chat.memory.basic import BasicMemoryManager, BasicMemoryFileStore
-from sirius_chat.memory.diary import DiaryManager
+from sirius_chat.memory.basic import BasicMemoryFileStore, BasicMemoryManager
 from sirius_chat.memory.context_assembler import ContextAssembler
-from sirius_chat.memory.user.simple import UserManager
-from sirius_chat.core.identity_resolver import IdentityResolver, IdentityContext
+from sirius_chat.memory.diary import DiaryManager
+from sirius_chat.memory.event.manager import EventMemoryManager
 from sirius_chat.memory.glossary import GlossaryManager, GlossaryTerm
-
-from sirius_chat.core.events import SessionEvent, SessionEventBus, SessionEventType
+from sirius_chat.memory.semantic.manager import SemanticMemoryManager
+from sirius_chat.memory.user.simple import UserManager
 from sirius_chat.models.emotion import AssistantEmotionState, EmotionState
 from sirius_chat.models.intent_v3 import IntentAnalysisV3
-from sirius_chat.skills.executor import strip_skill_calls
 from sirius_chat.models.models import Message, Participant, Transcript
 from sirius_chat.models.response_strategy import ResponseStrategy, StrategyDecision
+from sirius_chat.skills.executor import strip_skill_calls
 
 logger = logging.getLogger(__name__)
 
@@ -64,12 +62,16 @@ class EmotionalGroupChatEngine:
         self.work_path = work_path
 
         # Persona loading
-        from sirius_chat.core.persona_store import PersonaStore
         from sirius_chat.core.persona_generator import PersonaGenerator
+        from sirius_chat.core.persona_store import PersonaStore
         from sirius_chat.models.persona import PersonaProfile
 
         if persona is not None:
-            self.persona = persona if isinstance(persona, PersonaProfile) else PersonaProfile.from_dict(dict(persona))
+            self.persona = (
+                persona
+                if isinstance(persona, PersonaProfile)
+                else PersonaProfile.from_dict(dict(persona))
+            )
         else:
             # Try load from disk
             loaded = PersonaStore.load(work_path)
@@ -83,6 +85,7 @@ class EmotionalGroupChatEngine:
 
         # Load orchestration config (unified model configuration)
         from sirius_chat.core.orchestration_store import OrchestrationStore
+
         orch = OrchestrationStore.load(work_path)
         if not orch:
             orch = {
@@ -155,16 +158,14 @@ class EmotionalGroupChatEngine:
         # Execution layer (persona-injected)
         self.response_assembler = ResponseAssembler(persona=self.persona)
         self.style_adapter = StyleAdapter()
-        task_overrides = {
-            task: {"model_name": model}
-            for task, model in self._task_models.items()
-        }
+        task_overrides = {task: {"model_name": model} for task, model in self._task_models.items()}
         self.model_router = ModelRouter(
             overrides=task_overrides or self.config.get("task_model_overrides"),
         )
 
         # Persistence
         from sirius_chat.core.engine_persistence import EngineStateStore
+
         self._state_store = EngineStateStore(work_path)
 
         # Assistant state (persona emotional baseline)
@@ -187,6 +188,7 @@ class EmotionalGroupChatEngine:
 
         # Token usage tracking
         from sirius_chat.config import TokenUsageRecord
+
         self.token_usage_records: list[TokenUsageRecord] = []
 
         # SKILL system
@@ -214,6 +216,11 @@ class EmotionalGroupChatEngine:
         # Reminder (timer) pending queue
         self._pending_reminders: dict[str, list[str]] = {}
 
+        # Short-term reply deduplication cache per group (timestamp, content)
+        self._recent_sent_replies: dict[str, list[tuple[float, str]]] = {}
+        self._reply_dedup_window = self.config.get("reply_dedup_window_seconds", 15)
+        self._reply_dedup_threshold = self.config.get("reply_dedup_threshold", 0.65)
+
     # ==================================================================
     # Public API
     # ==================================================================
@@ -238,10 +245,12 @@ class EmotionalGroupChatEngine:
         user_id = self._perception(group_id, message, participants)
         speaker = message.speaker or "有人"
         self._log_inner_thought(f"{speaker} 在群里说话了，让我仔细听听看～")
-        await self.event_bus.emit(SessionEvent(
-            type=SessionEventType.PERCEPTION_COMPLETED,
-            data={"group_id": group_id, "user_id": user_id},
-        ))
+        await self.event_bus.emit(
+            SessionEvent(
+                type=SessionEventType.PERCEPTION_COMPLETED,
+                data={"group_id": group_id, "user_id": user_id},
+            )
+        )
 
         # Pure image message (no substantive text) → save to context but skip analysis
         if message.multimodal_inputs and self._is_pure_image_message(message.content):
@@ -254,20 +263,20 @@ class EmotionalGroupChatEngine:
             }
 
         # 2. Cognition (unified emotion + intent)
-        intent, emotion, memories, empathy = await self._cognition(
-            content, user_id, group_id
-        )
+        intent, emotion, memories, empathy = await self._cognition(content, user_id, group_id)
         # 内心活动：理解消息后的感受
         self._log_cognition_thought(speaker, intent, emotion)
-        await self.event_bus.emit(SessionEvent(
-            type=SessionEventType.COGNITION_COMPLETED,
-            data={
-                "group_id": group_id,
-                "user_id": user_id,
-                "intent": intent.to_dict(),
-                "emotion": emotion.to_dict(),
-            },
-        ))
+        await self.event_bus.emit(
+            SessionEvent(
+                type=SessionEventType.COGNITION_COMPLETED,
+                data={
+                    "group_id": group_id,
+                    "user_id": user_id,
+                    "intent": intent.to_dict(),
+                    "emotion": emotion.to_dict(),
+                },
+            )
+        )
 
         # Semantic: passive group norm learning from message content + intent
         social_intent = getattr(intent, "social_intent", None)
@@ -279,29 +288,35 @@ class EmotionalGroupChatEngine:
 
         # 3. Decision
         decision = self._decision(intent, emotion, group_id, user_id)
-        await self.event_bus.emit(SessionEvent(
-            type=SessionEventType.DECISION_COMPLETED,
-            data={
-                "group_id": group_id,
-                "strategy": decision.strategy.value,
-                "priority": getattr(decision, "priority", None),
-            },
-        ))
+        await self.event_bus.emit(
+            SessionEvent(
+                type=SessionEventType.DECISION_COMPLETED,
+                data={
+                    "group_id": group_id,
+                    "strategy": decision.strategy.value,
+                    "priority": getattr(decision, "priority", None),
+                },
+            )
+        )
 
         # 4. Execution
         # Warm up diary index for this group (lazy-loads from disk on first call)
         self.diary_manager.ensure_group_loaded(group_id)
-        result = await self._execution(decision, message, intent, emotion, memories, group_id, empathy, user_id)
+        result = await self._execution(
+            decision, message, intent, emotion, memories, group_id, empathy, user_id
+        )
         # 内心活动：执行后的反馈
         self._log_execution_thought(speaker, decision, result)
-        await self.event_bus.emit(SessionEvent(
-            type=SessionEventType.EXECUTION_COMPLETED,
-            data={
-                "group_id": group_id,
-                "strategy": result.get("strategy"),
-                "has_reply": result.get("reply") is not None,
-            },
-        ))
+        await self.event_bus.emit(
+            SessionEvent(
+                type=SessionEventType.EXECUTION_COMPLETED,
+                data={
+                    "group_id": group_id,
+                    "strategy": result.get("strategy"),
+                    "has_reply": result.get("reply") is not None,
+                },
+            )
+        )
 
         # 5. Track all private chats so the delivery loop can tick their delayed queue
         if group_id.startswith("private_"):
@@ -310,6 +325,7 @@ class EmotionalGroupChatEngine:
         # 6. Track developer private chats for proactive memory conversations
         if group_id.startswith("private_") and participants:
             from sirius_chat.developer_profiles import metadata_declares_developer
+
             if metadata_declares_developer(participants[0].metadata):
                 self._developer_private_groups.add(group_id)
 
@@ -322,7 +338,36 @@ class EmotionalGroupChatEngine:
     # Inner thought helpers
     # ------------------------------------------------------------------
 
-    def _log_inner_thought(self, thought: str, emotion: EmotionState | None = None, intensity: float = 0.5) -> None:
+    @staticmethod
+    def _text_similarity(a: str, b: str) -> float:
+        """Simple similarity metric based on character bigram Jaccard
+        and prefix overlap. Returns 0.0–1.0."""
+        a, b = a.strip(), b.strip()
+        if not a or not b:
+            return 0.0
+        if a == b:
+            return 1.0
+
+        # Prefix overlap ratio
+        prefix_match = 0
+        for ca, cb in zip(a, b):
+            if ca == cb:
+                prefix_match += 1
+            else:
+                break
+        prefix_ratio = prefix_match / max(len(a), len(b))
+
+        # Character bigram Jaccard
+        def _bigrams(s: str):
+            return {s[i : i + 2] for i in range(len(s) - 1)}
+
+        ba, bb = _bigrams(a), _bigrams(b)
+        jaccard = len(ba & bb) / len(ba | bb) if ba and bb else 0.0
+        return max(prefix_ratio, jaccard)
+
+    def _log_inner_thought(
+        self, thought: str, emotion: EmotionState | None = None, intensity: float = 0.5
+    ) -> None:
         """Log a persona-style inner monologue at INFO level."""
         prefix = f"[{self.persona.name}]" if self.persona else "[内心]"
         logger.info("%s %s", prefix, thought)
@@ -338,20 +383,30 @@ class EmotionalGroupChatEngine:
             if intent.social_intent.value == "help_seeking":
                 self._log_inner_thought(f"{speaker} 在问我问题呢，得认真想想怎么回答...")
             elif intent.social_intent.value == "emotional":
-                self._log_inner_thought(f"{speaker} 好像在抒发情绪，语气里带着{self._emotion_desc(emotion)}，我得温柔一点回应...")
+                self._log_inner_thought(
+                    f"{speaker} 好像在抒发情绪，语气里带着{self._emotion_desc(emotion)}，我得温柔一点回应..."
+                )
             else:
                 self._log_inner_thought(f"{speaker} 在跟我说话呢，被关注到的感觉真好～")
         else:
             if emotion.valence < -0.3:
-                self._log_inner_thought(f"{speaker} 的语气听起来有点{self._emotion_desc(emotion)}，虽然没直接叫我，但也想关心一下...")
+                self._log_inner_thought(
+                    f"{speaker} 的语气听起来有点{self._emotion_desc(emotion)}，虽然没直接叫我，但也想关心一下..."
+                )
             elif intent.urgency_score > 60:
                 self._log_inner_thought(f"{speaker} 的话感觉挺急的，虽然没@我，但可能需要帮忙...")
             else:
-                self._log_inner_thought(f"{speaker} 在群里聊天呢，气氛{self._emotion_desc(emotion)}，我先默默听着吧。")
+                self._log_inner_thought(
+                    f"{speaker} 在群里聊天呢，气氛{self._emotion_desc(emotion)}，我先默默听着吧。"
+                )
 
     def _log_decision_thought(self, intent: IntentAnalysisV3, decision: StrategyDecision) -> None:
         """Log inner deliberation after strategy decision."""
-        strategy = decision.strategy.value if hasattr(decision.strategy, "value") else str(decision.strategy)
+        strategy = (
+            decision.strategy.value
+            if hasattr(decision.strategy, "value")
+            else str(decision.strategy)
+        )
         if strategy == "immediate":
             if intent.directed_at_current_ai:
                 self._log_inner_thought("被点名了，得马上回应！")
@@ -367,7 +422,9 @@ class EmotionalGroupChatEngine:
         elif strategy == "proactive":
             self._log_inner_thought("群里好安静啊... 要不要主动说点什么打破沉默呢？")
 
-    def _log_execution_thought(self, speaker: str, decision: StrategyDecision, result: dict[str, Any]) -> None:
+    def _log_execution_thought(
+        self, speaker: str, decision: StrategyDecision, result: dict[str, Any]
+    ) -> None:
         """Log inner feedback after execution."""
         strategy = result.get("strategy", "unknown")
         reply = result.get("reply")
@@ -475,13 +532,15 @@ class EmotionalGroupChatEngine:
                         self._log_inner_thought("之前记下的延迟回复，现在该开口了～")
                         for item in newly_expired:
                             emitted.add(item.item_id)
-                            await self.event_bus.emit(SessionEvent(
-                                type=SessionEventType.DELAYED_RESPONSE_TRIGGERED,
-                                data={
-                                    "group_id": group_id,
-                                    "item_id": item.item_id,
-                                },
-                            ))
+                            await self.event_bus.emit(
+                                SessionEvent(
+                                    type=SessionEventType.DELAYED_RESPONSE_TRIGGERED,
+                                    data={
+                                        "group_id": group_id,
+                                        "item_id": item.item_id,
+                                    },
+                                )
+                            )
                 except Exception as exc:
                     logger.warning("Delayed queue tick failed for %s: %s", group_id, exc)
 
@@ -521,7 +580,8 @@ class EmotionalGroupChatEngine:
 
                     # Filter out already diarized candidates
                     candidates = [
-                        c for c in candidates
+                        c
+                        for c in candidates
                         if not self.diary_manager.is_source_diarized(group_id, c.entry_id)
                     ]
                     if not candidates:
@@ -529,8 +589,7 @@ class EmotionalGroupChatEngine:
 
                     # Trigger: cold group OR sufficient undiarized volume
                     should_promote = (
-                        self.basic_memory.is_cold(group_id)
-                        or len(candidates) >= volume_threshold
+                        self.basic_memory.is_cold(group_id) or len(candidates) >= volume_threshold
                     )
                     if not should_promote:
                         continue
@@ -541,9 +600,7 @@ class EmotionalGroupChatEngine:
                         candidates=candidates,
                         persona_name=self.persona.name,
                         persona_description=(
-                            self.persona.persona_summary
-                            or self.persona.backstory
-                            or ""
+                            self.persona.persona_summary or self.persona.backstory or ""
                         ),
                         provider_async=self.provider_async,
                         model_name=cfg.model_name,
@@ -631,8 +688,11 @@ class EmotionalGroupChatEngine:
             group_id,
             last_message_at=last_at,
             group_atmosphere={
-                "valence": getattr(group_profile.atmosphere_history[-1], "group_valence", 0.0)
-                if group_profile.atmosphere_history else 0.0,
+                "valence": (
+                    getattr(group_profile.atmosphere_history[-1], "group_valence", 0.0)
+                    if group_profile.atmosphere_history
+                    else 0.0
+                ),
             },
             _now=_now,
         )
@@ -656,7 +716,9 @@ class EmotionalGroupChatEngine:
         # Generate proactive message
         bundle = self._build_proactive_prompt(trigger, group_id)
         style = self.style_adapter.adapt(
-            heat_level="warm", pace="steady", is_group_chat=True,
+            heat_level="warm",
+            pace="steady",
+            is_group_chat=True,
         )
         # Embed recent history as XML in system prompt; only current turn as user msg
         history_xml = self.context_assembler.build_history_xml(group_id, n=10)
@@ -664,18 +726,18 @@ class EmotionalGroupChatEngine:
         if history_xml:
             system_prompt = system_prompt + "\n\n" + history_xml
         messages = [{"role": "user", "content": bundle.user_content or "..."}]
-        raw_reply = await self._generate(
-            system_prompt, messages, group_id, style
-        )
+        raw_reply = await self._generate(system_prompt, messages, group_id, style)
         reply = raw_reply.strip()
 
-        await self.event_bus.emit(SessionEvent(
-            type=SessionEventType.PROACTIVE_RESPONSE_TRIGGERED,
-            data={
-                "group_id": group_id,
-                "trigger_type": trigger["trigger_type"],
-            },
-        ))
+        await self.event_bus.emit(
+            SessionEvent(
+                type=SessionEventType.PROACTIVE_RESPONSE_TRIGGERED,
+                data={
+                    "group_id": group_id,
+                    "trigger_type": trigger["trigger_type"],
+                },
+            )
+        )
 
         # Record assistant reply into basic memory so future turns can see it
         clean_reply = strip_skill_calls(reply).strip()
@@ -777,11 +839,13 @@ class EmotionalGroupChatEngine:
         sections: list[str] = []
         if identity:
             sections.append(identity)
-        sections.extend([
-            "[当前场景] 你突然想起了开发者，想主动找他聊聊，分享一个话题或回忆。",
-            "[语气] 亲密、自然、像老朋友一样。不要机械，不要过度热情。",
-            f"[话题] {topic}",
-        ])
+        sections.extend(
+            [
+                "[当前场景] 你突然想起了开发者，想主动找他聊聊，分享一个话题或回忆。",
+                "[语气] 亲密、自然、像老朋友一样。不要机械，不要过度热情。",
+                f"[话题] {topic}",
+            ]
+        )
 
         if user_profile and user_profile.relationship_state:
             familiarity = user_profile.relationship_state.compute_familiarity()
@@ -1024,12 +1088,12 @@ class EmotionalGroupChatEngine:
             resolved_uid = self.user_manager.resolve_user_id(speaker=item.user_id)
             if resolved_uid:
                 caller_profile = self.user_manager.get_user(resolved_uid, group_id)
-        caller_is_developer = bool(
-            caller_profile and caller_profile.is_developer
-        )
+        caller_is_developer = bool(caller_profile and caller_profile.is_developer)
 
         # Merge all triggered items into one prompt and one generation call
-        bundle = self._build_delayed_prompt(triggered, group_id, caller_is_developer=caller_is_developer)
+        bundle = self._build_delayed_prompt(
+            triggered, group_id, caller_is_developer=caller_is_developer
+        )
 
         # Embed recent history as XML in system prompt; only current turn as user msg
         history_xml = self.context_assembler.build_history_xml(group_id, n=10)
@@ -1041,13 +1105,12 @@ class EmotionalGroupChatEngine:
         # Multi-round generation with SKILL support
         from sirius_chat.skills.executor import parse_skill_calls, strip_skill_calls
         from sirius_chat.skills.models import SkillInvocationContext
+
         max_skill_rounds = self.config.get("max_skill_rounds", 3)
         partial_replies: list[str] = []
 
         for _round in range(max_skill_rounds + 1):
-            raw_reply = await self._generate(
-                system_prompt, messages, group_id
-            )
+            raw_reply = await self._generate(system_prompt, messages, group_id)
             reply = raw_reply.strip()
 
             calls = parse_skill_calls(reply)
@@ -1057,8 +1120,7 @@ class EmotionalGroupChatEngine:
             # Determine if every invoked skill is marked silent.
             # Silent skills should not trigger partial replies or a follow-up round.
             all_silent = all(
-                self._skill_registry.get(name) is not None
-                and self._skill_registry.get(name).silent
+                self._skill_registry.get(name) is not None and self._skill_registry.get(name).silent
                 for name, _ in calls
             )
 
@@ -1078,6 +1140,7 @@ class EmotionalGroupChatEngine:
             skill_results: list[str] = []
             skill_multimodal: list[dict[str, Any]] = []
             from sirius_chat.memory.user.models import UserProfile
+
             caller_user_id = item.user_id
             skill_caller = UserProfile(
                 user_id=caller_user_id,
@@ -1118,10 +1181,12 @@ class EmotionalGroupChatEngine:
                                 f"[SKILL '{skill_name}' 结果] {result.to_display_text()}"
                             )
                             for block in result.multimodal_blocks:
-                                skill_multimodal.append({
-                                    "type": "image_url",
-                                    "image_url": {"url": block.value},
-                                })
+                                skill_multimodal.append(
+                                    {
+                                        "type": "image_url",
+                                        "image_url": {"url": block.value},
+                                    }
+                                )
                         # Auto-persist glossary terms from learn_term
                         if skill_name == "learn_term":
                             term = params.get("term", "")
@@ -1132,7 +1197,10 @@ class EmotionalGroupChatEngine:
                                     GlossaryTerm(term=term, definition=definition, source="skill"),
                                 )
                         # Inject group_id into newly created reminders
-                        if skill_name == "reminder" and params.get("action", "").strip().lower() == "create":
+                        if (
+                            skill_name == "reminder"
+                            and params.get("action", "").strip().lower() == "create"
+                        ):
                             self._inject_group_id_into_latest_reminder(group_id)
                     else:
                         err = result.error or "未知错误"
@@ -1149,23 +1217,35 @@ class EmotionalGroupChatEngine:
                 break
 
             # Inject skill results into the conversation for the next round
-            messages.append({"role": "assistant", "content": strip_skill_calls(reply)})
-            messages.append({
-                "role": "user",
-                "content": self._build_skill_result_content(
-                    skill_results,
-                    skill_multimodal,
-                    suffix=(
-                        "\n\n[继续] 请基于以上技能执行结果，继续完成你的回复。"
-                        "如果结果中包含错误或失败信息，请直接忽略，"
-                        "不要向用户提及任何关于能力调用或失败的内容，继续自然地对话。"
-                        "如果当前结果还不够完整，你可以继续调用其他技能来获取补充信息，"
-                        "形成链式调用。"
-                        "重要：你的每次回复都必须包含自然语言内容，"
-                        "不能把 SKILL_CALL 标记作为回复的唯一内容。"
+            assistant_content = strip_skill_calls(reply)
+            if partial_replies:
+                assistant_content += "\n\n（以上内容已发送给用户）"
+            messages.append({"role": "assistant", "content": assistant_content})
+
+            suffix_parts = [
+                "\n\n[继续] 请基于以上技能执行结果，继续完成你的回复。",
+                "如果结果中包含错误或失败信息，请直接忽略，",
+                "不要向用户提及任何关于能力调用或失败的内容，继续自然地对话。",
+                "如果当前结果还不够完整，你可以继续调用其他技能来获取补充信息，",
+                "形成链式调用。",
+                "重要：你的每次回复都必须包含自然语言内容，",
+                "不能把 SKILL_CALL 标记作为回复的唯一内容。",
+            ]
+            if partial_replies:
+                suffix_parts.append(
+                    "注意：上文标记为“已发送给用户”的内容已经由你发送给用户，"
+                    "现在只需基于技能结果给出简短补充，不要重复之前的确认内容。"
+                )
+            messages.append(
+                {
+                    "role": "user",
+                    "content": self._build_skill_result_content(
+                        skill_results,
+                        skill_multimodal,
+                        suffix="\n\n".join(suffix_parts),
                     ),
-                ),
-            })
+                }
+            )
 
             # Persist intermediate skill turns into basic memory
             self.basic_memory.add_entry(
@@ -1185,6 +1265,28 @@ class EmotionalGroupChatEngine:
 
         # Record assistant reply into basic memory so future turns can see it
         clean_reply = strip_skill_calls(reply).strip()
+
+        # Deduplication: suppress if nearly identical to a recent reply
+        if clean_reply:
+            now_ts = datetime.now(timezone.utc).timestamp()
+            recent = self._recent_sent_replies.get(group_id, [])
+            recent = [(t, r) for t, r in recent if now_ts - t < self._reply_dedup_window]
+            if any(
+                self._text_similarity(clean_reply, r) > self._reply_dedup_threshold
+                for _, r in recent
+            ):
+                logger.debug(
+                    "Suppressing duplicate reply for %s (window=%ds, threshold=%.2f): %s...",
+                    group_id,
+                    self._reply_dedup_window,
+                    self._reply_dedup_threshold,
+                    clean_reply[:40],
+                )
+                clean_reply = ""
+            else:
+                recent.append((now_ts, clean_reply))
+            self._recent_sent_replies[group_id] = recent
+
         if clean_reply:
             self.basic_memory.add_entry(
                 group_id=group_id,
@@ -1200,16 +1302,19 @@ class EmotionalGroupChatEngine:
 
         # Emit events for all triggered items but return only one result
         for item in triggered:
-            await self.event_bus.emit(SessionEvent(
-                type=SessionEventType.DELAYED_RESPONSE_TRIGGERED,
-                data={
-                    "group_id": group_id,
-                    "item_id": item.item_id,
-                },
-            ))
+            await self.event_bus.emit(
+                SessionEvent(
+                    type=SessionEventType.DELAYED_RESPONSE_TRIGGERED,
+                    data={
+                        "group_id": group_id,
+                        "item_id": item.item_id,
+                    },
+                )
+            )
 
         # Determine return strategy: if any triggered item is IMMEDIATE, report as immediate
         from sirius_chat.models.response_strategy import ResponseStrategy
+
         strategy = "delayed"
         if any(i.strategy_decision.strategy == ResponseStrategy.IMMEDIATE for i in triggered):
             strategy = "immediate"
@@ -1219,12 +1324,14 @@ class EmotionalGroupChatEngine:
         # fall back to the last partial reply or an empty string.
         final_reply = clean_reply or (partial_replies[-1] if partial_replies else "")
 
-        return [{
-            "strategy": strategy,
-            "item_id": triggered[0].item_id,
-            "reply": final_reply,
-            "partial_replies": partial_replies,
-        }]
+        return [
+            {
+                "strategy": strategy,
+                "item_id": triggered[0].item_id,
+                "reply": final_reply,
+                "partial_replies": partial_replies,
+            }
+        ]
 
     # ==================================================================
     # Persistence
@@ -1263,6 +1370,7 @@ class EmotionalGroupChatEngine:
             ]
 
         import dataclasses
+
         self._state_store.save_all(
             working_memories=working_memories,
             assistant_emotion=dataclasses.asdict(self.assistant_emotion),
@@ -1273,11 +1381,9 @@ class EmotionalGroupChatEngine:
             basic_memory=self.basic_memory.to_dict(),
             diary_state={
                 "diarized_sources": {
-                    gid: list(sids)
-                    for gid, sids in self.diary_manager._diarized_sources.items()
+                    gid: list(sids) for gid, sids in self.diary_manager._diarized_sources.items()
                 }
             },
-
         )
 
         # Save proactive state
@@ -1285,6 +1391,7 @@ class EmotionalGroupChatEngine:
 
         # Save persona
         from sirius_chat.core.persona_store import PersonaStore
+
         PersonaStore.save(self.work_path, self.persona)
 
     def save_state(self) -> None:
@@ -1351,8 +1458,7 @@ class EmotionalGroupChatEngine:
                 try:
                     sources = diary_state.get("diarized_sources", {})
                     self.diary_manager._diarized_sources = {
-                        gid: set(sids)
-                        for gid, sids in sources.items()
+                        gid: set(sids) for gid, sids in sources.items()
                     }
                 except Exception as exc:
                     logger.warning("日记状态恢复失败: %s", exc)
@@ -1373,6 +1479,7 @@ class EmotionalGroupChatEngine:
 
             # Token usage records
             from sirius_chat.config import TokenUsageRecord
+
             for rec_data in state.get("token_usage_records", []):
                 try:
                     self.token_usage_records.append(TokenUsageRecord.from_dict(rec_data))
@@ -1381,13 +1488,17 @@ class EmotionalGroupChatEngine:
 
             # Load persona
             from sirius_chat.core.persona_store import PersonaStore
+
             loaded = PersonaStore.load(self.work_path)
             if loaded:
                 self.persona = loaded
                 self.response_assembler.persona = loaded
                 logger.info("我的人设已经加载好了，我是 %s～", loaded.name)
 
-            logger.info("之前的记忆都找回来啦，一共 %d 个群的上下文我都记得。", len(state.get("working_memories", {})))
+            logger.info(
+                "之前的记忆都找回来啦，一共 %d 个群的上下文我都记得。",
+                len(state.get("working_memories", {})),
+            )
         except Exception as exc:
             logger.warning("状态恢复部分出错，继续尝试加载 proactive 状态: %s", exc)
         finally:
@@ -1422,15 +1533,10 @@ class EmotionalGroupChatEngine:
                 logger.warning("Proactive state file is not a dict, skipping")
                 return
             # Force str keys to avoid int/str mismatch
-            self._proactive_enabled_groups = {
-                str(g) for g in data.get("enabled_groups", [])
-            }
-            self._proactive_disabled_groups = {
-                str(g) for g in data.get("disabled_groups", [])
-            }
+            self._proactive_enabled_groups = {str(g) for g in data.get("enabled_groups", [])}
+            self._proactive_disabled_groups = {str(g) for g in data.get("disabled_groups", [])}
             self._last_proactive_at = {
-                str(k): str(v)
-                for k, v in dict(data.get("last_proactive_at", {})).items()
+                str(k): str(v) for k, v in dict(data.get("last_proactive_at", {})).items()
             }
             # Sync into ProactiveTrigger
             self.proactive_trigger._last_proactive = dict(self._last_proactive_at)
@@ -1499,9 +1605,7 @@ class EmotionalGroupChatEngine:
             platform=message.channel,
             is_developer=False,
         )
-        sender_profile = self.identity_resolver.resolve(
-            sender_ctx, self.user_manager, group_id
-        )
+        sender_profile = self.identity_resolver.resolve(sender_ctx, self.user_manager, group_id)
         resolved_user_id = sender_profile.user_id
         resolved_speaker_name = sender_profile.name
 
@@ -1513,9 +1617,11 @@ class EmotionalGroupChatEngine:
             role="human",
             content=message.content,
             channel_user_id=message.channel_user_id or "",
-            multimodal_inputs=[
-                dict(item) for item in message.multimodal_inputs
-            ] if message.multimodal_inputs else None,
+            multimodal_inputs=(
+                [dict(item) for item in message.multimodal_inputs]
+                if message.multimodal_inputs
+                else None
+            ),
         )
         self.basic_store.append(entry)
 
@@ -1529,6 +1635,7 @@ class EmotionalGroupChatEngine:
 
         # Update group last message time
         from sirius_chat.core.utils import now_iso
+
         self._group_last_message_at[group_id] = now_iso()
         self._persist_group_state(group_id)
         return resolved_user_id
@@ -1571,7 +1678,9 @@ class EmotionalGroupChatEngine:
 
         # Compute dynamic threshold via ThresholdEngine
         user_profile = self.semantic_memory.get_user_profile(group_id, user_id)
-        relationship_state = getattr(user_profile, "relationship_state", None) if user_profile else None
+        relationship_state = (
+            getattr(user_profile, "relationship_state", None) if user_profile else None
+        )
 
         # Message rate (per minute) from recent messages
         msg_rate = self._message_rate_per_minute(recent_msgs)
@@ -1598,7 +1707,9 @@ class EmotionalGroupChatEngine:
         intent.activity_factor = self.threshold_engine._activity_factor(rhythm.heat_level, msg_rate)
         intent.time_factor = self.threshold_engine._time_factor(None)
         if relationship_state:
-            intent.relationship_factor = self.threshold_engine._relationship_factor(relationship_state)
+            intent.relationship_factor = self.threshold_engine._relationship_factor(
+                relationship_state
+            )
 
         # Check if directly mentioned
         is_mentioned = intent.directed_at_current_ai
@@ -1612,6 +1723,7 @@ class EmotionalGroupChatEngine:
         # Reply cooldown suppression: delayed responses are throttled,
         # but immediate responses (e.g. direct mentions) bypass cooldown.
         from sirius_chat.models.response_strategy import ResponseStrategy
+
         now = datetime.now(timezone.utc).timestamp()
         last_reply = self._last_reply_at.get(group_id, 0)
         seconds_since_reply = now - last_reply
@@ -1682,10 +1794,7 @@ class EmotionalGroupChatEngine:
 
         # Profiles
         group_profile = self.semantic_memory.get_group_profile(group_id)
-        user_profile = (
-            self.semantic_memory.get_user_profile(group_id, user_id)
-            if user_id else None
-        )
+        user_profile = self.semantic_memory.get_user_profile(group_id, user_id) if user_id else None
 
         is_group_chat = not group_id.startswith("private_")
 
@@ -1696,7 +1805,8 @@ class EmotionalGroupChatEngine:
             global_semantic = self.semantic_memory.get_global_user_profile(user_id)
             # Only generate if user has activity in multiple groups
             group_count = sum(
-                1 for gid, group in self.user_manager.entries.items()
+                1
+                for gid, group in self.user_manager.entries.items()
                 if user_id in group and gid != group_id
             )
             if group_count > 0 or (global_semantic and global_semantic.communication_style):
@@ -1786,9 +1896,7 @@ class EmotionalGroupChatEngine:
         self.cognition_analyzer.update_group_sentiment(group_id, emotion)
 
         # Update assistant emotion based on interaction
-        self.assistant_emotion.update_from_interaction(
-            emotion, user_id
-        )
+        self.assistant_emotion.update_from_interaction(emotion, user_id)
 
     # ==================================================================
     # Prompt builders & generation
@@ -1833,6 +1941,7 @@ class EmotionalGroupChatEngine:
         """Build prompt bundle for delayed response (supports single item or merged list)."""
         from sirius_chat.core.response_assembler import PromptBundle
         from sirius_chat.models.response_strategy import ResponseStrategy
+
         if not isinstance(items, list):
             items = [items]
         if len(items) == 1:
@@ -1980,6 +2089,7 @@ class EmotionalGroupChatEngine:
 
         # Estimate input tokens
         from sirius_chat.providers.base import estimate_generation_request_input_tokens
+
         estimated_input_tokens = estimate_generation_request_input_tokens(request)
 
         # Debug: log the full prompt sent to the LLM
@@ -2006,18 +2116,22 @@ class EmotionalGroupChatEngine:
         output_chars = len(reply)
         estimated_output_tokens = max(1, (output_chars + 3) // 4)
         from sirius_chat.config import TokenUsageRecord
-        self.token_usage_records.append(TokenUsageRecord(
-            actor_id="assistant",
-            task_name=task_name,
-            model=cfg.model_name,
-            prompt_tokens=estimated_input_tokens,
-            completion_tokens=estimated_output_tokens,
-            total_tokens=estimated_input_tokens + estimated_output_tokens,
-            input_chars=len(system_prompt) + sum(len(str(m.get("content", ""))) for m in messages),
-            output_chars=output_chars,
-            estimation_method="char_div4",
-            retries_used=0,
-        ))
+
+        self.token_usage_records.append(
+            TokenUsageRecord(
+                actor_id="assistant",
+                task_name=task_name,
+                model=cfg.model_name,
+                prompt_tokens=estimated_input_tokens,
+                completion_tokens=estimated_output_tokens,
+                total_tokens=estimated_input_tokens + estimated_output_tokens,
+                input_chars=len(system_prompt)
+                + sum(len(str(m.get("content", ""))) for m in messages),
+                output_chars=output_chars,
+                estimation_method="char_div4",
+                retries_used=0,
+            )
+        )
 
         return reply
 
@@ -2063,8 +2177,11 @@ class EmotionalGroupChatEngine:
         strips those accidental blocks.
         """
         import re
+
         # Remove <conversation_history>...</conversation_history> (non-greedy, multiline)
-        cleaned = re.sub(r"<conversation_history>.*?</conversation_history>", "", text, flags=re.DOTALL)
+        cleaned = re.sub(
+            r"<conversation_history>.*?</conversation_history>", "", text, flags=re.DOTALL
+        )
         # Also clean up stray opening/closing tags just in case
         cleaned = re.sub(r"</?conversation_history>", "", cleaned)
         return cleaned.strip()
@@ -2076,6 +2193,7 @@ class EmotionalGroupChatEngine:
             return 0.0
         try:
             from datetime import datetime
+
             timestamps = []
             for m in recent_msgs:
                 ts = m.get("timestamp")
@@ -2102,8 +2220,6 @@ class EmotionalGroupChatEngine:
             return False
         cleaned = re.sub(r"\[图片\d*: [^\]]+\]", "", content).strip()
         return not cleaned
-
-
 
 
 def _is_reminder_due(reminder: dict[str, Any], now: datetime) -> bool:
