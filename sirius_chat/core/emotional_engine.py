@@ -1046,9 +1046,17 @@ class EmotionalGroupChatEngine:
             if not calls or self._skill_registry is None or self._skill_executor is None:
                 break
 
+            # Determine if every invoked skill is marked silent.
+            # Silent skills should not trigger partial replies or a follow-up round.
+            all_silent = all(
+                self._skill_registry.get(name) is not None
+                and self._skill_registry.get(name).silent
+                for name, _ in calls
+            )
+
             # Extract non-skill text as a partial reply to send immediately.
             non_skill_text = strip_skill_calls(reply).strip()
-            if non_skill_text:
+            if non_skill_text and not all_silent:
                 self._log_inner_thought(f"先跟用户回一声：{non_skill_text[:40]}...")
                 if on_partial_reply is not None:
                     try:
@@ -1079,12 +1087,14 @@ class EmotionalGroupChatEngine:
                 if skill is None:
                     err = f"SKILL '{skill_name}' 未找到"
                     logger.warning(err)
-                    skill_results.append(f"[{err}]")
+                    if not all_silent:
+                        skill_results.append(f"[{err}]")
                     continue
                 if skill.developer_only and not caller_is_developer:
                     err = f"SKILL '{skill_name}' 被拒绝：caller 不是 developer"
                     logger.warning(err)
-                    skill_results.append(f"[SKILL '{skill_name}' 拒绝] 该技能仅 developer 可用")
+                    if not all_silent:
+                        skill_results.append(f"[SKILL '{skill_name}' 拒绝] 该技能仅 developer 可用")
                     continue
                 ctx = SkillInvocationContext(
                     caller=skill_caller,
@@ -1095,14 +1105,15 @@ class EmotionalGroupChatEngine:
                         skill, params, invocation_context=ctx
                     )
                     if result.success:
-                        skill_results.append(
-                            f"[SKILL '{skill_name}' 结果] {result.to_display_text()}"
-                        )
-                        for block in result.multimodal_blocks:
-                            skill_multimodal.append({
-                                "type": "image_url",
-                                "image_url": {"url": block.value},
-                            })
+                        if not skill.silent:
+                            skill_results.append(
+                                f"[SKILL '{skill_name}' 结果] {result.to_display_text()}"
+                            )
+                            for block in result.multimodal_blocks:
+                                skill_multimodal.append({
+                                    "type": "image_url",
+                                    "image_url": {"url": block.value},
+                                })
                         # Auto-persist glossary terms from learn_term
                         if skill_name == "learn_term":
                             term = params.get("term", "")
@@ -1118,10 +1129,16 @@ class EmotionalGroupChatEngine:
                     else:
                         err = result.error or "未知错误"
                         logger.warning("SKILL '%s' 执行失败: %s", skill_name, err)
-                        skill_results.append(f"[SKILL '{skill_name}' 失败] {err}")
+                        if not skill.silent:
+                            skill_results.append(f"[SKILL '{skill_name}' 失败] {err}")
                 except Exception as exc:
                     logger.error("SKILL '%s' 执行异常: %s", skill_name, exc)
-                    skill_results.append(f"[SKILL '{skill_name}' 异常] {exc}")
+                    if not skill.silent:
+                        skill_results.append(f"[SKILL '{skill_name}' 异常] {exc}")
+
+            # If all skills were silent, skip the follow-up generation round.
+            if all_silent:
+                break
 
             # Inject skill results into the conversation for the next round
             messages.append({"role": "assistant", "content": strip_skill_calls(reply)})
