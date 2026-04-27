@@ -639,6 +639,14 @@ class EmotionalGroupChatEngine:
         if not trigger:
             return None
 
+        # Guard: do not send another proactive message if nobody replied to the last one.
+        last_proactive_iso = self._last_proactive_at.get(group_id)
+        if last_proactive_iso:
+            last_proactive_dt = _parse_iso(last_proactive_iso)
+            last_msg_dt = _parse_iso(last_at) if last_at else None
+            if last_proactive_dt and (last_msg_dt is None or last_proactive_dt > last_msg_dt):
+                return None
+
         # Record proactive trigger timestamp
         now_iso = (_now if _now is not None else datetime.now(timezone.utc)).isoformat()
         self._last_proactive_at[group_id] = now_iso
