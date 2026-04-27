@@ -549,6 +549,7 @@ class ResponseAssembler:
             "[当前场景] 群里一段时间没人说话，你决定开口说点什么。",
             f"[触发原因] {trigger_reason}",
             f"[语气] {suggested_tone}",
+            "[提醒] 不要和之前主动发起过的话题或句式重复，尝试换个角度或新的切入点。",
         ]
         if topic_context:
             sections.append(

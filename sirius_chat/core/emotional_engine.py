@@ -1856,7 +1856,14 @@ class EmotionalGroupChatEngine:
         return bundle
 
     def _pick_proactive_topic(self, group_id: str) -> str:
-        """Pick a topic from semantic memory for proactive initiation."""
+        """Pick a topic from semantic memory for proactive initiation.
+
+        To avoid repetitive proactive messages, picks randomly from the
+        top-N candidates rather than always returning the same highest-
+        relevance topic.
+        """
+        import random
+
         group_profile = self.semantic_memory.get_group_profile(group_id)
         if group_profile is None:
             return ""
@@ -1897,8 +1904,9 @@ class EmotionalGroupChatEngine:
                 seen.add(t)
                 unique.append(t)
 
-        # Pick the first (highest-relevance) topic
-        return unique[0]
+        # Pick randomly from top candidates to avoid always repeating the same topic.
+        pool = unique[:3] if len(unique) >= 3 else unique
+        return random.choice(pool)
 
     def _build_proactive_prompt(self, trigger: dict[str, Any], group_id: str):
         """Build prompt bundle for proactive initiation."""
