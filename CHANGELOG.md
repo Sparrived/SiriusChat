@@ -18,6 +18,35 @@
 - **删除 session store legacy migration**：`_migrate_legacy_storage_if_needed` 及对应测试已移除。
 - **删除 user memory auto-migration**：`UserMemoryFileStore.load_all()` 不再自动检测并迁移旧格式。
 
+## [1.0.1] - 2026-04-28
+
+### Added (Multi-Persona Architecture)
+
+- **`PersonaManager`**：主进程多人格生命周期管理。扫描 `data/personas/` 目录，维护端口注册表，创建/删除/迁移人格，子进程启停，PID 存活检测。
+- **`PersonaWorker`**：单个人格子进程入口。独立控制台窗口（Windows `CREATE_NEW_CONSOLE`），加载人格配置，创建 `EngineRuntime`，定期心跳写入 `worker_status.json`。
+- **`PersonaConfig`**：人格级配置模型——`NapCatAdapterConfig`、`PersonaAdaptersConfig`、`PersonaExperienceConfig`、`PersonaConfigPaths`。
+- **数据隔离**：`data/personas/{name}/` 含 `persona.json`、`orchestration.json`、`adapters.json`、`experience.json`、`engine_state/`、`memory/`、`diary/`、`image_cache/`、`skill_data/`、`logs/`。
+- **端口自动分配**：`PersonaManager` 维护 `data/adapter_port_registry.json`，从 3001 递增自动分配 NapCat WebSocket 端口。
+- **NapCat 多实例**：`NapCatManager.for_persona()` 创建 `napcat/instances/{name}/` 目录，共享全局二进制，独立配置/日志/QQ 号。
+- **WebUI 多人格重构**：Dashboard 人格卡片列表，所有配置页面增加人格选择器，API 改为 `/api/personas/{name}/...`。
+- **`python main.py` 子命令式 CLI**：`run`（启动所有人格+WebUI）、`webui`（仅 WebUI）、`persona list/create/start/stop/status/logs/migrate`。
+- **NapCat 自动管理集成到 `persona start`**：启动子进程前自动检查/安装/启动/等待 NapCat WS 就绪。
+- **Provider 配置全局化**：`data/providers/provider_keys.json` 所有人格共用；`EngineRuntime` 优先从全局位置加载，回退到人格目录兼容旧版。
+- **模型编排下拉选择**：WebUI 后端返回 `available_models`（聚合全局 Provider 的 models 字段），前端 `<input>` 改为 `<select>`。
+
+### Removed
+
+- **删除 `sirius_chat/cli.py`**：旧版单人格薄 CLI，由 `main.py` 统一入口替代。
+- **删除 `sirius_chat/cli_diagnostics.py`**：未使用。
+- **删除 WebUI legacy API**：`/api/status`、`/api/persona`、`/api/orchestration`、`/api/config`、`/api/engine/toggle` 等旧版单人格兼容路由。
+- **删除旧版 CLI 测试**：`test_cli_config.py`、`test_cli_diagnostics.py`、`test_cli_runtime.py`。
+- **移除 `pyproject.toml` entry point**：`sirius-chat` 命令已移除。
+
+### Changed
+
+- **更新核心文档**：`AGENTS.md`、`README.md`、`docs/architecture.md`、`docs/configuration.md`、`docs/external-usage.md` 全面反映多人格架构。
+- **修复 `is_installed()` 方法调用**：`main.py` 中 `global_mgr.is_installed` → `global_mgr.is_installed()`。
+
 ## [Unreleased]
 
 ### Added (Persona System)

@@ -1,6 +1,6 @@
 ﻿# 外部程序使用 Sirius Chat
 
-本文档说明如何从外部项目中调用 Sirius Chat 库（v0.28+ Emotional Engine）。
+本文档说明如何从外部项目中调用 Sirius Chat 库（v1.0 多人格架构）。
 
 ## 安装
 
@@ -12,7 +12,29 @@ python -m pip install -e /path/to/sirius_chat
 
 若通过打包产物安装，请替换为你的发布方式（如私有 index）。
 
-## 方式一：直接使用 Emotional Engine
+## 方式一：多人格管理（推荐生产入口）
+
+```python
+from sirius_chat.persona_manager import PersonaManager
+
+# 创建管理器
+manager = PersonaManager("data", global_config={"auto_manage_napcat": True})
+
+# 创建人格
+manager.create_persona("yuebai", keywords=["温暖", "猫娘"])
+
+# 启动所有已启用人格
+results = manager.start_all()
+
+# 停止单个人格
+manager.stop_persona("yuebai")
+
+# 获取人格状态
+status = manager.get_persona_status("yuebai")
+print(status)
+```
+
+## 方式二：直接使用 Emotional Engine
 
 ### 最小示例
 
