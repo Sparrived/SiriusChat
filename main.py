@@ -186,6 +186,34 @@ def _cmd_persona_remove(args: argparse.Namespace) -> None:
         sys.exit(1)
 
 
+def _cmd_persona_migrate(args: argparse.Namespace) -> None:
+    """从旧目录迁移人格。"""
+    configure_logging(level="INFO", format_type="console")
+    from sirius_chat.persona_manager import PersonaManager
+
+    config = _load_global_config()
+    manager = PersonaManager(DATA_DIR, global_config=config)
+    source = Path(args.source).resolve()
+    if not source.exists():
+        print(f"源目录不存在: {source}")
+        sys.exit(1)
+
+    try:
+        pdir = manager.migrate_persona(source, args.name)
+        print(f"人格已迁移: {args.name}")
+        print(f"  目录: {pdir}")
+        port = manager.get_port(args.name)
+        if port:
+            print(f"  分配端口: {port}")
+            print(f"  请为该人格配置 NapCat (QQ) 并监听端口 {port}")
+    except FileExistsError as exc:
+        print(f"迁移失败: {exc}")
+        sys.exit(1)
+    except FileNotFoundError as exc:
+        print(f"迁移失败: {exc}")
+        sys.exit(1)
+
+
 async def _cmd_persona_start(args: argparse.Namespace) -> None:
     """前台启动单个人格（调试用）。"""
     from sirius_chat.persona_worker import PersonaWorker
@@ -266,6 +294,10 @@ def main() -> int:
     remove_parser = persona_sub.add_parser("remove", help="删除人格")
     remove_parser.add_argument("name", help="人格标识名")
 
+    migrate_parser = persona_sub.add_parser("migrate", help="从旧目录迁移人格")
+    migrate_parser.add_argument("--source", required=True, help="源目录路径（如 data/bot）")
+    migrate_parser.add_argument("--name", required=True, help="目标人格标识名")
+
     start_parser = persona_sub.add_parser("start", help="前台启动单个人格")
     start_parser.add_argument("name", help="人格标识名")
 
@@ -288,6 +320,8 @@ def main() -> int:
             _cmd_persona_create(args)
         elif args.persona_cmd == "remove":
             _cmd_persona_remove(args)
+        elif args.persona_cmd == "migrate":
+            _cmd_persona_migrate(args)
         elif args.persona_cmd == "start":
             asyncio.run(_cmd_persona_start(args))
         elif args.persona_cmd == "stop":

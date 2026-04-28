@@ -44,6 +44,52 @@ class PersonaManager:
         self.personas_dir.mkdir(parents=True, exist_ok=True)
         self.global_config = dict(global_config or {})
         self._processes: dict[str, subprocess.Popen] = {}
+        self._port_registry_path = self.data_path / "adapter_port_registry.json"
+
+    # ------------------------------------------------------------------
+    # 端口分配
+    # ------------------------------------------------------------------
+
+    def _load_port_registry(self) -> dict[str, int]:
+        if not self._port_registry_path.exists():
+            return {}
+        try:
+            return json.loads(self._port_registry_path.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+
+    def _save_port_registry(self, ports: dict[str, int]) -> None:
+        self._port_registry_path.write_text(
+            json.dumps(ports, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+    def _allocate_port(self, name: str) -> int:
+        """为指定人格分配一个未被占用的 WebSocket 端口（从 3001 开始递增）。"""
+        ports = self._load_port_registry()
+        # 如果已有分配，直接复用
+        if name in ports:
+            return ports[name]
+        base_port = int(self.global_config.get("napcat_base_port", 3001))
+        used = set(ports.values())
+        port = base_port
+        while port in used:
+            port += 1
+        ports[name] = port
+        self._save_port_registry(ports)
+        LOG.info("为 %s 分配端口: %s", name, port)
+        return port
+
+    def _release_port(self, name: str) -> None:
+        """释放人格占用的端口记录。"""
+        ports = self._load_port_registry()
+        if name in ports:
+            del ports[name]
+            self._save_port_registry(ports)
+
+    def get_port(self, name: str) -> int | None:
+        """获取人格当前分配的端口。"""
+        return self._load_port_registry().get(name)
 
     # ------------------------------------------------------------------
     # 扫描与列表
@@ -142,8 +188,16 @@ class PersonaManager:
 
         PersonaStore.save(pdir, persona)
 
-        # 2. 生成默认 adapter 配置
-        adapters = PersonaAdaptersConfig.default()
+        # 2. 生成默认 adapter 配置（自动分配端口）
+        port = self._allocate_port(name)
+        adapters = PersonaAdaptersConfig(
+            adapters=[
+                NapCatAdapterConfig(
+                    ws_url=f"ws://localhost:{port}",
+                    token="napcat_ws",
+                )
+            ]
+        )
         adapters.save(paths.adapters)
 
         # 3. 生成默认 experience 配置
@@ -164,8 +218,111 @@ class PersonaManager:
         LOG.info("人格已创建: %s @ %s", name, pdir)
         return pdir
 
+    def migrate_persona(
+        self,
+        source_dir: Path | str,
+        name: str,
+    ) -> Path:
+        """从旧版单人格目录迁移到新的多人格结构。
+
+        迁移内容：
+        - persona.json / orchestration.json
+        - engine_state/（记忆、情绪、状态等）
+        - image_cache/
+        - qq_bridge_config.json → adapters.json
+        - 其他子目录（memory, diary, token, skill_data 等）
+        """
+        source = Path(source_dir).resolve()
+        if not source.exists():
+            raise FileNotFoundError(f"源目录不存在: {source}")
+
+        pdir = self.personas_dir / name
+        if pdir.exists():
+            raise FileExistsError(f"目标人格已存在: {name}")
+
+        pdir.mkdir(parents=True)
+        paths = PersonaConfigPaths(pdir)
+
+        # 1. 迁移人格定义
+        src_persona = source / "engine_state" / "persona.json"
+        if src_persona.exists():
+            shutil.copy2(str(src_persona), str(paths.persona))
+            LOG.info("迁移 persona.json")
+        else:
+            #  fallback：生成默认人格
+            PersonaStore.save(pdir, PersonaProfile(name=name))
+
+        # 2. 迁移模型编排
+        src_orch = source / "engine_state" / "orchestration.json"
+        if src_orch.exists():
+            shutil.copy2(str(src_orch), str(paths.orchestration))
+            LOG.info("迁移 orchestration.json")
+        else:
+            paths.orchestration.write_text(
+                json.dumps(
+                    {"analysis_model": "gpt-4o-mini", "chat_model": "gpt-4o", "vision_model": "gpt-4o"},
+                    ensure_ascii=False, indent=2,
+                ),
+                encoding="utf-8",
+            )
+
+        # 3. 迁移桥接配置 → adapters.json
+        src_bridge = source / "qq_bridge_config.json"
+        if src_bridge.exists():
+            bridge_cfg = json.loads(src_bridge.read_text(encoding="utf-8"))
+            port = self._allocate_port(name)
+            adapters = PersonaAdaptersConfig(
+                adapters=[
+                    NapCatAdapterConfig(
+                        ws_url=f"ws://localhost:{port}",
+                        token="napcat_ws",
+                        allowed_group_ids=[str(v) for v in bridge_cfg.get("allowed_group_ids", [])],
+                        allowed_private_user_ids=[str(v) for v in bridge_cfg.get("allowed_private_user_ids", [])],
+                        enable_group_chat=bool(bridge_cfg.get("enable_group_chat", True)),
+                        enable_private_chat=bool(bridge_cfg.get("enable_private_chat", True)),
+                        root=str(bridge_cfg.get("root", "")),
+                    )
+                ]
+            )
+            adapters.save(paths.adapters)
+            LOG.info("迁移 adapters.json (端口: %s)", port)
+        else:
+            port = self._allocate_port(name)
+            adapters = PersonaAdaptersConfig(
+                adapters=[NapCatAdapterConfig(ws_url=f"ws://localhost:{port}")]
+            )
+            adapters.save(paths.adapters)
+
+        # 4. 迁移 engine_state/
+        src_state = source / "engine_state"
+        if src_state.exists():
+            shutil.copytree(str(src_state), str(paths.engine_state), dirs_exist_ok=True)
+            LOG.info("迁移 engine_state/")
+
+        # 5. 迁移 image_cache/
+        src_cache = source / "image_cache"
+        if src_cache.exists():
+            shutil.copytree(str(src_cache), str(paths.image_cache), dirs_exist_ok=True)
+            LOG.info("迁移 image_cache/")
+
+        # 6. 迁移其他常见子目录
+        for sub in ("memory", "diary", "token", "skill_data", "skills"):
+            src_sub = source / sub
+            if src_sub.exists():
+                dst_sub = pdir / sub
+                shutil.copytree(str(src_sub), str(dst_sub), dirs_exist_ok=True)
+                LOG.info("迁移 %s/", sub)
+
+        # 7. 生成默认 experience.json
+        experience = PersonaExperienceConfig()
+        experience.save(paths.experience)
+        LOG.info("生成默认 experience.json")
+
+        LOG.info("迁移完成: %s → %s", source, pdir)
+        return pdir
+
     def remove_persona(self, name: str) -> bool:
-        """删除人格（先停止进程，再删除目录）。"""
+        """删除人格（先停止进程，再删除目录，最后释放端口）。"""
         pdir = self.personas_dir / name
         if not pdir.exists():
             return False
@@ -173,6 +330,7 @@ class PersonaManager:
         self.stop_persona(name)
         try:
             shutil.rmtree(pdir)
+            self._release_port(name)
             LOG.info("人格已删除: %s", name)
             return True
         except Exception as exc:
