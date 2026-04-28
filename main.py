@@ -1,1027 +1,195 @@
-﻿from __future__ import annotations
+"""SiriusChat 统一启动入口。
+
+启动 NapCat Bot + WebUI 配置面板。
+
+使用方法::
+
+    python main.py                          # 使用默认配置启动
+    python main.py --config config.json     # 指定配置文件
+    python main.py --init-config config.json # 生成默认配置模板
+"""
+
+from __future__ import annotations
 
 import argparse
 import asyncio
 import json
+import logging
 import sys
 from pathlib import Path
-from typing import Callable
 
-from sirius_chat.api import (
-    Agent,
-    AgentPreset,
-    AutoRoutingProvider,
-    JsonSessionStore,
-    LLMProvider,
-    Message,
-    OrchestrationPolicy,
-    Participant,
-    ProviderRegistry,
-    SessionConfig,
-    SqliteSessionStore,
-    Transcript,
-    RolePlayAnswer,
-    abuild_roleplay_prompt_from_answers_and_apply,
-    create_emotional_engine,
-    create_session_config_from_selected_agent,
-    setup_multimodel_config,
-    ensure_provider_platform_supported,
-    generate_humanized_roleplay_questions,
-    get_supported_provider_platforms,
-    merge_provider_sources,
-    register_provider_with_validation,
-    run_provider_detection_flow,
-    SessionStoreFactory,
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
-from sirius_chat.cli_diagnostics import (
-    EnvironmentDiagnostics,
-    generate_default_config,
-    run_preflight_check,
-)
-from sirius_chat.config import ConfigManager
-from sirius_chat.config.jsonc import load_json_document, write_session_config_jsonc
-from sirius_chat.config.helpers import build_orchestration_policy_from_dict
-from sirius_chat.logging_config import configure_logging, setup_log_archival, get_logger
-from sirius_chat.workspace.layout import WorkspaceLayout
-from sirius_chat.workspace.runtime import WorkspaceRuntime
+LOG = logging.getLogger("sirius_chat")
 
-InputFunc = Callable[[str], str]
-PrintFunc = Callable[[str], None]
-ProviderFactory = Callable[[dict[str, object]], LLMProvider]
 REPO_ROOT = Path(__file__).resolve().parent
-LAST_CONFIG_PATH_FILE = REPO_ROOT / ".last_config_path"
-DEFAULT_WORK_PATH = REPO_ROOT / "data"
-DEFAULT_CONFIG_PATH = REPO_ROOT / "examples" / "session.json"
-PRIMARY_USER_FILE_NAME = "primary_user.json"
-PERSISTED_SESSION_CONFIG_FILE_NAME = "session_config.persisted.json"
-RESET_USER_COMMAND = "/reset-user"
-PROVIDER_COMMAND_PREFIX = "/provider"
 
 
-def _build_arg_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Sirius Chat 测试入口（库外业务编排）")
-    parser.add_argument("--config", default="", help="会话 JSON/JSONC 配置文件路径")
-    parser.add_argument("--config-root", default="", help="配置持久化目录（默认与 work-path 相同）")
-    parser.add_argument("--work-path", default="", help="持久化工作路径（缺失时默认 data 目录）")
-    parser.add_argument("--output", default="", help="可选：输出 transcript JSON 文件路径")
-    parser.add_argument(
-        "--store",
-        default="json",
-        choices=["json", "sqlite"],
-        help="会话持久化后端：json 或 sqlite（默认 json）",
-    )
-    parser.add_argument(
-        "--resume",
-        action="store_true",
-        help="兼容参数：会话默认自动恢复，通常无需显式指定",
-    )
-    parser.add_argument(
-        "--no-resume",
-        action="store_true",
-        help="禁用自动恢复，始终从新会话开始",
-    )
-    parser.add_argument(
-        "--init-config",
-        type=str,
-        default="",
-        help="生成默认配置文件（指定输出路径）",
-    )
-    parser.add_argument(
-        "--check-config",
-        type=str,
-        default="",
-        help="检查配置文件（指定配置路径）",
-    )
-    parser.add_argument(
-        "--persona",
-        type=str,
-        default="",
-        help="选择人格模板（仅 emotional 引擎有效）：warm_friend, sarcastic_techie, gentle_caregiver, chaotic_jester, stoic_observer, protective_elder, 或 generated（从 roleplay 资产加载）",
-    )
-    return parser
-
-
-def _load_session_config(
-    config_path: Path,
-    work_path: Path,
-    *,
-    config_root: Path | None = None,
-) -> tuple[SessionConfig, list[dict[str, object]]]:
-    resolved_config_root = config_root or work_path
-    raw = load_json_document(config_path)
-    if not isinstance(raw, dict):
-        raise ValueError("配置文件顶层必须是对象")
-
-    if "agent" in raw or "global_system_prompt" in raw:
-        raise ValueError("不允许手动指定 agent/global_system_prompt；请使用 generated_agent_key")
-    generated_agent_key = str(raw.get("generated_agent_key", "")).strip()
-    if not generated_agent_key:
-        raise ValueError("必需提供 generated_agent_key")
-
-    manager = ConfigManager(base_path=resolved_config_root)
-    layout = WorkspaceLayout(work_path, config_path=resolved_config_root)
-    has_workspace_config = (
-        layout.workspace_manifest_path().exists()
-        or layout.session_config_path().exists()
-    )
-
-    if not has_workspace_config:
-        workspace_config, providers_config = manager.bootstrap_workspace_from_legacy_session_json(
-            config_path,
-            work_path=resolved_config_root,
-            data_path=work_path,
-        )
-        session = manager.build_session_config(
-            work_path=resolved_config_root,
-            data_path=work_path,
-            session_id="default",
-            overrides={"agent_key": workspace_config.active_agent_key or generated_agent_key},
-        )
-        return session, providers_config
-
-    session = manager.build_session_config(
-        work_path=resolved_config_root,
-        data_path=work_path,
-        session_id="default",
-        overrides={"agent_key": generated_agent_key},
-    )
-
-    # 加载 providers 列表（必需）
-    providers_config = list(raw.get("providers", []))
-    if not providers_config:
-        raise ValueError("SessionConfig 必需包含 providers 字段（list format）")
-
-    return session, providers_config
-
-
-def _setup_multimodel_orchestration(
-    session: SessionConfig,
-    task_models: dict[str, str] | None = None,
-    task_temperatures: dict[str, float] | None = None,
-    task_max_tokens: dict[str, int] | None = None,
-    task_retries: dict[str, int] | None = None,
-) -> SessionConfig:
-    """配置多模型协作编排。
-
-    这个辅助函数展示了如何使用 setup_multimodel_config 来配置多个任务的模型。
-
-    Args:
-        session: 会话配置对象
-        task_models: 任务模型映射（例如 {"memory_extract": "doubao-seed-2-0-lite-260215"}）
-        task_temperatures: 采样温度（例如 {"memory_extract": 0.1}）
-        task_max_tokens: 最大 token 数（例如 {"memory_extract": 128}）
-        task_retries: 重试次数（例如 {"memory_extract": 1}）
-
-    Returns:
-        配置完成的会话对象
-
-    Example:
-        # 在 main.py 中使用
-        session, provider_config, providers = _load_session_config(config_path, work_path)
-        session = _setup_multimodel_orchestration(
-            session,
-            task_models={
-                "memory_extract": "doubao-seed-2-0-lite-260215",
-                "event_extract": "doubao-seed-2-0-lite-260215",
-            },
-            task_retries={
-                "memory_extract": 1,
-                "event_extract": 1,
-            },
-        )
-        # 或者直接使用 API：
-        # from sirius_chat.api import setup_multimodel_config
-        # setup_multimodel_config(
-        #     session_config=session,
-        #     task_models={"memory_extract": "model-1"},
-        # )
-    """
-    if not task_models:
-        return session
-    return setup_multimodel_config(
-        session_config=session,
-        task_models=task_models,
-        task_temperatures=task_temperatures or {},
-        task_max_tokens=task_max_tokens or {},
-        task_retries=task_retries or {},
-    )
-
-
-def _load_providers_config_from_config_file(config_path: Path) -> list[dict[str, object]]:
-    """加载 Session JSON 中的 providers 配置。
-    
-    providers 字段为必需的 list format。
-    """
-    raw = load_json_document(config_path)
-    if not isinstance(raw, dict):
-        raise ValueError("配置文件顶层必须是对象")
-    
-    # 加载 providers 字段（必需）
-    providers_config = list(raw.get("providers", []))
-    if not providers_config:
-        raise ValueError("SessionConfig 必需包含 providers 字段（list format）")
-    
-    return providers_config
-
-
-def _save_generated_agent_key_to_config(config_path: Path, generated_agent_key: str) -> None:
-    raw = load_json_document(config_path)
-    if not isinstance(raw, dict):
-        raise ValueError("配置文件顶层必须是对象")
-    raw["generated_agent_key"] = generated_agent_key
-    write_session_config_jsonc(config_path, raw)
-
-
-def _load_generated_agent_key_from_config_file(config_path: Path) -> str:
-    raw = load_json_document(config_path)
-    if not isinstance(raw, dict):
-        raise ValueError("配置文件顶层必须是对象")
-    key = str(raw.get("generated_agent_key", "")).strip()
-    if not key:
-        raise ValueError("必需提供 generated_agent_key")
-    return key
-
-
-def _bootstrap_first_generated_agent(
-    *,
-    config_path: Path,
-    work_path: Path,
-    config_root: Path | None = None,
-    provider_factory: ProviderFactory | None,
-    input_func: InputFunc,
-    print_func: PrintFunc,
-) -> bool:
-    resolved_config_root = config_root or work_path
-    print_func("检测到当前配置缺少可用的 generated agent，进入首次初始化向导。")
-    agent_name = _prompt_non_empty(prompt="请输入首个 Agent 名称：", input_func=input_func, print_func=print_func)
-    agent_alias = input_func("请输入 Agent 别名（可留空）：").strip()
-    prompt_model = _prompt_non_empty(
-        prompt="请输入用于生成提示词的模型名：",
-        input_func=input_func,
-        print_func=print_func,
-    )
-    agent_key_raw = input_func("请输入 generated_agent_key（留空默认同 Agent 名称）：").strip() or agent_name
-
-    providers_config = _load_providers_config_from_config_file(config_path)
-    provider = _build_provider(providers_config, resolved_config_root, provider_factory)
-
-    questions = generate_humanized_roleplay_questions()
-    answers: list[RolePlayAnswer] = []
-    print_func("请依次回答角色问题（可简短作答）。")
-    for index, question in enumerate(questions, start=1):
-        answer_text = _prompt_non_empty(
-            prompt=f"[{index}/{len(questions)}] {question.question}\n> ",
-            input_func=input_func,
-            print_func=print_func,
-        )
-        answers.append(
-            RolePlayAnswer(
-                question=question.question,
-                answer=answer_text,
-                perspective=question.perspective,
-                details=question.details,
-            )
-        )
-
-    temp_config = SessionConfig(
-        work_path=resolved_config_root,
-        data_path=work_path,
-        preset=AgentPreset(
-            agent=Agent(name=agent_name, persona="待生成", model=prompt_model),
-            global_system_prompt="待生成",
-        ),
-    )
-
-    asyncio.run(
-        abuild_roleplay_prompt_from_answers_and_apply(
-            provider,
-            config=temp_config,
-            model=prompt_model,
-            answers=answers,
-            persona_key=agent_key_raw,
-            agent_name=agent_name,
-            agent_alias=agent_alias,
-            persist_generated_agent=True,
-            select_after_save=True,
-        )
-    )
-
-    _save_generated_agent_key_to_config(config_path, agent_key_raw)
-    print_func(f"首个 generated agent 初始化完成，已写入 generated_agent_key={agent_key_raw}。")
-    return True
-
-
-def _run_framework_provider_detection(
-    *,
-    config_path: Path,
-    work_path: Path,
-    print_func: PrintFunc,
-) -> None:
-    registry_providers = ProviderRegistry(work_path).load()
-    if registry_providers:
-        merged = registry_providers
-        print_func("Provider 检测来源：provider_keys.json（已注册 provider）")
-    else:
-        providers_config = _load_providers_config_from_config_file(config_path)
-        merged = merge_provider_sources(
-            work_path=work_path,
-            providers_config=providers_config,
-        )
-        print_func("Provider 检测来源：配置文件（provider/providers）")
-    print_func("开始执行 Provider 检测流程：配置检查 -> 平台适配检查 -> 可用性检查")
-    run_provider_detection_flow(providers=merged)
-    print_func("Provider 检测流程通过。")
-
-
-def _register_provider_interactively_for_bootstrap(
-    *,
-    work_path: Path,
-    input_func: InputFunc,
-    print_func: PrintFunc,
-) -> None:
-    platforms = get_supported_provider_platforms()
-    print_func("请注册可用 provider（仅支持已适配平台）：")
-    for provider_type, meta in platforms.items():
-        print_func(f"- {provider_type}: default_base_url={meta['default_base_url']}")
-
-    provider_type = _prompt_non_empty(prompt="请输入 provider 类型：", input_func=input_func, print_func=print_func)
-    normalized_provider_type = ensure_provider_platform_supported(provider_type)
-    api_key = _prompt_non_empty(prompt="请输入 API Key：", input_func=input_func, print_func=print_func)
-    default_base_url = platforms[normalized_provider_type]["default_base_url"]
-    base_url = input_func(f"请输入 base_url（留空使用默认 {default_base_url}）：").strip() or default_base_url
-    healthcheck_model = _prompt_non_empty(
-        prompt="请输入用于检测可用性的模型名（必填）：",
-        input_func=input_func,
-        print_func=print_func,
-    )
-
-    registered_type = register_provider_with_validation(
-        work_path=work_path,
-        provider_type=provider_type,
-        api_key=api_key,
-        healthcheck_model=healthcheck_model,
-        base_url=base_url,
-    )
-    print_func(f"provider 注册并检测通过：{registered_type}")
-
-
-def _prompt_for_path(
-    *,
-    prompt_text: str,
-    input_func: InputFunc,
-    print_func: PrintFunc,
-    must_exist: bool,
-) -> Path:
-    while True:
-        raw = input_func(prompt_text).strip().strip('"')
-        if not raw:
-            print_func("请输入有效路径。")
-            continue
-        path = Path(raw)
-        if must_exist and not path.exists():
-            print_func(f"路径不存在：{path}")
-            continue
-        return path
-
-
-def _resolve_runtime_paths(
-    args: argparse.Namespace,
-    input_func: InputFunc,
-    print_func: PrintFunc,
-) -> tuple[Path, Path, Path]:
-    if args.config:
-        config_path = Path(args.config)
-    elif LAST_CONFIG_PATH_FILE.exists():
-        saved = LAST_CONFIG_PATH_FILE.read_text(encoding="utf-8").strip()
-        saved_path = Path(saved)
-        config_path = saved_path if saved and saved_path.exists() else DEFAULT_CONFIG_PATH
-    elif DEFAULT_CONFIG_PATH.exists():
-        config_path = DEFAULT_CONFIG_PATH
-    else:
-        config_path = _prompt_for_path(
-            prompt_text="请输入会话配置文件路径：",
-            input_func=input_func,
-            print_func=print_func,
-            must_exist=True,
-        )
-
-    if not config_path.exists():
-        config_path = _prompt_for_path(
-            prompt_text="请输入会话配置文件路径：",
-            input_func=input_func,
-            print_func=print_func,
-            must_exist=True,
-        )
-
-    work_path = Path(args.work_path) if args.work_path else DEFAULT_WORK_PATH
-    config_root = Path(args.config_root) if args.config_root else work_path
-    return config_path, config_root, work_path
-
-
-def _parse_user_turn(raw_text: str) -> Message:
-    return Message(role="user", speaker="用户", content=raw_text.strip())
-
-
-def _build_provider(
-    providers_config: list[dict[str, object]],
-    work_path: Path,
-    provider_factory: ProviderFactory | None,
-) -> LLMProvider:
-    if provider_factory is not None:
-        # For custom factory, use first provider if available
-        if providers_config and isinstance(providers_config[0], dict):
-            return provider_factory(providers_config[0])
-        return provider_factory({})
-    merged_providers = merge_provider_sources(
-        work_path=work_path,
-        providers_config=providers_config,
-    )
-    return AutoRoutingProvider(merged_providers)
-
-
-def _build_runtime(
-    *,
-    work_path: Path,
-    provider: LLMProvider | None,
-    config_root: Path | None = None,
-    store_kind: str,
-) -> WorkspaceRuntime:
-    return WorkspaceRuntime.open(
-        work_path,
-        config_path=config_root,
-        provider=provider,
-        store_factory=SessionStoreFactory(backend=store_kind),
-    )
-
-
-def _handle_provider_command(
-    raw_text: str,
-    *,
-    provider_registry: ProviderRegistry,
-    print_func: PrintFunc,
-) -> tuple[bool, bool]:
-    if not raw_text.startswith(PROVIDER_COMMAND_PREFIX):
-        return False, False
-
-    tokens = raw_text.split(maxsplit=5)
-    if len(tokens) == 2 and tokens[1] == "platforms":
-        platforms = get_supported_provider_platforms()
-        print_func("当前支持的平台：")
-        for provider_type, item in platforms.items():
-            print_func(
-                f"- {provider_type}: default_base_url={item['default_base_url']}, notes={item['notes']}"
-            )
-        return True, False
-
-    if len(tokens) == 2 and tokens[1] == "list":
-        providers = provider_registry.load()
-        if not providers:
-            print_func("当前没有已配置 provider。")
-            return True, False
-        for provider_type, config in providers.items():
-            healthcheck_model = config.healthcheck_model or "(未配置)"
-            print_func(
-                f"- {provider_type}: base_url={config.base_url or '(默认)'}, "
-                f"healthcheck_model={healthcheck_model}"
-            )
-        return True, False
-
-    if len(tokens) >= 5 and tokens[1] == "add":
-        provider_type = tokens[2]
-        api_key = tokens[3]
-        healthcheck_model = tokens[4]
-        base_url = tokens[5] if len(tokens) >= 6 else ""
-        try:
-            registered_type = register_provider_with_validation(
-                work_path=provider_registry.work_path,
-                provider_type=provider_type,
-                api_key=api_key,
-                healthcheck_model=healthcheck_model,
-                base_url=base_url,
-            )
-        except Exception as exc:
-            print_func(f"provider 注册失败：{exc}")
-            return True, False
-        print_func(f"已添加并通过检测 provider: {registered_type}")
-        return True, True
-
-    if len(tokens) >= 3 and tokens[1] == "remove":
-        provider_type = tokens[2]
-        removed = provider_registry.remove(provider_type)
-        if removed:
-            print_func(f"已移除 provider: {provider_type}")
-            return True, True
-        print_func(f"未找到 provider: {provider_type}")
-        return True, False
-
-    print_func(
-        "provider 命令格式：/provider platforms | /provider list | "
-        "/provider add <type> <api_key> <healthcheck_model> [base_url] | "
-        "/provider remove <type>"
-    )
-    return True, False
-
-
-def _write_transcript_output(transcript: Transcript, output_path: Path) -> None:
-    payload = [
-        {
-            "role": message.role,
-            "speaker": message.speaker,
-            "content": message.content,
-        }
-        for message in transcript.messages
-    ]
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-
-
-def _create_session_store(*, work_path: Path, store_kind: str):
-    if store_kind == "sqlite":
-        return SqliteSessionStore(work_path)
-    return JsonSessionStore(work_path)
-
-
-def _persist_last_config_path(config_path: Path, print_func: PrintFunc) -> None:
-    try:
-        LAST_CONFIG_PATH_FILE.write_text(str(config_path.resolve()), encoding="utf-8")
-    except OSError as exc:
-        print_func(f"写入最近配置路径失败：{exc}")
-
-
-def _serialize_session_bundle(
-    *,
-    generated_agent_key: str,
-    session_config: SessionConfig,
-    providers_config: list[dict[str, object]],
-) -> dict[str, object]:
-    orchestration = session_config.orchestration
-    payload: dict[str, object] = {
-        "generated_agent_key": generated_agent_key,
-        "providers": providers_config,
-        "history_max_messages": session_config.history_max_messages,
-        "history_max_chars": session_config.history_max_chars,
-        "max_recent_participant_messages": session_config.max_recent_participant_messages,
-        "enable_auto_compression": session_config.enable_auto_compression,
-        "orchestration": {
-            "unified_model": orchestration.unified_model,
-            "task_models": dict(orchestration.task_models),
-            "task_enabled": dict(orchestration.task_enabled),
-            "task_temperatures": dict(orchestration.task_temperatures),
-            "task_max_tokens": dict(orchestration.task_max_tokens),
-            "task_retries": dict(orchestration.task_retries),
-            "max_multimodal_inputs_per_turn": orchestration.max_multimodal_inputs_per_turn,
-            "max_multimodal_value_length": orchestration.max_multimodal_value_length,
-            "enable_prompt_driven_splitting": orchestration.enable_prompt_driven_splitting,
-            "memory_extract_batch_size": orchestration.memory_extract_batch_size,
-            "memory_extract_min_content_length": orchestration.memory_extract_min_content_length,
-            "event_extract_batch_size": orchestration.event_extract_batch_size,
-            "consolidation_interval_seconds": orchestration.consolidation_interval_seconds,
-            "consolidation_min_entries": orchestration.consolidation_min_entries,
-            "consolidation_min_notes": orchestration.consolidation_min_notes,
-            "consolidation_min_facts": orchestration.consolidation_min_facts,
-            "session_reply_mode": orchestration.session_reply_mode,
-            "engagement_sensitivity": orchestration.engagement_sensitivity,
-            "heat_window_seconds": orchestration.heat_window_seconds,
-            "pending_message_threshold": orchestration.pending_message_threshold,
-            "min_reply_interval_seconds": orchestration.min_reply_interval_seconds,
-            "memory": {
-                "max_facts_per_user": orchestration.memory.max_facts_per_user,
-                "transient_confidence_threshold": orchestration.memory.transient_confidence_threshold,
-                "event_dedup_window_minutes": orchestration.memory.event_dedup_window_minutes,
-                "max_observed_set_size": orchestration.memory.max_observed_set_size,
-                "max_summary_facts_per_type": orchestration.memory.max_summary_facts_per_type,
-                "max_summary_total_chars": orchestration.memory.max_summary_total_chars,
-                "decay_schedule": dict(orchestration.memory.decay_schedule),
-            },
-            "enable_self_memory": orchestration.enable_self_memory,
-            "self_memory_extract_batch_size": orchestration.self_memory_extract_batch_size,
-            "self_memory_min_chars": orchestration.self_memory_min_chars,
-            "self_memory_max_diary_prompt_entries": orchestration.self_memory_max_diary_prompt_entries,
-            "self_memory_max_glossary_prompt_terms": orchestration.self_memory_max_glossary_prompt_terms,
-            "reply_frequency_window_seconds": orchestration.reply_frequency_window_seconds,
-            "reply_frequency_max_replies": orchestration.reply_frequency_max_replies,
-            "reply_frequency_exempt_on_mention": orchestration.reply_frequency_exempt_on_mention,
-            "max_concurrent_llm_calls": orchestration.max_concurrent_llm_calls,
-            "enable_skills": orchestration.enable_skills,
-            "max_skill_rounds": orchestration.max_skill_rounds,
-            "skill_execution_timeout": orchestration.skill_execution_timeout,
-            "auto_install_skill_deps": orchestration.auto_install_skill_deps,
-        },
+def _default_config() -> dict:
+    """返回默认 Bot 配置。"""
+    return {
+        "ws_url": "ws://localhost:3001",
+        "token": "napcat_ws",
+        "work_path": str(REPO_ROOT / "ncatbot_env" / "data" / "sirius_chat_v28"),
+        "root": "",
+        "allowed_group_ids": [],
+        "allowed_private_user_ids": [],
+        "enable_group_chat": True,
+        "enable_private_chat": True,
+        "auto_install_skill_deps": True,
+        "providers": [],
+        "webui_host": "0.0.0.0",
+        "webui_port": 8080,
+        "auto_manage_napcat": False,
+        "napcat_install_dir": str(REPO_ROOT / "ncatbot_env" / "napcat"),
     }
-    return payload
 
 
-def _atomic_write_json(path: Path, payload: dict[str, object]) -> None:
+def _init_config(path: Path) -> None:
+    """生成默认配置文件并退出。"""
+    config = _default_config()
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp.replace(path)
+    path.write_text(json.dumps(config, indent=2, ensure_ascii=False), encoding="utf-8")
+    LOG.info("默认配置已写入: %s", path)
 
 
-def _load_or_persist_session_bundle(
-    *,
-    config_path: Path,
-    work_path: Path,
-    config_root: Path | None = None,
-    print_func: PrintFunc,
-) -> tuple[SessionConfig, list[dict[str, object]]]:
-    resolved_config_root = config_root or work_path
-    persisted_path = WorkspaceLayout(work_path, config_path=resolved_config_root).persisted_session_bundle_path()
-    session_config, providers_config = _load_session_config(
-        config_path,
-        work_path,
-        config_root=resolved_config_root,
-    )
-    generated_agent_key = _load_generated_agent_key_from_config_file(config_path)
-    try:
-        _atomic_write_json(
-            persisted_path,
-            _serialize_session_bundle(
-                generated_agent_key=generated_agent_key,
-                session_config=session_config,
-                providers_config=providers_config,
-            ),
+async def _run_bot(config: dict) -> None:
+    """启动 NapCat Bot + WebUI。"""
+    from sirius_chat.platforms import NapCatAdapter, NapCatBridge, NapCatManager, WebUIServer
+
+    ws_url = str(config.get("ws_url", "ws://localhost:3001"))
+    token = str(config.get("token", "napcat_ws"))
+    work_path = str(
+        config.get(
+            "work_path",
+            str(REPO_ROOT / "ncatbot_env" / "data" / "sirius_chat_v28"),
         )
-    except OSError as exc:
-        print_func(f"写入持久化 SessionConfig 失败：{exc}")
-    return session_config, providers_config
-
-
-def _prompt_non_empty(*, prompt: str, input_func: InputFunc, print_func: PrintFunc) -> str:
-    while True:
-        value = input_func(prompt).strip()
-        if value:
-            return value
-        print_func("该项不能为空，请重新输入。")
-
-
-def _prompt_comma_values(raw: str) -> list[str]:
-    return [item.strip() for item in raw.split(",") if item.strip()]
-
-
-def _prompt_yes_no(
-    *,
-    prompt: str,
-    input_func: InputFunc,
-    default: bool = True,
-) -> bool:
-    answer = input_func(prompt).strip().lower()
-    if not answer:
-        return default
-    return answer in {"y", "yes", "true", "1"}
-
-
-def _persist_primary_user(
-    *,
-    work_path: Path,
-    participant: Participant,
-    transcript: Transcript | None,
-    print_func: PrintFunc,
-) -> None:
-    profile_path = work_path / PRIMARY_USER_FILE_NAME
-    payload: dict[str, object] = {
-        "name": participant.name,
-        "user_id": participant.user_id,
-        "persona": participant.persona,
-        "aliases": participant.aliases,
-        "traits": participant.traits,
-        "metadata": participant.metadata,
-    }
-    if transcript is not None:
-        user_entry = transcript.user_memory.get_user_by_id(participant.user_id)
-        if user_entry is not None:
-            runtime = user_entry.runtime
-        payload["runtime"] = {
-            "inferred_persona": runtime.inferred_persona,
-            "inferred_traits": runtime.inferred_traits,
-            "preference_tags": runtime.preference_tags,
-            "recent_messages": runtime.recent_messages,
-            "summary_notes": runtime.summary_notes,
-            "last_seen_channel": runtime.last_seen_channel,
-            "last_seen_uid": runtime.last_seen_uid,
-        }
-    try:
-        _atomic_write_json(profile_path, payload)
-    except OSError as exc:
-        print_func(f"写入主用户档案失败：{exc}")
-
-
-def _collect_primary_user_from_input(*, input_func: InputFunc, print_func: PrintFunc) -> Participant:
-    name = _prompt_non_empty(prompt="请输入你的称呼：", input_func=input_func, print_func=print_func)
-    user_id = input_func("请输入用户ID（留空则与称呼一致）：").strip() or name
-    persona = input_func("请输入你的角色/偏好描述（可留空）：").strip()
-    aliases_raw = input_func("请输入别名（逗号分隔，可留空）：").strip()
-    is_developer = _prompt_yes_no(
-        prompt="是否将该用户标记为 developer（可调用受限内置 Skill，例如桌面截图）？[Y/n] ",
-        input_func=input_func,
-        default=True,
     )
-    return Participant(
-        name=name,
-        user_id=user_id,
-        persona=persona,
-        aliases=_prompt_comma_values(aliases_raw),
-        metadata={"is_developer": is_developer},
+    root = str(config.get("root", ""))
+    auto_manage_napcat = bool(config.get("auto_manage_napcat", False))
+    napcat_install_dir = str(
+        config.get(
+            "napcat_install_dir",
+            str(REPO_ROOT / "ncatbot_env" / "napcat"),
+        )
     )
 
+    napcat_manager = None
+    if auto_manage_napcat:
+        napcat_manager = NapCatManager(napcat_install_dir)
+        LOG.info("NapCat 自动管理已启用，安装目录: %s", napcat_install_dir)
 
-def _bootstrap_primary_user(
-    *,
-    work_path: Path,
-    input_func: InputFunc,
-    print_func: PrintFunc,
-) -> Participant:
-    profile_path = work_path / PRIMARY_USER_FILE_NAME
-    if profile_path.exists():
-        payload = json.loads(profile_path.read_text(encoding="utf-8"))
-        metadata = payload.get("metadata", {})
-        participant = Participant(
-            name=str(payload.get("name", "用户")),
-            user_id=str(payload.get("user_id", payload.get("name", "用户"))),
-            persona=str(payload.get("persona", "")),
-            aliases=list(payload.get("aliases", [])),
-            traits=list(payload.get("traits", [])),
-            metadata=dict(metadata) if isinstance(metadata, dict) else {},
-        )
-        return participant
-
-    print_func("首次启用：请先创建一个主用户档案。")
-    participant = _collect_primary_user_from_input(
-        input_func=input_func,
-        print_func=print_func,
-    )
-    _persist_primary_user(work_path=work_path, participant=participant, transcript=None, print_func=print_func)
-    print_func(f"已创建主用户档案：{participant.name}(id={participant.user_id})")
-    return participant
-
-
-def main(
-    argv: list[str] | None = None,
-    *,
-    input_func: InputFunc = input,
-    print_func: PrintFunc = print,
-    provider_factory: ProviderFactory | None = None,
-) -> int:
-    parser = _build_arg_parser()
-    args = parser.parse_args(argv if argv is not None else sys.argv[1:])
-
-    # 配置日志系统 - 同时输出到控制台和日志文件
-    log_dir = REPO_ROOT / "logs"
-    
-    # 先清理旧日志（在处理器创建前）
-    setup_log_archival(log_dir / "sirius_chat.log")
-    
-    # 配置日志处理器（包括模型调用的专用日志）
-    configure_logging(
-        level="INFO",
-        format_type="console",
-        log_file=log_dir / "sirius_chat.log",
-        enable_file_rotation=True,  # 每日轮换，保留7个备份
-        model_calls_log_file=log_dir / "model_calls.log",  # 模型调用的专用日志
-    )
-    logger = get_logger(__name__)
-
-    # 处理特殊命令：--init-config
-    if args.init_config:
-        try:
-            output_path = Path(args.init_config)
-            generate_default_config(output_path)
-            print_func(f"默认配置文件已生成: {output_path}")
-            return 0
-        except Exception as e:
-            print_func(f"生成配置文件失败: {e}")
-            logger.error(f"配置生成失败：{e}", exc_info=True)
-            return 1
-
-    # 处理特殊命令：--check-config
-    if args.check_config:
-        try:
-            config_path = Path(args.check_config)
-            work_path = Path(args.work_path or REPO_ROOT / "data")
-            ran = run_preflight_check(config_path, work_path, print_func=print_func)
-            return 0 if ran else 1
-        except Exception as e:
-            print_func(f"配置检查失败: {e}")
-            logger.error(f"配置检查失败：{e}", exc_info=True)
-            return 1
-
-    try:
-        resolved_paths = tuple(_resolve_runtime_paths(args, input_func, print_func))
-        if len(resolved_paths) == 3:
-            config_path, config_root, work_path = resolved_paths
-        else:
-            config_path, work_path = resolved_paths
-            config_root = work_path
-    except Exception as e:
-        logger.error(f"路径解析失败：{e}", exc_info=True)
-        print_func(f"路径解析失败: {e}")
-        return 1
-    
-    work_path.mkdir(parents=True, exist_ok=True)
-    config_root.mkdir(parents=True, exist_ok=True)
-
-    _persist_last_config_path(config_path, print_func)
-
-    try:
-        session_config, providers_config = _load_or_persist_session_bundle(
-            config_path=config_path,
-            work_path=work_path,
-            config_root=config_root,
-            print_func=print_func,
-        )
-    except ValueError as exc:
-        logger.error(f"加载 SessionConfig 失败：{exc}", exc_info=True)
-        print_func(f"加载 SessionConfig 失败：{exc}")
-        should_bootstrap = input_func("是否现在初始化首个 generated agent？[Y/n] ").strip().lower()
-        if should_bootstrap not in {"", "y", "yes"}:
-            print_func("已取消初始化。")
-            return 1
-        try:
-            _run_framework_provider_detection(
-                config_path=config_path,
-                work_path=config_root,
-                print_func=print_func,
-            )
-        except Exception as provider_exc:
-            logger.error(f"提供商检测失败：{provider_exc}", exc_info=True)
-            print_func(f"Provider 检测流程失败：{provider_exc}")
-            should_register = input_func("是否现在注册 provider 并重新检测？[Y/n] ").strip().lower()
-            if should_register not in {"", "y", "yes"}:
-                return 1
-            try:
-                _register_provider_interactively_for_bootstrap(
-                    work_path=config_root,
-                    input_func=input_func,
-                    print_func=print_func,
-                )
-                _run_framework_provider_detection(
-                    config_path=config_path,
-                    work_path=config_root,
-                    print_func=print_func,
-                )
-            except Exception as register_exc:
-                logger.error(f"提供商注册失败：{register_exc}", exc_info=True)
-                print_func(f"Provider 注册或检测失败：{register_exc}")
-                return 1
-
-        try:
-            _bootstrap_first_generated_agent(
-                config_path=config_path,
-                work_path=work_path,
-                config_root=config_root,
-                provider_factory=provider_factory,
-                input_func=input_func,
-                print_func=print_func,
-            )
-            session_config, providers_config = _load_or_persist_session_bundle(
-                config_path=config_path,
-                work_path=work_path,
-                config_root=config_root,
-                print_func=print_func,
-            )
-        except Exception as bootstrap_exc:
-            logger.error(f"启动失败：{bootstrap_exc}", exc_info=True)
-            print_func(f"初始化首个 generated agent 失败：{bootstrap_exc}")
-            return 1
-    except Exception as e:
-        logger.error(f"会话加载失败：{e}", exc_info=True)
-        print_func(f"加载会话配置时发生未预期的错误：{e}")
-        return 1
-    
-    try:
-        primary_user = _bootstrap_primary_user(
-            work_path=work_path,
-            input_func=input_func,
-            print_func=print_func,
-        )
-        provider_registry = ProviderRegistry(config_root)
-        provider = _build_provider(providers_config, config_root, provider_factory) if provider_factory is not None else None
-        runtime = _build_runtime(
-            work_path=work_path,
-            config_root=config_root,
-            provider=provider,
-            store_kind=args.store,
-        )
-        if args.no_resume:
-            asyncio.run(runtime.clear_session(session_config.session_id))
-            transcript = None
-        else:
-            transcript = asyncio.run(runtime.get_transcript(session_config.session_id))
-        asyncio.run(runtime.set_primary_user(session_config.session_id, primary_user))
-
-        persona = None
-        if args.persona:
-            if args.persona == "generated":
-                persona = "generated"  # Will be resolved by WorkspaceRuntime
+        if not napcat_manager.is_installed:
+            LOG.info("NapCat 未安装，尝试自动安装...")
+            result = await napcat_manager.install()
+            if result["success"]:
+                LOG.info("NapCat 安装成功")
             else:
-                from sirius_chat.core.persona_generator import PersonaGenerator
-                try:
-                    persona = PersonaGenerator.from_template(args.persona)
-                    print_func(f"已加载人格模板：{persona.name}")
-                except ValueError as e:
-                    print_func(f"未知人格模板：{e}")
-        # Load emotional engine config from config file if available
-        emotional_config: dict[str, Any] | None = None
-        try:
-            raw_cfg = load_json_document(config_path)
-            if isinstance(raw_cfg, dict):
-                emotional_config = raw_cfg.get("emotional_engine")
-                # Also load persona from config if not overridden on CLI
-                if persona is None:
-                    cfg_persona = raw_cfg.get("persona")
-                    if cfg_persona and cfg_persona != "generated":
-                        from sirius_chat.core.persona_generator import PersonaGenerator
-                        try:
-                            persona = PersonaGenerator.from_template(str(cfg_persona))
-                            print_func(f"已从配置加载人格模板：{persona.name}")
-                        except ValueError:
-                            pass
-        except Exception:
-            pass
+                LOG.warning("NapCat 自动安装失败: %s", result["message"])
+                LOG.warning("请通过 WebUI 手动安装 NapCat")
 
-        _run_emotional_interactive_session(
-            work_path=work_path,
-            primary_user=primary_user,
-            provider_factory=lambda: _build_provider(providers_config, config_root, provider_factory) if provider_factory is not None else None,
-            input_func=input_func,
-            print_func=print_func,
-            persona=persona,
-            config=emotional_config,
-        )
+        if napcat_manager.is_installed and not napcat_manager.is_running:
+            # 尝试从已有配置推断 QQ 号
+            config_dir = Path(napcat_install_dir) / "config"
+            qq_number = None
+            if config_dir.exists():
+                for cfg in config_dir.glob("onebot11_*.json"):
+                    qq_number = cfg.stem.replace("onebot11_", "")
+                    break
 
-        print_func("\n[emotional engine 会话结束]")
+            LOG.info("尝试自动启动 NapCat (QQ: %s)...", qq_number or "二维码登录")
+            result = await napcat_manager.start(qq_number=qq_number)
+            if result["success"]:
+                LOG.info("NapCat 已启动，等待 WebSocket 就绪...")
+                ready = await napcat_manager.wait_for_ws(timeout=120.0)
+                if ready:
+                    LOG.info("NapCat WebSocket 已就绪")
+                else:
+                    LOG.warning("NapCat WebSocket 未就绪，请检查 QQ 是否已扫码登录")
+            else:
+                LOG.warning("NapCat 启动失败: %s", result["message"])
 
-        return 0
-    except KeyboardInterrupt:
-        print_func("\n会话已中断。")
-        return 0
-    except Exception as e:
-        logger.error(f"会话中遇到预查误误：{e}", exc_info=True)
-        print_func(f"会话执行过程中发生错误：{e}")
-        return 1
-
-
-def _run_emotional_interactive_session(
-    *,
-    work_path: Path,
-    primary_user: Participant,
-    provider_factory: Callable[[], LLMProvider | None],
-    input_func: InputFunc,
-    print_func: PrintFunc,
-    persona: Any | None = None,
-    config: dict[str, Any] | None = None,
-) -> Transcript:
-    """Run an interactive session using EmotionalGroupChatEngine (v0.28+).
-
-    Simplified loop: process user messages through the emotional engine
-    and print assistant replies.
-    """
-    provider = provider_factory()
-    engine = create_emotional_engine(
-        work_path, provider=provider, persona=persona, config=config
+    adapter = NapCatAdapter(ws_url=ws_url, token=token)
+    bridge = NapCatBridge(
+        adapter=adapter,
+        work_path=work_path,
+        config={"root": root, **config},
+    )
+    webui = WebUIServer(
+        bridge=bridge,
+        host=str(config.get("webui_host", "0.0.0.0")),
+        port=int(config.get("webui_port", 8080)),
+        napcat_install_dir=napcat_install_dir if auto_manage_napcat else None,
     )
 
-    print_func("\n=== Emotional Group Chat Engine (v0.28+) ===")
-    print_func("输入消息与 AI 交互，输入 /exit 或 /quit 退出。\n")
+    await adapter.connect()
+    await bridge.start()
+    await webui.start()
+    LOG.info("Bot 已启动，WebUI: http://localhost:%s，按 Ctrl+C 停止", webui.port)
 
-    group_id = "default"
-    participants = [primary_user]
-
-    async def _loop() -> None:
+    try:
         while True:
-            try:
-                user_input = input_func("你: ")
-            except EOFError:
-                break
-            user_input = user_input.strip()
-            if not user_input:
-                continue
-            if user_input.lower() in ("/exit", "/quit"):
-                break
+            await asyncio.sleep(3600)
+    except asyncio.CancelledError:
+        pass
+    finally:
+        await webui.stop()
+        await bridge.stop()
+        await adapter.close()
+        if napcat_manager and napcat_manager.is_running:
+            LOG.info("正在停止 NapCat...")
+            await napcat_manager.stop()
+        LOG.info("Bot 已停止")
 
-            msg = Message(
-                role="human",
-                content=user_input,
-                speaker=primary_user.user_id or primary_user.name,
-            )
-            result = await engine.process_message(msg, participants, group_id)
 
-            strategy = result.get("strategy", "unknown")
-            reply = result.get("reply")
-            if reply:
-                print_func(f"AI [{strategy}]: {reply}")
-            else:
-                print_func(f"AI [{strategy}]: (未回复)")
+def main() -> int:
+    parser = argparse.ArgumentParser(description="SiriusChat 启动入口")
+    parser.add_argument("--config", default="config.json", help="配置文件路径 (默认: config.json)")
+    parser.add_argument("--init-config", metavar="PATH", help="生成默认配置模板并退出")
+    parser.add_argument("--work-path", help="覆盖配置中的工作路径")
+    parser.add_argument("--ws-url", help="覆盖 NapCat WebSocket 地址")
+    parser.add_argument("--root", help="覆盖管理员 QQ 号")
+    parser.add_argument("--webui-port", type=int, help="覆盖 WebUI 端口")
 
-    asyncio.run(_loop())
-    engine.save_state()
-    print_func("引擎状态已保存。")
-    return Transcript()
+    args = parser.parse_args()
+
+    if args.init_config:
+        _init_config(Path(args.init_config))
+        return 0
+
+    config_path = Path(args.config)
+    config: dict = {}
+    if config_path.exists():
+        try:
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            LOG.warning("配置文件读取失败: %s", exc)
+    else:
+        LOG.warning("配置文件不存在: %s，使用默认配置", config_path)
+        config = _default_config()
+
+    # CLI 参数覆盖配置文件
+    if args.work_path:
+        config["work_path"] = args.work_path
+    if args.ws_url:
+        config["ws_url"] = args.ws_url
+    if args.root:
+        config["root"] = args.root
+    if args.webui_port:
+        config["webui_port"] = args.webui_port
+
+    # 确保 work_path 存在
+    work_path = Path(config.get("work_path", "."))
+    work_path.mkdir(parents=True, exist_ok=True)
+
+    try:
+        asyncio.run(_run_bot(config))
+    except KeyboardInterrupt:
+        LOG.info("收到中断信号，正在停止...")
+    return 0
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
