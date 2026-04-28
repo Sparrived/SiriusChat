@@ -31,12 +31,51 @@ class NapCatManager:
     提供安装检查、自动下载、配置生成、启动/停止、日志读取等功能。
     """
 
-    def __init__(self, install_dir: str | Path) -> None:
+    def __init__(
+        self,
+        install_dir: str | Path,
+        instance_dir: str | Path | None = None,
+    ) -> None:
         self.install_dir = Path(install_dir).resolve()
-        self.config_dir = self.install_dir / "config"
-        self.logs_dir = self.install_dir / "logs"
+        self.instance_dir = Path(instance_dir).resolve() if instance_dir else self.install_dir
+        self.config_dir = self.instance_dir / "config"
+        self.logs_dir = self.instance_dir / "logs"
         self._process: subprocess.Popen | None = None
         self._monitor_task: asyncio.Task | None = None
+
+    @classmethod
+    def for_persona(
+        cls,
+        global_install_dir: str | Path,
+        persona_name: str,
+        instances_root: str | Path | None = None,
+    ) -> "NapCatManager":
+        """为指定人格创建 NapCat 实例管理器。
+
+        实例目录结构::
+
+            {instances_root or global_install_dir}/instances/{persona_name}/
+                ├── config/         # 独立配置
+                ├── logs/           # 独立日志
+                └── qqnt.json       # 从全局复制
+        """
+        global_dir = Path(global_install_dir).resolve()
+        if instances_root is None:
+            instances_root = global_dir / "instances"
+        else:
+            instances_root = Path(instances_root).resolve()
+
+        instance_dir = instances_root / persona_name
+        instance_dir.mkdir(parents=True, exist_ok=True)
+
+        # 复制必要的全局文件到实例目录（如果不存在）
+        for filename in ("qqnt.json",):
+            src = global_dir / filename
+            dst = instance_dir / filename
+            if src.exists() and not dst.exists():
+                shutil.copy2(str(src), str(dst))
+
+        return cls(global_install_dir, instance_dir)
 
     # ── 状态检查 ─────────────────────────────────────────
 
@@ -298,7 +337,7 @@ class NapCatManager:
         """启动 NapCat。
 
         Windows 下通过 NapCatWinBootMain.exe 注入 QQ 并启动。
-        首次启动需要用户扫码登录，无法完全自动化。
+        实例模式下，二进制从 install_dir 加载，但运行时 cwd 在 instance_dir。
 
         Args:
             qq_number: QQ 号，提供则使用快速登录；省略则使用二维码登录。
@@ -319,10 +358,12 @@ class NapCatManager:
                 "message": "未检测到 QQ 安装。请先安装 QQ 客户端（支持 QQNT 9.9.x）。",
             }
 
+        # 二进制从全局安装目录加载
         launcher = self.install_dir / "NapCatWinBootMain.exe"
         hook = self.install_dir / "NapCatWinBootHook.dll"
         main_script = self.install_dir / "napcat.mjs"
-        load_script = self.install_dir / "loadNapCat.js"
+        # loadNapCat.js 在实例目录生成（避免冲突）
+        load_script = self.instance_dir / "loadNapCat.js"
 
         if not launcher.exists():
             return {"success": False, "message": f"启动器不存在: {launcher}"}
@@ -338,7 +379,11 @@ class NapCatManager:
 
         # 准备环境变量
         env = os.environ.copy()
-        env["NAPCAT_PATCH_PACKAGE"] = str(self.install_dir / "qqnt.json")
+        # qqnt.json 优先使用实例目录的，fallback 到全局
+        qqnt_path = self.instance_dir / "qqnt.json"
+        if not qqnt_path.exists():
+            qqnt_path = self.install_dir / "qqnt.json"
+        env["NAPCAT_PATCH_PACKAGE"] = str(qqnt_path)
         env["NAPCAT_LOAD_PATH"] = str(load_script)
         env["NAPCAT_INJECT_PATH"] = str(hook)
         env["NAPCAT_LAUNCHER_PATH"] = str(launcher)
@@ -348,14 +393,14 @@ class NapCatManager:
         if qq_number:
             cmd.extend(["-q", qq_number])
 
-        LOG.info("正在启动 NapCat: %s", " ".join(cmd))
+        LOG.info("正在启动 NapCat (实例: %s): %s", self.instance_dir.name, " ".join(cmd))
         try:
             # Windows 下使用 CREATE_NEW_CONSOLE 让 QQ 窗口独立显示
             creationflags = subprocess.CREATE_NEW_CONSOLE if sys.platform == "win32" else 0
             self._process = subprocess.Popen(
                 cmd,
                 env=env,
-                cwd=str(self.install_dir),
+                cwd=str(self.instance_dir),
                 creationflags=creationflags,
             )
         except Exception as exc:

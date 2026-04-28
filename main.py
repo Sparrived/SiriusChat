@@ -69,59 +69,59 @@ async def _cmd_run(args: argparse.Namespace) -> None:
 
     persona_manager = PersonaManager(DATA_DIR, global_config=config)
 
-    # ── NapCat 自动管理 ───────────────────────────────────
-    napcat_manager = None
+    # ── NapCat 自动管理（多实例）───────────────────────────
+    napcat_managers: dict[str, Any] = {}
     if config.get("auto_manage_napcat"):
         from sirius_chat.platforms.napcat_manager import NapCatManager
         from sirius_chat.persona_config import PersonaAdaptersConfig
 
         napcat_install_dir = str(config.get("napcat_install_dir", str(REPO_ROOT / "napcat")))
-        napcat_manager = NapCatManager(napcat_install_dir)
+        global_mgr = NapCatManager(napcat_install_dir)
 
-        # 1. 安装
-        if not napcat_manager.is_installed:
+        # 1. 全局安装（只需要一次）
+        if not global_mgr.is_installed:
             LOG.info("NapCat 未安装，尝试自动安装...")
-            result = await napcat_manager.install()
+            result = await global_mgr.install()
             if result["success"]:
                 LOG.info("NapCat 安装成功")
             else:
                 LOG.warning("NapCat 自动安装失败: %s", result["message"])
                 LOG.warning("请通过 WebUI 手动安装 NapCat")
 
-        # 2. 从第一个人格读取 NapCat 配置
-        napcat_qq = None
-        napcat_port = 3001
-        for info in persona_manager.list_personas():
-            paths = persona_manager.get_persona_paths(info["name"])
-            if paths is None:
-                continue
-            adapters = PersonaAdaptersConfig.load(paths.adapters)
-            for a in adapters.adapters:
-                if a.type == "napcat" and getattr(a, "qq_number", ""):
-                    napcat_qq = a.qq_number
-                    napcat_port = int(a.ws_url.rsplit(":", 1)[-1]) if ":" in a.ws_url else 3001
-                    break
-            if napcat_qq:
-                break
+        # 2. 为每个人格启动独立的 NapCat 实例
+        if global_mgr.is_installed:
+            for info in persona_manager.list_personas():
+                name = info["name"]
+                paths = persona_manager.get_persona_paths(name)
+                if paths is None:
+                    continue
+                adapters = PersonaAdaptersConfig.load(paths.adapters)
+                for a in adapters.adapters:
+                    if a.type != "napcat" or not a.enabled:
+                        continue
+                    qq = getattr(a, "qq_number", "")
+                    port = int(a.ws_url.rsplit(":", 1)[-1]) if ":" in a.ws_url else 3001
+                    if not qq:
+                        LOG.warning("人格 %s 的 NapCat 未配置 QQ 号，跳过", name)
+                        continue
 
-        # 3. 配置并启动
-        if napcat_manager.is_installed and not napcat_manager.is_running:
-            if napcat_qq:
-                LOG.info("配置 NapCat (QQ: %s, 端口: %s)...", napcat_qq, napcat_port)
-                napcat_manager.configure(qq_number=napcat_qq, ws_port=napcat_port)
-                result = await napcat_manager.start(qq_number=napcat_qq)
-            else:
-                LOG.info("未找到人格 QQ 配置，使用二维码登录启动 NapCat...")
-                result = await napcat_manager.start()
-            if result["success"]:
-                LOG.info("NapCat 已启动，等待 WebSocket 就绪...")
-                ready = await napcat_manager.wait_for_ws(port=napcat_port, timeout=120.0)
-                if ready:
-                    LOG.info("NapCat WebSocket 已就绪")
-                else:
-                    LOG.warning("NapCat WebSocket 未就绪，请检查 QQ 是否已扫码登录")
-            else:
-                LOG.warning("NapCat 启动失败: %s", result["message"])
+                    instance_mgr = NapCatManager.for_persona(
+                        global_install_dir=napcat_install_dir,
+                        persona_name=name,
+                    )
+                    LOG.info("配置 NapCat 实例 %s (QQ: %s, 端口: %s)...", name, qq, port)
+                    instance_mgr.configure(qq_number=qq, ws_port=port)
+                    result = await instance_mgr.start(qq_number=qq)
+                    if result["success"]:
+                        LOG.info("NapCat 实例 %s 已启动，等待 WS 就绪...", name)
+                        ready = await instance_mgr.wait_for_ws(port=port, timeout=120.0)
+                        if ready:
+                            LOG.info("NapCat 实例 %s WS 已就绪", name)
+                        else:
+                            LOG.warning("NapCat 实例 %s WS 未就绪，请检查 QQ 是否已扫码登录", name)
+                        napcat_managers[name] = instance_mgr
+                    else:
+                        LOG.warning("NapCat 实例 %s 启动失败: %s", name, result["message"])
 
     # ── 启动所有已启用人格 ────────────────────────────────
     LOG.info("正在启动已启用人格...")
@@ -150,9 +150,10 @@ async def _cmd_run(args: argparse.Namespace) -> None:
         LOG.info("正在停止所有人格...")
         persona_manager.stop_all()
         await webui.stop()
-        if napcat_manager and napcat_manager.is_running:
-            LOG.info("正在停止 NapCat...")
-            await napcat_manager.stop()
+        for name, mgr in napcat_managers.items():
+            if mgr.is_running:
+                LOG.info("正在停止 NapCat 实例 %s...", name)
+                await mgr.stop()
         LOG.info("所有服务已停止")
 
 

@@ -268,7 +268,8 @@ class PersonaManager:
 
         # 3. 迁移桥接配置 → adapters.json
         # 尝试从 napcat 配置推断 QQ 号和端口
-        napcat_config_dir = REPO_ROOT / "napcat" / "config"
+        repo_root = Path(__file__).resolve().parent.parent
+        napcat_config_dir = repo_root / "napcat" / "config"
         inferred_qq = ""
         inferred_port = None
         if napcat_config_dir.exists():
