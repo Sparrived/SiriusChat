@@ -110,7 +110,7 @@ class PersonaManager:
         return results
 
     def _inspect_persona(self, name: str) -> dict[str, Any] | None:
-        """检查单个人格目录，返回元信息。"""
+        """检查单个人格目录，返回元信息（含进程存活检测）。"""
         pdir = self.personas_dir / name
         if not pdir.exists():
             return None
@@ -121,6 +121,12 @@ class PersonaManager:
         experience = PersonaExperienceConfig.load(paths.experience)
         status = self._read_worker_status(name)
 
+        # 进程存活检测
+        is_alive = self.is_running(name)
+        pid = status.get("pid") if status else None
+        if not is_alive and pid:
+            pid = None  # PID 已死亡
+
         # 是否已启用（至少有一个 adapter enabled）
         has_enabled_adapter = any(a.enabled for a in adapters.adapters)
 
@@ -130,9 +136,9 @@ class PersonaManager:
             "persona_summary": persona.persona_summary if persona else None,
             "adapters_count": len(adapters.adapters),
             "enabled": has_enabled_adapter,
-            "running": self.is_running(name),
-            "pid": status.get("pid") if status else None,
-            "status": status.get("status") if status else "unknown",
+            "running": is_alive,
+            "pid": pid,
+            "status": "running" if is_alive else (status.get("status") if status else "stopped"),
             "heartbeat_at": status.get("heartbeat_at") if status else None,
             "work_path": str(pdir),
         }
@@ -453,16 +459,31 @@ class PersonaManager:
         LOG.info("人格已停止: %s", name)
         return True
 
+    @staticmethod
+    def _is_pid_alive(pid: int) -> bool:
+        """通过信号 0 检测 PID 是否存活（不发送实际信号）。"""
+        try:
+            import os
+            os.kill(pid, 0)
+            return True
+        except (OSError, ProcessLookupError):
+            return False
+
     def is_running(self, name: str) -> bool:
         """检查人格进程是否仍在运行。"""
         proc = self._processes.get(name)
-        if proc is None:
-            return False
-        if proc.poll() is not None:
+        if proc is not None:
+            if proc.poll() is None:
+                return True
             # 进程已退出，清理记录
             self._processes.pop(name, None)
-            return False
-        return True
+
+        # 通过状态文件检测 PID 存活（支持 CLI 新实例检测）
+        status = self._read_worker_status(name)
+        pid = status.get("pid") if status else None
+        if pid and self._is_pid_alive(pid):
+            return True
+        return False
 
     def start_all(self) -> dict[str, bool]:
         """启动所有已启用的人格。"""
@@ -527,6 +548,19 @@ class PersonaManager:
         except Exception as exc:
             LOG.warning("写入重载标志失败 %s: %s", name, exc)
             return False
+
+    def get_logs(self, name: str, lines: int = 50) -> list[str]:
+        """读取人格子进程日志文件。"""
+        log_file = self.personas_dir / name / "logs" / "worker.log"
+        if not log_file.exists():
+            return []
+        try:
+            text = log_file.read_text(encoding="utf-8", errors="ignore")
+            all_lines = text.splitlines()
+            return all_lines[-lines:] if len(all_lines) > lines else all_lines
+        except Exception as exc:
+            LOG.warning("读取日志失败 %s: %s", name, exc)
+            return []
 
 
 __all__ = ["PersonaManager"]

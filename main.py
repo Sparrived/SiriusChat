@@ -187,7 +187,7 @@ async def _cmd_webui(args: argparse.Namespace) -> None:
 
 
 def _cmd_persona_list(args: argparse.Namespace) -> None:
-    """列出所有人格。"""
+    """列出所有人格（含进程存活检测）。"""
     configure_logging(level="WARNING", format_type="console")
     from sirius_chat.persona_manager import PersonaManager
 
@@ -198,13 +198,14 @@ def _cmd_persona_list(args: argparse.Namespace) -> None:
         print("暂无任何人格。使用 `python main.py persona create <name>` 创建。")
         return
 
-    print(f"{'人格名':<12} {'角色名':<12} {'状态':<8} {'PID':<8} {'Adapter'}")
-    print("-" * 60)
+    print(f"{'人格名':<12} {'角色名':<12} {'状态':<8} {'PID':<8} {'端口':<8} {'Adapter'}")
+    print("-" * 70)
     for p in personas:
         status = "运行中" if p.get("running") else "已停止"
         pid = str(p.get("pid") or "-")
+        port = str(manager.get_port(p["name"]) or "-")
         adapters = p.get("adapters_count", 0)
-        print(f"{p['name']:<12} {p.get('persona_name') or '-':<12} {status:<8} {pid:<8} {adapters}")
+        print(f"{p['name']:<12} {p.get('persona_name') or '-':<12} {status:<8} {pid:<8} {port:<8} {adapters}")
 
 
 def _cmd_persona_create(args: argparse.Namespace) -> None:
@@ -322,7 +323,30 @@ def _cmd_persona_status(args: argparse.Namespace) -> None:
         print(f"人格不存在: {args.name}")
         sys.exit(1)
 
-    print(json.dumps(info, ensure_ascii=False, indent=2))
+    # 简洁格式输出
+    print(f"人格: {info['name']}")
+    print(f"角色名: {info.get('persona_name') or '—'}")
+    print(f"状态: {'运行中' if info.get('running') else '已停止'}")
+    print(f"PID: {info.get('pid') or '—'}")
+    print(f"端口: {manager.get_port(args.name) or '—'}")
+    print(f"Adapter: {info.get('adapters_count', 0)} 个")
+    print(f"心跳: {info.get('heartbeat_at') or '—'}")
+    print(f"目录: {info['work_path']}")
+
+
+def _cmd_persona_logs(args: argparse.Namespace) -> None:
+    """查看人格日志。"""
+    configure_logging(level="WARNING", format_type="console")
+    from sirius_chat.persona_manager import PersonaManager
+
+    config = _load_global_config()
+    manager = PersonaManager(DATA_DIR, global_config=config)
+    logs = manager.get_logs(args.name, lines=args.lines)
+    if not logs:
+        print("暂无日志")
+        return
+    for line in logs:
+        print(line)
 
 
 # ---------------------------------------------------------------------------
@@ -365,6 +389,10 @@ def main() -> int:
     status_parser = persona_sub.add_parser("status", help="查看人格状态")
     status_parser.add_argument("name", help="人格标识名")
 
+    logs_parser = persona_sub.add_parser("logs", help="查看人格日志")
+    logs_parser.add_argument("name", help="人格标识名")
+    logs_parser.add_argument("--lines", type=int, default=50, help="显示行数")
+
     args = parser.parse_args()
 
     if args.command is None:
@@ -389,6 +417,8 @@ def main() -> int:
             _cmd_persona_stop(args)
         elif args.persona_cmd == "status":
             _cmd_persona_status(args)
+        elif args.persona_cmd == "logs":
+            _cmd_persona_logs(args)
         else:
             persona_parser.print_help()
             return 1
