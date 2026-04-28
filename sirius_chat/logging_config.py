@@ -221,8 +221,13 @@ class ColoredFormatter(logging.Formatter):
 
     def format(self, record: logging.LogRecord) -> str:
         level_width = 8
-        name_width = 22
+        name_width = 26
         gap = "  "
+
+        # logger 名称 + 行号
+        display_name = self._short_name(record.name, name_width - 4) + ":" + str(record.lineno)
+        if len(display_name) > name_width:
+            display_name = display_name[: name_width - 1] + "…"
 
         # 前缀长度（无颜色时的纯文本长度，用于异常缩进对齐）
         prefix_len = 8 + len(gap) + level_width + len(gap) + name_width + len(gap)
@@ -236,9 +241,8 @@ class ColoredFormatter(logging.Formatter):
         )
         level_str = f"{level_color}{record.levelname:<{level_width}}{level_reset}"
 
-        # logger 名称（彩色 + 智能缩短）
+        # logger 名称（彩色）
         name_color = self._name_color(record.name)
-        display_name = self._short_name(record.name, name_width)
         name_str = f"{name_color}{display_name:<{name_width}}{self.RESET}"
 
         # 消息
@@ -285,12 +289,15 @@ class PlainFormatter(logging.Formatter):
 
     def format(self, record: logging.LogRecord) -> str:
         level_width = 8
-        name_width = 22
+        name_width = 26
         gap = "  "
+        display_name = self._short_name(record.name, name_width - 4) + ":" + str(record.lineno)
+        if len(display_name) > name_width:
+            display_name = display_name[: name_width - 1] + "…"
         prefix_len = 8 + len(gap) + level_width + len(gap) + name_width + len(gap)
         time_str = self.formatTime(record, "%Y-%m-%d %H:%M:%S")
         level_str = record.levelname.ljust(level_width)
-        name_str = self._short_name(record.name, name_width).ljust(name_width)
+        name_str = display_name.ljust(name_width)
         msg = record.getMessage()
         exc = ""
         if record.exc_info and record.exc_info[0] is not None:
