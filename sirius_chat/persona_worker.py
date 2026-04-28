@@ -265,10 +265,19 @@ async def _main() -> None:
 
     worker = PersonaWorker(args.config)
 
-    # 信号处理
-    loop = asyncio.get_running_loop()
-    for sig in (signal.SIGTERM, signal.SIGINT):
-        loop.add_signal_handler(sig, worker.shutdown)
+    # 信号处理（Windows 不支持 loop.add_signal_handler）
+    if sys.platform == "win32":
+        import signal as _signal
+
+        def _sig_handler(_signum, _frame):
+            worker.shutdown()
+
+        _signal.signal(_signal.SIGINT, _sig_handler)
+        _signal.signal(_signal.SIGTERM, _sig_handler)
+    else:
+        loop = asyncio.get_running_loop()
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            loop.add_signal_handler(sig, worker.shutdown)
 
     try:
         await worker.run()
