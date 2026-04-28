@@ -125,14 +125,27 @@ class DelayedResponseQueue:
         Returns items that should be triggered now.
         """
         queue = self._queues.get(group_id, [])
-        pending = [i for i in queue if i.status == "pending"]
         if not queue:
             return []
+
+        # Defensive: filter out corrupted dict entries (should never happen,
+        # but protects against external mutation of _queues).
+        clean_queue: list[DelayedResponseItem] = []
+        for i in queue:
+            if isinstance(i, DelayedResponseItem):
+                clean_queue.append(i)
+            else:
+                logger.warning(
+                    "DelayedResponseQueue: skipping corrupted entry in group %s (type=%s)",
+                    group_id,
+                    type(i).__name__,
+                )
+        self._queues[group_id] = clean_queue
 
         triggered: list[DelayedResponseItem] = []
         remaining: list[DelayedResponseItem] = []
 
-        for item in queue:
+        for item in clean_queue:
             if item.status != "pending":
                 continue
 

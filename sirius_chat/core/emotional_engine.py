@@ -1084,6 +1084,49 @@ class EmotionalGroupChatEngine:
         # Determine caller from the first triggered item
         caller_profile = None
         item = triggered[0]
+        # Defensive: if _queues was corrupted externally, item may be a dict.
+        if isinstance(item, dict):
+            logger.warning(
+                "tick_delayed_queue: triggered[0] is dict (item_id=%s), converting to DelayedResponseItem",
+                item.get("item_id", "unknown"),
+            )
+            from sirius_chat.models.response_strategy import DelayedResponseItem, StrategyDecision, ResponseStrategy
+            sd_raw = item.get("strategy_decision", {}) or {}
+            try:
+                strategy_val = sd_raw.get("strategy", "silent")
+                if isinstance(strategy_val, str):
+                    strategy_enum = ResponseStrategy(strategy_val)
+                else:
+                    strategy_enum = ResponseStrategy.SILENT
+            except Exception:
+                strategy_enum = ResponseStrategy.SILENT
+            strategy_decision = StrategyDecision(
+                strategy=strategy_enum,
+                score=float(sd_raw.get("score", 0.0)),
+                threshold=float(sd_raw.get("threshold", 0.5)),
+                urgency=float(sd_raw.get("urgency", 0.0)),
+                relevance=float(sd_raw.get("relevance", 0.0)),
+                reason=str(sd_raw.get("reason", "")),
+                estimated_delay_seconds=float(sd_raw.get("estimated_delay_seconds", 0.0)),
+                context=dict(sd_raw.get("context", {})),
+            )
+            item = DelayedResponseItem(
+                item_id=item.get("item_id", ""),
+                group_id=item.get("group_id", group_id),
+                user_id=item.get("user_id", ""),
+                channel=item.get("channel"),
+                channel_user_id=item.get("channel_user_id"),
+                message_content=item.get("message_content", ""),
+                strategy_decision=strategy_decision,
+                emotion_state=item.get("emotion_state", {}),
+                candidate_memories=item.get("candidate_memories", []),
+                enqueue_time=item.get("enqueue_time", ""),
+                window_seconds=float(item.get("window_seconds", 30.0)),
+                status=item.get("status", "pending"),
+                multimodal_inputs=item.get("multimodal_inputs", []),
+            )
+            triggered[0] = item
+
         if item.channel and item.channel_user_id:
             resolved_uid = self.user_manager.resolve_user_id(
                 platform=item.channel,
@@ -1126,11 +1169,15 @@ class EmotionalGroupChatEngine:
         seen_urls: set[str] = {str(m.get("value", "")) for m in all_multimodal}
         for entry in self.basic_memory.get_context(group_id, n=10):
             if entry.multimodal_inputs:
-                for item in entry.multimodal_inputs:
-                    url = str(item.get("value", ""))
-                    if url and url not in seen_urls and item.get("type") == "image":
-                        all_multimodal.append(dict(item))
-                        seen_urls.add(url)
+                for m in entry.multimodal_inputs:
+                    url = str(m.get("value", ""))
+                    # 跳过公网 URL——QQ 临时链接 Provider 无法下载，只保留本地缓存路径
+                    if not url or url in seen_urls or m.get("type") != "image":
+                        continue
+                    if url.startswith(("http://", "https://")):
+                        continue
+                    all_multimodal.append(dict(m))
+                    seen_urls.add(url)
 
         messages = self._inject_multimodal_into_user_message(messages, all_multimodal)
 
@@ -1138,8 +1185,10 @@ class EmotionalGroupChatEngine:
         from sirius_chat.skills.executor import parse_skill_calls, strip_skill_calls
         from sirius_chat.skills.models import SkillInvocationContext
 
-        max_skill_rounds = self.config.get("max_skill_rounds", 3)
+        max_skill_rounds = self.config.get("max_skill_rounds", 8)
         partial_replies: list[str] = []
+        _any_partial_sent = False
+        last_round_had_partial = False
 
         for _round in range(max_skill_rounds + 1):
             raw_reply = await self._generate(system_prompt, messages, group_id)
@@ -1158,8 +1207,11 @@ class EmotionalGroupChatEngine:
 
             # Extract non-skill text as a partial reply to send immediately.
             non_skill_text = strip_skill_calls(reply).strip()
+            last_round_had_partial = False
             if non_skill_text and not all_silent:
                 self._log_inner_thought(f"先跟用户回一声：{non_skill_text[:40]}...")
+                last_round_had_partial = True
+                _any_partial_sent = True
                 if on_partial_reply is not None:
                     try:
                         await on_partial_reply(non_skill_text)
@@ -1250,7 +1302,7 @@ class EmotionalGroupChatEngine:
 
             # Inject skill results into the conversation for the next round
             assistant_content = strip_skill_calls(reply)
-            if partial_replies:
+            if _any_partial_sent:
                 assistant_content += "\n\n（以上内容已发送给用户）"
             messages.append({"role": "assistant", "content": assistant_content})
 
@@ -1260,10 +1312,14 @@ class EmotionalGroupChatEngine:
                 "不要向用户提及任何关于能力调用或失败的内容，继续自然地对话。",
                 "如果当前结果还不够完整，你可以继续调用其他技能来获取补充信息，",
                 "形成链式调用。",
+                "重要：如果你说要去搜索、查找、读取或执行任何操作，",
+                "必须在同一句回复中紧跟对应的 [SKILL_CALL: ...] 标记，绝对不能只说不动。",
+                "错误示例（只说不动）：\"我再去搜索一下\" ❌",
+                "正确示例（边说边做）：\"我再去搜索一下 [SKILL_CALL: bing_search | {\\\"query\\\": \\\"xxx\\\"}]\" ✅",
                 "重要：你的每次回复都必须包含自然语言内容，",
                 "不能把 SKILL_CALL 标记作为回复的唯一内容。",
             ]
-            if partial_replies:
+            if _any_partial_sent:
                 suffix_parts.append(
                     "注意：上文标记为“已发送给用户”的内容已经由你发送给用户，"
                     "现在只需基于技能结果给出简短补充，不要重复之前的确认内容。"
@@ -1294,6 +1350,22 @@ class EmotionalGroupChatEngine:
                     role="system",
                     content=f"[技能执行结果]\n{'\n'.join(skill_results)}",
                 )
+
+        # If the loop ended because max rounds were exhausted and the last round
+        # already sent a partial reply, don't duplicate that text as the final reply.
+        ended_because_max_rounds = (
+            _round == max_skill_rounds
+            and calls
+            and self._skill_registry is not None
+            and self._skill_executor is not None
+        )
+        if ended_because_max_rounds and last_round_had_partial:
+            logger.debug(
+                "Chain hit max_skill_rounds=%d; last partial already sent, "
+                "clearing clean_reply to avoid duplication",
+                max_skill_rounds,
+            )
+            reply = ""
 
         # Record assistant reply into basic memory so future turns can see it
         clean_reply = strip_skill_calls(reply).strip()
