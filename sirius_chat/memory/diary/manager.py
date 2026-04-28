@@ -106,10 +106,19 @@ class DiaryManager:
     def load_group(self, group_id: str) -> None:
         """Load persisted entries for a group into the index."""
         entries = self._store.load(group_id)
+        logger.info("群 %s 日记加载中: 磁盘条目=%d", group_id, len(entries))
+        any_recomputed = False
         for entry in entries:
-            self._indexer.add(entry)
+            if self._indexer.add(entry):
+                any_recomputed = True
             sources = self._diarized_sources.setdefault(group_id, set())
             sources.update(entry.source_ids)
+        # If any stale embeddings were recomputed (e.g. model swap),
+        # persist the updated entries so the migration happens only once.
+        if any_recomputed:
+            self._store.save(group_id, entries)
+            logger.info("群 %s 的日记 embedding 已自动迁移并持久化", group_id)
+        logger.info("群 %s 日记加载完成: 索引条目=%d", group_id, len(entries))
 
     # ------------------------------------------------------------------
     # Retrieval
@@ -133,11 +142,18 @@ class DiaryManager:
         """
         if group_id is not None:
             self.ensure_group_loaded(group_id)
-        return self._retriever.retrieve(
+        results = self._retriever.retrieve(
             query=query,
             top_k=top_k,
             max_tokens_budget=max_tokens_budget,
         )
+        logger.info(
+            "日记检索结果: group=%s | 返回 %d 条 (预算 %d tokens)",
+            group_id,
+            len(results),
+            max_tokens_budget,
+        )
+        return results
 
     # ------------------------------------------------------------------
     # Consolidation helpers

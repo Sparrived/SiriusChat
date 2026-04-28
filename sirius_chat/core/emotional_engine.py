@@ -720,12 +720,16 @@ class EmotionalGroupChatEngine:
             pace="steady",
             is_group_chat=True,
         )
-        # Embed recent history as XML in system prompt; only current turn as user msg
-        history_xml = self.context_assembler.build_history_xml(group_id, n=10)
-        system_prompt = bundle.system_prompt
-        if history_xml:
-            system_prompt = system_prompt + "\n\n" + history_xml
-        messages = [{"role": "user", "content": bundle.user_content or "..."}]
+        # Use ContextAssembler to build full messages with diary RAG + XML history
+        msgs = self.context_assembler.build_messages(
+            group_id=group_id,
+            current_query=bundle.user_content or "...",
+            system_prompt=bundle.system_prompt,
+            search_query=bundle.user_content or "",
+            recent_n=10,
+        )
+        system_prompt = msgs[0]["content"]
+        messages = msgs[1:]
         raw_reply = await self._generate(system_prompt, messages, group_id, style)
         reply = raw_reply.strip()
 
@@ -1095,12 +1099,23 @@ class EmotionalGroupChatEngine:
             triggered, group_id, caller_is_developer=caller_is_developer
         )
 
-        # Embed recent history as XML in system prompt; only current turn as user msg
-        history_xml = self.context_assembler.build_history_xml(group_id, n=10)
-        system_prompt = bundle.system_prompt
-        if history_xml:
-            system_prompt = system_prompt + "\n\n" + history_xml
-        messages = [{"role": "user", "content": bundle.user_content}]
+        # Use ContextAssembler to build full messages with diary RAG + XML history
+        msgs = self.context_assembler.build_messages(
+            group_id=group_id,
+            current_query=bundle.user_content,
+            system_prompt=bundle.system_prompt,
+            search_query=bundle.user_content,
+            recent_n=10,
+        )
+        system_prompt = msgs[0]["content"]
+        messages = msgs[1:]
+
+        # Collect multimodal inputs from all triggered items and inject into user message
+        all_multimodal: list[dict[str, str]] = []
+        for triggered_item in triggered:
+            if getattr(triggered_item, "multimodal_inputs", None):
+                all_multimodal.extend(triggered_item.multimodal_inputs)
+        messages = self._inject_multimodal_into_user_message(messages, all_multimodal)
 
         # Multi-round generation with SKILL support
         from sirius_chat.skills.executor import parse_skill_calls, strip_skill_calls
@@ -1844,6 +1859,7 @@ class EmotionalGroupChatEngine:
                 candidate_memories=[m.get("content", "") for m in memories],
                 channel=message.channel,
                 channel_user_id=message.channel_user_id,
+                multimodal_inputs=message.multimodal_inputs,
             )
             self._persist_group_state(group_id)
             return {
@@ -1866,6 +1882,7 @@ class EmotionalGroupChatEngine:
                 candidate_memories=[m.get("content", "") for m in memories],
                 channel=message.channel,
                 channel_user_id=message.channel_user_id,
+                multimodal_inputs=message.multimodal_inputs,
             )
             self._persist_group_state(group_id)
             return {
@@ -2221,6 +2238,37 @@ class EmotionalGroupChatEngine:
         cleaned = re.sub(r"\[图片\d*: [^\]]+\]", "", content).strip()
         return not cleaned
 
+    @staticmethod
+    def _inject_multimodal_into_user_message(
+        messages: list[dict[str, Any]],
+        multimodal_inputs: list[dict[str, str]] | None,
+    ) -> list[dict[str, Any]]:
+        """Convert the last user message's string content into OpenAI multimodal list.
+
+        Supports image URLs (local paths are later converted to base64 data URLs
+        by the transport layer in ``prepare_openai_compatible_messages``).
+        """
+        if not multimodal_inputs:
+            return messages
+        if not messages:
+            return messages
+
+        for i in range(len(messages) - 1, -1, -1):
+            if messages[i].get("role") == "user":
+                user_msg = dict(messages[i])
+                content: list[dict[str, Any]] = [
+                    {"type": "text", "text": str(user_msg.get("content", ""))}
+                ]
+                for item in multimodal_inputs:
+                    if item.get("type") == "image":
+                        content.append(
+                            {"type": "image_url", "image_url": {"url": str(item["value"])}}
+                        )
+                user_msg["content"] = content
+                messages[i] = user_msg
+                break
+        return messages
+
 
 def _is_reminder_due(reminder: dict[str, Any], now: datetime) -> bool:
     """Check whether a single reminder should fire at *now*."""
@@ -2243,26 +2291,29 @@ def _is_reminder_due(reminder: dict[str, Any], now: datetime) -> bool:
             h, m = map(int, str(time_str).split(":"))
         except ValueError:
             return False
-        if now.hour != h or now.minute != m:
+        # Compare against local time since user inputs time in local timezone
+        now_local = now.astimezone()
+        if now_local.hour != h or now_local.minute != m:
             return False
         # Avoid duplicate fire within the same minute
         last_fired = reminder.get("last_fired_at")
         if last_fired:
             try:
                 last_dt = datetime.fromisoformat(str(last_fired).replace("Z", "+00:00"))
+                last_local = last_dt.astimezone()
                 if (
-                    last_dt.year == now.year
-                    and last_dt.month == now.month
-                    and last_dt.day == now.day
-                    and last_dt.hour == now.hour
-                    and last_dt.minute == now.minute
+                    last_local.year == now_local.year
+                    and last_local.month == now_local.month
+                    and last_local.day == now_local.day
+                    and last_local.hour == now_local.hour
+                    and last_local.minute == now_local.minute
                 ):
                     return False
             except ValueError:
                 pass
         if mode == "weekly":
             weekday = reminder.get("weekday")
-            if weekday is not None and now.weekday() != int(weekday):
+            if weekday is not None and now_local.weekday() != int(weekday):
                 return False
         return True
 

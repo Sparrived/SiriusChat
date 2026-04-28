@@ -28,7 +28,9 @@ class TestContextAssembler:
         # Should return exactly 2 messages: system (with XML history + diary) + user (current)
         assert len(messages) == 2
         assert messages[0]["role"] == "system"
-        assert "问候日记" in messages[0]["content"]
+        # 第 1 条属于前 5 档，注入完整 content，不显示 summary
+        assert "之前聊过问候" in messages[0]["content"]
+        assert "问候日记" not in messages[0]["content"]
         # History is embedded in system prompt as XML
         assert "<conversation_history>" in messages[0]["content"]
         assert 'speaker="alice"' in messages[0]["content"]
@@ -86,3 +88,41 @@ class TestContextAssembler:
         # Content should be escaped, raw HTML tags should not appear
         assert "<script>" not in xml
         assert "&lt;script&gt;" in xml
+
+    def test_diary_injection_tiers(self) -> None:
+        """分级注入：最多 12 条，前 5 条注入全文，其余仅摘要。"""
+        basic = BasicMemoryManager()
+        basic.add_entry("g1", "alice", "human", "你好")
+
+        indexer = DiaryIndexer()
+        for i in range(1, 16):
+            indexer.add(
+                DiaryEntry(
+                    f"d{i}",
+                    "g1",
+                    f"2026-04-22T10:0{i}:00+00:00",
+                    content=f"query日记正文{i}",
+                    summary=f"摘要{i}",
+                )
+            )
+        retriever = DiaryRetriever(indexer)
+
+        assembler = ContextAssembler(basic, retriever)
+        messages = assembler.build_messages("g1", "query", "sys")
+        lines = messages[0]["content"].splitlines()
+
+        # 只注入前 12 条
+        for i in range(1, 13):
+            assert any(line.startswith(f"{i}.") for line in lines)
+        for i in range(13, 16):
+            assert not any(f"摘要{i}" in line for line in lines)
+
+        # 前 5 条注入完整 content，不显示 summary
+        for i in range(1, 6):
+            assert f"{i}. query日记正文{i}" in lines
+            assert f"{i}. 摘要{i}" not in lines
+
+        # 第 6 条及以后仅注入摘要，不含正文
+        for i in range(6, 13):
+            assert f"{i}. 摘要{i}" in lines
+            assert f"{i}. query日记正文{i}" not in lines

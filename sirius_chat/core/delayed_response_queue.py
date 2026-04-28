@@ -45,6 +45,7 @@ class DelayedResponseQueue:
         candidate_memories: list[str] | None = None,
         channel: str | None = None,
         channel_user_id: str | None = None,
+        multimodal_inputs: list[dict[str, str]] | None = None,
     ) -> DelayedResponseItem:
         """Add an item to the delayed queue.
 
@@ -72,6 +73,8 @@ class DelayedResponseQueue:
                 item.emotion_state.update(emotion_state or {})
                 if candidate_memories:
                     item.candidate_memories.extend(candidate_memories)
+                if multimodal_inputs:
+                    item.multimodal_inputs.extend(multimodal_inputs)
                 # Update caller identity to the latest message (most relevant for skill auth)
                 item.user_id = user_id
                 item.channel = channel
@@ -99,6 +102,7 @@ class DelayedResponseQueue:
             enqueue_time=now_iso(),
             window_seconds=self._window_for_item(strategy_decision),
             status="pending",
+            multimodal_inputs=list(multimodal_inputs or []),
         )
         if group_id not in self._queues:
             self._queues[group_id] = []

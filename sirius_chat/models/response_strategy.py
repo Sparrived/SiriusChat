@@ -46,6 +46,7 @@ class DelayedResponseItem:
     enqueue_time: str = ""
     window_seconds: float = 30.0
     status: str = "pending"  # pending | triggered | cancelled | sent
+    multimodal_inputs: list[dict[str, str]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -61,4 +62,5 @@ class DelayedResponseItem:
             "enqueue_time": self.enqueue_time,
             "window_seconds": self.window_seconds,
             "status": self.status,
+            "multimodal_inputs": self.multimodal_inputs,
         }

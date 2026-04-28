@@ -97,6 +97,36 @@ class TestDelayedQueueMerge:
         assert item1.user_id == "u2"
         assert item1.channel_user_id == "200"
 
+    def test_merge_multimodal_inputs(self):
+        """Merging should accumulate multimodal_inputs from multiple messages."""
+        q = DelayedResponseQueue()
+        dec = StrategyDecision(strategy=ResponseStrategy.DELAYED, urgency=50)
+
+        item1 = q.enqueue(
+            "g1", "u1", "hello", dec,
+            multimodal_inputs=[{"type": "image", "value": "http://a.jpg"}],
+        )
+        q.enqueue(
+            "g1", "u2", "world", dec,
+            multimodal_inputs=[{"type": "image", "value": "http://b.jpg"}],
+        )
+
+        assert len(item1.multimodal_inputs) == 2
+        assert item1.multimodal_inputs[0]["value"] == "http://a.jpg"
+        assert item1.multimodal_inputs[1]["value"] == "http://b.jpg"
+
+    def test_enqueue_with_multimodal_inputs(self):
+        """A fresh enqueue should preserve multimodal_inputs."""
+        q = DelayedResponseQueue()
+        dec = StrategyDecision(strategy=ResponseStrategy.IMMEDIATE, urgency=90)
+
+        item = q.enqueue(
+            "g1", "u1", "hello", dec,
+            multimodal_inputs=[{"type": "image", "value": "http://c.jpg"}],
+        )
+
+        assert item.multimodal_inputs == [{"type": "image", "value": "http://c.jpg"}]
+
 
 class TestTextSimilarity:
     """Test the _text_similarity helper used for deduplication."""

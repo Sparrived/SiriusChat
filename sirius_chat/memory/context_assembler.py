@@ -8,10 +8,13 @@ This avoids role-confusion in multi-human group chat scenarios.
 from __future__ import annotations
 
 import html
+import logging
 from typing import Any
 
 from sirius_chat.memory.basic.manager import BasicMemoryManager
 from sirius_chat.memory.diary.indexer import DiaryRetriever
+
+logger = logging.getLogger(__name__)
 
 
 class ContextAssembler:
@@ -42,7 +45,7 @@ class ContextAssembler:
         *,
         search_query: str = "",
         recent_n: int = 5,
-        diary_top_k: int = 5,
+        diary_top_k: int = 12,
         diary_token_budget: int = 800,
         cross_group_user_id: str = "",
         cross_group_enabled: bool = False,
@@ -57,12 +60,26 @@ class ContextAssembler:
         recent messages from that user in other groups are also embedded
         (marked as cross-group to avoid confusion).
         """
-        # 1. Retrieve relevant diary entries
+        # 1. Retrieve relevant diary entries (group-isolated)
         diary_entries = self._diary.retrieve(
             query=search_query or current_query,
+            group_id=group_id,
             top_k=diary_top_k,
             max_tokens_budget=diary_token_budget,
         )
+        logger.info(
+            "ContextAssembler: group=%s | 检索到 %d 条日记 | query=%.30s...",
+            group_id,
+            len(diary_entries),
+            search_query or current_query,
+        )
+        if diary_entries:
+            displayed = diary_entries[:12]
+            for i, entry in enumerate(displayed, 1):
+                label = entry.content if i <= 5 else entry.summary
+                logger.info(
+                    "  [日记嵌入 %d/%d] %s", i, len(displayed), label
+                )
 
         # 2. Build XML conversation history from recent basic memory
         history_xml = self._build_history_xml(group_id, n=recent_n)
@@ -161,12 +178,16 @@ class ContextAssembler:
         parts: list[str] = [base_prompt]
 
         if diary_entries:
-            parts.extend(["", "【历史日记摘要】"])
-            for i, entry in enumerate(diary_entries, 1):
-                parts.append(f"{i}. {entry.summary}")
-                if entry.content:
-                    parts.append(f"   {entry.content[:120]}")
-            parts.append("【日记摘要结束】")
+            # 分级注入：最多 12 条，前 5 条注入全文，其余仅注入摘要
+            entries = diary_entries[:12]
+            full_text_count = min(5, len(entries))
+            parts.extend(["", "【历史日记】"])
+            for i, entry in enumerate(entries, 1):
+                if i <= full_text_count and entry.content:
+                    parts.append(f"{i}. {entry.content}")
+                else:
+                    parts.append(f"{i}. {entry.summary}")
+            parts.append("【历史日记结束】")
 
         if cross_group_xml:
             parts.extend([
