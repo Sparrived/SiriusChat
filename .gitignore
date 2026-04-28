@@ -43,4 +43,7 @@ Thumbs.db
 null
 Questions.md
 
-ncatbot_env/
+
+config.json
+
+napcat/

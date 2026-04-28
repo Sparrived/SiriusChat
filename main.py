@@ -32,7 +32,7 @@ def _default_config() -> dict:
     return {
         "ws_url": "ws://localhost:3001",
         "token": "napcat_ws",
-        "work_path": str(REPO_ROOT / "ncatbot_env" / "data" / "sirius_chat_v28"),
+        "work_path": str(REPO_ROOT / "data" / "bot"),
         "root": "",
         "allowed_group_ids": [],
         "allowed_private_user_ids": [],
@@ -43,7 +43,7 @@ def _default_config() -> dict:
         "webui_host": "0.0.0.0",
         "webui_port": 8080,
         "auto_manage_napcat": False,
-        "napcat_install_dir": str(REPO_ROOT / "ncatbot_env" / "napcat"),
+        "napcat_install_dir": str(REPO_ROOT / "napcat"),
     }
 
 
@@ -64,7 +64,7 @@ async def _run_bot(config: dict) -> None:
     work_path = str(
         config.get(
             "work_path",
-            str(REPO_ROOT / "ncatbot_env" / "data" / "sirius_chat_v28"),
+            str(REPO_ROOT / "data" / "bot"),
         )
     )
     root = str(config.get("root", ""))
@@ -72,7 +72,7 @@ async def _run_bot(config: dict) -> None:
     napcat_install_dir = str(
         config.get(
             "napcat_install_dir",
-            str(REPO_ROOT / "ncatbot_env" / "napcat"),
+            str(REPO_ROOT / "napcat"),
         )
     )
 

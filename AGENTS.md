@@ -520,4 +520,9 @@ python scripts/ci_check.py
 | `docs/skill-authoring.md` | SKILL 编写规范 |
 | `docs/best-practices.md` | 开发最佳实践 |
 
-> **注意**：`ncatbot_env/` 是项目实际的 QQ Bot 运行测试环境（基于 NcatBot/NapCat），与 `sirius_chat` 主源码无直接耦合，清理代码时**不要删除或修改**此目录。
+> **注意**：运行时数据已统一迁移到标准路径：
+> - `data/bot/` — Bot 运行时数据（引擎状态、记忆、日记等）
+> - `napcat/` — NapCat 二进制与配置
+> - `logs/napcat/` — NapCat 日志
+> 
+> `ncatbot_env/` 目录已被清理并删除。
