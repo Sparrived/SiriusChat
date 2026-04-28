@@ -5,6 +5,21 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>SiriusChat 仪表盘</title>
 <link rel="stylesheet" href="/static/style.css">
+<style>
+.persona-bar { display:flex; align-items:center; gap:12px; padding:12px 16px; background:var(--card); border-radius:8px; margin-bottom:16px; border:1px solid var(--border); }
+.persona-bar label { font-size:13px; color:var(--text-2); }
+.persona-bar select { padding:6px 12px; border-radius:6px; border:1px solid var(--border); background:var(--bg); color:var(--text); font-size:14px; min-width:160px; }
+.persona-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(220px,1fr)); gap:16px; }
+.persona-card { background:var(--card); border:1px solid var(--border); border-radius:12px; padding:16px; position:relative; }
+.persona-card.running { border-color:var(--success); }
+.persona-card .p-name { font-size:18px; font-weight:600; margin-bottom:4px; }
+.persona-card .p-meta { font-size:12px; color:var(--text-2); margin-bottom:8px; }
+.persona-card .p-status { display:inline-block; padding:2px 8px; border-radius:4px; font-size:12px; background:var(--bg); margin-bottom:12px; }
+.persona-card.running .p-status { background:rgba(34,197,94,0.15); color:var(--success); }
+.persona-card .p-actions { display:flex; gap:8px; flex-wrap:wrap; }
+.persona-card .p-actions button { padding:4px 10px; font-size:12px; }
+.persona-card .p-port { position:absolute; top:12px; right:12px; font-size:11px; color:var(--text-2); background:var(--bg); padding:2px 8px; border-radius:4px; }
+</style>
 </head>
 <body>
 <div class="app">
@@ -46,20 +61,16 @@
   </nav>
   <div class="sidebar-status">
     <div class="status-row">
-      <span>引擎状态</span>
-      <span><span class="status-dot err" id="sbEngineDot"></span> <span id="sbEngineText">未就绪</span></span>
+      <span>当前人格</span>
+      <span id="sbCurrentPersona">—</span>
     </div>
     <div class="status-row">
-      <span>AI 开关</span>
-      <span id="sbAiState">关闭</span>
+      <span>人格总数</span>
+      <span id="sbPersonaCount">0</span>
     </div>
     <div class="status-row">
-      <span>Provider</span>
-      <span id="sbProviderCount">0 个</span>
-    </div>
-    <div class="status-row">
-      <span>人格</span>
-      <span id="sbPersonaName">—</span>
+      <span>运行中</span>
+      <span id="sbRunningCount">0</span>
     </div>
   </div>
 </aside>
@@ -70,9 +81,8 @@
     <div class="header-title" id="pageTitle">概览</div>
     <div class="header-breadcrumb" id="pageBreadcrumb">Dashboard</div>
   </div>
-  <div class="header-right">
-    <button class="btn" id="toggleBtn" onclick="toggleEngine()">▶ 开启 AI</button>
-    <button class="btn" onclick="reloadEngine()">🔄 重建引擎</button>
+  <div class="header-right" id="headerActions">
+    <!-- 动态注入 -->
   </div>
 </header>
 
@@ -81,62 +91,41 @@
 
 <!-- ── Dashboard ─────────────────────────────────────── -->
 <div class="page active" id="page-dashboard">
-  <div class="stat-grid">
-    <div class="stat-card">
-      <div class="label">引擎状态</div>
-      <div class="value" id="dashEngine">未就绪</div>
-    </div>
-    <div class="stat-card">
-      <div class="label">AI 开关</div>
-      <div class="value" id="dashAi">关闭</div>
-    </div>
-    <div class="stat-card">
-      <div class="label">Provider 数量</div>
-      <div class="value" id="dashProviderCount">0</div>
-    </div>
-    <div class="stat-card">
-      <div class="label">当前人格</div>
-      <div class="value small" id="dashPersona">—</div>
-    </div>
-    <div class="stat-card">
-      <div class="label">白名单群数</div>
-      <div class="value" id="dashGroupCount">0</div>
-    </div>
-    <div class="stat-card">
-      <div class="label">分析模型</div>
-      <div class="value small" id="dashAnalysisModel">—</div>
-    </div>
-    <div class="stat-card">
-      <div class="label">对话模型</div>
-      <div class="value small" id="dashChatModel">—</div>
-    </div>
-    <div class="stat-card">
-      <div class="label">NapCat 状态</div>
-      <div class="value small" id="dashNapcat">未检测</div>
-    </div>
+  <div class="card">
+    <h2 style="display:flex;justify-content:space-between;align-items:center">
+      人格列表
+      <button class="btn" onclick="navTo('persona')">➕ 创建人格</button>
+    </h2>
+    <div class="persona-grid" id="personaCards">加载中...</div>
   </div>
 
   <div class="card">
-    <h2>快速操作</h2>
-    <div class="row">
-      <button class="btn" onclick="navTo('providers')">🔌 配置 Provider</button>
-      <button class="btn" onclick="navTo('persona')">🎭 配置人格</button>
-      <button class="btn" onclick="navTo('orchestration')">⚙️ 模型编排</button>
-      <button class="btn" onclick="navTo('groups')">👥 群白名单</button>
-      <button class="btn" onclick="navTo('napcat')">🐧 NapCat 管理</button>
+    <h2>全局状态</h2>
+    <div class="stat-grid">
+      <div class="stat-card">
+        <div class="label">Provider 数量</div>
+        <div class="value" id="dashProviderCount">0</div>
+      </div>
+      <div class="stat-card">
+        <div class="label">人格总数</div>
+        <div class="value" id="dashPersonaCount">0</div>
+      </div>
+      <div class="stat-card">
+        <div class="label">运行中</div>
+        <div class="value" id="dashRunningCount">0</div>
+      </div>
+      <div class="stat-card">
+        <div class="label">NapCat 实例</div>
+        <div class="value" id="dashNapcatCount">0</div>
+      </div>
     </div>
-  </div>
-
-  <div class="card">
-    <h2>人格预览</h2>
-    <div id="dashPersonaPreview" class="preview-box">加载中...</div>
   </div>
 </div>
 
 <!-- ── Providers ─────────────────────────────────────── -->
 <div class="page" id="page-providers">
   <div class="card">
-    <h2>Provider 配置</h2>
+    <h2>Provider 配置（全局共享）</h2>
     <div id="providerList"></div>
     <div style="margin-top:12px">
       <button class="btn" onclick="addProvider()">➕ 添加 Provider</button>
@@ -147,6 +136,12 @@
 
 <!-- ── Persona ───────────────────────────────────────── -->
 <div class="page" id="page-persona">
+  <div class="persona-bar">
+    <label>当前人格</label>
+    <select class="persona-select" id="personaSelectPersona" onchange="selectPersona(this.value)">
+      <option>加载中...</option>
+    </select>
+  </div>
   <div class="card">
     <h2>人格配置</h2>
     <div class="section-title">关键词生成</div>
@@ -185,12 +180,18 @@
 
 <!-- ── Orchestration ─────────────────────────────────── -->
 <div class="page" id="page-orchestration">
+  <div class="persona-bar">
+    <label>当前人格</label>
+    <select class="persona-select" id="personaSelectOrch" onchange="selectPersona(this.value)">
+      <option>加载中...</option>
+    </select>
+  </div>
   <div class="card">
     <h2>模型编排</h2>
     <div class="row">
       <div class="col">
         <div class="form-group">
-          <label>分析模型（情感/意图/认知/记忆）</label>
+          <label>分析模型</label>
           <input type="text" id="orchAnalysis" value="gpt-4o-mini">
         </div>
       </div>
@@ -213,6 +214,12 @@
 
 <!-- ── Groups ────────────────────────────────────────── -->
 <div class="page" id="page-groups">
+  <div class="persona-bar">
+    <label>当前人格</label>
+    <select class="persona-select" id="personaSelectGroups" onchange="selectPersona(this.value)">
+      <option>加载中...</option>
+    </select>
+  </div>
   <div class="card">
     <h2>群白名单</h2>
     <div class="form-group">
@@ -224,7 +231,7 @@
     </div>
     <div class="tag-list" id="groupTags"></div>
 
-    <div class="section-title">私聊白名单（空表示允许所有人）</div>
+    <div class="section-title">私聊白名单</div>
     <div class="form-group">
       <label>添加 QQ 号</label>
       <div class="row">
@@ -246,14 +253,14 @@
 <!-- ── NapCat ────────────────────────────────────────── -->
 <div class="page" id="page-napcat">
   <div class="card">
-    <h2>NapCat 管理</h2>
+    <h2>NapCat 管理（全局）</h2>
     <div class="stat-grid" style="margin-bottom:16px">
       <div class="stat-card">
         <div class="label">安装状态</div>
         <div class="value small" id="ncInstalled">检测中...</div>
       </div>
       <div class="stat-card">
-        <div class="label">运行状态</div>
+        <div class="label">运行中实例</div>
         <div class="value small" id="ncRunning">检测中...</div>
       </div>
       <div class="stat-card">
@@ -261,27 +268,8 @@
         <div class="value small" id="ncQQ">检测中...</div>
       </div>
     </div>
-    <div class="form-group">
-      <label>QQ 号（快速登录，首次启动需扫码）</label>
-      <input type="text" id="ncQQNumber" placeholder="例如：123456789">
-    </div>
-    <div class="row">
-      <div class="col">
-        <div class="form-group">
-          <label>WebSocket 端口</label>
-          <input type="text" id="ncWSPort" value="3001">
-        </div>
-      </div>
-      <div class="col">
-        <div class="form-group">
-          <label>WebSocket Token</label>
-          <input type="text" id="ncWSToken" value="napcat_ws">
-        </div>
-      </div>
-    </div>
     <div class="row" style="margin-top:12px">
       <button class="btn" id="ncInstallBtn" onclick="ncInstall()">⬇️ 安装 NapCat</button>
-      <button class="btn" id="ncConfigBtn" onclick="ncConfigure()">⚙️ 生成配置</button>
       <button class="btn success" id="ncStartBtn" onclick="ncStart()">▶ 启动 NapCat</button>
       <button class="btn danger" id="ncStopBtn" onclick="ncStop()">⏹ 停止 NapCat</button>
     </div>

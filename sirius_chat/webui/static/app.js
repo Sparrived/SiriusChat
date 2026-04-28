@@ -1,5 +1,8 @@
 const API = '/api';
-let state = {};
+let personas = [];
+let currentPersona = null;
+let personaState = {};
+let providerDraft = [];
 let currentPage = 'dashboard';
 
 function $(id) { return document.getElementById(id); }
@@ -23,6 +26,10 @@ async function post(path, body) {
   return r.json();
 }
 
+function pApi(path) {
+  return `/personas/${currentPersona}${path}`;
+}
+
 // ── Navigation ────────────────────────────────────────
 const pageTitles = {
   dashboard: ['概览', 'Dashboard'],
@@ -42,60 +49,115 @@ function navTo(page) {
   const t = pageTitles[page];
   $('pageTitle').textContent = t[0];
   $('pageBreadcrumb').textContent = t[1];
-  if (page === 'dashboard') loadPersonaPreview();
+  if (page === 'persona') loadPersonaPreview();
+  if (page === 'orchestration') loadOrchestration();
+  if (page === 'groups') loadGroups();
 }
 
-// ── Status ────────────────────────────────────────────
-async function loadStatus() {
+// ── Personas ──────────────────────────────────────────
+async function loadPersonas() {
   try {
-    state = await get('/status');
-    const ready = state.ready;
-    const enabled = state.enabled;
-
-    // Sidebar status
-    $('sbEngineDot').className = 'status-dot ' + (ready ? 'ok' : 'err');
-    $('sbEngineText').textContent = ready ? '就绪' : '未就绪';
-    $('sbAiState').textContent = enabled ? '开启' : '关闭';
-    $('sbProviderCount').textContent = (state.providers?.length || 0) + ' 个';
-    $('sbPersonaName').textContent = state.persona_name || '—';
-
-    // Header toggle
-    $('toggleBtn').textContent = enabled ? '⏸ 关闭 AI' : '▶ 开启 AI';
-    $('toggleBtn').className = 'btn' + (enabled ? ' danger' : '');
-
-    // Dashboard stats
-    $('dashEngine').textContent = ready ? '✅ 就绪' : '⏳ 未就绪';
-    $('dashAi').textContent = enabled ? '✅ 开启' : '⏹ 关闭';
-    $('dashProviderCount').textContent = state.providers?.length || 0;
-    $('dashPersona').textContent = state.persona_name || '—';
-    $('dashGroupCount').textContent = state.allowed_group_ids?.length || 0;
-    $('dashAnalysisModel').textContent = state.orchestration?.analysis_model || '—';
-    $('dashChatModel').textContent = state.orchestration?.chat_model || '—';
-
-    // Form values
-    renderProviders(state.providers || []);
-    renderGroups(state.allowed_group_ids || []);
-    renderPrivates(state.allowed_private_user_ids || []);
-    $('enableGroupChat').checked = state.enable_group_chat;
-    $('enablePrivateChat').checked = state.enable_private_chat;
-
-    const orch = state.orchestration || {};
-    $('orchAnalysis').value = orch.analysis_model || 'gpt-4o-mini';
-    $('orchChat').value = orch.chat_model || 'gpt-4o';
-    $('orchVision').value = orch.vision_model || 'gpt-4o';
-
-    loadPersonaPreview();
+    const res = await get('/personas');
+    personas = res.personas || [];
+    renderPersonaSelect();
+    renderPersonaCards();
+    updateSidebar();
+    if (!currentPersona && personas.length > 0) {
+      selectPersona(personas[0].name);
+    }
   } catch (e) {
-    console.error('loadStatus', e);
+    console.error('loadPersonas', e);
   }
 }
 
-// ── Providers ─────────────────────────────────────────
-let providerDraft = [];
-function renderProviders(list) {
-  providerDraft = JSON.parse(JSON.stringify(list));
-  _renderProviderDraft();
+function renderPersonaSelect() {
+  const opts = personas.map((p) => `<option value="${p.name}">${p.persona_name || p.name}</option>`).join('');
+  document.querySelectorAll('.persona-select').forEach((el) => {
+    el.innerHTML = opts || '<option>无人格</option>';
+    if (currentPersona) el.value = currentPersona;
+  });
 }
+
+function selectPersona(name) {
+  currentPersona = name;
+  document.querySelectorAll('.persona-select').forEach((el) => {
+    if (el.querySelector(`option[value="${name}"]`)) el.value = name;
+  });
+  loadPersonaStatus();
+}
+
+async function loadPersonaStatus() {
+  if (!currentPersona) return;
+  try {
+    personaState = await get(pApi(''));
+    updateSidebar();
+    if (currentPage === 'dashboard') renderPersonaCards();
+    if (currentPage === 'persona') loadPersonaPreview();
+    if (currentPage === 'orchestration') loadOrchestration();
+    if (currentPage === 'groups') loadGroups();
+  } catch (e) {
+    console.error('loadPersonaStatus', e);
+  }
+}
+
+function updateSidebar() {
+  const running = personas.filter((p) => p.running).length;
+  $('sbCurrentPersona').textContent = currentPersona ? (personaState.persona_name || currentPersona) : '—';
+  $('sbPersonaCount').textContent = String(personas.length);
+  $('sbRunningCount').textContent = String(running);
+}
+
+function renderPersonaCards() {
+  const el = $('personaCards');
+  if (!personas.length) {
+    el.innerHTML = '<div style="color:var(--text-2);padding:20px">暂无人格。使用 CLI <code>python main.py persona create &lt;name&gt;</code> 创建。</div>';
+    return;
+  }
+  el.innerHTML = personas.map((p) => {
+    const port = p.adapters?.[0]?.ws_url?.split(':').pop() || '—';
+    return `
+    <div class="persona-card ${p.running ? 'running' : ''}">
+      <div class="p-port">端口 ${port}</div>
+      <div class="p-name">${p.persona_name || p.name}</div>
+      <div class="p-meta">${p.name}</div>
+      <div class="p-status">${p.running ? '● 运行中' : '○ 已停止'}</div>
+      <div class="p-actions">
+        ${p.running
+          ? `<button class="btn danger" onclick="stopPersona('${p.name}')">⏹ 停止</button>`
+          : `<button class="btn success" onclick="startPersona('${p.name}')">▶ 启动</button>`}
+        <button class="btn" onclick="selectPersona('${p.name}'); navTo('persona')">⚙️ 配置</button>
+      </div>
+    </div>
+  `;
+  }).join('');
+
+  $('dashPersonaCount').textContent = String(personas.length);
+  $('dashRunningCount').textContent = String(personas.filter((p) => p.running).length);
+  $('dashNapcatCount').textContent = String(personas.filter((p) => p.adapters_count > 0).length);
+}
+
+async function startPersona(name) {
+  const res = await post(`/personas/${name}/start`, {});
+  toast(res.success ? `人格 ${name} 已启动` : res.error || '启动失败', res.success ? 'success' : 'error');
+  loadPersonas();
+}
+
+async function stopPersona(name) {
+  const res = await post(`/personas/${name}/stop`, {});
+  toast(res.success ? `人格 ${name} 已停止` : res.error || '停止失败', res.success ? 'success' : 'error');
+  loadPersonas();
+}
+
+// ── Providers ─────────────────────────────────────────
+async function loadProviders() {
+  try {
+    const res = await get('/providers');
+    providerDraft = JSON.parse(JSON.stringify(res.providers || []));
+    _renderProviderDraft();
+    $('dashProviderCount').textContent = String(providerDraft.length);
+  } catch (e) {}
+}
+
 function _renderProviderDraft() {
   const el = $('providerList');
   el.innerHTML = providerDraft
@@ -113,95 +175,41 @@ function _renderProviderDraft() {
     )
     .join('');
   if (!providerDraft.length)
-    el.innerHTML =
-      '<div style="color:var(--text-2);padding:10px">暂无 Provider，请点击「添加 Provider」。</div>';
+    el.innerHTML = '<div style="color:var(--text-2);padding:10px">暂无 Provider，请点击「添加 Provider」。</div>';
 }
 function addProvider() {
   providerDraft.push({ type: '', base_url: '', api_key: '', healthcheck_model: '', enabled: true, models: [] });
   _renderProviderDraft();
 }
-
 async function saveProviders() {
   const res = await post('/providers', { providers: providerDraft });
   toast(res.success ? 'Provider 已保存' : res.error || '保存失败', res.success ? 'success' : 'error');
-  loadStatus();
-}
-
-// ── Groups ────────────────────────────────────────────
-function renderGroups(list) {
-  $('groupTags').innerHTML = list
-    .map((g) => `<span class="tag">${g} <span class="remove" onclick="removeGroup('${g}')">✕</span></span>`)
-    .join('');
-}
-function renderPrivates(list) {
-  $('privateTags').innerHTML = list
-    .map((u) => `<span class="tag">${u} <span class="remove" onclick="removePrivate('${u}')">✕</span></span>`)
-    .join('');
-}
-
-function addGroup() {
-  const v = $('newGroupId').value.trim();
-  if (v) {
-    state.allowed_group_ids.push(v);
-    $('newGroupId').value = '';
-    renderGroups(state.allowed_group_ids);
-  }
-}
-function removeGroup(g) {
-  state.allowed_group_ids = state.allowed_group_ids.filter((x) => x !== g);
-  renderGroups(state.allowed_group_ids);
-}
-function addPrivate() {
-  const v = $('newPrivateId').value.trim();
-  if (v) {
-    state.allowed_private_user_ids.push(v);
-    $('newPrivateId').value = '';
-    renderPrivates(state.allowed_private_user_ids);
-  }
-}
-function removePrivate(u) {
-  state.allowed_private_user_ids = state.allowed_private_user_ids.filter((x) => x !== u);
-  renderPrivates(state.allowed_private_user_ids);
-}
-
-async function saveConfig() {
-  const res = await post('/config', {
-    allowed_group_ids: state.allowed_group_ids,
-    allowed_private_user_ids: state.allowed_private_user_ids,
-    enable_group_chat: $('enableGroupChat').checked,
-    enable_private_chat: $('enablePrivateChat').checked,
-  });
-  toast(res.success ? '配置已保存' : res.error || '失败', res.success ? 'success' : 'error');
-}
-
-// ── Orchestration ─────────────────────────────────────
-async function saveOrchestration() {
-  const res = await post('/orchestration', {
-    analysis_model: $('orchAnalysis').value,
-    chat_model: $('orchChat').value,
-    vision_model: $('orchVision').value,
-  });
-  toast(res.success ? '模型编排已保存' : res.error || '失败', res.success ? 'success' : 'error');
-}
-
-// ── Engine ────────────────────────────────────────────
-async function toggleEngine() {
-  const res = await post('/engine/toggle', { enabled: !state.enabled });
-  toast(res.success ? (res.enabled ? 'AI 已开启' : 'AI 已关闭') : res.error || '失败', res.success ? 'success' : 'error');
-  loadStatus();
-}
-async function reloadEngine() {
-  const res = await post('/engine/reload', {});
-  toast(res.success ? '引擎已重建' : res.error || '失败', res.success ? 'success' : 'error');
-  loadStatus();
+  loadProviders();
 }
 
 // ── Persona ───────────────────────────────────────────
+async function loadPersonaPreview() {
+  if (!currentPersona) return;
+  try {
+    const res = await get(pApi('/persona'));
+    const text = res.persona ? JSON.stringify(res.persona, null, 2) : '尚未配置人格。';
+    $('personaPreview').textContent = text;
+  } catch (e) {}
+}
+
+async function savePersona(jsonStr) {
+  if (!currentPersona) return;
+  const res = await post(pApi('/persona/save'), { persona: JSON.parse(jsonStr) });
+  toast(res.success ? '人格已保存' : res.error || '保存失败', res.success ? 'success' : 'error');
+  loadPersonaStatus();
+}
+
 async function generatePersonaKeywords() {
+  if (!currentPersona) { toast('请先选择人格', 'error'); return; }
   const btn = document.querySelector('#page-persona .btn');
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner"></span> 生成中...';
-  const res = await post('/persona/keywords', {
+  const res = await post(pApi('/persona/keywords'), {
     name: $('kwName').value,
     keywords: $('kwKeywords').value,
     aliases: $('kwAliases').value.split(/\s+/).filter(Boolean),
@@ -239,6 +247,7 @@ function renderInterviewQuestions() {
 }
 
 async function generatePersonaInterview() {
+  if (!currentPersona) { toast('请先选择人格', 'error'); return; }
   const btn = document.querySelectorAll('#page-persona .btn')[1];
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner"></span> 生成中...';
@@ -247,7 +256,7 @@ async function generatePersonaInterview() {
     const v = $(`ivAns${i}`).value.trim();
     if (v) answers[String(i + 1)] = v;
   });
-  const res = await post('/persona/interview', {
+  const res = await post(pApi('/persona/interview'), {
     name: $('ivName').value,
     aliases: $('ivAliases').value.split(/\s+/).filter(Boolean),
     answers,
@@ -261,19 +270,113 @@ async function generatePersonaInterview() {
   }
 }
 
-async function savePersona(jsonStr) {
-  const res = await post('/persona/save', { persona: JSON.parse(jsonStr) });
-  toast(res.success ? '人格已保存' : res.error || '保存失败', res.success ? 'success' : 'error');
-  loadStatus();
+// ── Orchestration ─────────────────────────────────────
+async function loadOrchestration() {
+  if (!currentPersona) return;
+  try {
+    const res = await get(pApi('/orchestration'));
+    const orch = res || {};
+    $('orchAnalysis').value = orch.analysis_model || 'gpt-4o-mini';
+    $('orchChat').value = orch.chat_model || 'gpt-4o';
+    $('orchVision').value = orch.vision_model || 'gpt-4o';
+  } catch (e) {}
 }
 
-async function loadPersonaPreview() {
+async function saveOrchestration() {
+  if (!currentPersona) { toast('请先选择人格', 'error'); return; }
+  const res = await post(pApi('/orchestration'), {
+    analysis_model: $('orchAnalysis').value,
+    chat_model: $('orchChat').value,
+    vision_model: $('orchVision').value,
+  });
+  toast(res.success ? '模型编排已保存' : res.error || '失败', res.success ? 'success' : 'error');
+}
+
+// ── Groups ────────────────────────────────────────────
+async function loadGroups() {
+  if (!currentPersona) return;
   try {
-    const res = await get('/persona');
-    const text = res.persona ? JSON.stringify(res.persona, null, 2) : '尚未配置人格。';
-    $('personaPreview').textContent = text;
-    $('dashPersonaPreview').textContent = text;
+    const adapters = personaState.adapters || [];
+    const a = adapters[0] || {};
+    renderGroups(a.allowed_group_ids || []);
+    renderPrivates(a.allowed_private_user_ids || []);
+    $('enableGroupChat').checked = a.enable_group_chat !== false;
+    $('enablePrivateChat').checked = a.enable_private_chat !== false;
   } catch (e) {}
+}
+
+function renderGroups(list) {
+  $('groupTags').innerHTML = list
+    .map((g) => `<span class="tag">${g} <span class="remove" onclick="removeGroup('${g}')">✕</span></span>`)
+    .join('');
+}
+function renderPrivates(list) {
+  $('privateTags').innerHTML = list
+    .map((u) => `<span class="tag">${u} <span class="remove" onclick="removePrivate('${u}')">✕</span></span>`)
+    .join('');
+}
+
+function addGroup() {
+  const v = $('newGroupId').value.trim();
+  if (v) {
+    const adapters = personaState.adapters || [];
+    const a = adapters[0] || {};
+    a.allowed_group_ids = a.allowed_group_ids || [];
+    a.allowed_group_ids.push(v);
+    $('newGroupId').value = '';
+    renderGroups(a.allowed_group_ids);
+  }
+}
+function removeGroup(g) {
+  const adapters = personaState.adapters || [];
+  const a = adapters[0] || {};
+  a.allowed_group_ids = (a.allowed_group_ids || []).filter((x) => x !== g);
+  renderGroups(a.allowed_group_ids);
+}
+function addPrivate() {
+  const v = $('newPrivateId').value.trim();
+  if (v) {
+    const adapters = personaState.adapters || [];
+    const a = adapters[0] || {};
+    a.allowed_private_user_ids = a.allowed_private_user_ids || [];
+    a.allowed_private_user_ids.push(v);
+    $('newPrivateId').value = '';
+    renderPrivates(a.allowed_private_user_ids);
+  }
+}
+function removePrivate(u) {
+  const adapters = personaState.adapters || [];
+  const a = adapters[0] || {};
+  a.allowed_private_user_ids = (a.allowed_private_user_ids || []).filter((x) => x !== u);
+  renderPrivates(a.allowed_private_user_ids);
+}
+
+async function saveConfig() {
+  if (!currentPersona) { toast('请先选择人格', 'error'); return; }
+  const adapters = personaState.adapters || [];
+  const a = adapters[0] || {};
+  a.allowed_group_ids = a.allowed_group_ids || [];
+  a.allowed_private_user_ids = a.allowed_private_user_ids || [];
+  a.enable_group_chat = $('enableGroupChat').checked;
+  a.enable_private_chat = $('enablePrivateChat').checked;
+  const res = await post(pApi('/adapters'), { adapters });
+  toast(res.success ? '配置已保存' : res.error || '失败', res.success ? 'success' : 'error');
+  loadPersonaStatus();
+}
+
+// ── Engine ────────────────────────────────────────────
+async function toggleEngine() {
+  if (!currentPersona) { toast('请先选择人格', 'error'); return; }
+  const res = await post(pApi('/engine/toggle'), { enabled: !personaState.enabled });
+  toast(res.success ? (res.enabled ? 'AI 已开启' : 'AI 已关闭') : res.error || '失败', res.success ? 'success' : 'error');
+  loadPersonaStatus();
+}
+
+async function reloadEngine() {
+  if (!currentPersona) { toast('请先选择人格', 'error'); return; }
+  const res = await post(pApi('/engine/reload'), {});
+  toast(res.success ? '引擎已重建' : res.error || '失败', res.success ? 'success' : 'error');
+  loadPersonaStatus();
 }
 
 // ── NapCat ────────────────────────────────────────────
@@ -284,7 +387,6 @@ async function ncLoadStatus() {
       $('ncInstalled').textContent = '管理未启用';
       $('ncRunning').textContent = '管理未启用';
       $('ncQQ').textContent = '管理未启用';
-      $('dashNapcat').textContent = '管理未启用';
       return;
     }
     const installed = res.installed ? '✅ 已安装' : '❌ 未安装';
@@ -293,7 +395,6 @@ async function ncLoadStatus() {
     $('ncInstalled').textContent = installed;
     $('ncRunning').textContent = running;
     $('ncQQ').textContent = qq + (res.qq_path ? ` (${res.qq_path})` : '');
-    $('dashNapcat').textContent = `${installed} / ${running}`;
     $('ncInstallBtn').style.display = res.installed ? 'none' : 'inline-flex';
     $('ncStartBtn').style.display = res.installed ? 'inline-flex' : 'none';
     $('ncStopBtn').style.display = res.running ? 'inline-flex' : 'none';
@@ -312,25 +413,11 @@ async function ncInstall() {
   toast(res.success ? res.message : res.message || '安装失败', res.success ? 'success' : 'error');
   ncLoadStatus();
 }
-async function ncConfigure() {
-  const qq = $('ncQQNumber').value.trim();
-  if (!qq) {
-    toast('请填写 QQ 号', 'error');
-    return;
-  }
-  const res = await post('/napcat/configure', {
-    qq,
-    ws_port: parseInt($('ncWSPort').value) || 3001,
-    ws_token: $('ncWSToken').value || 'napcat_ws',
-  });
-  toast(res.success ? res.message : res.message || '配置失败', res.success ? 'success' : 'error');
-}
 async function ncStart() {
-  const qq = $('ncQQNumber').value.trim() || undefined;
   const btn = $('ncStartBtn');
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner"></span> 启动中...';
-  const res = await post('/napcat/start', qq ? { qq } : {});
+  const res = await post('/napcat/start', {});
   btn.disabled = false;
   btn.innerHTML = '▶ 启动 NapCat';
   toast(res.success ? res.message : res.message || '启动失败', res.success ? 'success' : 'error');
@@ -352,8 +439,10 @@ async function ncLoadLogs() {
 
 // ── Init ──────────────────────────────────────────────
 renderInterviewQuestions();
-loadStatus();
+loadPersonas();
+loadProviders();
 ncLoadStatus();
 setInterval(() => {
+  loadPersonas();
   ncLoadLogs();
 }, 5000);

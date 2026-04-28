@@ -367,7 +367,10 @@ def main() -> int:
 
     args = parser.parse_args()
 
-    if args.command == "run":
+    if args.command is None:
+        # 默认启动 WebUI（管理模式）
+        asyncio.run(_cmd_webui(args))
+    elif args.command == "run":
         asyncio.run(_cmd_run(args))
     elif args.command == "webui":
         asyncio.run(_cmd_webui(args))
