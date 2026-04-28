@@ -252,11 +252,19 @@ class EmotionalGroupChatEngine:
             )
         )
 
-        # NOTE: Previously pure image messages were forced to SILENT here.
-        # This prevented multimodal inputs from entering the generation pipeline,
-        # so the model could never actually "see" images. We now let the
-        # response strategy engine decide whether to reply, and image URLs
-        # are injected in tick_delayed_queue / _generate as usual.
+        # Pure image message (no substantive text) → save to context but skip
+        # analysis.  This prevents duplicate replies when a user sends an image
+        # followed by a text message: the image is kept SILENT, and the later
+        # text message will pull the image URL from basic memory and inject it
+        # into the LLM prompt in tick_delayed_queue.
+        if message.multimodal_inputs and self._is_pure_image_message(message.content):
+            self._log_inner_thought(f"{speaker} 发了一张图，我先默默记下来～")
+            return {
+                "strategy": "silent",
+                "reply": None,
+                "emotion": {},
+                "intent": {},
+            }
 
         # 2. Cognition (unified emotion + intent)
         intent, emotion, memories, empathy = await self._cognition(content, user_id, group_id)
