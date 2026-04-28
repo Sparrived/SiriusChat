@@ -55,6 +55,8 @@ class WebUIServer:
 
     def _setup_routes(self) -> None:
         self.app.router.add_get("/", self.index)
+        static_dir = Path(__file__).parent / "webui_static"
+        self.app.router.add_static("/static/", static_dir)
         self.app.router.add_get("/api/status", self.api_status)
         self.app.router.add_get("/api/providers", self.api_providers_get)
         self.app.router.add_post("/api/providers", self.api_providers_post)
