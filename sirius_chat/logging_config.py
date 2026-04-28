@@ -316,6 +316,25 @@ class PlainFormatter(logging.Formatter):
 
 
 
+# 默认需要上调到 WARNING 的第三方库 logger 名称
+_DEFAULT_THIRD_PARTY_LOGGERS = [
+    "websockets",
+    "aiohttp",
+    "aiohttp.access",
+    "aiohttp.client",
+    "aiohttp.web",
+    "urllib3",
+    "urllib3.connectionpool",
+    "httpx",
+    "asyncio",
+    "watchdog",
+    "watchdog.observers",
+    "watchdog.observers.inotify_buffer",
+    "fsspec",
+    "PIL",
+]
+
+
 def configure_logging(
     *,
     level: LogLevel = "INFO",
@@ -323,6 +342,7 @@ def configure_logging(
     log_file: Path | str | None = None,
     enable_file_rotation: bool = False,
     model_calls_log_file: Path | str | None = None,
+    third_party_level: LogLevel = "WARNING",
 ) -> None:
     """
     配置全局日志系统
@@ -333,6 +353,7 @@ def configure_logging(
         log_file: 可选的日志文件路径（若指定则同时输出到文件）
         enable_file_rotation: 是否启用日志文件循环（每日轮换）
         model_calls_log_file: 可选的模型调用日志文件路径（独立的专用日志）
+        third_party_level: 第三方库日志级别上调到该值，默认 WARNING
 
     Example:
         ```python
@@ -356,6 +377,14 @@ def configure_logging(
     # 清除已有的处理器
     for handler in root_logger.handlers[:]:
         root_logger.removeHandler(handler)
+
+    # 上调第三方库日志级别，避免 INFO/DEBUG 噪音
+    third_party_levelno = getattr(logging, third_party_level)
+    for logger_name in _DEFAULT_THIRD_PARTY_LOGGERS:
+        tp_logger = logging.getLogger(logger_name)
+        # 如果当前级别比目标更宽松（数值更小），则上调
+        if tp_logger.level < third_party_levelno or tp_logger.level == 0:
+            tp_logger.setLevel(third_party_levelno)
 
     # Console处理器
     console_handler = logging.StreamHandler(sys.stdout)
