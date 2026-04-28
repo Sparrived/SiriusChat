@@ -252,15 +252,11 @@ class EmotionalGroupChatEngine:
             )
         )
 
-        # Pure image message (no substantive text) → save to context but skip analysis
-        if message.multimodal_inputs and self._is_pure_image_message(message.content):
-            self._log_inner_thought(f"{speaker} 发了一张图，我先默默记下来～")
-            return {
-                "strategy": "silent",
-                "reply": None,
-                "emotion": {},
-                "intent": {},
-            }
+        # NOTE: Previously pure image messages were forced to SILENT here.
+        # This prevented multimodal inputs from entering the generation pipeline,
+        # so the model could never actually "see" images. We now let the
+        # response strategy engine decide whether to reply, and image URLs
+        # are injected in tick_delayed_queue / _generate as usual.
 
         # 2. Cognition (unified emotion + intent)
         intent, emotion, memories, empathy = await self._cognition(content, user_id, group_id)
@@ -1115,6 +1111,19 @@ class EmotionalGroupChatEngine:
         for triggered_item in triggered:
             if getattr(triggered_item, "multimodal_inputs", None):
                 all_multimodal.extend(triggered_item.multimodal_inputs)
+
+        # Also inject recent images from basic memory so the model can see
+        # pictures referenced in the current conversation (e.g. user sends a
+        # photo then asks "who is this character?").
+        seen_urls: set[str] = {str(m.get("value", "")) for m in all_multimodal}
+        for entry in self.basic_memory.get_context(group_id, n=10):
+            if entry.multimodal_inputs:
+                for item in entry.multimodal_inputs:
+                    url = str(item.get("value", ""))
+                    if url and url not in seen_urls and item.get("type") == "image":
+                        all_multimodal.append(dict(item))
+                        seen_urls.add(url)
+
         messages = self._inject_multimodal_into_user_message(messages, all_multimodal)
 
         # Multi-round generation with SKILL support
