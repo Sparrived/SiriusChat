@@ -79,7 +79,7 @@ async def _cmd_run(args: argparse.Namespace) -> None:
         global_mgr = NapCatManager(napcat_install_dir)
 
         # 1. 全局安装（只需要一次）
-        if not global_mgr.is_installed:
+        if not global_mgr.is_installed():
             LOG.info("NapCat 未安装，尝试自动安装...")
             result = await global_mgr.install()
             if result["success"]:
@@ -89,7 +89,7 @@ async def _cmd_run(args: argparse.Namespace) -> None:
                 LOG.warning("请通过 WebUI 手动安装 NapCat")
 
         # 2. 为每个人格启动独立的 NapCat 实例
-        if global_mgr.is_installed:
+        if global_mgr.is_installed():
             for info in persona_manager.list_personas():
                 name = info["name"]
                 paths = persona_manager.get_persona_paths(name)
@@ -274,8 +274,9 @@ def _cmd_persona_migrate(args: argparse.Namespace) -> None:
 
 
 async def _cmd_persona_start(args: argparse.Namespace) -> None:
-    """前台启动单个人格（调试用）。"""
+    """前台启动单个人格（含 NapCat 自动管理）。"""
     from sirius_chat.persona_worker import PersonaWorker
+    from sirius_chat.persona_config import PersonaAdaptersConfig, NapCatAdapterConfig
 
     pdir = DATA_DIR / "personas" / args.name
     if not pdir.exists():
@@ -283,18 +284,67 @@ async def _cmd_persona_start(args: argparse.Namespace) -> None:
         sys.exit(1)
 
     configure_logging(level="INFO", format_type="console")
+    LOG = logging.getLogger("sirius.main")
+
+    # ── NapCat 自动管理 ───────────────────────────────────
+    napcat_mgr = None
+    config = _load_global_config()
+    if config.get("auto_manage_napcat"):
+        adapters = PersonaAdaptersConfig.load(pdir / "adapters.json")
+        for a in adapters.adapters:
+            if isinstance(a, NapCatAdapterConfig) and a.enabled and a.qq_number:
+                from sirius_chat.platforms.napcat_manager import NapCatManager
+
+                napcat_install_dir = str(config.get("napcat_install_dir", str(REPO_ROOT / "napcat")))
+                napcat_mgr = NapCatManager.for_persona(
+                    global_install_dir=napcat_install_dir,
+                    persona_name=args.name,
+                )
+                if not napcat_mgr.is_installed():
+                    LOG.info("NapCat 未安装，尝试自动安装...")
+                    result = await napcat_mgr.install()
+                    if not result["success"]:
+                        LOG.warning("NapCat 安装失败: %s", result["message"])
+                        break
+                port = int(a.ws_url.rsplit(":", 1)[-1]) if ":" in a.ws_url else 3001
+                napcat_mgr.configure(qq_number=a.qq_number, ws_port=port)
+                result = await napcat_mgr.start(qq_number=a.qq_number)
+                if result["success"]:
+                    LOG.info("NapCat 已启动，等待 WS 就绪...")
+                    ready = await napcat_mgr.wait_for_ws(port=port, timeout=120.0)
+                    if ready:
+                        LOG.info("NapCat WS 已就绪")
+                    else:
+                        LOG.warning("NapCat WS 未就绪，请检查 QQ 是否已扫码登录")
+                else:
+                    LOG.warning("NapCat 启动失败: %s", result["message"])
+                break
+
     worker = PersonaWorker(pdir)
 
-    # 信号处理
-    loop = asyncio.get_running_loop()
-    for sig in (__import__("signal").SIGTERM, __import__("signal").SIGINT):
-        loop.add_signal_handler(sig, worker.shutdown)
+    # 信号处理（Windows 兼容）
+    if sys.platform == "win32":
+        import signal as _signal
+
+        def _sig_handler(_s, _f):
+            worker.shutdown()
+
+        _signal.signal(_signal.SIGINT, _sig_handler)
+        _signal.signal(_signal.SIGTERM, _sig_handler)
+    else:
+        loop = asyncio.get_running_loop()
+        for sig in (__import__("signal").SIGTERM, __import__("signal").SIGINT):
+            loop.add_signal_handler(sig, worker.shutdown)
 
     try:
         await worker.run()
     except Exception:
-        logging.getLogger("sirius.main").exception("人格工作进程异常退出")
+        LOG.exception("人格工作进程异常退出")
         raise
+    finally:
+        if napcat_mgr and napcat_mgr.is_running:
+            LOG.info("正在停止 NapCat...")
+            await napcat_mgr.stop()
 
 
 def _cmd_persona_stop(args: argparse.Namespace) -> None:

@@ -64,7 +64,12 @@ class PersonaWorker:
 
         # 2. 创建 EngineRuntime（experience 参数注入 plugin_config）
         plugin_config = self._build_plugin_config(experience)
-        self._runtime = EngineRuntime(self.persona_dir, plugin_config=plugin_config)
+        global_data_path = self.persona_dir.parent.parent
+        self._runtime = EngineRuntime(
+            self.persona_dir,
+            plugin_config=plugin_config,
+            global_data_path=global_data_path,
+        )
 
         # 3. 启动引擎
         await self._runtime.start()

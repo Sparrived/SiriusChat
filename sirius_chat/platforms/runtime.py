@@ -88,9 +88,15 @@ def _build_provider_from_env() -> AutoRoutingProvider | None:
 class EngineRuntime:
     """EmotionalGroupChatEngine v1.0 的运行时封装，支持延迟初始化。"""
 
-    def __init__(self, work_path: str | Path, plugin_config: dict[str, Any] | None = None) -> None:
+    def __init__(
+        self,
+        work_path: str | Path,
+        plugin_config: dict[str, Any] | None = None,
+        global_data_path: str | Path | None = None,
+    ) -> None:
         self.work_path = Path(work_path).resolve()
         self.work_path.mkdir(parents=True, exist_ok=True)
+        self.global_data_path = Path(global_data_path).resolve() if global_data_path else self.work_path
         self.plugin_config = dict(plugin_config or {})
         self._engine: EmotionalGroupChatEngine | None = None
         self._running = False
@@ -126,7 +132,17 @@ class EngineRuntime:
             return False
 
     def _build_provider(self) -> AutoRoutingProvider | None:
-        # 1) 优先从 sirius_chat ProviderRegistry 持久化加载
+        # 1) 优先从全局 ProviderRegistry 持久化加载（多人格架构）
+        try:
+            from sirius_chat.providers.routing import ProviderRegistry
+            registry = ProviderRegistry(self.global_data_path)
+            loaded = registry.load()
+            if loaded:
+                return AutoRoutingProvider(loaded)
+        except Exception as exc:
+            LOG.debug("全局 ProviderRegistry 加载失败: %s", exc)
+
+        # 2) 回退到人格目录（兼容旧版单人格架构）
         try:
             from sirius_chat.providers.routing import ProviderRegistry
             registry = ProviderRegistry(self.work_path)
@@ -134,14 +150,14 @@ class EngineRuntime:
             if loaded:
                 return AutoRoutingProvider(loaded)
         except Exception as exc:
-            LOG.debug("ProviderRegistry 加载失败: %s", exc)
+            LOG.debug("人格级 ProviderRegistry 加载失败: %s", exc)
 
-        # 2) 从插件配置读取（覆盖/补充）
+        # 3) 从插件配置读取（覆盖/补充）
         provider = _build_provider_from_config(self.plugin_config)
         if provider is not None:
             return provider
 
-        # 3) fallback 到环境变量
+        # 4) fallback 到环境变量
         return _build_provider_from_env()
 
     def _setup_skill_runtime(self, engine: EmotionalGroupChatEngine) -> None:

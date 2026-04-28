@@ -271,14 +271,28 @@ async function generatePersonaInterview() {
 }
 
 // ── Orchestration ─────────────────────────────────────
+function _fillSelect(id, value, models) {
+  const el = $(id);
+  el.innerHTML = '';
+  const opts = models.length ? models : [value || 'gpt-4o'];
+  opts.forEach((m) => {
+    const opt = document.createElement('option');
+    opt.value = m;
+    opt.textContent = m;
+    if (m === value) opt.selected = true;
+    el.appendChild(opt);
+  });
+}
+
 async function loadOrchestration() {
   if (!currentPersona) return;
   try {
     const res = await get(pApi('/orchestration'));
     const orch = res || {};
-    $('orchAnalysis').value = orch.analysis_model || 'gpt-4o-mini';
-    $('orchChat').value = orch.chat_model || 'gpt-4o';
-    $('orchVision').value = orch.vision_model || 'gpt-4o';
+    const models = orch.available_models || [];
+    _fillSelect('orchAnalysis', orch.analysis_model || 'gpt-4o-mini', models);
+    _fillSelect('orchChat', orch.chat_model || 'gpt-4o', models);
+    _fillSelect('orchVision', orch.vision_model || 'gpt-4o', models);
   } catch (e) {}
 }
 

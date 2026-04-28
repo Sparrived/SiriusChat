@@ -898,11 +898,16 @@ class SetupWizard:
     # ─── 配置持久化辅助 ─────────────────────────────────
 
     def _current_provider_configs(self) -> list[dict]:
-        """从 ProviderRegistry 读取已有 provider 配置作为默认值。"""
+        """从全局 ProviderRegistry 读取已有 provider 配置作为默认值。"""
         try:
             from sirius_chat.providers.routing import ProviderRegistry
-            registry = ProviderRegistry(self.runtime.work_path)
+            global_path = self.runtime.work_path.parent.parent
+            registry = ProviderRegistry(global_path)
             loaded = registry.load()
+            if not loaded:
+                # 回退到人格目录（兼容旧版）
+                registry = ProviderRegistry(self.runtime.work_path)
+                loaded = registry.load()
             return [
                 {
                     "type": cfg.provider_type,
@@ -918,10 +923,11 @@ class SetupWizard:
             return []
 
     def _save_providers_to_registry(self, providers: list[dict]) -> None:
-        """将 provider 列表持久化到 ProviderRegistry。"""
+        """将 provider 列表持久化到全局 ProviderRegistry。"""
         try:
             from sirius_chat.providers.routing import ProviderRegistry, ProviderConfig
-            registry = ProviderRegistry(self.runtime.work_path)
+            global_path = self.runtime.work_path.parent.parent
+            registry = ProviderRegistry(global_path)
             entries: dict[str, ProviderConfig] = {}
             for item in providers:
                 ptype = str(item.get("type", "")).strip()
@@ -935,27 +941,8 @@ class SetupWizard:
                     enabled=bool(item.get("enabled", True)),
                     models=list(item.get("models", []) or []),
                 )
-            # ProviderRegistry 目前没有 save 方法，直接写 JSON
-            import json
-            providers_dir = self.runtime.work_path / "providers"
-            providers_dir.mkdir(parents=True, exist_ok=True)
-            payload = {
-                "providers": {
-                    key: {
-                        "type": cfg.provider_type,
-                        "api_key": cfg.api_key,
-                        "base_url": cfg.base_url,
-                        "healthcheck_model": cfg.healthcheck_model,
-                        "enabled": cfg.enabled,
-                        "models": cfg.models,
-                    }
-                    for key, cfg in entries.items()
-                }
-            }
-            (providers_dir / "provider_keys.json").write_text(
-                json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
-            )
-            LOG.info("Provider 配置已持久化到 provider_keys.json")
+            registry.save(entries)
+            LOG.info("Provider 配置已持久化到全局 provider_keys.json")
         except Exception as exc:
             LOG.warning("Provider 持久化失败: %s", exc)
 
@@ -973,9 +960,10 @@ class SetupWizard:
         if providers:
             self._save_providers_to_registry(providers)
         elif not providers:
-            # 如果之前没有配置，尝试删除 provider_keys.json
+            # 如果之前没有配置，尝试删除全局 provider_keys.json
             try:
-                pk = self.runtime.work_path / "providers" / "provider_keys.json"
+                global_path = self.runtime.work_path.parent.parent
+                pk = global_path / "providers" / "provider_keys.json"
                 if pk.exists():
                     pk.unlink()
             except OSError:

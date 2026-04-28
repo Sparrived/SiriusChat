@@ -63,8 +63,7 @@ quality = [
 	"tiktoken>=0.5.0",  # 精确token估算库
 ]
 
-[project.scripts]
-sirius-chat = "sirius_chat.cli:run"
+
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

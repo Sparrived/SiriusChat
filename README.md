@@ -8,7 +8,7 @@
 <a href="#-测试"><img src="https://img.shields.io/badge/Tests-600%2B%20passing-brightgreen?style=flat-square" alt="Tests"></a>
 <a href="sirius_chat/async_engine/"><img src="https://img.shields.io/badge/Async-First-orange?style=flat-square" alt="Async First"></a>
 
-<em>一个为多人交互场景设计的 Python LLM 编排框架。构建具有真实情感表达能力、能提供帮助与情绪价值的核心引擎。</em>
+<em>一个支持多人格启用的异步角色扮演程序。为 QQ 群聊等场景设计，每个人格独立进程、独立配置、独立记忆，具备真实情感表达与群聊互动能力。</em>
 
 <a href="#-文档">📚 文档</a> · <a href="#-快速开始">🚀 快速开始</a> · <a href="#使用示例">💡 示例</a> · <a href="#-配置示例">🛠️ 配置</a> · <a href="#-贡献">🤝 贡献</a>
 
@@ -32,10 +32,11 @@
 
 ## 🎯 核心特性
 
-### ✨ **多人交互架构**
-- **异步编排引擎**：支持实时多人交互、动态参与者加入、自动身份识别
-- **单 AI 主助手**：多人用户与一个主 AI 的标准模式，便于一致性管理
-- **结构化 Transcript**：完整记录交互过程，便于下游系统消费
+### ✨ **多人格异步架构**
+- **多人格管理**：每个人格独立进程、独立控制台窗口、独立文件日志，支持同时运行多个 AI 角色
+- **人格隔离**：`data/personas/{name}/` 下独立的 `persona.json`、`orchestration.json`、`adapters.json`、`experience.json`、`engine_state/`、`memory/`、`diary/`
+- **NapCat 多实例**：每个人格可绑定独立 QQ 号与独立 WebSocket 端口，自动管理 NapCat 生命周期
+- **WebUI 管理面板**：Dashboard 查看所有人格状态，支持启停、配置、模型编排、群管理
 
 ### 🧠 **智能记忆系统**
 - **结构化用户记忆**：极简 `UserProfile`（user_id, name, aliases, identities, metadata），群隔离存储，区分可信身份锚点与弱别称线索
@@ -57,9 +58,9 @@
 
 ### 🎬 **高级功能**
 - **多模态处理**：支持图片/视频输入与结构化解析
-- **CLI 与 API 双模式**：库调用 + 命令行交互，灵活接入
-- **Provider 管理**：多平台 API Key 持久化，自动可用性检测
-- **WorkspaceRuntime 持久化接管**：外部至少提供运行态 `work_path`，必要时可额外提供独立 `config_root`；框架自动恢复会话、参与者元数据与持久化布局，并通过文件监听即时刷新外部修改的 workspace/config/provider/roleplay 配置
+- **WebUI + CLI 双模式**：WebUI 面板管理所有人格，`python main.py` CLI 管理启停与迁移
+- **Provider 全局共享**：`data/providers/provider_keys.json` 所有人格共用，模型编排按人格独立选择
+- **自动端口分配**：`PersonaManager` 维护端口注册表，从 3001 递增自动分配 NapCat WebSocket 端口
 
 ---
 
@@ -75,143 +76,130 @@ python -m pip install -e .
 python -m pip install -e .[test]
 ```
 
-### 2️⃣ **CLI 运行**
+### 2️⃣ **CLI 运行（多人格架构）**
 
-**库内 CLI（单轮调用）：**
+**默认启动（WebUI 管理模式）：**
 
 ```bash
-sirius-chat --config examples/session.json --work-path data/session_runtime \
-  --config-root data/session_config \
-  --message "你好，请告诉我关于 LLM 的事" --output transcript.json
+python main.py
+# 或显式指定
+python main.py webui
 ```
 
-**项目入口（交互模式 + 持久化）：**
+**启动所有人格 + WebUI：**
 
 ```bash
-python main.py --config examples/session.json --work-path data/session_runtime \
-  --config-root data/session_config --store json
+python main.py run
 ```
 
-- `--work-path`：运行态数据根目录，保存 `sessions/`、`memory/`、`token/`、`skill_data/`、`primary_user.json`
-- `--config-root`：配置根目录，保存 `workspace.json`、`config/`、`providers/`、`roleplay/`、`skills/`；不传时默认回退到 `--work-path`
-- `--config`：支持 JSON/JSONC；`--init-config <path>` 生成的模板会带内联注释，便于直接修改
-
-**人格问卷模板辅助命令：**
+**人格管理：**
 
 ```bash
-# 列出可用模板
-sirius-chat --list-roleplay-question-templates
+# 列出现有人格
+python main.py persona list
 
-# 导出指定模板的问题清单 JSON
-sirius-chat --print-roleplay-questions-template companion
+# 创建新人格
+python main.py persona create <name> [--keywords ...]
+
+# 启动单个人格（调试用，含 NapCat 自动管理）
+python main.py persona start <name>
+
+# 停止单个人格
+python main.py persona stop <name>
+
+# 查看人格状态
+python main.py persona status <name>
+
+# 查看人格日志
+python main.py persona logs <name> --lines 50
+
+# 从旧版目录迁移人格
+python main.py persona migrate --source data/bot --name <name>
 ```
 
-**禁用自动恢复:**
+**全局配置：** `data/global_config.json`
 
-```bash
-python main.py --config examples/session.json --work-path data/session_runtime \
-  --config-root data/session_config --no-resume
+```json
+{
+  "webui_host": "0.0.0.0",
+  "webui_port": 8080,
+  "auto_manage_napcat": true,
+  "napcat_install_dir": "D:\\Code\\sirius_chat\\napcat",
+  "log_level": "INFO"
+}
 ```
 
 ### 3️⃣ **CLI 命令说明**
 
 | 命令 | 说明 |
 |------|------|
-| `sirius-chat` | 库内 CLI，单轮薄调用（不传 `--message` 时可交互输入） |
-| `python main.py` | 仓库入口，维护持续会话、主用户档案、provider 配置 |
-| `/reset-user` | 重置主用户档案（会话中输入） |
-| `/provider platforms` | 查看支持的平台 |
-| `/provider list` | 查看已配置 Provider |
-| `/provider add <type> <api_key> <healthcheck_model> [base_url]` | 添加或更新 provider |
-| `/provider remove <type>` | 删除 provider |
+| `python main.py` | 默认启动 WebUI 管理模式 |
+| `python main.py run` | 启动所有已启用人格 + WebUI |
+| `python main.py webui` | 仅启动 WebUI（不启动人格） |
+| `python main.py persona list` | 列出所有人格 |
+| `python main.py persona create <name>` | 创建新人格 |
+| `python main.py persona start <name>` | 前台启动单个人格 |
+| `python main.py persona stop <name>` | 停止单个人格 |
+| `python main.py persona status <name>` | 查看人格状态 |
+| `python main.py persona logs <name>` | 查看人格日志 |
+| `python main.py persona migrate --source <dir> --name <name>` | 从旧版目录迁移 |
 
-**会话存储选项：**
+**数据目录结构：**
 
-```bash
-# 轻量、可读、适合单机单会话
-python main.py --store json --config examples/session.json
-
-# 强一致性、支持复杂查询
-python main.py --store sqlite --config examples/session.json
+```
+data/
+├── global_config.json              # 全局配置
+├── providers/
+│   └── provider_keys.json          # Provider 凭证（所有人格共用）
+├── adapter_port_registry.json      # 端口分配表
+└── personas/
+    └── {name}/                     # 人格隔离目录
+        ├── persona.json            # 人格定义
+        ├── orchestration.json      # 模型编排
+        ├── adapters.json           # 平台适配器
+        ├── experience.json         # 体验参数
+        ├── engine_state/           # 运行状态
+        ├── memory/                 # 语义记忆
+        ├── diary/                  # 日记记忆
+        ├── image_cache/            # 图片缓存
+        ├── skill_data/             # 技能数据
+        └── logs/                   # 文件日志
 ```
 
 ### 4️⃣ **Python API 调用**
 
-**推荐入口：WorkspaceRuntime（自动恢复与落盘）**
+**多人格管理（推荐生产入口）**
 
 ```python
-import asyncio
-from pathlib import Path
+from sirius_chat.persona_manager import PersonaManager
 
-from sirius_chat.api import Message, UserProfile, open_workspace_runtime
-from sirius_chat.providers.mock import MockProvider
+manager = PersonaManager("data", global_config={"auto_manage_napcat": True})
 
+# 创建人格
+manager.create_persona("yuebai", keywords=["温暖", "猫娘"])
 
-async def main() -> None:
-  runtime = open_workspace_runtime(
-    Path("./data/chat_session"),
-    config_path=Path("./config/chat_session"),
-    provider=MockProvider(responses=["我理解您的想法"]),
-  )
+# 启动所有人格
+results = manager.start_all()
 
-  transcript = await runtime.run_live_message(
-    session_id="group:demo",
-    turn=Message(role="user", speaker="小王", content="Python 如何学习？"),
-    user_profile=UserProfile(
-      user_id="u_xiaowang",
-      name="小王",
-      metadata={"is_developer": True},
-    ),
-  )
-
-  print(transcript.as_chat_history())
-
-
-asyncio.run(main())
+# 停止人格
+manager.stop_persona("yuebai")
 ```
-
-> `work_path` 保存运行态数据；`config_path` 保存 workspace 配置、provider 与角色资产。不传 `config_path` 时，runtime 会回退到单根模式。外部修改 `config_path` 下的 workspace/config/provider/roleplay 文件后，runtime 会通过文件监听自动刷新；单轮调用前仍保留一次签名校验作为兜底。
->
-> `WorkspaceBootstrap` 只会按 payload 签名持久化一次；同一份 bootstrap 在后续重启时不会再次覆盖你已经手工修改过的 workspace/config/provider 文件。若需要给已存在的 workspace 下发新默认值，请改用 `apply_workspace_updates()`、`set_provider_entries()`，或显式调整 bootstrap payload。
-
-**BigModel GLM-4.6V 示例**
-
-```python
-from sirius_chat.api import BigModelProvider
-
-provider = BigModelProvider(api_key="YOUR_BIGMODEL_API_KEY")
-```
-
-> `BigModelProvider` 默认请求 `https://open.bigmodel.cn/api/paas/v4/chat/completions`，兼容传入根域名 `https://open.bigmodel.cn` 或完整 `api/paas/v4` 前缀。多模态消息沿用 OpenAI 兼容的 `content` 列表格式，可直接用于 `glm-4.6v`。
 
 **底层模式：EmotionalGroupChatEngine（高级控制）**
 
 ```python
 import asyncio
 from pathlib import Path
-from sirius_chat.api import create_emotional_engine, Message, Participant
+from sirius_chat.api import create_emotional_engine
 from sirius_chat.providers.mock import MockProvider
 
 async def main():
     engine = create_emotional_engine(
-        work_path=Path("./data/chat_session"),
-        provider_async=MockProvider(responses=["我理解您的想法", "这很有意思"]),
-        persona="warm_friend",
-        config={
-            "sensitivity": 0.6,
-            "event_memory_batch_size": 5,
-        },
+        work_path=Path("data/personas/yuebai"),
+        provider_async=MockProvider(responses=["喵~"]),
     )
     engine.start_background_tasks()
-
-    # 处理消息
-    result = await engine.process_message(
-        message=Message(role="human", content="Python 如何学习？", speaker="u1"),
-        participants=[Participant(name="小王", user_id="u1")],
-        group_id="group:demo",
-    )
-    print(result.get("reply"))
-
+    # ... 处理消息
     engine.stop_background_tasks()
     engine.save_state()
 
@@ -256,9 +244,22 @@ sirius_chat/
 ├── roleplay_prompting.py         # 🎭 人格资产生成、持久化与选择
 ├── cache/                        # ⚡ 可扩展缓存框架
 ├── performance/                  # 📈 性能分析与基准测试
-└── cli.py                        # 🖥️ 库内薄 CLI
+├── persona_manager.py            # 🎭 多人格生命周期管理
+├── persona_worker.py             # 🎭 单个人格子进程入口
+├── persona_config.py             # 🎭 人格级配置模型
+├── webui/                        # 🌐 WebUI 管理面板
+│   ├── server.py                 # aiohttp REST API
+│   └── static/                   # 前端页面
+├── platforms/                    # 🔗 平台适配层
+│   ├── napcat_manager.py         # NapCat 多实例管理
+│   ├── napcat_adapter.py         # NapCat WebSocket 适配
+│   ├── napcat_bridge.py          # QQ 桥接器
+│   ├── runtime.py                # EngineRuntime 封装
+│   └── setup_wizard.py           # 首次配置向导
 
-tests/                            # ✅ 单元测试 (600+ 个)
+└── cli.py                        # 🖥️ 库内薄 CLI（已移除）
+
+tests/                            # ✅ 单元测试 (540+ 个)
 ├── test_api_integrity.py         # 公开 API 完整性
 ├── test_basic_memory.py          # 基础记忆
 ├── test_diary_memory.py          # 日记记忆

@@ -106,18 +106,6 @@ class WebUIServer:
         # 桥接配置（写入 adapters.json）
         self.app.router.add_post("/api/personas/{name}/config", self.api_config_post)
 
-        # ─── 旧 API 兼容（默认操作第一个人格）────────────────────
-        self.app.router.add_get("/api/status", self.api_status_legacy)
-        self.app.router.add_get("/api/persona", self.api_persona_legacy)
-        self.app.router.add_post("/api/persona/save", self.api_persona_save_legacy)
-        self.app.router.add_post("/api/persona/keywords", self.api_persona_keywords_legacy)
-        self.app.router.add_post("/api/persona/interview", self.api_persona_interview_legacy)
-        self.app.router.add_get("/api/orchestration", self.api_orchestration_legacy)
-        self.app.router.add_post("/api/orchestration", self.api_orchestration_post_legacy)
-        self.app.router.add_post("/api/config", self.api_config_legacy)
-        self.app.router.add_post("/api/engine/toggle", self.api_engine_toggle_legacy)
-        self.app.router.add_post("/api/engine/reload", self.api_engine_reload_legacy)
-
     # ─── 生命周期 ─────────────────────────────────────────
 
     async def start(self) -> None:
@@ -287,10 +275,21 @@ class WebUIServer:
         name = _get_name(request)
         pdir = self.persona_manager.get_persona_dir(name)
         orch = OrchestrationStore.load(pdir)
+        # 聚合全局 Provider 中所有可用模型
+        available_models: list[str] = []
+        try:
+            provider_mgr = WorkspaceProviderManager(self.persona_manager.data_path)
+            for cfg in provider_mgr.load().values():
+                if cfg.enabled:
+                    available_models.extend(cfg.models)
+            available_models = sorted(set(available_models))
+        except Exception:
+            pass
         return _json_response({
             "analysis_model": orch.get("analysis_model", "gpt-4o-mini"),
             "chat_model": orch.get("chat_model", "gpt-4o"),
             "vision_model": orch.get("vision_model", "gpt-4o"),
+            "available_models": available_models,
         })
 
     async def api_orchestration_post(self, request: web.Request) -> web.Response:
@@ -408,184 +407,6 @@ class WebUIServer:
         adapters.save(paths.adapters)
         LOG.info("配置已更新 %s: %s", name, {k: body.get(k) for k in body})
         return _json_response({"success": True, "message": "配置已保存"})
-
-    # ─── 旧 API 兼容 ──────────────────────────────────────
-
-    def _default_persona_name(self) -> str | None:
-        """旧 API 默认操作第一个人格。"""
-        personas = self.persona_manager.list_personas()
-        if personas:
-            return personas[0]["name"]
-        return None
-
-    async def api_status_legacy(self, request: web.Request) -> web.Response:
-        name = self._default_persona_name()
-        if name is None:
-            return _json_response({"ready": False, "message": "无人格"})
-        info = self.persona_manager.get_persona_status(name)
-        if info is None:
-            return _json_response({"ready": False, "message": "人格不存在"})
-        return _json_response({
-            "ready": info.get("running", False),
-            "enabled": info.get("enabled", False),
-            "persona_name": info.get("persona_name"),
-            "persona_source": info.get("persona_summary"),
-            "providers": [],  # 兼容旧格式
-            "orchestration": {},
-            "allowed_group_ids": [],
-            "allowed_private_user_ids": [],
-            "enable_group_chat": True,
-            "enable_private_chat": True,
-        })
-
-    async def api_persona_legacy(self, request: web.Request) -> web.Response:
-        name = self._default_persona_name()
-        if name is None:
-            return _json_response({"persona": None})
-        pdir = self.persona_manager.get_persona_dir(name)
-        persona = PersonaStore.load(pdir)
-        if persona is None:
-            return _json_response({"persona": None})
-        return _json_response({"persona": asdict(persona)})
-
-    async def api_persona_save_legacy(self, request: web.Request) -> web.Response:
-        name = self._default_persona_name()
-        if name is None:
-            return _json_response({"error": "无人格"}, 400)
-        try:
-            body = await request.json()
-        except Exception:
-            return _json_response({"error": "Invalid JSON"}, 400)
-        raw = body.get("persona")
-        if not isinstance(raw, dict):
-            return _json_response({"error": "persona must be an object"}, 400)
-        try:
-            persona = PersonaProfile(**raw)
-            pdir = self.persona_manager.get_persona_dir(name)
-            PersonaStore.save(pdir, persona)
-            self.persona_manager.reload_persona(name)
-            return _json_response({"success": True, "message": f"人格「{persona.name}」已保存"})
-        except Exception as exc:
-            LOG.exception("保存人格失败")
-            return _json_response({"error": str(exc)}, 500)
-
-    async def api_persona_keywords_legacy(self, request: web.Request) -> web.Response:
-        try:
-            body = await request.json()
-        except Exception:
-            return _json_response({"error": "Invalid JSON"}, 400)
-        p_name = str(body.get("name", "小星")).strip()
-        keywords = [k.strip() for k in str(body.get("keywords", "")).split() if k.strip()]
-        aliases = [a.strip() for a in body.get("aliases", []) if isinstance(a, str) and a.strip()]
-        try:
-            persona = PersonaGenerator.from_keywords(p_name, keywords)
-            persona.aliases = aliases
-            return _json_response({"success": True, "persona": asdict(persona)})
-        except Exception as exc:
-            LOG.exception("关键词人格生成失败")
-            return _json_response({"error": str(exc)}, 500)
-
-    async def api_persona_interview_legacy(self, request: web.Request) -> web.Response:
-        name = self._default_persona_name()
-        if name is None:
-            return _json_response({"error": "无人格"}, 400)
-        try:
-            body = await request.json()
-        except Exception:
-            return _json_response({"error": "Invalid JSON"}, 400)
-        p_name = str(body.get("name", "小星")).strip()
-        answers = body.get("answers", {})
-        aliases = [a.strip() for a in body.get("aliases", []) if isinstance(a, str) and a.strip()]
-        pdir = self.persona_manager.get_persona_dir(name)
-        provider_mgr = WorkspaceProviderManager(self.persona_manager.data_path)
-        providers = provider_mgr.load()
-        provider = None
-        if providers:
-            from sirius_chat.providers.routing import AutoRoutingProvider
-            provider = AutoRoutingProvider(providers)
-        try:
-            persona = await generate_persona_from_interview(
-                work_path=pdir,
-                provider=provider,
-                name=p_name,
-                answers=answers,
-                aliases=aliases,
-            )
-            return _json_response({"success": True, "persona": asdict(persona)})
-        except Exception as exc:
-            LOG.exception("问卷人格生成失败")
-            return _json_response({"error": str(exc)}, 500)
-
-    async def api_orchestration_legacy(self, request: web.Request) -> web.Response:
-        name = self._default_persona_name()
-        if name is None:
-            return _json_response({"error": "无人格"}, 400)
-        pdir = self.persona_manager.get_persona_dir(name)
-        orch = OrchestrationStore.load(pdir)
-        return _json_response({
-            "analysis_model": orch.get("analysis_model", "gpt-4o-mini"),
-            "chat_model": orch.get("chat_model", "gpt-4o"),
-            "vision_model": orch.get("vision_model", "gpt-4o"),
-        })
-
-    async def api_orchestration_post_legacy(self, request: web.Request) -> web.Response:
-        name = self._default_persona_name()
-        if name is None:
-            return _json_response({"error": "无人格"}, 400)
-        try:
-            body = await request.json()
-        except Exception:
-            return _json_response({"error": "Invalid JSON"}, 400)
-        pdir = self.persona_manager.get_persona_dir(name)
-        orch = OrchestrationStore.load(pdir)
-        for key in ("analysis_model", "chat_model", "vision_model"):
-            if key in body:
-                orch[key] = str(body[key]).strip()
-        OrchestrationStore.save(pdir, orch)
-        self.persona_manager.reload_persona(name)
-        return _json_response({"success": True, "message": "模型编排已保存，引擎将重载"})
-
-    async def api_config_legacy(self, request: web.Request) -> web.Response:
-        name = self._default_persona_name()
-        if name is None:
-            return _json_response({"error": "无人格"}, 400)
-        try:
-            body = await request.json()
-        except Exception:
-            return _json_response({"error": "Invalid JSON"}, 400)
-        paths = self.persona_manager.get_persona_paths(name)
-        if paths is None:
-            return _json_response({"error": "人格不存在"}, 404)
-        adapters = PersonaAdaptersConfig.load(paths.adapters)
-        if not adapters.adapters:
-            return _json_response({"error": "无 adapter 可配置"}, 400)
-        for key in ("allowed_group_ids", "allowed_private_user_ids", "enable_group_chat", "enable_private_chat", "root"):
-            if key in body and adapters.adapters:
-                setattr(adapters.adapters[0], key, body[key])
-        adapters.save(paths.adapters)
-        return _json_response({"success": True, "message": "配置已保存"})
-
-    async def api_engine_toggle_legacy(self, request: web.Request) -> web.Response:
-        name = self._default_persona_name()
-        if name is None:
-            return _json_response({"error": "无人格"}, 400)
-        try:
-            body = await request.json()
-        except Exception:
-            body = {}
-        enabled = bool(body.get("enabled", True))
-        pdir = self.persona_manager.get_persona_dir(name)
-        flag = pdir / "engine_state" / "enabled"
-        flag.parent.mkdir(parents=True, exist_ok=True)
-        flag.write_text("1" if enabled else "0", encoding="utf-8")
-        return _json_response({"success": True, "enabled": enabled})
-
-    async def api_engine_reload_legacy(self, request: web.Request) -> web.Response:
-        name = self._default_persona_name()
-        if name is None:
-            return _json_response({"error": "无人格"}, 400)
-        ok = self.persona_manager.reload_persona(name)
-        return _json_response({"success": ok, "message": "重载请求已发送" if ok else "发送失败"})
 
     # ─── NapCat 管理 ──────────────────────────────────────
 

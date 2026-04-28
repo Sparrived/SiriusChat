@@ -2,61 +2,118 @@
 
 ## 概述
 
-Sirius Chat v1.0 使用 **EmotionalGroupChatEngine** 作为唯一引擎。配置文件为 JSON/JSONC 格式，通过 `main.py --config` 或 API 直接传入。
+Sirius Chat v1.0 使用 **EmotionalGroupChatEngine** 作为唯一引擎，支持**多人格架构**。配置分为两层：
 
-## 1. 轻量会话配置（推荐）
+1. **全局配置**（`data/global_config.json`）：WebUI 参数、NapCat 管理、日志级别
+2. **人格级配置**（`data/personas/{name}/`）：人格定义、模型编排、平台适配器、体验参数
 
-适用入口：
+## 1. 全局配置
 
-```bash
-python main.py --config session.json
-```
-
-示例：
+路径：`data/global_config.json`
 
 ```json
 {
-  "providers": [
-    {
-      "type": "openai-compatible",
-      "base_url": "https://api.openai.com",
-      "api_key": "${OPENAI_API_KEY}",
-      "healthcheck_model": "gpt-4o-mini"
-    }
-  ],
-
-  "persona": "warm_friend",
-
-  "emotional_engine": {
-    "basic_memory_hard_limit": 30,
-    "basic_memory_context_window": 5,
-    "sensitivity": 0.5,
-
-    "delayed_queue_tick_interval_seconds": 10,
-    "proactive_silence_minutes": 60,
-    "proactive_check_interval_seconds": 60,
-    "proactive_active_start_hour": 12,
-    "proactive_active_end_hour": 21,
-
-    "memory_promote_interval_seconds": 300,
-
-    "diary_top_k": 5,
-    "diary_token_budget": 800,
-
-    "task_model_overrides": {
-      "response_generate": { "model": "gpt-4o", "max_tokens": 512, "temperature": 0.7 },
-      "cognition_analyze": { "model": "gpt-4o-mini", "max_tokens": 384, "temperature": 0.2 }
-    }
-  }
+  "webui_host": "0.0.0.0",
+  "webui_port": 8080,
+  "auto_manage_napcat": true,
+  "napcat_install_dir": "D:\\Code\\sirius_chat\\napcat",
+  "napcat_base_port": 3001,
+  "log_level": "INFO",
+  "setup_completed": false,
+  "setup_wizard_running": false
 }
 ```
 
-说明：
+| 字段 | 类型 | 默认值 | 含义 |
+|------|------|--------|------|
+| `webui_host` | string | `"0.0.0.0"` | WebUI 监听地址 |
+| `webui_port` | int | `8080` | WebUI 监听端口 |
+| `auto_manage_napcat` | bool | `false` | 是否自动管理 NapCat 安装/启动 |
+| `napcat_install_dir` | string | `"napcat"` | NapCat 全局安装目录 |
+| `napcat_base_port` | int | `3001` | NapCat WebSocket 起始端口 |
+| `log_level` | string | `"INFO"` | 日志级别 |
+| `setup_completed` | bool | `false` | 首次配置向导是否完成 |
+| `setup_wizard_running` | bool | `false` | 配置向导是否正在运行 |
 
-- 文件可直接写成 JSONC，允许 `//` 注释
-- `persona` 支持模板名（`warm_friend`、`sarcastic_techie` 等）或 `"generated"`（从 roleplay 资产自动加载）
-- `emotional_engine` 下的字段全部可选，缺失时使用默认值
-- 完整示例见 `examples/session.json`
+## 2. 人格级配置
+
+路径：`data/personas/{name}/`
+
+### 2.1 人格定义（`persona.json`）
+
+```json
+{
+  "name": "月白",
+  "aliases": ["Sirius"],
+  "persona_summary": "一位由AI猫娘构成的温暖群友...",
+  "personality_traits": ["温暖治愈", "聪慧灵动"],
+  "communication_style": "发言节奏适中...",
+  "catchphrases": ["喵~", "大家要好好相处呀喵"],
+  "emoji_preference": "heavy",
+  "humor_style": "wholesome",
+  "emotional_baseline": { "valence": 0.6, "arousal": 0.4 },
+  "empathy_style": "warm",
+  "boundaries": ["拒绝嘲讽亲友和家人"],
+  "taboo_topics": ["辱骂家人", "恶意攻击"],
+  "social_role": "caregiver"
+}
+```
+
+### 2.2 模型编排（`orchestration.json`）
+
+```json
+{
+  "analysis_model": "qwen3.5-flash",
+  "chat_model": "qwen3.5-plus",
+  "vision_model": "qwen3.5-plus"
+}
+```
+
+模型只能从已配置的 Provider 的 `models` 列表中选择。
+
+### 2.3 平台适配器（`adapters.json`）
+
+```json
+{
+  "adapters": [
+    {
+      "type": "napcat",
+      "enabled": true,
+      "ws_url": "ws://localhost:3001",
+      "token": "napcat_ws",
+      "qq_number": "123456789",
+      "allowed_group_ids": ["728196560"],
+      "allowed_private_user_ids": [],
+      "enable_group_chat": true,
+      "enable_private_chat": true
+    }
+  ]
+}
+```
+
+### 2.4 体验参数（`experience.json`）
+
+```json
+{
+  "reply_mode": "auto",
+  "engagement_sensitivity": 0.5,
+  "heat_window_seconds": 60.0,
+  "proactive_enabled": true,
+  "proactive_interval_seconds": 300.0,
+  "delay_reply_enabled": true,
+  "pending_message_threshold": 4.0,
+  "min_reply_interval_seconds": 0.0,
+  "reply_frequency_window_seconds": 60.0,
+  "reply_frequency_max_replies": 8,
+  "reply_frequency_exempt_on_mention": true,
+  "max_concurrent_llm_calls": 1,
+  "enable_skills": true,
+  "max_skill_rounds": 3,
+  "skill_execution_timeout": 30.0,
+  "auto_install_skill_deps": true,
+  "memory_depth": "deep"
+}
+```
 
 ## 2. 配置字段说明
 
