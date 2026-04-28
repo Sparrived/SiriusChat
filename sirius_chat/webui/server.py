@@ -22,9 +22,9 @@ from sirius_chat.core.persona_generator import PersonaGenerator
 from sirius_chat.core.persona_store import PersonaStore
 from sirius_chat.providers.routing import WorkspaceProviderManager
 
-from .persona_utils import generate_persona_from_interview
+from sirius_chat.platforms.persona_utils import generate_persona_from_interview
 
-LOG = logging.getLogger("sirius.platforms.webui")
+LOG = logging.getLogger("sirius.webui")
 
 
 def _json_response(data: dict[str, Any], status: int = 200) -> web.Response:
@@ -55,7 +55,7 @@ class WebUIServer:
 
     def _setup_routes(self) -> None:
         self.app.router.add_get("/", self.index)
-        static_dir = Path(__file__).parent / "webui_static"
+        static_dir = Path(__file__).parent / "static"
         self.app.router.add_static("/static/", static_dir)
         self.app.router.add_get("/api/status", self.api_status)
         self.app.router.add_get("/api/providers", self.api_providers_get)
@@ -96,7 +96,7 @@ class WebUIServer:
     # ─── 静态页面 ─────────────────────────────────────────
 
     async def index(self, request: web.Request) -> web.Response:
-        html_path = Path(__file__).parent / "webui_static" / "index.html"
+        html_path = Path(__file__).parent / "static" / "index.html"
         if html_path.exists():
             return web.FileResponse(html_path)
         return web.Response(text="WebUI not found", status=404)

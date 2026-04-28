@@ -56,7 +56,8 @@ def _init_config(path: Path) -> None:
 
 async def _run_bot(config: dict) -> None:
     """启动 NapCat Bot + WebUI。"""
-    from sirius_chat.platforms import NapCatAdapter, NapCatBridge, NapCatManager, WebUIServer
+    from sirius_chat.platforms import NapCatAdapter, NapCatBridge, NapCatManager
+    from sirius_chat.webui import WebUIServer
 
     ws_url = str(config.get("ws_url", "ws://localhost:3001"))
     token = str(config.get("token", "napcat_ws"))

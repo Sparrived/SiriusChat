@@ -20,7 +20,6 @@ from .napcat_bridge import ConfigStore, NapCatBridge
 from .napcat_manager import NapCatManager
 from .runtime import EngineRuntime
 from .setup_wizard import SetupWizard
-from .webui import WebUIServer
 
 __all__ = [
     "NapCatAdapter",
@@ -29,5 +28,4 @@ __all__ = [
     "EngineRuntime",
     "NapCatManager",
     "SetupWizard",
-    "WebUIServer",
 ]
