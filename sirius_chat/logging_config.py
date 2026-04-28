@@ -145,35 +145,115 @@ def setup_log_archival(log_file: Path) -> None:
     _archive_old_logs(log_file)
 
 
-class ColoredFormatter(logging.Formatter):
-    """带颜色的Console格式化器，提高可读性（仅用于控制台）"""
+# 初始化 colorama（Windows 终端 ANSI 支持）
+try:
+    import colorama
+    colorama.init()
+    _COLORAMA_OK = True
+except ImportError:
+    _COLORAMA_OK = False
 
-    # ANSI颜色代码
-    COLOR_CODES = {
-        "DEBUG": "\033[36m",  # 青色
-        "INFO": "\033[32m",  # 绿色
-        "WARNING": "\033[33m",  # 黄色
-        "ERROR": "\033[31m",  # 红色
-        "CRITICAL": "\033[41m",  # 红色背景
+
+class ColoredFormatter(logging.Formatter):
+    """带颜色的 Console 格式化器，提高可读性。
+
+    格式：2024-01-15 10:23:45  INFO     napcat_adapter     NapCat WS connected
+    """
+
+    # 级别颜色
+    LEVEL_STYLES: dict[str, tuple[str, str]] = {
+        "DEBUG": ("\033[36m", "\033[0m"),      # 青色
+        "INFO": ("\033[32m", "\033[0m"),       # 绿色
+        "WARNING": ("\033[33m", "\033[0m"),    # 黄色
+        "ERROR": ("\033[31m", "\033[0m"),      # 红色
+        "CRITICAL": ("\033[1;37;41m", "\033[0m"),  # 白字红底加粗
     }
+
+    # logger 名称颜色池（用于区分不同模块）
+    NAME_COLORS = [
+        "\033[34m",   # 蓝色
+        "\033[35m",   # 紫色
+        "\033[36m",   # 青色
+        "\033[32m",   # 绿色
+        "\033[33m",   # 黄色
+        "\033[94m",   # 亮蓝
+        "\033[95m",   # 亮紫
+        "\033[96m",   # 亮青
+    ]
+    DIM = "\033[2m"
     RESET = "\033[0m"
+    BRIGHT = "\033[1m"
+
+    def __init__(
+        self,
+        fmt: str | None = None,
+        datefmt: str | None = None,
+        style: str = "%",
+        validate: bool = True,
+        *,
+        defaults: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(fmt, datefmt, style, validate, defaults=defaults)
+        self._name_color_cache: dict[str, str] = {}
+
+    @staticmethod
+    def _short_name(name: str, width: int = 22) -> str:
+        """智能缩短 logger 名称，保留辨识度最高的部分。"""
+        if len(name) <= width:
+            return name
+        parts = name.split(".")
+        # 尝试保留最后两段
+        short = ".".join(parts[-2:])
+        if len(short) <= width:
+            return short
+        # 仍太长，只保留最后一段
+        short = parts[-1]
+        if len(short) <= width:
+            return short
+        return short[: width - 1] + "…"
+
+    def _name_color(self, name: str) -> str:
+        """为 logger 名称分配一个稳定的颜色。"""
+        if name not in self._name_color_cache:
+            idx = hash(name) % len(self.NAME_COLORS)
+            self._name_color_cache[name] = self.NAME_COLORS[idx]
+        return self._name_color_cache[name]
 
     def format(self, record: logging.LogRecord) -> str:
-        # 创建基础日志
-        fmt = "[%(asctime)s] [%(levelname)s] %(name)s - %(message)s"
-        formatter = logging.Formatter(fmt, datefmt="%Y-%m-%d %H:%M:%S")
-        
-        # 仅在终端中添加颜色（不修改原record）
-        original_levelname = record.levelname
-        if sys.stdout.isatty():
-            levelname = record.levelname
-            color = self.COLOR_CODES.get(levelname, self.RESET)
-            record.levelname = f"{color}{levelname}{self.RESET}"
-        
-        result = formatter.format(record)
-        record.levelname = original_levelname  # 恢复原值，防止影响其他处理器
+        level_width = 8
+        name_width = 22
+        gap = "  "
 
-        # 添加额外信息（如果有）
+        # 前缀长度（无颜色时的纯文本长度，用于异常缩进对齐）
+        prefix_len = 8 + len(gap) + level_width + len(gap) + name_width + len(gap)
+
+        # 时间（dim）
+        time_str = f"{self.DIM}{self.formatTime(record, '%H:%M:%S')}{self.RESET}"
+
+        # 级别（彩色）
+        level_color, level_reset = self.LEVEL_STYLES.get(
+            record.levelname, ("", "")
+        )
+        level_str = f"{level_color}{record.levelname:<{level_width}}{level_reset}"
+
+        # logger 名称（彩色 + 智能缩短）
+        name_color = self._name_color(record.name)
+        display_name = self._short_name(record.name, name_width)
+        name_str = f"{name_color}{display_name:<{name_width}}{self.RESET}"
+
+        # 消息
+        msg = record.getMessage()
+
+        # 异常信息
+        exc = ""
+        if record.exc_info and record.exc_info[0] is not None:
+            exc = "\n" + self.formatException(record.exc_info)
+            exc = exc.replace("\n", "\n" + " " * prefix_len)
+
+        # 组装
+        result = f"{time_str}{gap}{level_str}{gap}{name_str}{gap}{msg}{exc}"
+
+        # 额外信息
         if hasattr(record, "task") or hasattr(record, "user_id"):
             extra_parts = []
             if hasattr(record, "task"):
@@ -181,7 +261,7 @@ class ColoredFormatter(logging.Formatter):
             if hasattr(record, "user_id"):
                 extra_parts.append(f"user={record.user_id}")
             if extra_parts:
-                result += f" ({', '.join(extra_parts)})"
+                result += f" {self.DIM}({', '.join(extra_parts)}){self.RESET}"
 
         return result
 
@@ -189,12 +269,34 @@ class ColoredFormatter(logging.Formatter):
 class PlainFormatter(logging.Formatter):
     """纯文本格式化器，用于日志文件（无颜色代码）"""
 
-    def format(self, record: logging.LogRecord) -> str:
-        fmt = "[%(asctime)s] [%(levelname)s] %(name)s - %(message)s"
-        formatter = logging.Formatter(fmt, datefmt="%Y-%m-%d %H:%M:%S")
-        result = formatter.format(record)
+    @staticmethod
+    def _short_name(name: str, width: int = 22) -> str:
+        """智能缩短 logger 名称。"""
+        if len(name) <= width:
+            return name
+        parts = name.split(".")
+        short = ".".join(parts[-2:])
+        if len(short) <= width:
+            return short
+        short = parts[-1]
+        if len(short) <= width:
+            return short
+        return short[: width - 1] + "…"
 
-        # 添加额外信息（如果有）
+    def format(self, record: logging.LogRecord) -> str:
+        level_width = 8
+        name_width = 22
+        gap = "  "
+        prefix_len = 8 + len(gap) + level_width + len(gap) + name_width + len(gap)
+        time_str = self.formatTime(record, "%Y-%m-%d %H:%M:%S")
+        level_str = record.levelname.ljust(level_width)
+        name_str = self._short_name(record.name, name_width).ljust(name_width)
+        msg = record.getMessage()
+        exc = ""
+        if record.exc_info and record.exc_info[0] is not None:
+            exc = "\n" + self.formatException(record.exc_info)
+            exc = exc.replace("\n", "\n" + " " * prefix_len)
+        result = f"{time_str}{gap}{level_str}{gap}{name_str}{gap}{msg}{exc}"
         if hasattr(record, "task") or hasattr(record, "user_id"):
             extra_parts = []
             if hasattr(record, "task"):
@@ -203,7 +305,6 @@ class PlainFormatter(logging.Formatter):
                 extra_parts.append(f"user={record.user_id}")
             if extra_parts:
                 result += f" ({', '.join(extra_parts)})"
-
         return result
 
 

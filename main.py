@@ -18,10 +18,9 @@ import logging
 import sys
 from pathlib import Path
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-)
+from sirius_chat.logging_config import configure_logging
+
+configure_logging(level="INFO", format_type="console")
 LOG = logging.getLogger("sirius_chat")
 
 REPO_ROOT = Path(__file__).resolve().parent
