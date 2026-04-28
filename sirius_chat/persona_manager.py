@@ -267,15 +267,38 @@ class PersonaManager:
             )
 
         # 3. 迁移桥接配置 → adapters.json
+        # 尝试从 napcat 配置推断 QQ 号和端口
+        napcat_config_dir = REPO_ROOT / "napcat" / "config"
+        inferred_qq = ""
+        inferred_port = None
+        if napcat_config_dir.exists():
+            for cfg_path in napcat_config_dir.glob("onebot11_*.json"):
+                try:
+                    nc_cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+                    qq = cfg_path.stem.replace("onebot11_", "")
+                    ws_servers = nc_cfg.get("network", {}).get("websocketServers", [])
+                    if ws_servers and ws_servers[0].get("enable"):
+                        inferred_qq = qq
+                        inferred_port = ws_servers[0].get("port")
+                        break
+                except Exception:
+                    continue
+
         src_bridge = source / "qq_bridge_config.json"
         if src_bridge.exists():
             bridge_cfg = json.loads(src_bridge.read_text(encoding="utf-8"))
-            port = self._allocate_port(name)
+            port = inferred_port or self._allocate_port(name)
+            if inferred_port and name not in self._load_port_registry():
+                # 如果推断到了端口且未分配，直接注册
+                ports = self._load_port_registry()
+                ports[name] = port
+                self._save_port_registry(ports)
             adapters = PersonaAdaptersConfig(
                 adapters=[
                     NapCatAdapterConfig(
                         ws_url=f"ws://localhost:{port}",
                         token="napcat_ws",
+                        qq_number=inferred_qq,
                         allowed_group_ids=[str(v) for v in bridge_cfg.get("allowed_group_ids", [])],
                         allowed_private_user_ids=[str(v) for v in bridge_cfg.get("allowed_private_user_ids", [])],
                         enable_group_chat=bool(bridge_cfg.get("enable_group_chat", True)),
@@ -285,11 +308,16 @@ class PersonaManager:
                 ]
             )
             adapters.save(paths.adapters)
-            LOG.info("迁移 adapters.json (端口: %s)", port)
+            LOG.info("迁移 adapters.json (端口: %s, QQ: %s)", port, inferred_qq or "未识别")
         else:
-            port = self._allocate_port(name)
+            port = inferred_port or self._allocate_port(name)
             adapters = PersonaAdaptersConfig(
-                adapters=[NapCatAdapterConfig(ws_url=f"ws://localhost:{port}")]
+                adapters=[
+                    NapCatAdapterConfig(
+                        ws_url=f"ws://localhost:{port}",
+                        qq_number=inferred_qq,
+                    )
+                ]
             )
             adapters.save(paths.adapters)
 

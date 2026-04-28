@@ -30,6 +30,7 @@ class NapCatAdapterConfig:
     enabled: bool = True
     ws_url: str = "ws://localhost:3001"
     token: str = "napcat_ws"
+    qq_number: str = ""
     allowed_group_ids: list[str] = field(default_factory=list)
     allowed_private_user_ids: list[str] = field(default_factory=list)
     enable_group_chat: bool = True
@@ -42,6 +43,7 @@ class NapCatAdapterConfig:
             "enabled": self.enabled,
             "ws_url": self.ws_url,
             "token": self.token,
+            "qq_number": self.qq_number,
             "allowed_group_ids": list(self.allowed_group_ids),
             "allowed_private_user_ids": list(self.allowed_private_user_ids),
             "enable_group_chat": self.enable_group_chat,
@@ -56,6 +58,7 @@ class NapCatAdapterConfig:
             enabled=bool(data.get("enabled", True)),
             ws_url=str(data.get("ws_url", "ws://localhost:3001")),
             token=str(data.get("token", "napcat_ws")),
+            qq_number=str(data.get("qq_number", "")),
             allowed_group_ids=[str(v) for v in data.get("allowed_group_ids", [])],
             allowed_private_user_ids=[str(v) for v in data.get("allowed_private_user_ids", [])],
             enable_group_chat=bool(data.get("enable_group_chat", True)),
