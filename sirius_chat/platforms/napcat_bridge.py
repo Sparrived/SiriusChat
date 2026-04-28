@@ -1,0 +1,671 @@
+"""SiriusChat v1.0 — NapCat 原生桥接器。
+
+职责：
+    - 接收 NapCat OneBot v11 事件（群聊/私聊）
+    - 渲染 prompt、处理 multimodal（图片缓存）
+    - 调用 EmotionalGroupChatEngine 生成回复
+    - 后台 delayed / proactive / reminder 投递
+    - 处理 /ai-on /ai-off 等管理指令
+"""
+
+from __future__ import annotations
+
+import asyncio
+import hashlib
+import json
+import logging
+import os
+from pathlib import Path
+from typing import Any
+
+import aiohttp
+
+from sirius_chat.models.models import Message, Participant
+from sirius_chat.skills.executor import strip_skill_calls
+
+from .napcat_adapter import NapCatAdapter
+from .runtime import EngineRuntime
+
+LOG = logging.getLogger("sirius.platforms.napcat_bridge")
+
+_DEFAULT_ALLOWED_GROUP_ID = "728196560"
+_COMMAND_NAMES = frozenset({"ai-on", "ai-off", "ai-status"})
+
+
+def _extract_text_from_segments(message: list[dict[str, Any]]) -> str:
+    """从 OneBot 消息段数组中提取纯文本。"""
+    parts: list[str] = []
+    for seg in message:
+        if seg.get("type") == "text":
+            parts.append(seg.get("data", {}).get("text", ""))
+    return "".join(parts).strip()
+
+
+def _extract_image_urls(message: list[dict[str, Any]]) -> list[str]:
+    """从消息段中提取所有图片 URL。"""
+    urls: list[str] = []
+    for seg in message:
+        if seg.get("type") == "image":
+            data = seg.get("data", {})
+            url = data.get("url", "")
+            if not url:
+                url = data.get("file", "")
+            if url:
+                urls.append(url)
+    return urls
+
+
+class ConfigStore:
+    """轻量级 JSON 配置存储。"""
+
+    def __init__(self, path: Path) -> None:
+        self._path = path
+        self._config: dict[str, Any] = {}
+        self._load()
+
+    def _load(self) -> None:
+        if self._path.exists():
+            try:
+                self._config = json.loads(self._path.read_text(encoding="utf-8"))
+            except Exception:
+                self._config = {}
+        else:
+            self._config = {}
+
+    def _save(self) -> None:
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self._path.with_suffix(self._path.suffix + ".tmp")
+        tmp.write_text(json.dumps(self._config, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp.replace(self._path)
+
+    def get(self, key: str, default: Any = None) -> Any:
+        return self._config.get(key, default)
+
+    def set(self, key: str, value: Any) -> None:
+        self._config[key] = value
+        self._save()
+
+    def __contains__(self, key: str) -> bool:
+        return key in self._config
+
+
+class NapCatBridge:
+    """QQ 群聊/私聊与 SiriusChat Engine 的桥接器。"""
+
+    def __init__(
+        self,
+        adapter: NapCatAdapter,
+        work_path: str | Path,
+        config: dict[str, Any] | None = None,
+    ) -> None:
+        self.adapter = adapter
+        self.work_path = Path(work_path).resolve()
+        self.work_path.mkdir(parents=True, exist_ok=True)
+        self.plugin_config = dict(config or {})
+
+        self._enabled = True
+        self._running = False
+        self._reply_lock = asyncio.Lock()
+        self._image_cache_dir = self.work_path / "image_cache"
+
+        # 配置持久化
+        self._store = ConfigStore(self.work_path / "qq_bridge_config.json")
+        defaults = {
+            "allowed_group_ids": [_DEFAULT_ALLOWED_GROUP_ID],
+            "allowed_private_user_ids": [],
+            "enable_group_chat": True,
+            "enable_private_chat": True,
+            "auto_install_skill_deps": True,
+            "setup_completed": False,
+            "setup_wizard_running": False,
+        }
+        for key, value in defaults.items():
+            if key not in self._store:
+                self._store.set(key, value)
+
+        old_gid = self._store.get("allowed_group_id")
+        if old_gid is not None and isinstance(old_gid, str) and old_gid:
+            self._store.set("allowed_group_ids", [old_gid])
+            LOG.info("配置迁移: allowed_group_id=%s → allowed_group_ids", old_gid)
+
+        self.runtime = EngineRuntime(self.work_path, plugin_config=self.plugin_config)
+        self._bg_task: asyncio.Task | None = None
+        self._event_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+
+    # ─── 生命周期 ─────────────────────────────────────────
+
+    async def start(self) -> None:
+        self._running = True
+        try:
+            await self.runtime.start()
+        except Exception as exc:
+            LOG.error("引擎启动失败: %s", exc)
+
+        self._bg_task = asyncio.create_task(self._background_delivery_loop())
+        self.adapter.on_event(self._on_event)
+        LOG.info("NapCatBridge 已启动")
+
+    async def stop(self) -> None:
+        self._running = False
+        if self._bg_task is not None:
+            self._bg_task.cancel()
+            try:
+                await self._bg_task
+            except asyncio.CancelledError:
+                pass
+            self._bg_task = None
+        await self.runtime.stop()
+        LOG.info("NapCatBridge 已停止")
+
+    # ─── 事件入口 ─────────────────────────────────────────
+
+    async def _on_event(self, event: dict[str, Any]) -> None:
+        post_type = event.get("post_type")
+        if post_type != "message":
+            return
+        try:
+            self._event_queue.put_nowait(event)
+        except asyncio.QueueFull:
+            pass
+
+        msg_type = event.get("message_type")
+        if msg_type == "group":
+            await self._on_group_message(event)
+        elif msg_type == "private":
+            await self._on_private_message(event)
+
+    # ─── 群聊处理 ─────────────────────────────────────────
+
+    async def _on_group_message(self, event: dict[str, Any]) -> None:
+        gid = str(event.get("group_id", ""))
+        uid = str(event.get("user_id", ""))
+        self_id = str(event.get("self_id", ""))
+        LOG.info("收到群消息: group_id=%s user_id=%s", gid, uid)
+
+        allowed_gids = self._get_allowed_group_ids()
+        if gid not in allowed_gids:
+            LOG.debug("群号不在白名单，跳过: %s", gid)
+            return
+        if uid == self_id:
+            return
+        if not self._enabled:
+            return
+        if not self._store.get("enable_group_chat", True):
+            return
+
+        prompt = await self._render_group_prompt(event)
+        if not prompt:
+            return
+
+        head = prompt.strip().split()[0].lower().lstrip("/")
+        if head in _COMMAND_NAMES:
+            return
+
+        if not self.runtime.is_ready():
+            LOG.warning("引擎未就绪，跳过消息")
+            return
+
+        await self._process_message(gid, uid, prompt, event)
+
+    # ─── 私聊处理 ─────────────────────────────────────────
+
+    async def _on_private_message(self, event: dict[str, Any]) -> None:
+        uid = str(event.get("user_id", ""))
+        self_id = str(event.get("self_id", ""))
+        LOG.info("收到私聊消息: user_id=%s", uid)
+
+        if uid == self_id:
+            return
+
+        allowed_priv_uids = self._get_allowed_private_user_ids()
+        if allowed_priv_uids and uid not in allowed_priv_uids:
+            LOG.debug("私聊用户不在白名单，跳过: %s", uid)
+            return
+
+        if not self._enabled:
+            return
+        if not self._store.get("enable_private_chat", True):
+            return
+
+        prompt = await self._render_private_prompt(event)
+        if not prompt:
+            return
+
+        head = prompt.strip().split()[0].lower().lstrip("/")
+        if head in _COMMAND_NAMES:
+            return
+        if prompt.strip().startswith("/"):
+            return
+
+        if not self.runtime.is_ready():
+            LOG.warning("引擎未就绪，跳过消息")
+            return
+
+        await self._process_message(f"private_{uid}", uid, prompt, event)
+
+    # ─── 统一消息处理 ─────────────────────────────────────
+
+    async def _process_message(
+        self,
+        group_id: str,
+        user_id: str,
+        prompt: str,
+        event: dict[str, Any],
+    ) -> None:
+        memory_channel = "qq_native_sirius_chat"
+        nickname, card = self._extract_sender_names(event)
+        speaker_name = card or nickname or f"qq_{user_id}"
+        uid = f"qq_{user_id}"
+
+        metadata: dict[str, Any] = {
+            "platform": "qq",
+            "qq_uid": user_id,
+            "is_developer": self._is_admin(user_id),
+        }
+        if event.get("message_type") == "group":
+            metadata["group_id"] = group_id
+        else:
+            metadata["scope"] = "private"
+
+        participant = Participant(
+            name=nickname or f"qq_{user_id}",
+            user_id=uid,
+            identities={memory_channel: user_id},
+            aliases=[card] if card else [],
+            metadata=metadata,
+        )
+
+        multimodal_inputs: list[dict[str, str]] = []
+        for seg in event.get("message", []):
+            if seg.get("type") == "image":
+                data = seg.get("data", {})
+                url = data.get("url", "") or data.get("file", "")
+                if url:
+                    local_path = await self._cache_image(str(url))
+                    multimodal_inputs.append({"type": "image", "value": local_path})
+
+        message = Message(
+            role="user",
+            content=prompt,
+            speaker=speaker_name,
+            channel=memory_channel,
+            channel_user_id=user_id,
+            group_id=group_id,
+            multimodal_inputs=multimodal_inputs,
+        )
+
+        try:
+            result = await self.runtime.engine.process_message(
+                message=message,
+                participants=[participant],
+                group_id=group_id,
+            )
+            for partial in result.get("partial_replies", []):
+                if partial:
+                    if event.get("message_type") == "group":
+                        await self._send_group_text_raw(group_id, partial)
+                    else:
+                        await self._send_private_text_raw(user_id, partial)
+
+            reply = result.get("reply")
+            if reply:
+                clean_reply = strip_skill_calls(reply).strip()
+                if clean_reply:
+                    if event.get("message_type") == "group":
+                        await self._send_group_text_raw(group_id, clean_reply)
+                    else:
+                        await self._send_private_text_raw(user_id, clean_reply)
+            LOG.info("%s 消息处理完成 | strategy=%s | speaker=%s", group_id, result.get("strategy"), speaker_name)
+        except Exception as exc:
+            LOG.error("消息处理异常: %s", exc)
+
+    # ─── 后台投递 ─────────────────────────────────────────
+
+    async def _background_delivery_loop(self) -> None:
+        while self._running:
+            await asyncio.sleep(3)
+            if not self._enabled or not self.runtime.is_ready():
+                continue
+            try:
+                allowed_gids = self._get_allowed_group_ids()
+                for gid in allowed_gids:
+                    if not self._running:
+                        break
+
+                    async def _send_group_partial(text: str) -> None:
+                        await self._send_group_text_raw(gid, text)
+                        LOG.info("Partial 回复已发送: %s", text[:80])
+
+                    delayed_results = await self.runtime.engine.tick_delayed_queue(
+                        gid, on_partial_reply=_send_group_partial
+                    )
+                    for item in delayed_results:
+                        if not self._running:
+                            break
+                        for partial in item.get("partial_replies", []):
+                            if partial:
+                                await self._send_group_text_raw(gid, partial)
+                                LOG.info("Partial 回复已发送: %s", partial[:80])
+                        reply = item.get("reply")
+                        if reply:
+                            await self._send_group_text_raw(gid, reply)
+                            LOG.info("Delayed 回复已发送: %s", reply[:80])
+
+                    if not self._running:
+                        break
+                    proactive_result = await self.runtime.engine.proactive_check(gid)
+                    if proactive_result:
+                        reply = proactive_result.get("reply")
+                        if reply:
+                            await self._send_group_text_raw(gid, reply)
+                            LOG.info("Proactive 回复已发送: %s", reply[:80])
+
+                # 私聊延迟队列
+                try:
+                    for gid in list(self.runtime.engine._active_private_groups):
+                        if not self._running:
+                            break
+                        _private_uid = gid.replace("private_", "").replace("qq_", "")
+                        async def _send_private_partial(text: str) -> None:
+                            await self._send_private_text_raw(_private_uid, text)
+                            LOG.info("Private partial 回复已发送: %s", text[:80])
+
+                        delayed_results = await self.runtime.engine.tick_delayed_queue(
+                            gid, on_partial_reply=_send_private_partial
+                        )
+                        for item in delayed_results:
+                            for partial in item.get("partial_replies", []):
+                                if partial:
+                                    await self._send_private_text_raw(_private_uid, partial)
+                                    LOG.info("Private partial 回复已发送: %s", partial[:80])
+                            reply = item.get("reply")
+                            if reply:
+                                await self._send_private_text_raw(_private_uid, reply)
+                                LOG.info("Private 回复已发送: %s", reply[:80])
+                except Exception as exc:
+                    LOG.warning("私聊延迟队列投递异常: %s", exc)
+
+                # Developer 主动私聊
+                try:
+                    for gid in list(self.runtime.engine._developer_private_groups):
+                        if not self._running:
+                            break
+                        chats = self.runtime.engine.pop_developer_chats(gid)
+                        for reply in chats:
+                            uid = gid.replace("private_", "").replace("qq_", "")
+                            await self._send_private_text_raw(uid, reply)
+                            LOG.info("Developer 主动私聊已发送: %s", reply[:80])
+                except Exception as exc:
+                    LOG.warning("Developer 主动私聊投递异常: %s", exc)
+
+                # 提醒投递
+                try:
+                    for gid in allowed_gids:
+                        if not self._running:
+                            break
+                        reminders = self.runtime.engine.pop_reminders(gid)
+                        for reply in reminders:
+                            await self._send_group_text_raw(gid, reply)
+                            LOG.info("群提醒已发送: %s", reply[:80])
+                    for gid in list(self.runtime.engine._active_private_groups):
+                        if not self._running:
+                            break
+                        reminders = self.runtime.engine.pop_reminders(gid)
+                        for reply in reminders:
+                            uid = gid.replace("private_", "").replace("qq_", "")
+                            await self._send_private_text_raw(uid, reply)
+                            LOG.info("私聊提醒已发送: %s", reply[:80])
+                except Exception as exc:
+                    LOG.warning("提醒投递异常: %s", exc)
+            except Exception as exc:
+                import traceback
+                LOG.warning("后台投递异常: %s\n%s", exc, traceback.format_exc())
+
+    # ─── 消息渲染 ─────────────────────────────────────────
+
+    async def _render_group_prompt(self, event: dict[str, Any]) -> str:
+        parts: list[str] = []
+        mention_cache: dict[str, str] = {}
+        image_index = 1
+        image_names: dict[str, int] = {}
+        self_id = str(event.get("self_id", ""))
+        group_id = str(event.get("group_id", ""))
+
+        for seg in event.get("message", []):
+            seg_type = seg.get("type")
+            data = seg.get("data", {})
+            if seg_type == "text":
+                parts.append(data.get("text", ""))
+            elif seg_type == "at":
+                target_uid = str(data.get("qq", ""))
+                if target_uid == "all":
+                    parts.append("@全体成员")
+                    continue
+                if target_uid not in mention_cache:
+                    if target_uid == self_id:
+                        display = self.runtime.get_persona_name()
+                    else:
+                        display = f"qq_{target_uid}"
+                        try:
+                            info = await self.adapter.get_group_member_info(group_id, target_uid)
+                            card = str(info.get("card", "") or "").strip()
+                            nickname = str(info.get("nickname", "") or "").strip()
+                            display = card or nickname or display
+                        except Exception:
+                            pass
+                    mention_cache[target_uid] = display
+                parts.append(f"@{mention_cache[target_uid]}")
+            elif seg_type == "image":
+                parts.append(self._build_image_label(seg, image_index, "图片", image_names))
+                image_index += 1
+
+        rendered = "".join(parts).strip()
+        if rendered:
+            return rendered
+        return event.get("raw_message", "").strip()
+
+    async def _render_private_prompt(self, event: dict[str, Any]) -> str:
+        parts: list[str] = []
+        image_index = 1
+        image_names: dict[str, int] = {}
+        for seg in event.get("message", []):
+            seg_type = seg.get("type")
+            data = seg.get("data", {})
+            if seg_type == "text":
+                parts.append(data.get("text", ""))
+            elif seg_type == "image":
+                parts.append(self._build_image_label(seg, image_index, "图片", image_names))
+                image_index += 1
+        rendered = "".join(parts).strip()
+        if rendered:
+            return rendered
+        return event.get("raw_message", "").strip()
+
+    # ─── 发送工具 ─────────────────────────────────────────
+
+    async def _send_group_text_raw(self, group_id: str, text: str) -> None:
+        async with self._reply_lock:
+            try:
+                await self.adapter.send_group_msg(group_id, text)
+                LOG.info("回复群 %s: %s", group_id, text[:120])
+            except Exception as exc:
+                LOG.warning("发送群消息失败: %s", exc)
+
+    async def _send_private_text_raw(self, user_id: str, text: str) -> None:
+        async with self._reply_lock:
+            try:
+                await self.adapter.send_private_msg(user_id, text)
+                LOG.info("回复私聊 %s: %s", user_id, text[:120])
+            except Exception as exc:
+                LOG.warning("发送私聊消息失败: %s", exc)
+
+    # ─── 图片缓存 ─────────────────────────────────────────
+
+    async def _cache_image(self, url: str) -> str:
+        if not url.startswith(("http://", "https://")):
+            return url
+        self._image_cache_dir.mkdir(parents=True, exist_ok=True)
+        url_hash = hashlib.md5(url.encode()).hexdigest()
+        ext = Path(url.split("?")[0]).suffix or ".jpg"
+        cache_path = self._image_cache_dir / f"{url_hash}{ext}"
+        if cache_path.exists():
+            return str(cache_path)
+        try:
+            timeout = aiohttp.ClientTimeout(total=15)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                headers = {
+                    "User-Agent": (
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.0"
+                    ),
+                    "Referer": "https://multimedia.nt.qq.com.cn/",
+                }
+                async with session.get(url, headers=headers) as resp:
+                    if resp.status == 200:
+                        data = await resp.read()
+                        if len(data) > 10 * 1024 * 1024:
+                            LOG.warning("图片过大(%d bytes)，跳过缓存: %s", len(data), url[:80])
+                            return url
+                        cache_path.write_bytes(data)
+                        await self._cleanup_image_cache(max_files=200)
+                        return str(cache_path)
+        except Exception as exc:
+            LOG.warning("图片下载异常: %s | %s", exc, url[:80])
+        return url
+
+    async def _cleanup_image_cache(self, max_files: int = 200) -> None:
+        if not self._image_cache_dir.exists():
+            return
+        files = sorted(self._image_cache_dir.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True)
+        if len(files) > max_files:
+            for old_file in files[max_files:]:
+                try:
+                    old_file.unlink()
+                except Exception:
+                    pass
+
+    # ─── 事件等待（供外部向导使用）─────────────────────────
+
+    async def wait_event(
+        self,
+        predicate: Callable[[dict[str, Any]], bool],
+        timeout: float = 300.0,
+    ) -> dict[str, Any]:
+        """等待满足条件的 OneBot 事件。"""
+        deadline = asyncio.get_event_loop().time() + timeout
+        while True:
+            remaining = deadline - asyncio.get_event_loop().time()
+            if remaining <= 0:
+                raise asyncio.TimeoutError()
+            try:
+                event = await asyncio.wait_for(self._event_queue.get(), timeout=remaining)
+                if predicate(event):
+                    return event
+            except asyncio.TimeoutError:
+                raise
+
+    # ─── 配置辅助 ─────────────────────────────────────────
+
+    def get_config(self, key: str, default: Any = None) -> Any:
+        return self._store.get(key, default)
+
+    def set_config(self, key: str, value: Any) -> None:
+        self._store.set(key, value)
+
+    @property
+    def data(self) -> dict[str, Any]:
+        """暴露底层配置字典，兼容 setup_wizard 等外部模块。修改后需手动调用 save_data() 持久化。"""
+        return self._store._config
+
+    def save_data(self) -> None:
+        self._store._save()
+
+    def _get_allowed_group_ids(self) -> list[str]:
+        gids = self._store.get("allowed_group_ids", [_DEFAULT_ALLOWED_GROUP_ID])
+        if isinstance(gids, str):
+            try:
+                parsed = json.loads(gids)
+                if isinstance(parsed, list):
+                    return [str(g).strip() for g in parsed if g]
+            except (json.JSONDecodeError, ValueError):
+                pass
+            if "," in gids:
+                return [g.strip().strip("'\"[]()") for g in gids.split(",") if g.strip()]
+            return [gids.strip()] if gids.strip() else []
+        return [str(g).strip() for g in gids if g]
+
+    def _get_allowed_private_user_ids(self) -> list[str]:
+        uids = self._store.get("allowed_private_user_ids", [])
+        if isinstance(uids, str):
+            try:
+                parsed = json.loads(uids)
+                if isinstance(parsed, list):
+                    return [str(u).strip() for u in parsed if u]
+            except (json.JSONDecodeError, ValueError):
+                pass
+            if "," in uids:
+                return [u.strip().strip("'\"[]()") for u in uids.split(",") if u.strip()]
+            return [uids.strip()] if uids.strip() else []
+        return [str(u).strip() for u in uids if u]
+
+    # ─── 权限与工具 ───────────────────────────────────────
+
+    def _is_admin(self, uid: str) -> bool:
+        return uid == self._root_user_id()
+
+    def _root_user_id(self) -> str:
+        return str(self.plugin_config.get("root", "")).strip()
+
+    @staticmethod
+    def _extract_sender_names(event: dict[str, Any]) -> tuple[str, str]:
+        sender = event.get("sender", {})
+        nickname = str(sender.get("nickname", "") or "").strip()
+        card = str(sender.get("card", "") or "").strip()
+        return nickname, card
+
+    @staticmethod
+    def _sanitize_image_name(name: str) -> str:
+        from urllib.parse import unquote
+        text = unquote(str(name or "").strip().strip("'\"")).replace("\r", " ").replace("\n", " ")
+        text = text.replace("[", "(").replace("]", ")")
+        return text[:80].strip()
+
+    @staticmethod
+    def _extract_image_name(seg: dict[str, Any], index: int, fallback_prefix: str = "未命名图片") -> str:
+        data = seg.get("data", {})
+        candidates = [
+            data.get("filename", ""),
+            data.get("file_name", ""),
+            data.get("name", ""),
+            data.get("file", ""),
+            data.get("url", ""),
+        ]
+        for raw in candidates:
+            text = str(raw or "").strip()
+            if text:
+                from urllib.parse import urlparse, unquote
+                parsed = urlparse(text)
+                for candidate in (parsed.path, text):
+                    normalized = str(candidate or "").strip().replace("\\", "/").rstrip("/")
+                    if not normalized or normalized.startswith(("data:", "base64:")):
+                        continue
+                    name = NapCatBridge._sanitize_image_name(normalized.split("/")[-1])
+                    if name:
+                        return name
+        return f"{fallback_prefix}_{index}"
+
+    @staticmethod
+    def _dedupe_image_name(name: str, counter: dict[str, int]) -> str:
+        seen = counter.get(name, 0) + 1
+        counter[name] = seen
+        if seen == 1:
+            return name
+        stem, dot, suffix = name.rpartition(".")
+        if dot:
+            return f"{stem}#{seen}.{suffix}"
+        return f"{name}#{seen}"
+
+    def _build_image_label(self, seg: dict[str, Any], index: int, label_prefix: str, counter: dict[str, int]) -> str:
+        image_name = self._extract_image_name(seg, index)
+        display_name = self._dedupe_image_name(image_name, counter)
+        return f"[{label_prefix}: {display_name}]"

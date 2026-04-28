@@ -1,0 +1,593 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SiriusChat 配置面板</title>
+<style>
+:root {
+  --bg: #0f1117; --surface: #161922; --surface-2: #1e212b;
+  --text: #e6e6e6; --text-2: #9aa0a6; --accent: #58a6ff; --accent-2: #3fb950;
+  --danger: #f85149; --warn: #d29922; --border: #30363d;
+  --radius: 10px; --shadow: 0 4px 20px rgba(0,0,0,0.35);
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans SC", sans-serif;
+  background: var(--bg); color: var(--text); line-height: 1.6;
+}
+.container { max-width: 960px; margin: 0 auto; padding: 24px; }
+header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; }
+header h1 { margin: 0; font-size: 24px; letter-spacing: -0.5px; }
+.status-pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 14px; border-radius: 999px; font-size: 13px; font-weight: 600;
+  background: var(--surface); border: 1px solid var(--border);
+}
+.status-pill .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--danger); }
+.status-pill.ready .dot { background: var(--accent-2); }
+
+.card {
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 20px; margin-bottom: 20px; box-shadow: var(--shadow);
+}
+.card h2 { margin: 0 0 16px 0; font-size: 18px; color: var(--text); }
+.card h3 { margin: 16px 0 10px 0; font-size: 15px; color: var(--text-2); }
+
+.tabs { display: flex; gap: 8px; margin-bottom: 20px; flex-wrap: wrap; }
+.tab {
+  padding: 10px 18px; border-radius: var(--radius); cursor: pointer;
+  background: var(--surface); border: 1px solid var(--border); color: var(--text-2);
+  font-size: 14px; transition: .15s;
+}
+.tab:hover { border-color: var(--accent); color: var(--text); }
+.tab.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+
+.tab-content { display: none; }
+.tab-content.active { display: block; }
+
+.form-group { margin-bottom: 14px; }
+label { display: block; font-size: 13px; color: var(--text-2); margin-bottom: 6px; }
+input[type="text"], input[type="password"], select, textarea {
+  width: 100%; padding: 10px 12px; border-radius: 8px;
+  background: var(--bg); border: 1px solid var(--border); color: var(--text);
+  font-size: 14px; outline: none; transition: .15s;
+}
+input:focus, select:focus, textarea:focus { border-color: var(--accent); }
+textarea { min-height: 80px; resize: vertical; }
+
+.btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 10px 18px; border-radius: 8px; border: 1px solid var(--border);
+  background: var(--surface-2); color: var(--text); cursor: pointer; font-size: 14px;
+  transition: .15s;
+}
+.btn:hover { background: var(--accent); color: #fff; border-color: var(--accent); }
+.btn.danger { border-color: var(--danger); color: var(--danger); }
+.btn.danger:hover { background: var(--danger); color: #fff; }
+.btn.success { border-color: var(--accent-2); color: var(--accent-2); }
+.btn.success:hover { background: var(--accent-2); color: #fff; }
+.btn:disabled { opacity: .5; cursor: not-allowed; }
+
+.row { display: flex; gap: 12px; flex-wrap: wrap; }
+.col { flex: 1; min-width: 220px; }
+
+.provider-row {
+  display: grid; grid-template-columns: 1.2fr 2fr 1.5fr 1fr 80px 40px; gap: 10px;
+  align-items: center; padding: 10px; background: var(--bg); border-radius: 8px; margin-bottom: 8px;
+}
+.provider-row input { padding: 8px 10px; font-size: 13px; }
+.provider-row .btn { padding: 6px 10px; font-size: 12px; }
+
+.tag-list { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+.tag {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 12px; border-radius: 999px; background: var(--bg); border: 1px solid var(--border);
+  font-size: 13px;
+}
+.tag .remove { cursor: pointer; color: var(--danger); font-weight: bold; }
+
+.question-block {
+  background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+  padding: 14px; margin-bottom: 12px;
+}
+.question-block .q { font-size: 14px; color: var(--text); margin-bottom: 8px; }
+.question-block textarea { min-height: 60px; }
+
+.preview-box {
+  background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+  padding: 16px; white-space: pre-wrap; font-size: 13px; max-height: 400px; overflow: auto;
+}
+
+.toast {
+  position: fixed; bottom: 24px; right: 24px;
+  padding: 14px 20px; border-radius: var(--radius);
+  background: var(--surface); border: 1px solid var(--border);
+  box-shadow: var(--shadow); font-size: 14px; z-index: 999;
+  transform: translateY(120%); transition: transform .25s ease;
+}
+.toast.show { transform: translateY(0); }
+.toast.error { border-color: var(--danger); color: var(--danger); }
+.toast.success { border-color: var(--accent-2); color: var(--accent-2); }
+
+.spinner {
+  width: 16px; height: 16px; border: 2px solid var(--border);
+  border-top-color: var(--accent); border-radius: 50%;
+  animation: spin .8s linear infinite; display: inline-block;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<div class="container">
+  <header>
+    <h1>🌟 SiriusChat 配置面板</h1>
+    <div class="status-pill" id="statusPill">
+      <span class="dot"></span><span id="statusText">加载中...</span>
+    </div>
+  </header>
+
+  <div class="card">
+    <div class="row">
+      <div class="col">
+        <strong>AI 开关</strong>
+        <div style="margin-top:8px">
+          <button class="btn" id="toggleBtn" onclick="toggleEngine()">开关</button>
+        </div>
+      </div>
+      <div class="col">
+        <strong>当前人格</strong>
+        <div id="personaName" style="margin-top:8px;color:var(--text-2)">—</div>
+      </div>
+      <div class="col">
+        <strong>Provider</strong>
+        <div id="providerCount" style="margin-top:8px;color:var(--text-2)">—</div>
+      </div>
+      <div class="col">
+        <strong>引擎状态</strong>
+        <div id="engineReady" style="margin-top:8px;color:var(--text-2)">—</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="tabs">
+    <div class="tab active" data-tab="providers">Provider</div>
+    <div class="tab" data-tab="persona">人格</div>
+    <div class="tab" data-tab="orchestration">模型编排</div>
+    <div class="tab" data-tab="groups">群管理</div>
+    <div class="tab" data-tab="napcat">NapCat</div>
+  </div>
+
+  <!-- Provider -->
+  <div class="tab-content active" id="tab-providers">
+    <div class="card">
+      <h2>Provider 配置</h2>
+      <div id="providerList"></div>
+      <div style="margin-top:12px">
+        <button class="btn" onclick="addProvider()">➕ 添加 Provider</button>
+        <button class="btn success" onclick="saveProviders()">💾 保存 Provider</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Persona -->
+  <div class="tab-content" id="tab-persona">
+    <div class="card">
+      <h2>人格配置</h2>
+      <div class="tabs">
+        <div class="tab active" data-subtab="keywords">关键词生成</div>
+        <div class="tab" data-subtab="interview">问卷深度定制</div>
+        <div class="tab" data-subtab="preview">当前人格</div>
+      </div>
+
+      <div class="tab-content active" id="subtab-keywords">
+        <div class="form-group">
+          <label>角色名称</label>
+          <input type="text" id="kwName" value="小星" placeholder="例如：小星">
+        </div>
+        <div class="form-group">
+          <label>关键词（空格分隔）</label>
+          <input type="text" id="kwKeywords" placeholder="例如：温柔 猫奴 二次元">
+        </div>
+        <div class="form-group">
+          <label>别名（可选，空格分隔）</label>
+          <input type="text" id="kwAliases" placeholder="例如：星酱 星星">
+        </div>
+        <button class="btn" onclick="generatePersonaKeywords()">✨ 生成人格</button>
+        <div id="kwResult" style="margin-top:16px"></div>
+      </div>
+
+      <div class="tab-content" id="subtab-interview">
+        <div id="interviewQuestions"></div>
+        <div class="form-group">
+          <label>角色名称</label>
+          <input type="text" id="ivName" value="小星">
+        </div>
+        <div class="form-group">
+          <label>别名（空格分隔）</label>
+          <input type="text" id="ivAliases" placeholder="例如：星酱 星星">
+        </div>
+        <button class="btn" onclick="generatePersonaInterview()">✨ 生成人格</button>
+        <div id="ivResult" style="margin-top:16px"></div>
+      </div>
+
+      <div class="tab-content" id="subtab-preview">
+        <div id="personaPreview" class="preview-box">加载中...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Orchestration -->
+  <div class="tab-content" id="tab-orchestration">
+    <div class="card">
+      <h2>模型编排</h2>
+      <div class="row">
+        <div class="col">
+          <div class="form-group">
+            <label>分析模型（情感/意图/认知/记忆）</label>
+            <input type="text" id="orchAnalysis" value="gpt-4o-mini">
+          </div>
+        </div>
+        <div class="col">
+          <div class="form-group">
+            <label>对话生成模型</label>
+            <input type="text" id="orchChat" value="gpt-4o">
+          </div>
+        </div>
+        <div class="col">
+          <div class="form-group">
+            <label>多模态模型</label>
+            <input type="text" id="orchVision" value="gpt-4o">
+          </div>
+        </div>
+      </div>
+      <button class="btn success" onclick="saveOrchestration()">💾 保存模型编排</button>
+    </div>
+  </div>
+
+  <!-- Groups -->
+  <div class="tab-content" id="tab-groups">
+    <div class="card">
+      <h2>群白名单</h2>
+      <div class="form-group">
+        <label>添加群号</label>
+        <div class="row">
+          <input type="text" id="newGroupId" placeholder="输入群号" style="flex:1">
+          <button class="btn" onclick="addGroup()">添加</button>
+        </div>
+      </div>
+      <div class="tag-list" id="groupTags"></div>
+
+      <h3>私聊白名单（空表示允许所有人）</h3>
+      <div class="form-group">
+        <label>添加 QQ 号</label>
+        <div class="row">
+          <input type="text" id="newPrivateId" placeholder="输入 QQ 号" style="flex:1">
+          <button class="btn" onclick="addPrivate()">添加</button>
+        </div>
+      </div>
+      <div class="tag-list" id="privateTags"></div>
+
+      <h3>功能开关</h3>
+      <div class="form-group">
+        <label><input type="checkbox" id="enableGroupChat" checked> 启用群聊</label>
+        <label><input type="checkbox" id="enablePrivateChat" checked> 启用私聊</label>
+      </div>
+      <button class="btn success" onclick="saveConfig()">💾 保存配置</button>
+    </div>
+  </div>
+
+  <!-- NapCat -->
+  <div class="tab-content" id="tab-napcat">
+    <div class="card">
+      <h2>NapCat 管理</h2>
+      <div id="napcatStatusBox" style="margin-bottom:16px">
+        <div class="row">
+          <div class="col"><strong>安装状态</strong>: <span id="ncInstalled">检测中...</span></div>
+          <div class="col"><strong>运行状态</strong>: <span id="ncRunning">检测中...</span></div>
+          <div class="col"><strong>QQ 检测</strong>: <span id="ncQQ">检测中...</span></div>
+        </div>
+      </div>
+      <div class="form-group">
+        <label>QQ 号（快速登录，首次启动需扫码）</label>
+        <input type="text" id="ncQQNumber" placeholder="例如：123456789">
+      </div>
+      <div class="form-group">
+        <label>WebSocket 端口</label>
+        <input type="text" id="ncWSPort" value="3001">
+      </div>
+      <div class="form-group">
+        <label>WebSocket Token</label>
+        <input type="text" id="ncWSToken" value="napcat_ws">
+      </div>
+      <div class="row" style="margin-top:12px">
+        <button class="btn" id="ncInstallBtn" onclick="ncInstall()">⬇️ 安装 NapCat</button>
+        <button class="btn" id="ncConfigBtn" onclick="ncConfigure()">⚙️ 生成配置</button>
+        <button class="btn success" id="ncStartBtn" onclick="ncStart()">▶ 启动 NapCat</button>
+        <button class="btn danger" id="ncStopBtn" onclick="ncStop()">⏹ 停止 NapCat</button>
+      </div>
+      <h3 style="margin-top:20px">日志</h3>
+      <div id="ncLogs" class="preview-box" style="max-height:300px;font-size:12px">暂无日志</div>
+      <div style="margin-top:8px">
+        <button class="btn" onclick="ncLoadLogs()">🔄 刷新日志</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const API = '/api';
+let state = {};
+
+function $(id){ return document.getElementById(id); }
+function toast(msg, type='success'){
+  const t = $('toast');
+  t.textContent = msg; t.className = 'toast ' + type + ' show';
+  setTimeout(()=>t.classList.remove('show'), 3000);
+}
+
+async function get(path){ const r = await fetch(API+path); return r.json(); }
+async function post(path, body){
+  const r = await fetch(API+path, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+  return r.json();
+}
+
+async function loadStatus(){
+  state = await get('/status');
+  const ready = state.ready;
+  $('statusPill').classList.toggle('ready', ready);
+  $('statusText').textContent = ready ? '就绪' : '未就绪';
+  $('engineReady').textContent = ready ? '✅ 就绪' : '⏳ 未就绪';
+  $('toggleBtn').textContent = state.enabled ? '⏸ 关闭 AI' : '▶ 开启 AI';
+  $('personaName').textContent = state.persona_name || '—';
+  $('providerCount').textContent = (state.providers?.length || 0) + ' 个';
+
+  renderProviders(state.providers || []);
+  renderGroups(state.allowed_group_ids || []);
+  renderPrivates(state.allowed_private_user_ids || []);
+  $('enableGroupChat').checked = state.enable_group_chat;
+  $('enablePrivateChat').checked = state.enable_private_chat;
+
+  const orch = state.orchestration || {};
+  $('orchAnalysis').value = orch.analysis_model || 'gpt-4o-mini';
+  $('orchChat').value = orch.chat_model || 'gpt-4o';
+  $('orchVision').value = orch.vision_model || 'gpt-4o';
+
+  loadPersonaPreview();
+}
+
+function renderProviders(list){
+  const el = $('providerList');
+  el.innerHTML = list.map((p,i)=>`
+    <div class="provider-row">
+      <input placeholder="平台" value="${p.type||''}" onchange="updateProvider(${i},'type',this.value)">
+      <input placeholder="Base URL" value="${p.base_url||''}" onchange="updateProvider(${i},'base_url',this.value)">
+      <input type="password" placeholder="API Key" value="${p.api_key||''}" onchange="updateProvider(${i},'api_key',this.value)">
+      <input placeholder="Model" value="${p.healthcheck_model||''}" onchange="updateProvider(${i},'healthcheck_model',this.value)">
+      <button class="btn" onclick="toggleProviderEnabled(${i})">${p.enabled?'启用':'禁用'}</button>
+      <button class="btn danger" onclick="removeProvider(${i})">✕</button>
+    </div>
+  `).join('');
+  if(!list.length) el.innerHTML = '<div style="color:var(--text-2);padding:10px">暂无 Provider，请点击「添加 Provider」。</div>';
+}
+
+let providerDraft = [];
+function renderProviders(list){ providerDraft = JSON.parse(JSON.stringify(list)); _renderProviderDraft(); }
+function _renderProviderDraft(){
+  const el = $('providerList');
+  el.innerHTML = providerDraft.map((p,i)=>`
+    <div class="provider-row">
+      <input placeholder="平台" value="${p.type||''}" oninput="providerDraft[${i}].type=this.value">
+      <input placeholder="Base URL" value="${p.base_url||''}" oninput="providerDraft[${i}].base_url=this.value">
+      <input type="password" placeholder="API Key" value="${p.api_key||''}" oninput="providerDraft[${i}].api_key=this.value">
+      <input placeholder="Model" value="${p.healthcheck_model||''}" oninput="providerDraft[${i}].healthcheck_model=this.value">
+      <button class="btn" onclick="providerDraft[${i}].enabled=!providerDraft[${i}].enabled;_renderProviderDraft()">${providerDraft[i].enabled!==false?'启用':'禁用'}</button>
+      <button class="btn danger" onclick="providerDraft.splice(${i},1);_renderProviderDraft()">✕</button>
+    </div>
+  `).join('');
+  if(!providerDraft.length) el.innerHTML = '<div style="color:var(--text-2);padding:10px">暂无 Provider，请点击「添加 Provider」。</div>';
+}
+function addProvider(){ providerDraft.push({type:'',base_url:'',api_key:'',healthcheck_model:'',enabled:true,models:[]}); _renderProviderDraft(); }
+
+async function saveProviders(){
+  const res = await post('/providers', {providers: providerDraft});
+  toast(res.success ? 'Provider 已保存' : (res.error||'保存失败'), res.success?'success':'error');
+  loadStatus();
+}
+
+function renderGroups(list){
+  $('groupTags').innerHTML = list.map(g=>`<span class="tag">${g} <span class="remove" onclick="removeGroup('${g}')">✕</span></span>`).join('');
+}
+function renderPrivates(list){
+  $('privateTags').innerHTML = list.map(u=>`<span class="tag">${u} <span class="remove" onclick="removePrivate('${u}')">✕</span></span>`).join('');
+}
+
+function addGroup(){ const v=$('newGroupId').value.trim(); if(v){ state.allowed_group_ids.push(v); $('newGroupId').value=''; renderGroups(state.allowed_group_ids); } }
+function removeGroup(g){ state.allowed_group_ids=state.allowed_group_ids.filter(x=>x!==g); renderGroups(state.allowed_group_ids); }
+function addPrivate(){ const v=$('newPrivateId').value.trim(); if(v){ state.allowed_private_user_ids.push(v); $('newPrivateId').value=''; renderPrivates(state.allowed_private_user_ids); } }
+function removePrivate(u){ state.allowed_private_user_ids=state.allowed_private_user_ids.filter(x=>x!==u); renderPrivates(state.allowed_private_user_ids); }
+
+async function saveConfig(){
+  const res = await post('/config', {
+    allowed_group_ids: state.allowed_group_ids,
+    allowed_private_user_ids: state.allowed_private_user_ids,
+    enable_group_chat: $('enableGroupChat').checked,
+    enable_private_chat: $('enablePrivateChat').checked,
+  });
+  toast(res.success ? '配置已保存' : (res.error||'失败'), res.success?'success':'error');
+}
+
+async function saveOrchestration(){
+  const res = await post('/orchestration', {
+    analysis_model: $('orchAnalysis').value,
+    chat_model: $('orchChat').value,
+    vision_model: $('orchVision').value,
+  });
+  toast(res.success ? '模型编排已保存' : (res.error||'失败'), res.success?'success':'error');
+}
+
+async function toggleEngine(){
+  const res = await post('/engine/toggle', {enabled: !state.enabled});
+  toast(res.success ? (res.enabled?'AI 已开启':'AI 已关闭') : (res.error||'失败'), res.success?'success':'error');
+  loadStatus();
+}
+
+async function generatePersonaKeywords(){
+  const btn = document.querySelector('#subtab-keywords .btn');
+  btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> 生成中...';
+  const res = await post('/persona/keywords', {
+    name: $('kwName').value,
+    keywords: $('kwKeywords').value,
+    aliases: $('kwAliases').value.split(/\s+/).filter(Boolean),
+  });
+  btn.disabled = false; btn.innerHTML = '✨ 生成人格';
+  if(res.success){
+    $('kwResult').innerHTML = `<div class="preview-box">${JSON.stringify(res.persona,null,2)}</div><button class="btn success" onclick="savePersona(${JSON.stringify(JSON.stringify(res.persona))})">💾 保存人格</button>`;
+  } else {
+    toast(res.error||'生成失败', 'error');
+  }
+}
+
+const interviewQuestions = [
+  "如果把 TA 放进群聊，TA 更像哪类群体角色？是活跃气氛的人、冷幽默观察者、可靠收束者，还是偶尔出手的梗王？",
+  "TA 在多人对话里的发言节奏如何？什么时候会抢话、接梗、补刀、收尾，什么时候会选择潜水？",
+  "TA 如何区分群内不同关系层级？公开场合和私下场合，对熟人和生人会有什么明显区别？",
+  "群里气氛好、被冷落、有人争执、有人单独 cue TA 时，TA 的情绪和反应路径分别是什么？",
+  "TA 的群聊语言风格是什么？会不会用梗、方言、昵称、复读、反问、表情包式句法？最该避免哪些 AI 味回复？",
+  "TA 在群聊中的边界与禁忌是什么？面对多人起哄、越界玩笑、道德绑架或拉踩时会怎么处理？",
+  "TA 在群里最真实的小习惯或记忆点是什么？什么细节会让人一看就觉得「这人很具体」？",
+  "这个群聊角色的社交气质从什么经历里长出来？哪些过去的圈子、职业或成长环境塑造了 TA 的群体互动方式？",
+];
+function renderInterviewQuestions(){
+  $('interviewQuestions').innerHTML = interviewQuestions.map((q,i)=>`
+    <div class="question-block">
+      <div class="q">Q${i+1}. ${q}</div>
+      <textarea id="ivAns${i}" placeholder="请回答..."></textarea>
+    </div>
+  `).join('');
+}
+
+async function generatePersonaInterview(){
+  const btn = document.querySelector('#subtab-interview .btn');
+  btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> 生成中...';
+  const answers = {};
+  interviewQuestions.forEach((_,i)=>{ const v=$(`ivAns${i}`).value.trim(); if(v) answers[String(i+1)]=v; });
+  const res = await post('/persona/interview', {
+    name: $('ivName').value,
+    aliases: $('ivAliases').value.split(/\s+/).filter(Boolean),
+    answers,
+  });
+  btn.disabled = false; btn.innerHTML = '✨ 生成人格';
+  if(res.success){
+    $('ivResult').innerHTML = `<div class="preview-box">${JSON.stringify(res.persona,null,2)}</div><button class="btn success" onclick="savePersona(${JSON.stringify(JSON.stringify(res.persona))})">💾 保存人格</button>`;
+  } else {
+    toast(res.error||'生成失败', 'error');
+  }
+}
+
+async function savePersona(jsonStr){
+  const res = await post('/persona/save', {persona: JSON.parse(jsonStr)});
+  toast(res.success ? '人格已保存' : (res.error||'保存失败'), res.success?'success':'error');
+  loadStatus();
+}
+
+async function loadPersonaPreview(){
+  const res = await get('/persona');
+  $('personaPreview').textContent = res.persona ? JSON.stringify(res.persona, null, 2) : '尚未配置人格。';
+}
+
+// Tabs
+document.querySelectorAll('.tabs .tab[data-tab]').forEach(tab=>{
+  tab.addEventListener('click', ()=>{
+    document.querySelectorAll('.tabs .tab[data-tab]').forEach(t=>t.classList.remove('active'));
+    document.querySelectorAll('.tab-content').forEach(c=>c.classList.remove('active'));
+    tab.classList.add('active');
+    $(`tab-${tab.dataset.tab}`).classList.add('active');
+  });
+});
+document.querySelectorAll('.tabs .tab[data-subtab]').forEach(tab=>{
+  tab.addEventListener('click', ()=>{
+    const parent = tab.closest('.card');
+    parent.querySelectorAll('.tab[data-subtab]').forEach(t=>t.classList.remove('active'));
+    parent.querySelectorAll('.tab-content').forEach(c=>c.classList.remove('active'));
+    tab.classList.add('active');
+    $(`subtab-${tab.dataset.subtab}`).classList.add('active');
+  });
+});
+
+renderInterviewQuestions();
+loadStatus();
+ncLoadStatus();
+
+// ── NapCat ────────────────────────────────────────────
+
+async function ncLoadStatus(){
+  try {
+    const res = await get('/napcat/status');
+    if(!res.enabled){
+      $('ncInstalled').textContent = '管理未启用';
+      $('ncRunning').textContent = '管理未启用';
+      $('ncQQ').textContent = '管理未启用';
+      return;
+    }
+    $('ncInstalled').textContent = res.installed ? '✅ 已安装' : '❌ 未安装';
+    $('ncRunning').textContent = res.running ? '✅ 运行中' : '⏹ 已停止';
+    $('ncQQ').textContent = res.qq_installed ? `✅ 已安装 (${res.qq_path||''})` : '❌ 未检测到 QQ';
+    $('ncInstallBtn').style.display = res.installed ? 'none' : 'inline-flex';
+    $('ncStartBtn').style.display = res.installed ? 'inline-flex' : 'none';
+    $('ncStopBtn').style.display = res.running ? 'inline-flex' : 'none';
+  } catch(e) {
+    console.error('NapCat 状态加载失败', e);
+  }
+}
+
+async function ncInstall(){
+  const btn = $('ncInstallBtn');
+  btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> 安装中...';
+  const res = await post('/napcat/install', {});
+  btn.disabled = false; btn.innerHTML = '⬇️ 安装 NapCat';
+  toast(res.success ? res.message : (res.message||'安装失败'), res.success?'success':'error');
+  ncLoadStatus();
+}
+
+async function ncConfigure(){
+  const qq = $('ncQQNumber').value.trim();
+  if(!qq){ toast('请填写 QQ 号', 'error'); return; }
+  const res = await post('/napcat/configure', {
+    qq: qq,
+    ws_port: parseInt($('ncWSPort').value)||3001,
+    ws_token: $('ncWSToken').value||'napcat_ws',
+  });
+  toast(res.success ? res.message : (res.message||'配置失败'), res.success?'success':'error');
+}
+
+async function ncStart(){
+  const qq = $('ncQQNumber').value.trim() || undefined;
+  const btn = $('ncStartBtn');
+  btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> 启动中...';
+  const res = await post('/napcat/start', qq ? {qq} : {});
+  btn.disabled = false; btn.innerHTML = '▶ 启动 NapCat';
+  toast(res.success ? res.message : (res.message||'启动失败'), res.success?'success':'error');
+  ncLoadStatus();
+  if(res.success) setInterval(ncLoadLogs, 5000);
+}
+
+async function ncStop(){
+  const res = await post('/napcat/stop', {});
+  toast(res.success ? res.message : (res.message||'停止失败'), res.success?'success':'error');
+  ncLoadStatus();
+}
+
+async function ncLoadLogs(){
+  try {
+    const res = await get('/napcat/logs?lines=50');
+    if(res.enabled){
+      $('ncLogs').textContent = res.logs.length ? res.logs.join('\n') : '暂无日志';
+    }
+  } catch(e) {}
+}
+</script>
+</body>
+</html>
