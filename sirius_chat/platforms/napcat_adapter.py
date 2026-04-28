@@ -67,7 +67,7 @@ class NapCatAdapter:
             headers["Authorization"] = f"Bearer {self.token}"
         try:
             LOG.info("Connecting to NapCat WS: %s", self.ws_url)
-            self.ws = await websockets.connect(self.ws_url, extra_headers=headers)
+            self.ws = await websockets.connect(self.ws_url, additional_headers=headers)
             LOG.info("NapCat WS connected")
             return True
         except Exception as exc:
