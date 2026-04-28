@@ -255,7 +255,13 @@ async def _main() -> None:
     parser.add_argument("--log-level", default="INFO", help="日志级别")
     args = parser.parse_args()
 
-    configure_logging(level=args.log_level.upper(), format_type="console")
+    pdir = Path(args.config).resolve()
+    log_file = pdir / "logs" / "worker.log"
+    configure_logging(
+        level=args.log_level.upper(),
+        format_type="console",
+        log_file=str(log_file),
+    )
 
     worker = PersonaWorker(args.config)
 

@@ -184,7 +184,7 @@ class PersonaManager:
     # ------------------------------------------------------------------
 
     def start_persona(self, name: str) -> bool:
-        """启动单个人格子进程。"""
+        """启动单个人格子进程（Windows 下创建独立控制台窗口）。"""
         if self.is_running(name):
             LOG.warning("人格已在运行: %s", name)
             return True
@@ -204,22 +204,17 @@ class PersonaManager:
             self.global_config.get("log_level", "INFO"),
         ]
 
-        # 子进程日志输出到文件
-        log_dir = pdir / "logs"
-        log_dir.mkdir(parents=True, exist_ok=True)
-        log_file = log_dir / "worker.log"
-        stdout = open(log_file, "a", encoding="utf-8")
-
-        # Windows 下需要 CREATE_NEW_PROCESS_GROUP 才能发送 SIGTERM
         kwargs: dict[str, Any] = {}
         if sys.platform == "win32":
-            kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+            # CREATE_NEW_CONSOLE: 独立窗口
+            # CREATE_NEW_PROCESS_GROUP: 支持 Ctrl+Break 终止
+            kwargs["creationflags"] = (
+                subprocess.CREATE_NEW_CONSOLE | subprocess.CREATE_NEW_PROCESS_GROUP
+            )
 
         try:
             proc = subprocess.Popen(
                 cmd,
-                stdout=stdout,
-                stderr=subprocess.STDOUT,
                 cwd=str(Path(__file__).resolve().parent.parent),
                 **kwargs,
             )
