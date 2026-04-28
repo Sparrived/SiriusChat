@@ -1,12 +1,17 @@
-"""SiriusChat 统一启动入口。
+"""SiriusChat 多进程人格管理 CLI。
 
-启动 NapCat Bot + WebUI 配置面板。
+启动与管理多个人格实例，每个人格在独立子进程中运行。
 
 使用方法::
 
-    python main.py                          # 使用默认配置启动
-    python main.py --config config.json     # 指定配置文件
-    python main.py --init-config config.json # 生成默认配置模板
+    python main.py run                           # 启动所有已启用人格 + WebUI
+    python main.py webui                         # 仅启动 WebUI（管理模式）
+    python main.py persona list                  # 列出所有人格
+    python main.py persona create <name>         # 创建人格
+    python main.py persona remove <name>         # 删除人格
+    python main.py persona start <name>          # 前台启动单个人格
+    python main.py persona stop <name>           # 停止单个人格
+    python main.py persona status <name>         # 查看人格状态
 """
 
 from __future__ import annotations
@@ -20,114 +25,99 @@ from pathlib import Path
 
 from sirius_chat.logging_config import configure_logging
 
-configure_logging(level="INFO", format_type="console")
-LOG = logging.getLogger("sirius_chat")
-
 REPO_ROOT = Path(__file__).resolve().parent
+DATA_DIR = REPO_ROOT / "data"
+GLOBAL_CONFIG_PATH = DATA_DIR / "global_config.json"
 
 
-def _default_config() -> dict:
-    """返回默认 Bot 配置。"""
+def _default_global_config() -> dict:
+    """返回默认全局配置。"""
     return {
-        "ws_url": "ws://localhost:3001",
-        "token": "napcat_ws",
-        "work_path": str(REPO_ROOT / "data" / "bot"),
-        "root": "",
-        "allowed_group_ids": [],
-        "allowed_private_user_ids": [],
-        "enable_group_chat": True,
-        "enable_private_chat": True,
-        "auto_install_skill_deps": True,
-        "providers": [],
         "webui_host": "0.0.0.0",
         "webui_port": 8080,
         "auto_manage_napcat": False,
         "napcat_install_dir": str(REPO_ROOT / "napcat"),
+        "log_level": "INFO",
     }
 
 
-def _init_config(path: Path) -> None:
-    """生成默认配置文件并退出。"""
-    config = _default_config()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(config, indent=2, ensure_ascii=False), encoding="utf-8")
-    LOG.info("默认配置已写入: %s", path)
+def _load_global_config() -> dict:
+    """加载全局配置，若不存在则创建默认。"""
+    if GLOBAL_CONFIG_PATH.exists():
+        try:
+            return json.loads(GLOBAL_CONFIG_PATH.read_text(encoding="utf-8"))
+        except Exception as exc:
+            logging.getLogger("sirius.main").warning("全局配置读取失败: %s，使用默认", exc)
+    config = _default_global_config()
+    GLOBAL_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    GLOBAL_CONFIG_PATH.write_text(json.dumps(config, indent=2, ensure_ascii=False), encoding="utf-8")
+    return config
 
 
-async def _run_bot(config: dict) -> None:
-    """启动 NapCat Bot + WebUI。"""
-    from sirius_chat.platforms import NapCatAdapter, NapCatBridge, NapCatManager
+# ---------------------------------------------------------------------------
+# 子命令实现
+# ---------------------------------------------------------------------------
+
+async def _cmd_run(args: argparse.Namespace) -> None:
+    """启动所有已启用的人格 + WebUI。"""
+    config = _load_global_config()
+    configure_logging(level=config.get("log_level", "INFO"), format_type="console")
+    LOG = logging.getLogger("sirius.main")
+
+    from sirius_chat.persona_manager import PersonaManager
     from sirius_chat.webui import WebUIServer
 
-    ws_url = str(config.get("ws_url", "ws://localhost:3001"))
-    token = str(config.get("token", "napcat_ws"))
-    work_path = str(
-        config.get(
-            "work_path",
-            str(REPO_ROOT / "data" / "bot"),
-        )
-    )
-    root = str(config.get("root", ""))
-    auto_manage_napcat = bool(config.get("auto_manage_napcat", False))
-    napcat_install_dir = str(
-        config.get(
-            "napcat_install_dir",
-            str(REPO_ROOT / "napcat"),
-        )
-    )
+    persona_manager = PersonaManager(DATA_DIR, global_config=config)
 
-    napcat_manager = None
-    if auto_manage_napcat:
-        napcat_manager = NapCatManager(napcat_install_dir)
-        LOG.info("NapCat 自动管理已启用，安装目录: %s", napcat_install_dir)
+    # 启动所有已启用的人格
+    LOG.info("正在启动已启用人格...")
+    results = persona_manager.start_all()
+    for name, ok in results.items():
+        LOG.info("  %s %s", "✓" if ok else "✗", name)
 
-        if not napcat_manager.is_installed:
-            LOG.info("NapCat 未安装，尝试自动安装...")
-            result = await napcat_manager.install()
-            if result["success"]:
-                LOG.info("NapCat 安装成功")
-            else:
-                LOG.warning("NapCat 自动安装失败: %s", result["message"])
-                LOG.warning("请通过 WebUI 手动安装 NapCat")
-
-        if napcat_manager.is_installed and not napcat_manager.is_running:
-            # 尝试从已有配置推断 QQ 号
-            config_dir = Path(napcat_install_dir) / "config"
-            qq_number = None
-            if config_dir.exists():
-                for cfg in config_dir.glob("onebot11_*.json"):
-                    qq_number = cfg.stem.replace("onebot11_", "")
-                    break
-
-            LOG.info("尝试自动启动 NapCat (QQ: %s)...", qq_number or "二维码登录")
-            result = await napcat_manager.start(qq_number=qq_number)
-            if result["success"]:
-                LOG.info("NapCat 已启动，等待 WebSocket 就绪...")
-                ready = await napcat_manager.wait_for_ws(timeout=120.0)
-                if ready:
-                    LOG.info("NapCat WebSocket 已就绪")
-                else:
-                    LOG.warning("NapCat WebSocket 未就绪，请检查 QQ 是否已扫码登录")
-            else:
-                LOG.warning("NapCat 启动失败: %s", result["message"])
-
-    adapter = NapCatAdapter(ws_url=ws_url, token=token)
-    bridge = NapCatBridge(
-        adapter=adapter,
-        work_path=work_path,
-        config={"root": root, **config},
-    )
+    # 启动 WebUI
+    napcat_dir = config.get("napcat_install_dir") if config.get("auto_manage_napcat") else None
     webui = WebUIServer(
-        bridge=bridge,
+        persona_manager=persona_manager,
         host=str(config.get("webui_host", "0.0.0.0")),
         port=int(config.get("webui_port", 8080)),
-        napcat_install_dir=napcat_install_dir if auto_manage_napcat else None,
+        napcat_install_dir=napcat_dir,
     )
-
-    await adapter.connect()
-    await bridge.start()
     await webui.start()
-    LOG.info("Bot 已启动，WebUI: http://localhost:%s，按 Ctrl+C 停止", webui.port)
+    LOG.info("WebUI: http://localhost:%s", webui.port)
+    LOG.info("按 Ctrl+C 停止所有服务")
+
+    try:
+        while True:
+            await asyncio.sleep(3600)
+    except asyncio.CancelledError:
+        pass
+    finally:
+        LOG.info("正在停止所有人格...")
+        persona_manager.stop_all()
+        await webui.stop()
+        LOG.info("所有服务已停止")
+
+
+async def _cmd_webui(args: argparse.Namespace) -> None:
+    """仅启动 WebUI（不启动任何人格）。"""
+    config = _load_global_config()
+    configure_logging(level=config.get("log_level", "INFO"), format_type="console")
+    LOG = logging.getLogger("sirius.main")
+
+    from sirius_chat.persona_manager import PersonaManager
+    from sirius_chat.webui import WebUIServer
+
+    persona_manager = PersonaManager(DATA_DIR, global_config=config)
+    napcat_dir = config.get("napcat_install_dir") if config.get("auto_manage_napcat") else None
+    webui = WebUIServer(
+        persona_manager=persona_manager,
+        host=str(config.get("webui_host", "0.0.0.0")),
+        port=int(config.get("webui_port", 8080)),
+        napcat_install_dir=napcat_dir,
+    )
+    await webui.start()
+    LOG.info("WebUI: http://localhost:%s（仅管理模式，无人格运行）", webui.port)
 
     try:
         while True:
@@ -136,58 +126,181 @@ async def _run_bot(config: dict) -> None:
         pass
     finally:
         await webui.stop()
-        await bridge.stop()
-        await adapter.close()
-        if napcat_manager and napcat_manager.is_running:
-            LOG.info("正在停止 NapCat...")
-            await napcat_manager.stop()
-        LOG.info("Bot 已停止")
 
+
+def _cmd_persona_list(args: argparse.Namespace) -> None:
+    """列出所有人格。"""
+    configure_logging(level="WARNING", format_type="console")
+    from sirius_chat.persona_manager import PersonaManager
+
+    config = _load_global_config()
+    manager = PersonaManager(DATA_DIR, global_config=config)
+    personas = manager.list_personas()
+    if not personas:
+        print("暂无任何人格。使用 `python main.py persona create <name>` 创建。")
+        return
+
+    print(f"{'人格名':<12} {'角色名':<12} {'状态':<8} {'PID':<8} {'Adapter'}")
+    print("-" * 60)
+    for p in personas:
+        status = "运行中" if p.get("running") else "已停止"
+        pid = str(p.get("pid") or "-")
+        adapters = p.get("adapters_count", 0)
+        print(f"{p['name']:<12} {p.get('persona_name') or '-':<12} {status:<8} {pid:<8} {adapters}")
+
+
+def _cmd_persona_create(args: argparse.Namespace) -> None:
+    """创建新人格。"""
+    configure_logging(level="WARNING", format_type="console")
+    from sirius_chat.persona_manager import PersonaManager
+
+    config = _load_global_config()
+    manager = PersonaManager(DATA_DIR, global_config=config)
+    try:
+        pdir = manager.create_persona(
+            args.name,
+            persona_name=args.name,
+            keywords=args.keywords or [],
+        )
+        print(f"人格已创建: {args.name}")
+        print(f"  目录: {pdir}")
+        print(f"  请编辑 {pdir / 'adapters.json'} 配置连接，然后运行:")
+        print(f"    python main.py run")
+    except FileExistsError:
+        print(f"人格已存在: {args.name}")
+        sys.exit(1)
+
+
+def _cmd_persona_remove(args: argparse.Namespace) -> None:
+    """删除人格。"""
+    configure_logging(level="WARNING", format_type="console")
+    from sirius_chat.persona_manager import PersonaManager
+
+    config = _load_global_config()
+    manager = PersonaManager(DATA_DIR, global_config=config)
+    ok = manager.remove_persona(args.name)
+    if ok:
+        print(f"人格已删除: {args.name}")
+    else:
+        print(f"人格不存在: {args.name}")
+        sys.exit(1)
+
+
+async def _cmd_persona_start(args: argparse.Namespace) -> None:
+    """前台启动单个人格（调试用）。"""
+    from sirius_chat.persona_worker import PersonaWorker
+
+    pdir = DATA_DIR / "personas" / args.name
+    if not pdir.exists():
+        print(f"人格不存在: {args.name}")
+        sys.exit(1)
+
+    configure_logging(level="INFO", format_type="console")
+    worker = PersonaWorker(pdir)
+
+    # 信号处理
+    loop = asyncio.get_running_loop()
+    for sig in (__import__("signal").SIGTERM, __import__("signal").SIGINT):
+        loop.add_signal_handler(sig, worker.shutdown)
+
+    try:
+        await worker.run()
+    except Exception:
+        logging.getLogger("sirius.main").exception("人格工作进程异常退出")
+        raise
+
+
+def _cmd_persona_stop(args: argparse.Namespace) -> None:
+    """停止单个人格。"""
+    configure_logging(level="WARNING", format_type="console")
+    from sirius_chat.persona_manager import PersonaManager
+
+    config = _load_global_config()
+    manager = PersonaManager(DATA_DIR, global_config=config)
+    ok = manager.stop_persona(args.name)
+    if ok:
+        print(f"人格已停止: {args.name}")
+    else:
+        print(f"人格未在运行或不存在: {args.name}")
+
+
+def _cmd_persona_status(args: argparse.Namespace) -> None:
+    """查看人格状态。"""
+    configure_logging(level="WARNING", format_type="console")
+    from sirius_chat.persona_manager import PersonaManager
+
+    config = _load_global_config()
+    manager = PersonaManager(DATA_DIR, global_config=config)
+    info = manager.get_persona_status(args.name)
+    if info is None:
+        print(f"人格不存在: {args.name}")
+        sys.exit(1)
+
+    print(json.dumps(info, ensure_ascii=False, indent=2))
+
+
+# ---------------------------------------------------------------------------
+# CLI 入口
+# ---------------------------------------------------------------------------
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="SiriusChat 启动入口")
-    parser.add_argument("--config", default="config.json", help="配置文件路径 (默认: config.json)")
-    parser.add_argument("--init-config", metavar="PATH", help="生成默认配置模板并退出")
-    parser.add_argument("--work-path", help="覆盖配置中的工作路径")
-    parser.add_argument("--ws-url", help="覆盖 NapCat WebSocket 地址")
-    parser.add_argument("--root", help="覆盖管理员 QQ 号")
-    parser.add_argument("--webui-port", type=int, help="覆盖 WebUI 端口")
+    parser = argparse.ArgumentParser(description="SiriusChat 多进程人格管理 CLI")
+    subparsers = parser.add_subparsers(dest="command", help="可用命令")
+
+    # run
+    subparsers.add_parser("run", help="启动所有已启用人格 + WebUI")
+
+    # webui
+    subparsers.add_parser("webui", help="仅启动 WebUI（管理模式）")
+
+    # persona
+    persona_parser = subparsers.add_parser("persona", help="人格管理")
+    persona_sub = persona_parser.add_subparsers(dest="persona_cmd", help="人格子命令")
+
+    persona_sub.add_parser("list", help="列出所有人格")
+
+    create_parser = persona_sub.add_parser("create", help="创建人格")
+    create_parser.add_argument("name", help="人格标识名（目录名）")
+    create_parser.add_argument("--keywords", nargs="*", default=[], help="关键词（空格分隔）")
+
+    remove_parser = persona_sub.add_parser("remove", help="删除人格")
+    remove_parser.add_argument("name", help="人格标识名")
+
+    start_parser = persona_sub.add_parser("start", help="前台启动单个人格")
+    start_parser.add_argument("name", help="人格标识名")
+
+    stop_parser = persona_sub.add_parser("stop", help="停止单个人格")
+    stop_parser.add_argument("name", help="人格标识名")
+
+    status_parser = persona_sub.add_parser("status", help="查看人格状态")
+    status_parser.add_argument("name", help="人格标识名")
 
     args = parser.parse_args()
 
-    if args.init_config:
-        _init_config(Path(args.init_config))
-        return 0
-
-    config_path = Path(args.config)
-    config: dict = {}
-    if config_path.exists():
-        try:
-            config = json.loads(config_path.read_text(encoding="utf-8"))
-        except Exception as exc:
-            LOG.warning("配置文件读取失败: %s", exc)
+    if args.command == "run":
+        asyncio.run(_cmd_run(args))
+    elif args.command == "webui":
+        asyncio.run(_cmd_webui(args))
+    elif args.command == "persona":
+        if args.persona_cmd == "list":
+            _cmd_persona_list(args)
+        elif args.persona_cmd == "create":
+            _cmd_persona_create(args)
+        elif args.persona_cmd == "remove":
+            _cmd_persona_remove(args)
+        elif args.persona_cmd == "start":
+            asyncio.run(_cmd_persona_start(args))
+        elif args.persona_cmd == "stop":
+            _cmd_persona_stop(args)
+        elif args.persona_cmd == "status":
+            _cmd_persona_status(args)
+        else:
+            persona_parser.print_help()
+            return 1
     else:
-        LOG.warning("配置文件不存在: %s，使用默认配置", config_path)
-        config = _default_config()
+        parser.print_help()
+        return 1
 
-    # CLI 参数覆盖配置文件
-    if args.work_path:
-        config["work_path"] = args.work_path
-    if args.ws_url:
-        config["ws_url"] = args.ws_url
-    if args.root:
-        config["root"] = args.root
-    if args.webui_port:
-        config["webui_port"] = args.webui_port
-
-    # 确保 work_path 存在
-    work_path = Path(config.get("work_path", "."))
-    work_path.mkdir(parents=True, exist_ok=True)
-
-    try:
-        asyncio.run(_run_bot(config))
-    except KeyboardInterrupt:
-        LOG.info("收到中断信号，正在停止...")
     return 0
 
 
