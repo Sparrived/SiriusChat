@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from pathlib import Path
 from typing import Any, Callable
 
 import websockets
@@ -211,6 +212,32 @@ class NapCatAdapter:
         """发送私聊消息。"""
         segments = self._to_segments(message)
         return await self.call_api("send_private_msg", {"user_id": int(user_id), "message": segments})
+
+    async def upload_group_file(
+        self, group_id: str | int, file_path: str, name: str = ""
+    ) -> dict[str, Any]:
+        """上传文件到群文件。"""
+        return await self.call_api(
+            "upload_group_file",
+            {
+                "group_id": int(group_id),
+                "file": file_path,
+                "name": name or Path(file_path).name,
+            },
+        )
+
+    async def upload_private_file(
+        self, user_id: str | int, file_path: str, name: str = ""
+    ) -> dict[str, Any]:
+        """上传文件到私聊。"""
+        return await self.call_api(
+            "upload_private_file",
+            {
+                "user_id": int(user_id),
+                "file": file_path,
+                "name": name or Path(file_path).name,
+            },
+        )
 
     async def get_group_member_info(
         self, group_id: str | int, user_id: str | int, no_cache: bool = False
