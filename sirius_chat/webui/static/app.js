@@ -5,6 +5,10 @@ let personaState = {};
 let providerDraft = [];
 let currentPage = 'dashboard';
 
+// Adapter 白名单的独立状态（避免被 personaState 覆盖丢失）
+let adapterGroupIds = [];
+let adapterPrivateIds = [];
+
 function $(id) { return document.getElementById(id); }
 function toast(msg, type = 'success') {
   const t = $('toast');
@@ -91,6 +95,8 @@ async function loadPersonas() {
     if (!currentPersona && personas.length > 0) {
       selectPersona(personas[0].name);
     }
+    // Load telemetry in parallel (don't block persona list)
+    loadTelemetry();
   } catch (e) {
     console.error('loadPersonas', e);
     personas = [];
@@ -202,6 +208,39 @@ function renderPersonaCards() {
     $('dsPort').textContent = sp.adapters?.[0]?.ws_url?.split(':').pop() || '—';
   } else {
     ds.style.display = 'none';
+  }
+}
+
+async function loadTelemetry() {
+  const container = $('dashSkillStats');
+  const totalEl = $('dashSkillTotalCalls');
+  if (!container) return;
+  try {
+    const res = await get('/telemetry');
+    const skills = res.skills || {};
+    const total = res.total_calls || 0;
+    if (totalEl) totalEl.textContent = String(total);
+    const names = Object.keys(skills).sort((a, b) => skills[b].calls - skills[a].calls);
+    if (!names.length) {
+      container.innerHTML = '<div style="color:var(--text-2);padding:12px">暂无 Skill 调用记录</div>';
+      return;
+    }
+    container.innerHTML = names.map((name) => {
+      const s = skills[name];
+      const successRate = s.success_rate || 0;
+      const color = successRate >= 95 ? 'var(--success)' : successRate >= 80 ? 'var(--warning)' : 'var(--danger)';
+      return `
+        <div class="stat-card">
+          <div class="label">${name}</div>
+          <div class="value">${s.calls}</div>
+          <div style="font-size:11px;color:var(--text-2)">
+            成功率 <span style="color:${color}">${successRate}%</span> &nbsp;|&nbsp; 平均 ${s.avg_ms || 0}ms
+          </div>
+        </div>
+      `;
+    }).join('');
+  } catch (e) {
+    container.innerHTML = '<div style="color:var(--text-2);padding:12px">统计加载失败</div>';
   }
 }
 
@@ -601,9 +640,16 @@ async function loadAdapters() {
     $('adRoot').value = a.root || '';
     $('adEnableGroup').value = String(a.enable_group_chat !== false);
     $('adEnablePrivate').value = String(a.enable_private_chat !== false);
-    renderGroups(a.allowed_group_ids || []);
-    renderPrivates(a.allowed_private_user_ids || []);
-  } catch (e) {}
+    adapterGroupIds = a.allowed_group_ids || [];
+    adapterPrivateIds = a.allowed_private_user_ids || [];
+    renderGroups(adapterGroupIds);
+    renderPrivates(adapterPrivateIds);
+  } catch (e) {
+    // 保底初始化，避免 addGroup / saveAdapters 操作空对象
+    adapterGroupIds = [];
+    adapterPrivateIds = [];
+    personaState.adapters = personaState.adapters || [{}];
+  }
 }
 
 async function createBlankPersona() {
@@ -628,8 +674,6 @@ async function createBlankPersona() {
 
 async function saveAdapters() {
   if (!currentPersona) { toast('请先选择人格', 'error'); return; }
-  const adapters = personaState.adapters || [];
-  const a = adapters[0] || {};
   const res = await post(pApi('/adapters'), {
     adapters: [{
       type: 'napcat',
@@ -640,14 +684,17 @@ async function saveAdapters() {
       root: $('adRoot').value.trim(),
       enable_group_chat: $('adEnableGroup').value === 'true',
       enable_private_chat: $('adEnablePrivate').value === 'true',
-      allowed_group_ids: a.allowed_group_ids || [],
-      allowed_private_user_ids: a.allowed_private_user_ids || [],
+      allowed_group_ids: adapterGroupIds,
+      allowed_private_user_ids: adapterPrivateIds,
     }]
   });
   toast(res.success ? 'Adapter 配置已保存' : res.error || '保存失败', res.success ? 'success' : 'error');
   if (res.success) {
     const refreshed = await get(pApi('/adapters'));
     personaState.adapters = refreshed.adapters || [];
+    const a = personaState.adapters[0] || {};
+    adapterGroupIds = a.allowed_group_ids || [];
+    adapterPrivateIds = a.allowed_private_user_ids || [];
   }
 }
 
@@ -665,36 +712,28 @@ function renderPrivates(list) {
 function addGroup() {
   const v = $('newGroupId').value.trim();
   if (v) {
-    const adapters = personaState.adapters || [];
-    const a = adapters[0] || {};
-    a.allowed_group_ids = a.allowed_group_ids || [];
-    a.allowed_group_ids.push(v);
+    adapterGroupIds = adapterGroupIds || [];
+    if (!adapterGroupIds.includes(v)) adapterGroupIds.push(v);
     $('newGroupId').value = '';
-    renderGroups(a.allowed_group_ids);
+    renderGroups(adapterGroupIds);
   }
 }
 function removeGroup(g) {
-  const adapters = personaState.adapters || [];
-  const a = adapters[0] || {};
-  a.allowed_group_ids = (a.allowed_group_ids || []).filter((x) => x !== g);
-  renderGroups(a.allowed_group_ids);
+  adapterGroupIds = (adapterGroupIds || []).filter((x) => x !== g);
+  renderGroups(adapterGroupIds);
 }
 function addPrivate() {
   const v = $('newPrivateId').value.trim();
   if (v) {
-    const adapters = personaState.adapters || [];
-    const a = adapters[0] || {};
-    a.allowed_private_user_ids = a.allowed_private_user_ids || [];
-    a.allowed_private_user_ids.push(v);
+    adapterPrivateIds = adapterPrivateIds || [];
+    if (!adapterPrivateIds.includes(v)) adapterPrivateIds.push(v);
     $('newPrivateId').value = '';
-    renderPrivates(a.allowed_private_user_ids);
+    renderPrivates(adapterPrivateIds);
   }
 }
 function removePrivate(u) {
-  const adapters = personaState.adapters || [];
-  const a = adapters[0] || {};
-  a.allowed_private_user_ids = (a.allowed_private_user_ids || []).filter((x) => x !== u);
-  renderPrivates(a.allowed_private_user_ids);
+  adapterPrivateIds = (adapterPrivateIds || []).filter((x) => x !== u);
+  renderPrivates(adapterPrivateIds);
 }
 
 // ── Engine ────────────────────────────────────────────

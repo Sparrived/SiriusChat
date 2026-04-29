@@ -89,6 +89,9 @@ class WebUIServer:
         self.app.router.add_post("/api/napcat/stop", self.api_napcat_stop)
         self.app.router.add_get("/api/napcat/logs", self.api_napcat_logs)
 
+        # ─── Telemetry API ────────────────────────────────────
+        self.app.router.add_get("/api/telemetry", self.api_telemetry_get)
+
         # ─── 多人格 API ───────────────────────────────────────
         self.app.router.add_get("/api/personas", self.api_personas_list)
         self.app.router.add_post("/api/personas", self.api_personas_create)
@@ -655,4 +658,52 @@ class WebUIServer:
         return _json_response({
             "enabled": True,
             "logs": self.napcat_manager.get_logs(lines=lines),
+        })
+
+    async def api_telemetry_get(self, request: web.Request) -> web.Response:
+        """Return global skill usage telemetry aggregated across all personas."""
+        from sirius_chat.skills.telemetry import SkillTelemetry
+
+        all_summaries: dict[str, dict[str, Any]] = {}
+        for name in self.persona_manager.list_personas():
+            paths = self.persona_manager.get_persona_paths(name)
+            if paths is None:
+                continue
+            telemetry_path = paths.dir / "skill_data" / ".telemetry.jsonl"
+            if not telemetry_path.exists():
+                continue
+            try:
+                telemetry = SkillTelemetry(telemetry_path)
+                summary = telemetry.summary()
+                for skill_name, stats in summary.items():
+                    if skill_name not in all_summaries:
+                        all_summaries[skill_name] = {
+                            "calls": 0,
+                            "successes": 0,
+                            "failures": 0,
+                            "total_ms": 0.0,
+                            "errors": [],
+                        }
+                    agg = all_summaries[skill_name]
+                    agg["calls"] += stats["calls"]
+                    agg["successes"] += stats["successes"]
+                    agg["failures"] += stats["failures"]
+                    agg["total_ms"] += stats["total_ms"]
+                    agg["errors"].extend(stats.get("errors", []))
+                    agg["errors"] = agg["errors"][-5:]  # keep last 5 unique-ish errors
+            except Exception:
+                continue
+
+        # Compute averages
+        for stats in all_summaries.values():
+            if stats["calls"]:
+                stats["avg_ms"] = round(stats["total_ms"] / stats["calls"], 2)
+                stats["success_rate"] = round(stats["successes"] / stats["calls"] * 100, 1)
+            else:
+                stats["avg_ms"] = 0.0
+                stats["success_rate"] = 0.0
+
+        return _json_response({
+            "skills": all_summaries,
+            "total_calls": sum(s["calls"] for s in all_summaries.values()),
         })
