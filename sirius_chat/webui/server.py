@@ -104,6 +104,7 @@ class WebUIServer:
         self.app.router.add_get("/api/personas/{name}/persona", self.api_persona_get)
         self.app.router.add_post("/api/personas/{name}/persona/save", self.api_persona_save)
         self.app.router.add_post("/api/personas/{name}/persona/keywords", self.api_persona_keywords)
+        self.app.router.add_get("/api/personas/{name}/persona/interview", self.api_persona_interview_get)
         self.app.router.add_post("/api/personas/{name}/persona/interview", self.api_persona_interview)
 
         # 模型编排
@@ -390,10 +391,34 @@ class WebUIServer:
                 p_name, keywords, provider_async=provider, model=model
             )
             persona.aliases = aliases
+            # 自动生成并保存到当前人格目录
+            pdir = self.persona_manager.get_persona_dir(name)
+            PersonaStore.save(pdir, persona)
+            self.persona_manager.reload_persona(name)
             return _json_response({"success": True, "persona": asdict(persona)})
         except Exception as exc:
             LOG.exception("关键词人格生成失败")
             return _json_response({"error": str(exc)}, 500)
+
+    async def api_persona_interview_get(self, request: web.Request) -> web.Response:
+        """读取已保存的 interview 问卷答案。"""
+        name = _get_name(request)
+        pdir = self.persona_manager.get_persona_dir(name)
+        record_path = pdir / "engine_state" / "persona_interview_record.json"
+        pending_path = pdir / "engine_state" / "pending_persona_interview.json"
+        target = record_path if record_path.exists() else pending_path
+        if not target.exists():
+            return _json_response({"answers": {}, "name": "", "aliases": []})
+        try:
+            data = json.loads(target.read_text(encoding="utf-8"))
+            return _json_response({
+                "answers": data.get("answers", {}),
+                "name": data.get("name", ""),
+                "aliases": data.get("aliases", []),
+            })
+        except Exception as exc:
+            LOG.warning("读取 interview 记录失败: %s", exc)
+            return _json_response({"answers": {}, "name": "", "aliases": []})
 
     async def api_persona_interview(self, request: web.Request) -> web.Response:
         name = _get_name(request)
@@ -422,6 +447,9 @@ class WebUIServer:
                 aliases=aliases,
                 model=model,
             )
+            # 自动生成并保存到当前人格目录
+            PersonaStore.save(pdir, persona)
+            self.persona_manager.reload_persona(name)
             return _json_response({"success": True, "persona": asdict(persona)})
         except Exception as exc:
             LOG.exception("问卷人格生成失败")

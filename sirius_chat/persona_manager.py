@@ -260,6 +260,8 @@ class PersonaManager:
 
         # 1. 迁移人格定义
         src_persona = source / "engine_state" / "persona.json"
+        if not src_persona.exists():
+            src_persona = source / "persona.json"
         if src_persona.exists():
             shutil.copy2(str(src_persona), str(paths.persona))
             LOG.info("迁移 persona.json")
