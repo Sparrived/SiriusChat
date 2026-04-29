@@ -10,6 +10,52 @@ let adapterGroupIds = [];
 let adapterPrivateIds = [];
 
 function $(id) { return document.getElementById(id); }
+
+/* ── Animation helpers ──────────────────────────────── */
+
+function animateNumber(el, target, duration = 600) {
+  if (!el) return;
+  const start = parseInt(el.textContent.replace(/,/g, '') || '0', 10) || 0;
+  if (start === target) return;
+  const startTime = performance.now();
+  function tick(now) {
+    const elapsed = now - startTime;
+    const progress = Math.min(elapsed / duration, 1);
+    const eased = 1 - Math.pow(1 - progress, 3);
+    const current = Math.round(start + (target - start) * eased);
+    el.textContent = String(current);
+    if (progress < 1) requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+}
+
+function flashSuccess(btn) {
+  if (!btn) return;
+  const prev = btn.textContent;
+  btn.classList.add('btn-success-flash');
+  btn.textContent = '✓ ' + prev;
+  btn.disabled = true;
+  setTimeout(() => {
+    btn.classList.remove('btn-success-flash');
+    btn.textContent = prev;
+    btn.disabled = false;
+  }, 1200);
+}
+
+function applyStagger(containerSelector, childSelector) {
+  const container = typeof containerSelector === 'string'
+    ? document.querySelector(containerSelector)
+    : containerSelector;
+  if (!container) return;
+  container.classList.add('animate-stagger');
+  const children = childSelector
+    ? container.querySelectorAll(childSelector)
+    : container.children;
+  Array.from(children).forEach((child, i) => {
+    child.style.setProperty('--i', String(i));
+  });
+}
+
 function toast(msg, type = 'success') {
   const t = $('toast');
   t.textContent = msg;
@@ -64,6 +110,11 @@ async function navTo(page) {
     container.innerHTML = `<div class="card"><h2>加载失败</h2><p>无法加载页面：${page}</p><pre style="color:var(--text-2);font-size:12px">${e.message}</pre></div>`;
     console.error('navTo error:', e);
   }
+
+  // 页面切换入场动画
+  container.classList.remove('animate-fade-in');
+  void container.offsetWidth; // force reflow
+  container.classList.add('animate-fade-in');
 
   // 页面加载后重新填充人格下拉框
   renderPersonaSelect();
@@ -146,8 +197,13 @@ async function loadPersonaStatus() {
 function updateSidebar() {
   const running = personas.filter((p) => p.running).length;
   $('sbCurrentPersona').textContent = currentPersona ? (personaState.persona_name || currentPersona) : '—';
-  $('sbPersonaCount').textContent = String(personas.length);
-  $('sbRunningCount').textContent = String(running);
+  animateNumber($('sbPersonaCount'), personas.length, 400);
+  animateNumber($('sbRunningCount'), running, 400);
+  const dot = $('sbRunningDot');
+  if (dot) {
+    dot.classList.toggle('ok', running > 0);
+    dot.classList.toggle('pulse', running > 0);
+  }
 }
 
 function formatHeartbeat(ts) {
@@ -189,9 +245,11 @@ function renderPersonaCards() {
   `;
   }).join('');
 
-  $('dashPersonaCount').textContent = String(personas.length);
-  $('dashRunningCount').textContent = String(personas.filter((p) => p.running).length);
-  $('dashStoppedCount').textContent = String(personas.filter((p) => !p.running).length);
+  applyStagger(el, '.persona-card');
+
+  animateNumber($('dashPersonaCount'), personas.length, 500);
+  animateNumber($('dashRunningCount'), personas.filter((p) => p.running).length, 500);
+  animateNumber($('dashStoppedCount'), personas.filter((p) => !p.running).length, 500);
 
   // 更新选中人格详细信息
   const sp = personas.find((p) => p.name === currentPersona);
@@ -239,6 +297,7 @@ async function loadTelemetry() {
         </div>
       `;
     }).join('');
+    applyStagger(container, '.stat-card');
   } catch (e) {
     container.innerHTML = '<div style="color:var(--text-2);padding:12px">统计加载失败</div>';
   }
@@ -450,6 +509,7 @@ async function saveProviders() {
   if (res.success) {
     providerEditIndex = -1;
     providerBackup = null;
+    flashSuccess(document.activeElement);
   }
   loadProviders();
 }
@@ -496,6 +556,7 @@ async function savePersonaForm() {
     }
   });
   toast(res.success ? '人格已保存' : res.error || '保存失败', res.success ? 'success' : 'error');
+  if (res.success) flashSuccess(document.activeElement);
   loadPersonaStatus();
 }
 
@@ -623,6 +684,7 @@ async function saveOrchestration() {
     vision_model: $('orchVision').value,
   });
   toast(res.success ? '模型编排已保存' : res.error || '失败', res.success ? 'success' : 'error');
+  if (res.success) flashSuccess(document.activeElement);
 }
 
 // ── Groups ────────────────────────────────────────────
@@ -690,6 +752,7 @@ async function saveAdapters() {
   });
   toast(res.success ? 'Adapter 配置已保存' : res.error || '保存失败', res.success ? 'success' : 'error');
   if (res.success) {
+    flashSuccess(document.activeElement);
     const refreshed = await get(pApi('/adapters'));
     personaState.adapters = refreshed.adapters || [];
     const a = personaState.adapters[0] || {};
@@ -831,6 +894,7 @@ async function saveGlobalSettings() {
     napcat_base_port: parseInt($('gsNapcatPort').value, 10),
   });
   toast(res.success ? '全局设置已保存' : res.error || '保存失败', res.success ? 'success' : 'error');
+  if (res.success) flashSuccess(document.activeElement);
 }
 
 // ── Experience ────────────────────────────────────────
@@ -883,6 +947,7 @@ async function saveExperience() {
     }
   });
   toast(res.success ? '体验参数已保存' : res.error || '保存失败', res.success ? 'success' : 'error');
+  if (res.success) flashSuccess(document.activeElement);
 }
 
 // ── Init ──────────────────────────────────────────────
