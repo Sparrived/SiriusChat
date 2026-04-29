@@ -148,7 +148,6 @@ class WebUIServer:
         return _json_response({
             "webui_host": "0.0.0.0",
             "webui_port": 8080,
-            "auto_manage_napcat": False,
             "napcat_install_dir": "",
             "napcat_base_port": 3001,
             "log_level": "INFO",
@@ -166,7 +165,7 @@ class WebUIServer:
                 existing = json.loads(path.read_text(encoding="utf-8"))
             # 只更新允许的字段
             allowed = {
-                "webui_host", "webui_port", "auto_manage_napcat",
+                "webui_host", "webui_port",
                 "napcat_install_dir", "napcat_base_port", "log_level",
                 "setup_completed", "setup_wizard_running",
             }

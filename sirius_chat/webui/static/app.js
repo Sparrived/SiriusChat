@@ -705,7 +705,7 @@ async function loadGlobalSettings() {
     $('gsLogLevel').value = res.log_level || 'INFO';
     $('gsNapcatDir').value = res.napcat_install_dir || '';
     $('gsNapcatPort').value = res.napcat_base_port || 3001;
-    $('gsAutoNapcat').value = String(res.auto_manage_napcat === true);
+    // NapCat 自动管理默认启用，无需配置
   } catch (e) {}
 }
 
@@ -716,7 +716,6 @@ async function saveGlobalSettings() {
     log_level: $('gsLogLevel').value,
     napcat_install_dir: $('gsNapcatDir').value,
     napcat_base_port: parseInt($('gsNapcatPort').value, 10),
-    auto_manage_napcat: $('gsAutoNapcat').value === 'true',
   });
   toast(res.success ? '全局设置已保存' : res.error || '保存失败', res.success ? 'success' : 'error');
 }
