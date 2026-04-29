@@ -818,21 +818,27 @@ async function reloadEngine() {
 async function ncLoadStatus() {
   try {
     const res = await get('/napcat/status');
+    const elInstalled = $('ncInstalled');
+    const elRunning = $('ncRunning');
+    const elQQ = $('ncQQ');
     if (!res.enabled) {
-      $('ncInstalled').textContent = '管理未启用';
-      $('ncRunning').textContent = '管理未启用';
-      $('ncQQ').textContent = '管理未启用';
+      if (elInstalled) elInstalled.textContent = '管理未启用';
+      if (elRunning) elRunning.textContent = '管理未启用';
+      if (elQQ) elQQ.textContent = '管理未启用';
       return;
     }
     const installed = res.installed ? '✅ 已安装' : '❌ 未安装';
     const running = res.running ? '✅ 运行中' : '⏹ 已停止';
     const qq = res.qq_installed ? '✅ 已安装' : '❌ 未检测到';
-    $('ncInstalled').textContent = installed;
-    $('ncRunning').textContent = running;
-    $('ncQQ').textContent = qq + (res.qq_path ? ` (${res.qq_path})` : '');
-    $('ncInstallBtn').style.display = res.installed ? 'none' : 'inline-flex';
-    $('ncStartBtn').style.display = res.installed ? 'inline-flex' : 'none';
-    $('ncStopBtn').style.display = res.running ? 'inline-flex' : 'none';
+    if (elInstalled) elInstalled.textContent = installed;
+    if (elRunning) elRunning.textContent = running;
+    if (elQQ) elQQ.textContent = qq + (res.qq_path ? ` (${res.qq_path})` : '');
+    const installBtn = $('ncInstallBtn');
+    const startBtn = $('ncStartBtn');
+    const stopBtn = $('ncStopBtn');
+    if (installBtn) installBtn.style.display = res.installed ? 'none' : 'inline-flex';
+    if (startBtn) startBtn.style.display = res.installed ? 'inline-flex' : 'none';
+    if (stopBtn) stopBtn.style.display = res.running ? 'inline-flex' : 'none';
   } catch (e) {
     console.error('ncLoadStatus', e);
   }
