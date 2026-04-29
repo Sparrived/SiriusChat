@@ -124,7 +124,7 @@ async function navTo(page) {
     selectPersona(personas[0].name);
   }
 
-  if (page === 'dashboard') renderPersonaCards();
+  if (page === 'dashboard') { renderPersonaCards(); loadProviders(); loadTelemetry(); }
   if (page === 'global-settings') loadGlobalSettings();
   if (page === 'persona') loadPersonaPreview();
   if (page === 'create-persona') { renderInterviewQuestions(); loadAvailableModels(); }
