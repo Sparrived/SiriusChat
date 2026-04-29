@@ -1,42 +1,10 @@
 <div class="page active" id="page-persona">
   <div class="persona-bar">
     <label>当前人格</label>
-    <select class="persona-select" id="personaSelectPersona" onchange="selectPersona(this.value)">
-      <option>加载中...</option>
-    </select>
+    <div class="persona-select-bar"></div>
   </div>
   <div class="card">
     <h2>人格配置</h2>
-    <div class="section-title">关键词生成</div>
-    <div class="form-group">
-      <label>角色名称</label>
-      <input type="text" id="kwName" value="小星" placeholder="例如：小星">
-    </div>
-    <div class="form-group">
-      <label>关键词（空格分隔）</label>
-      <input type="text" id="kwKeywords" placeholder="例如：温柔 猫奴 二次元">
-    </div>
-    <div class="form-group">
-      <label>别名（可选，空格分隔）</label>
-      <input type="text" id="kwAliases" placeholder="例如：星酱 星星">
-    </div>
-    <button class="btn" onclick="generatePersonaKeywords()">✨ 生成人格</button>
-    <div id="kwResult" style="margin-top:16px"></div>
-
-    <div class="section-title">问卷深度定制</div>
-    <div id="interviewQuestions"></div>
-    <div class="form-group">
-      <label>角色名称</label>
-      <input type="text" id="ivName" value="小星">
-    </div>
-    <div class="form-group">
-      <label>别名（空格分隔）</label>
-      <input type="text" id="ivAliases" placeholder="例如：星酱 星星">
-    </div>
-    <button class="btn" onclick="generatePersonaInterview()">✨ 生成人格</button>
-    <div id="ivResult" style="margin-top:16px"></div>
-
-    <div class="section-title">当前人格</div>
     <div id="personaForm">
       <div class="row">
         <div class="col"><div class="form-group"><label>名称</label><input type="text" id="pfName"></div></div>
