@@ -33,9 +33,11 @@ function pApi(path) {
 // ── Navigation ────────────────────────────────────────
 const pageTitles = {
   dashboard: ['概览', 'Dashboard'],
+  'global-settings': ['全局设置', 'Configuration / Global'],
   providers: ['Provider 配置', 'Configuration / Providers'],
   persona: ['人格配置', 'Configuration / Persona'],
   orchestration: ['模型编排', 'Configuration / Orchestration'],
+  experience: ['体验参数', 'Configuration / Experience'],
   groups: ['群管理', 'Configuration / Groups'],
   napcat: ['NapCat 管理', 'Platform / NapCat'],
 };
@@ -49,8 +51,10 @@ function navTo(page) {
   const t = pageTitles[page];
   $('pageTitle').textContent = t[0];
   $('pageBreadcrumb').textContent = t[1];
+  if (page === 'global-settings') loadGlobalSettings();
   if (page === 'persona') loadPersonaPreview();
   if (page === 'orchestration') loadOrchestration();
+  if (page === 'experience') loadExperience();
   if (page === 'groups') loadGroups();
 }
 
@@ -92,8 +96,10 @@ async function loadPersonaStatus() {
     personaState = await get(pApi(''));
     updateSidebar();
     if (currentPage === 'dashboard') renderPersonaCards();
+    if (currentPage === 'global-settings') loadGlobalSettings();
     if (currentPage === 'persona') loadPersonaPreview();
     if (currentPage === 'orchestration') loadOrchestration();
+    if (currentPage === 'experience') loadExperience();
     if (currentPage === 'groups') loadGroups();
   } catch (e) {
     console.error('loadPersonaStatus', e);
@@ -107,6 +113,17 @@ function updateSidebar() {
   $('sbRunningCount').textContent = String(running);
 }
 
+function formatHeartbeat(ts) {
+  if (!ts) return '—';
+  const d = new Date(ts);
+  const now = new Date();
+  const diff = (now - d) / 1000;
+  if (diff < 5) return '刚刚';
+  if (diff < 60) return `${Math.floor(diff)}秒前`;
+  if (diff < 3600) return `${Math.floor(diff / 60)}分钟前`;
+  return d.toLocaleString();
+}
+
 function renderPersonaCards() {
   const el = $('personaCards');
   if (!personas.length) {
@@ -115,12 +132,14 @@ function renderPersonaCards() {
   }
   el.innerHTML = personas.map((p) => {
     const port = p.adapters?.[0]?.ws_url?.split(':').pop() || '—';
+    const hb = formatHeartbeat(p.heartbeat_at);
     return `
     <div class="persona-card ${p.running ? 'running' : ''}">
       <div class="p-port">端口 ${port}</div>
       <div class="p-name">${p.persona_name || p.name}</div>
-      <div class="p-meta">${p.name}</div>
-      <div class="p-status">${p.running ? '● 运行中' : '○ 已停止'}</div>
+      <div class="p-meta">${p.persona_summary || p.name}</div>
+      <div class="p-status">${p.running ? '● 运行中' : (p.status === 'stale' ? '○ 心跳超时' : '○ 已停止')}</div>
+      <div style="font-size:11px;color:var(--text-2);margin-bottom:8px">心跳: ${hb}</div>
       <div class="p-actions">
         ${p.running
           ? `<button class="btn danger" onclick="stopPersona('${p.name}')">⏹ 停止</button>`
@@ -133,7 +152,24 @@ function renderPersonaCards() {
 
   $('dashPersonaCount').textContent = String(personas.length);
   $('dashRunningCount').textContent = String(personas.filter((p) => p.running).length);
-  $('dashNapcatCount').textContent = String(personas.filter((p) => p.adapters_count > 0).length);
+  $('dashStoppedCount').textContent = String(personas.filter((p) => !p.running).length);
+
+  // 更新选中人格详细信息
+  const sp = personas.find((p) => p.name === currentPersona);
+  const ds = $('dashSelectedInfo');
+  if (sp) {
+    ds.style.display = '';
+    $('dsName').textContent = sp.persona_name || sp.name;
+    $('dsSummary').textContent = sp.persona_summary || '暂无描述';
+    $('dsTags').innerHTML = (sp.persona_summary || '').split(/[,，]/).filter(Boolean).slice(0,5).map((t) => `<span class="tag">${t.trim()}</span>`).join('');
+    $('dsStatus').textContent = sp.running ? '运行中' : (sp.status === 'stale' ? '心跳超时' : '已停止');
+    $('dsHeartbeat').textContent = formatHeartbeat(sp.heartbeat_at);
+    $('dsPid').textContent = sp.pid || '—';
+    $('dsAdapters').textContent = String(sp.adapters_count || 0);
+    $('dsPort').textContent = sp.adapters?.[0]?.ws_url?.split(':').pop() || '—';
+  } else {
+    ds.style.display = 'none';
+  }
 }
 
 async function startPersona(name) {
@@ -158,18 +194,48 @@ async function loadProviders() {
   } catch (e) {}
 }
 
+function _renderProviderModels(i) {
+  const p = providerDraft[i];
+  const models = p.models || [];
+  const tags = models.map((m, mi) => `<span class="tag">${m} <span class="remove" onclick="providerDraft[${i}].models.splice(${mi},1);_renderProviderDraft()">✕</span></span>`).join('');
+  return `
+    <div style="margin-top:6px">
+      <div style="display:flex;gap:6px">
+        <input type="text" placeholder="添加模型名" id="pmodel-${i}" style="flex:1;font-size:12px" onkeydown="if(event.key==='Enter'){_addProviderModel(${i})}">
+        <button class="btn small" onclick="_addProviderModel(${i})">添加</button>
+      </div>
+      <div class="tag-list" style="margin-top:4px">${tags}</div>
+    </div>
+  `;
+}
+
+function _addProviderModel(i) {
+  const input = $(`pmodel-${i}`);
+  const v = input.value.trim();
+  if (!v) return;
+  providerDraft[i].models = providerDraft[i].models || [];
+  if (!providerDraft[i].models.includes(v)) {
+    providerDraft[i].models.push(v);
+  }
+  input.value = '';
+  _renderProviderDraft();
+}
+
 function _renderProviderDraft() {
   const el = $('providerList');
   el.innerHTML = providerDraft
     .map(
       (p, i) => `
-    <div class="provider-row">
-      <input placeholder="平台" value="${p.type || ''}" oninput="providerDraft[${i}].type=this.value">
-      <input placeholder="Base URL" value="${p.base_url || ''}" oninput="providerDraft[${i}].base_url=this.value">
-      <input type="password" placeholder="API Key" value="${p.api_key || ''}" oninput="providerDraft[${i}].api_key=this.value">
-      <input placeholder="Model" value="${p.healthcheck_model || ''}" oninput="providerDraft[${i}].healthcheck_model=this.value">
-      <button class="btn small" onclick="providerDraft[${i}].enabled=!providerDraft[${i}].enabled;_renderProviderDraft()">${providerDraft[i].enabled !== false ? '启用' : '禁用'}</button>
-      <button class="btn small danger" onclick="providerDraft.splice(${i},1);_renderProviderDraft()">✕</button>
+    <div class="provider-row" style="flex-wrap:wrap;margin-bottom:12px;padding:12px;background:var(--bg);border-radius:8px">
+      <div style="display:flex;gap:8px;flex-wrap:wrap;width:100%;margin-bottom:6px">
+        <input placeholder="平台" value="${p.type || ''}" oninput="providerDraft[${i}].type=this.value" style="flex:1;min-width:120px">
+        <input placeholder="Base URL" value="${p.base_url || ''}" oninput="providerDraft[${i}].base_url=this.value" style="flex:2;min-width:200px">
+        <input type="password" placeholder="API Key" value="${p.api_key || ''}" oninput="providerDraft[${i}].api_key=this.value" style="flex:2;min-width:200px">
+        <input placeholder="健康检查模型" value="${p.healthcheck_model || ''}" oninput="providerDraft[${i}].healthcheck_model=this.value" style="flex:1;min-width:120px">
+        <button class="btn small" onclick="providerDraft[${i}].enabled=!providerDraft[${i}].enabled;_renderProviderDraft()">${providerDraft[i].enabled !== false ? '启用' : '禁用'}</button>
+        <button class="btn small danger" onclick="providerDraft.splice(${i},1);_renderProviderDraft()">✕</button>
+      </div>
+      ${_renderProviderModels(i)}
     </div>
   `
     )
@@ -192,9 +258,44 @@ async function loadPersonaPreview() {
   if (!currentPersona) return;
   try {
     const res = await get(pApi('/persona'));
-    const text = res.persona ? JSON.stringify(res.persona, null, 2) : '尚未配置人格。';
-    $('personaPreview').textContent = text;
+    const p = res.persona || {};
+    $('pfName').value = p.name || '';
+    $('pfAliases').value = (p.aliases || []).join(' ');
+    $('pfSocialRole').value = p.social_role || 'caregiver';
+    $('pfSummary').value = p.persona_summary || '';
+    $('pfTraits').value = (p.personality_traits || []).join('，');
+    $('pfStyle').value = p.communication_style || '';
+    $('pfCatchphrases').value = (p.catchphrases || []).join('，');
+    $('pfEmoji').value = p.emoji_preference || 'moderate';
+    $('pfHumor').value = p.humor_style || 'wholesome';
+    $('pfEmpathy').value = p.empathy_style || 'warm';
+    $('pfBoundaries').value = (p.boundaries || []).join('，');
+    $('pfTaboos').value = (p.taboo_topics || []).join('，');
+    $('pfBackstory').value = p.backstory || '';
   } catch (e) {}
+}
+
+async function savePersonaForm() {
+  if (!currentPersona) { toast('请先选择人格', 'error'); return; }
+  const res = await post(pApi('/persona/save'), {
+    persona: {
+      name: $('pfName').value.trim(),
+      aliases: $('pfAliases').value.split(/\s+/).filter(Boolean),
+      social_role: $('pfSocialRole').value,
+      persona_summary: $('pfSummary').value.trim(),
+      personality_traits: $('pfTraits').value.split(/[,，]/).map(s => s.trim()).filter(Boolean),
+      communication_style: $('pfStyle').value.trim(),
+      catchphrases: $('pfCatchphrases').value.split(/[,，]/).map(s => s.trim()).filter(Boolean),
+      emoji_preference: $('pfEmoji').value,
+      humor_style: $('pfHumor').value,
+      empathy_style: $('pfEmpathy').value,
+      boundaries: $('pfBoundaries').value.split(/[,，]/).map(s => s.trim()).filter(Boolean),
+      taboo_topics: $('pfTaboos').value.split(/[,，]/).map(s => s.trim()).filter(Boolean),
+      backstory: $('pfBackstory').value.trim(),
+    }
+  });
+  toast(res.success ? '人格已保存' : res.error || '保存失败', res.success ? 'success' : 'error');
+  loadPersonaStatus();
 }
 
 async function savePersona(jsonStr) {
@@ -451,10 +552,88 @@ async function ncLoadLogs() {
   } catch (e) {}
 }
 
+// ── Global Settings ───────────────────────────────────
+async function loadGlobalSettings() {
+  try {
+    const res = await get('/global-config');
+    $('gsHost').value = res.webui_host || '0.0.0.0';
+    $('gsPort').value = res.webui_port || 8080;
+    $('gsLogLevel').value = res.log_level || 'INFO';
+    $('gsNapcatDir').value = res.napcat_install_dir || '';
+    $('gsNapcatPort').value = res.napcat_base_port || 3001;
+    $('gsAutoNapcat').value = String(res.auto_manage_napcat === true);
+  } catch (e) {}
+}
+
+async function saveGlobalSettings() {
+  const res = await post('/global-config', {
+    webui_host: $('gsHost').value,
+    webui_port: parseInt($('gsPort').value, 10),
+    log_level: $('gsLogLevel').value,
+    napcat_install_dir: $('gsNapcatDir').value,
+    napcat_base_port: parseInt($('gsNapcatPort').value, 10),
+    auto_manage_napcat: $('gsAutoNapcat').value === 'true',
+  });
+  toast(res.success ? '全局设置已保存' : res.error || '保存失败', res.success ? 'success' : 'error');
+}
+
+// ── Experience ────────────────────────────────────────
+async function loadExperience() {
+  if (!currentPersona) return;
+  try {
+    const res = await get(pApi('/experience'));
+    const e = res.experience || {};
+    $('expReplyMode').value = e.reply_mode || 'auto';
+    $('expSensitivity').value = e.engagement_sensitivity ?? 0.5;
+    $('expHeatWindow').value = e.heat_window_seconds ?? 60;
+    $('expProactive').value = String(e.proactive_enabled !== false);
+    $('expProactiveInterval').value = e.proactive_interval_seconds ?? 300;
+    $('expDelayReply').value = String(e.delay_reply_enabled !== false);
+    $('expPendingThreshold').value = e.pending_message_threshold ?? 4;
+    $('expMinReplyInterval').value = e.min_reply_interval_seconds ?? 0;
+    $('expReplyFreqWindow').value = e.reply_frequency_window_seconds ?? 60;
+    $('expReplyFreqMax').value = e.reply_frequency_max_replies ?? 8;
+    $('expExemptMention').value = String(e.reply_frequency_exempt_on_mention !== false);
+    $('expMaxConcurrent').value = e.max_concurrent_llm_calls ?? 1;
+    $('expEnableSkills').value = String(e.enable_skills !== false);
+    $('expMaxSkillRounds').value = e.max_skill_rounds ?? 3;
+    $('expSkillTimeout').value = e.skill_execution_timeout ?? 30;
+    $('expAutoInstallDeps').value = String(e.auto_install_skill_deps !== false);
+    $('expMemoryDepth').value = e.memory_depth || 'deep';
+  } catch (e) {}
+}
+
+async function saveExperience() {
+  if (!currentPersona) { toast('请先选择人格', 'error'); return; }
+  const res = await post(pApi('/experience'), {
+    experience: {
+      reply_mode: $('expReplyMode').value,
+      engagement_sensitivity: parseFloat($('expSensitivity').value),
+      heat_window_seconds: parseFloat($('expHeatWindow').value),
+      proactive_enabled: $('expProactive').value === 'true',
+      proactive_interval_seconds: parseFloat($('expProactiveInterval').value),
+      delay_reply_enabled: $('expDelayReply').value === 'true',
+      pending_message_threshold: parseFloat($('expPendingThreshold').value),
+      min_reply_interval_seconds: parseFloat($('expMinReplyInterval').value),
+      reply_frequency_window_seconds: parseFloat($('expReplyFreqWindow').value),
+      reply_frequency_max_replies: parseInt($('expReplyFreqMax').value, 10),
+      reply_frequency_exempt_on_mention: $('expExemptMention').value === 'true',
+      max_concurrent_llm_calls: parseInt($('expMaxConcurrent').value, 10),
+      enable_skills: $('expEnableSkills').value === 'true',
+      max_skill_rounds: parseInt($('expMaxSkillRounds').value, 10),
+      skill_execution_timeout: parseFloat($('expSkillTimeout').value),
+      auto_install_skill_deps: $('expAutoInstallDeps').value === 'true',
+      memory_depth: $('expMemoryDepth').value,
+    }
+  });
+  toast(res.success ? '体验参数已保存' : res.error || '保存失败', res.success ? 'success' : 'error');
+}
+
 // ── Init ──────────────────────────────────────────────
 renderInterviewQuestions();
 loadPersonas();
 loadProviders();
+loadGlobalSettings();
 ncLoadStatus();
 setInterval(() => {
   loadPersonas();

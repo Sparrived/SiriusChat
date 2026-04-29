@@ -65,6 +65,8 @@ class WebUIServer:
         self.app.router.add_static("/static/", static_dir)
 
         # ─── 全局 API ─────────────────────────────────────────
+        self.app.router.add_get("/api/global-config", self.api_global_config_get)
+        self.app.router.add_post("/api/global-config", self.api_global_config_post)
         self.app.router.add_get("/api/providers", self.api_providers_get)
         self.app.router.add_post("/api/providers", self.api_providers_post)
         self.app.router.add_get("/api/napcat/status", self.api_napcat_status)
@@ -129,6 +131,57 @@ class WebUIServer:
         if html_path.exists():
             return web.FileResponse(html_path)
         return web.Response(text="WebUI not found", status=404)
+
+    # ─── 全局 API: 全局配置 ───────────────────────────────
+
+    def _global_config_path(self) -> Path:
+        return Path(self.persona_manager.data_path) / "global_config.json"
+
+    async def api_global_config_get(self, request: web.Request) -> web.Response:
+        path = self._global_config_path()
+        if path.exists():
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                return _json_response(data)
+            except Exception:
+                pass
+        return _json_response({
+            "webui_host": "0.0.0.0",
+            "webui_port": 8080,
+            "auto_manage_napcat": False,
+            "napcat_install_dir": "",
+            "napcat_base_port": 3001,
+            "log_level": "INFO",
+        })
+
+    async def api_global_config_post(self, request: web.Request) -> web.Response:
+        try:
+            body = await request.json()
+        except Exception:
+            return _json_response({"error": "Invalid JSON"}, 400)
+        path = self._global_config_path()
+        try:
+            existing = {}
+            if path.exists():
+                existing = json.loads(path.read_text(encoding="utf-8"))
+            # 只更新允许的字段
+            allowed = {
+                "webui_host", "webui_port", "auto_manage_napcat",
+                "napcat_install_dir", "napcat_base_port", "log_level",
+                "setup_completed", "setup_wizard_running",
+            }
+            for key in allowed:
+                if key in body:
+                    existing[key] = body[key]
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(path.suffix + ".tmp")
+            tmp.write_text(json.dumps(existing, ensure_ascii=False, indent=2), encoding="utf-8")
+            tmp.replace(path)
+            LOG.info("全局配置已更新: %s", existing)
+            return _json_response({"success": True, "message": "全局配置已保存"})
+        except Exception as exc:
+            LOG.exception("保存全局配置失败")
+            return _json_response({"error": str(exc)}, 500)
 
     # ─── 全局 API: Provider ───────────────────────────────
 

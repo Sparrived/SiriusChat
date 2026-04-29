@@ -38,15 +38,24 @@
       </button>
     </div>
     <div class="nav-group">
-      <div class="nav-group-title">配置</div>
+      <div class="nav-group-title">全局</div>
+      <button class="nav-item" data-page="global-settings" onclick="navTo('global-settings')">
+        <span class="icon">🌍</span> 全局设置
+      </button>
       <button class="nav-item" data-page="providers" onclick="navTo('providers')">
         <span class="icon">🔌</span> Provider
       </button>
+    </div>
+    <div class="nav-group">
+      <div class="nav-group-title">人格配置</div>
       <button class="nav-item" data-page="persona" onclick="navTo('persona')">
         <span class="icon">🎭</span> 人格
       </button>
       <button class="nav-item" data-page="orchestration" onclick="navTo('orchestration')">
         <span class="icon">⚙️</span> 模型编排
+      </button>
+      <button class="nav-item" data-page="experience" onclick="navTo('experience')">
+        <span class="icon">🎚️</span> 体验参数
       </button>
       <button class="nav-item" data-page="groups" onclick="navTo('groups')">
         <span class="icon">👥</span> 群管理
@@ -115,8 +124,34 @@
         <div class="value" id="dashRunningCount">0</div>
       </div>
       <div class="stat-card">
-        <div class="label">NapCat 实例</div>
-        <div class="value" id="dashNapcatCount">0</div>
+        <div class="label">已停止</div>
+        <div class="value" id="dashStoppedCount">0</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" id="dashSelectedInfo" style="display:none">
+    <h2>当前选中人格</h2>
+    <div style="display:flex;gap:20px;align-items:flex-start;flex-wrap:wrap">
+      <div style="flex:1;min-width:240px">
+        <div style="font-size:20px;font-weight:600;margin-bottom:4px" id="dsName">—</div>
+        <div style="color:var(--text-2);font-size:13px;margin-bottom:12px" id="dsSummary">—</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px" id="dsTags"></div>
+        <div style="font-size:13px;color:var(--text-2)">
+          状态：<span id="dsStatus">—</span> &nbsp;|&nbsp;
+          最后心跳：<span id="dsHeartbeat">—</span> &nbsp;|&nbsp;
+          PID：<span id="dsPid">—</span>
+        </div>
+      </div>
+      <div style="min-width:140px">
+        <div class="stat-card" style="margin-bottom:8px">
+          <div class="label">Adapters</div>
+          <div class="value" id="dsAdapters">0</div>
+        </div>
+        <div class="stat-card">
+          <div class="label">端口</div>
+          <div class="value" id="dsPort">—</div>
+        </div>
       </div>
     </div>
   </div>
@@ -174,7 +209,41 @@
     <div id="ivResult" style="margin-top:16px"></div>
 
     <div class="section-title">当前人格</div>
-    <div id="personaPreview" class="preview-box">加载中...</div>
+    <div id="personaForm">
+      <div class="row">
+        <div class="col"><div class="form-group"><label>名称</label><input type="text" id="pfName"></div></div>
+        <div class="col"><div class="form-group"><label>别名（空格分隔）</label><input type="text" id="pfAliases"></div></div>
+        <div class="col"><div class="form-group"><label>社交角色</label>
+          <select id="pfSocialRole">
+            <option value="observer">观察者</option>
+            <option value="mediator">调解者</option>
+            <option value="leader">领导者</option>
+            <option value="jester">搞笑者</option>
+            <option value="caregiver">照顾者</option>
+          </select>
+        </div></div>
+      </div>
+      <div class="form-group"><label>一句话描述</label><input type="text" id="pfSummary"></div>
+      <div class="form-group"><label>性格标签（逗号分隔）</label><input type="text" id="pfTraits"></div>
+      <div class="form-group"><label>说话风格</label><textarea id="pfStyle" rows="2"></textarea></div>
+      <div class="form-group"><label>口头禅（逗号分隔）</label><input type="text" id="pfCatchphrases"></div>
+      <div class="row">
+        <div class="col"><div class="form-group"><label>Emoji 偏好</label>
+          <select id="pfEmoji"><option value="heavy">重度</option><option value="moderate">中度</option><option value="light">轻度</option><option value="none">无</option></select>
+        </div></div>
+        <div class="col"><div class="form-group"><label>幽默风格</label>
+          <select id="pfHumor"><option value="sarcastic">讽刺</option><option value="wholesome">温馨</option><option value="dark">黑暗</option><option value="dry">冷幽默</option><option value="witty">机智</option><option value="none">无</option></select>
+        </div></div>
+        <div class="col"><div class="form-group"><label>共情方式</label>
+          <select id="pfEmpathy"><option value="warm">温暖</option><option value="practical">实用</option><option value="distant">疏离</option><option value="playful"> playful</option><option value="mentor">导师</option></select>
+        </div></div>
+      </div>
+      <div class="form-group"><label>边界（逗号分隔）</label><input type="text" id="pfBoundaries"></div>
+      <div class="form-group"><label>禁忌话题（逗号分隔）</label><input type="text" id="pfTaboos"></div>
+      <div class="form-group"><label>背景故事</label><textarea id="pfBackstory" rows="3"></textarea></div>
+      <button class="btn success" onclick="savePersonaForm()">💾 保存人格</button>
+    </div>
+    <div id="personaPreview" class="preview-box" style="display:none">加载中...</div>
   </div>
 </div>
 
@@ -247,6 +316,213 @@
       <label><input type="checkbox" id="enablePrivateChat" checked> 启用私聊</label>
     </div>
     <button class="btn success" onclick="saveConfig()">💾 保存配置</button>
+  </div>
+</div>
+
+<!-- ── Global Settings ───────────────────────────────── -->
+<div class="page" id="page-global-settings">
+  <div class="card">
+    <h2>全局设置</h2>
+    <div class="row">
+      <div class="col">
+        <div class="form-group">
+          <label>WebUI 监听地址</label>
+          <input type="text" id="gsHost" value="0.0.0.0">
+        </div>
+      </div>
+      <div class="col">
+        <div class="form-group">
+          <label>WebUI 端口</label>
+          <input type="number" id="gsPort" value="8080">
+        </div>
+      </div>
+      <div class="col">
+        <div class="form-group">
+          <label>日志级别</label>
+          <select id="gsLogLevel">
+            <option value="DEBUG">DEBUG</option>
+            <option value="INFO">INFO</option>
+            <option value="WARNING">WARNING</option>
+            <option value="ERROR">ERROR</option>
+          </select>
+        </div>
+      </div>
+    </div>
+    <div class="row">
+      <div class="col">
+        <div class="form-group">
+          <label>NapCat 安装目录</label>
+          <input type="text" id="gsNapcatDir" placeholder="例如: D:\\Code\\sirius_chat\\napcat">
+        </div>
+      </div>
+      <div class="col">
+        <div class="form-group">
+          <label>NapCat 起始端口</label>
+          <input type="number" id="gsNapcatPort" value="3001">
+        </div>
+      </div>
+      <div class="col">
+        <div class="form-group">
+          <label>自动管理 NapCat</label>
+          <select id="gsAutoNapcat">
+            <option value="true">启用</option>
+            <option value="false">禁用</option>
+          </select>
+        </div>
+      </div>
+    </div>
+    <button class="btn success" onclick="saveGlobalSettings()">💾 保存全局设置</button>
+  </div>
+</div>
+
+<!-- ── Experience ────────────────────────────────────── -->
+<div class="page" id="page-experience">
+  <div class="persona-bar">
+    <label>当前人格</label>
+    <select class="persona-select" id="personaSelectExp" onchange="selectPersona(this.value)">
+      <option>加载中...</option>
+    </select>
+  </div>
+  <div class="card">
+    <h2>体验参数</h2>
+    <div class="row">
+      <div class="col">
+        <div class="form-group">
+          <label>回复模式</label>
+          <select id="expReplyMode">
+            <option value="auto">自动</option>
+            <option value="always">总是回复</option>
+            <option value="never">从不回复</option>
+          </select>
+        </div>
+      </div>
+      <div class="col">
+        <div class="form-group">
+          <label>参与敏感度 (0~1)</label>
+          <input type="number" id="expSensitivity" min="0" max="1" step="0.1" value="0.5">
+        </div>
+      </div>
+      <div class="col">
+        <div class="form-group">
+          <label>热度窗口 (秒)</label>
+          <input type="number" id="expHeatWindow" value="60">
+        </div>
+      </div>
+    </div>
+    <div class="row">
+      <div class="col">
+        <div class="form-group">
+          <label>主动行为</label>
+          <select id="expProactive">
+            <option value="true">启用</option>
+            <option value="false">禁用</option>
+          </select>
+        </div>
+      </div>
+      <div class="col">
+        <div class="form-group">
+          <label>主动间隔 (秒)</label>
+          <input type="number" id="expProactiveInterval" value="300">
+        </div>
+      </div>
+      <div class="col">
+        <div class="form-group">
+          <label>延迟回复</label>
+          <select id="expDelayReply">
+            <option value="true">启用</option>
+            <option value="false">禁用</option>
+          </select>
+        </div>
+      </div>
+    </div>
+    <div class="row">
+      <div class="col">
+        <div class="form-group">
+          <label>待处理消息阈值</label>
+          <input type="number" id="expPendingThreshold" value="4">
+        </div>
+      </div>
+      <div class="col">
+        <div class="form-group">
+          <label>最小回复间隔 (秒)</label>
+          <input type="number" id="expMinReplyInterval" value="0">
+        </div>
+      </div>
+      <div class="col">
+        <div class="form-group">
+          <label>回复频率窗口 (秒)</label>
+          <input type="number" id="expReplyFreqWindow" value="60">
+        </div>
+      </div>
+    </div>
+    <div class="row">
+      <div class="col">
+        <div class="form-group">
+          <label>频率窗口最大回复数</label>
+          <input type="number" id="expReplyFreqMax" value="8">
+        </div>
+      </div>
+      <div class="col">
+        <div class="form-group">
+          <label>提及豁免频率限制</label>
+          <select id="expExemptMention">
+            <option value="true">是</option>
+            <option value="false">否</option>
+          </select>
+        </div>
+      </div>
+      <div class="col">
+        <div class="form-group">
+          <label>最大并发 LLM 调用</label>
+          <input type="number" id="expMaxConcurrent" value="1">
+        </div>
+      </div>
+    </div>
+    <div class="row">
+      <div class="col">
+        <div class="form-group">
+          <label>启用 Skills</label>
+          <select id="expEnableSkills">
+            <option value="true">是</option>
+            <option value="false">否</option>
+          </select>
+        </div>
+      </div>
+      <div class="col">
+        <div class="form-group">
+          <label>最大 Skill 轮次</label>
+          <input type="number" id="expMaxSkillRounds" value="3">
+        </div>
+      </div>
+      <div class="col">
+        <div class="form-group">
+          <label>Skill 超时 (秒)</label>
+          <input type="number" id="expSkillTimeout" value="30">
+        </div>
+      </div>
+    </div>
+    <div class="row">
+      <div class="col">
+        <div class="form-group">
+          <label>自动安装 Skill 依赖</label>
+          <select id="expAutoInstallDeps">
+            <option value="true">是</option>
+            <option value="false">否</option>
+          </select>
+        </div>
+      </div>
+      <div class="col">
+        <div class="form-group">
+          <label>记忆深度</label>
+          <select id="expMemoryDepth">
+            <option value="shallow">浅</option>
+            <option value="moderate">中</option>
+            <option value="deep">深</option>
+          </select>
+        </div>
+      </div>
+    </div>
+    <button class="btn success" onclick="saveExperience()">💾 保存体验参数</button>
   </div>
 </div>
 
