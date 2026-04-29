@@ -639,7 +639,8 @@ const interviewQuestions = [
   'TA 在群里最真实的小习惯或记忆点是什么？什么细节会让人一看就觉得「这人很具体」？',
   '这个群聊角色的社交气质从什么经历里长出来？哪些过去的圈子、职业或成长环境塑造了 TA 的群体互动方式？',
 ];
-function renderInterviewQuestions() {
+async function renderInterviewQuestions() {
+  // 先渲染空表单
   $('interviewQuestions').innerHTML = interviewQuestions
     .map(
       (q, i) => `
@@ -650,6 +651,24 @@ function renderInterviewQuestions() {
   `
     )
     .join('');
+  // 若有已选人格，尝试加载已有 interview 答案
+  if (!currentPersona) return;
+  try {
+    const data = await get(pApi('/persona/interview'));
+    if (data.answers) {
+      interviewQuestions.forEach((_, i) => {
+        const v = data.answers[String(i + 1)];
+        if (v) {
+          const el = $(`ivAns${i}`);
+          if (el) el.value = v;
+        }
+      });
+    }
+    if (data.name) $('ivName').value = data.name;
+    if (data.aliases && data.aliases.length) $('ivAliases').value = data.aliases.join(' ');
+  } catch (e) {
+    // 静默失败：无记录时保持空表单
+  }
 }
 
 async function generatePersonaInterview() {

@@ -21,13 +21,22 @@ class PersonaStore:
     @staticmethod
     def _path(work_path: Any) -> Path:
         p = Path(work_path)
-        return p / "engine_state" / "persona.json"
+        return p / "persona.json"
 
     @classmethod
     def load(cls, work_path: Any) -> PersonaProfile | None:
         """Load persona from disk. Returns None if not found."""
         path = cls._path(work_path)
         if not path.exists():
+            # 向后兼容：旧版存放在 engine_state/ 下
+            legacy = Path(work_path) / "engine_state" / "persona.json"
+            if legacy.exists():
+                try:
+                    data = json.loads(legacy.read_text(encoding="utf-8"))
+                    return PersonaProfile.from_dict(data)
+                except (OSError, json.JSONDecodeError) as exc:
+                    logger.warning("Failed to load persona from %s: %s", legacy, exc)
+                    return None
             return None
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
