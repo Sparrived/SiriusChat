@@ -356,24 +356,31 @@ function _renderProviderDraft() {
     // 只读模式
     const modelsHtml = (p.models || []).map(m => `<span class="tag">${m}</span>`).join('');
     const urlDisplay = _shortUrl(p.base_url, p.type);
+    const enabled = p.enabled !== false;
     return `
     <div class="provider-row readonly">
       <div class="pv-header">
-        <div class="pv-title">
+        <div class="pv-header-left">
+          <div class="pv-status ${enabled?'on':'off'}" onclick="providerToggleEnabled(${i})" title="${enabled?'点击禁用':'点击启用'}"></div>
           <span class="pv-platform">${p.type || '未命名'}</span>
           ${builtin?'<span class="pv-badge builtin">内置</span>':''}
         </div>
         <div class="pv-actions">
-          <div class="toggle-switch${p.enabled!==false?' on':''}" onclick="providerToggleEnabled(${i})" title="${p.enabled!==false?'点击禁用':'点击启用'}"></div>
-          <button class="btn small" onclick="providerStartEdit(${i})">✏️ 编辑</button>
-          <button class="btn small danger" onclick="providerDraft.splice(${i},1);_renderProviderDraft()">✕</button>
+          <button class="btn small" onclick="providerStartEdit(${i})">编辑</button>
+          <button class="btn small danger" onclick="providerDraft.splice(${i},1);_renderProviderDraft()">删除</button>
         </div>
       </div>
-      <div class="pv-models">${modelsHtml||'<span style="color:var(--text-2);font-size:13px">暂无模型</span>'}</div>
-      <div class="pv-meta">
-        <div class="pv-meta-item"><span class="pv-meta-label">🔑</span><span class="pv-meta-val">${_maskKey(p.api_key)}</span></div>
-        <div class="pv-meta-item"><span class="pv-meta-label">🩺</span><span class="pv-meta-val">${p.healthcheck_model||'—'}</span></div>
-        <div class="pv-meta-item"><span class="pv-meta-label">🔗</span><span class="pv-meta-val" title="${p.base_url||''}">${urlDisplay}</span></div>
+      <div class="pv-section">
+        <div class="pv-section-label">模型</div>
+        <div class="pv-models">${modelsHtml||'<span style="color:var(--text-2);font-size:12px">暂无模型</span>'}</div>
+      </div>
+      <div class="pv-section">
+        <div class="pv-section-label">配置</div>
+        <div class="pv-meta">
+          <div class="pv-meta-item">🔑 <span class="mono">${_maskKey(p.api_key)}</span></div>
+          <div class="pv-meta-item">🩺 <span class="mono">${p.healthcheck_model||'—'}</span></div>
+          <div class="pv-meta-item">🔗 <span class="mono" title="${p.base_url||''}">${urlDisplay}</span></div>
+        </div>
       </div>
     </div>`;
   }).join('');
@@ -382,7 +389,7 @@ function _renderProviderDraft() {
 function addProvider() {
   if (providerEditIndex >= 0) providerCancelEdit();
   const idx = providerDraft.length;
-  providerDraft.push({ type: 'openai-compatible', base_url: 'https://', api_key: '', healthcheck_model: '', enabled: true, models: [] });
+  providerDraft.push({ type: 'openai-compatible', base_url: 'https://api.openai.com', api_key: '', healthcheck_model: '', enabled: true, models: [] });
   providerStartEdit(idx);
 }
 
