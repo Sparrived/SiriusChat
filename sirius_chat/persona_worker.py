@@ -169,10 +169,9 @@ class PersonaWorker:
     # 配置转换
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _build_plugin_config(experience: PersonaExperienceConfig) -> dict[str, Any]:
+    def _build_plugin_config(self, experience: PersonaExperienceConfig) -> dict[str, Any]:
         """将体验参数转换为 EngineRuntime 的 plugin_config。"""
-        return {
+        config: dict[str, Any] = {
             # 参与决策
             "sensitivity": experience.engagement_sensitivity,
             "reply_cooldown_seconds": int(experience.min_reply_interval_seconds),
@@ -195,6 +194,21 @@ class PersonaWorker:
             "skill_execution_timeout": experience.skill_execution_timeout,
             "memory_depth": experience.memory_depth,
         }
+        # 同项目其他 AI 的名字/别名，用于抑制"人类叫别的 AI 时当前 AI 抢话"
+        other_ai_names: list[str] = []
+        personas_dir = self.persona_dir.parent
+        if personas_dir.exists():
+            for subdir in personas_dir.iterdir():
+                if not subdir.is_dir() or subdir.name == self.persona_dir.name:
+                    continue
+                from sirius_chat.core.persona_store import PersonaStore
+                other_persona = PersonaStore.load(subdir)
+                if other_persona:
+                    other_ai_names.append(other_persona.name)
+                    other_ai_names.extend(other_persona.aliases)
+        if other_ai_names:
+            config["other_ai_names"] = list(dict.fromkeys(other_ai_names))
+        return config
 
     # ------------------------------------------------------------------
     # 心跳与状态
