@@ -77,7 +77,7 @@ async def _cmd_run(args: argparse.Namespace) -> None:
     global_mgr = NapCatManager(napcat_install_dir)
 
     # 1. 全局安装（只需要一次）
-    if not global_mgr.is_installed():
+    if not global_mgr.is_installed:
         LOG.info("NapCat 未安装，尝试自动安装...")
         result = await global_mgr.install()
         if result["success"]:
@@ -87,7 +87,7 @@ async def _cmd_run(args: argparse.Namespace) -> None:
             LOG.warning("请通过 WebUI 手动安装 NapCat")
 
     # 2. 为每个人格启动独立的 NapCat 实例
-    if global_mgr.is_installed():
+    if global_mgr.is_installed:
         for info in persona_manager.list_personas():
             name = info["name"]
             paths = persona_manager.get_persona_paths(name)
@@ -297,7 +297,7 @@ async def _cmd_persona_start(args: argparse.Namespace) -> None:
                 global_install_dir=napcat_install_dir,
                 persona_name=args.name,
             )
-            if not napcat_mgr.is_installed():
+            if not napcat_mgr.is_installed:
                 LOG.info("NapCat 未安装，尝试自动安装...")
                 result = await napcat_mgr.install()
                 if not result["success"]:

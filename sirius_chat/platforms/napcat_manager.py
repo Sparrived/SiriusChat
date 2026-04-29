@@ -79,15 +79,39 @@ class NapCatManager:
 
     # ── 状态检查 ─────────────────────────────────────────
 
+    @property
     def is_installed(self) -> bool:
         """检查 NapCat 是否已安装（通过核心文件 napcat.mjs 判断）。"""
         return (self.install_dir / "napcat.mjs").exists()
 
+    # 常见 QQ 安装路径（用于注册表失效时的回退检测）
+    _COMMON_QQ_PATHS: tuple[Path, ...] = (
+        Path(r"C:\Program Files\Tencent\QQNT\QQ.exe"),
+        Path(r"C:\Program Files (x86)\Tencent\QQNT\QQ.exe"),
+        Path(r"C:\Program Files\Tencent\QQ\Bin\QQ.exe"),
+        Path(r"C:\Program Files (x86)\Tencent\QQ\Bin\QQ.exe"),
+        Path.home() / "AppData" / "Local" / "Tencent" / "QQNT" / "QQ.exe",
+        Path.home() / "AppData" / "Roaming" / "Tencent" / "QQNT" / "QQ.exe",
+        Path.home() / "Tencent" / "QQNT" / "QQ.exe",
+    )
+
     @staticmethod
-    def is_qq_installed() -> bool:
-        """检查 QQ 是否通过注册表安装（仅 Windows）。"""
+    def _strip_quotes(value: str) -> str:
+        """去除注册表值首尾可能出现的引号。"""
+        v = value.strip()
+        if (v.startswith('"') and v.endswith('"')) or (v.startswith("'") and v.endswith("'")):
+            return v[1:-1]
+        return v
+
+    @classmethod
+    def is_qq_installed(cls) -> bool:
+        """检查 QQ 是否安装（仅 Windows）。
+
+        优先读取注册表，失败时回退到常见路径扫描。
+        """
         if sys.platform != "win32":
             return False
+        # 注册表检测
         try:
             import winreg
 
@@ -99,27 +123,66 @@ class NapCatManager:
             winreg.CloseKey(key)
             return True
         except Exception:
-            return False
+            pass
+        # 回退：扫描常见路径
+        for p in cls._COMMON_QQ_PATHS:
+            if p.exists():
+                return True
+        return False
 
-    @staticmethod
-    def get_qq_path() -> str | None:
-        """从注册表获取 QQ.exe 完整路径（仅 Windows）。"""
+    @classmethod
+    def get_qq_path(cls) -> str | None:
+        """获取 QQ.exe 完整路径（仅 Windows）。
+
+        依次尝试：
+        1. 注册表 UninstallString 推导
+        2. 注册表 InstallLocation 推导
+        3. 常见路径扫描
+        """
         if sys.platform != "win32":
             return None
-        try:
-            import winreg
+        import winreg
 
+        # 1. 尝试 UninstallString
+        try:
             key = winreg.OpenKey(
                 winreg.HKEY_LOCAL_MACHINE,
                 r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\QQ",
             )
             value, _ = winreg.QueryValueEx(key, "UninstallString")
             winreg.CloseKey(key)
-            uninstall_path = Path(value)
+            uninstall_path = Path(cls._strip_quotes(value))
             qq_path = uninstall_path.parent / "QQ.exe"
-            return str(qq_path) if qq_path.exists() else None
+            if qq_path.exists():
+                return str(qq_path)
         except Exception:
-            return None
+            pass
+
+        # 2. 尝试 InstallLocation
+        try:
+            key = winreg.OpenKey(
+                winreg.HKEY_LOCAL_MACHINE,
+                r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\QQ",
+            )
+            value, _ = winreg.QueryValueEx(key, "InstallLocation")
+            winreg.CloseKey(key)
+            install_dir = Path(cls._strip_quotes(value))
+            candidates = [
+                install_dir / "QQ.exe",
+                install_dir / "QQNT" / "QQ.exe",
+                install_dir / "Bin" / "QQ.exe",
+            ]
+            for c in candidates:
+                if c.exists():
+                    return str(c)
+        except Exception:
+            pass
+
+        # 3. 回退到常见路径扫描
+        for p in cls._COMMON_QQ_PATHS:
+            if p.exists():
+                return str(p)
+        return None
 
     @property
     def is_running(self) -> bool:
