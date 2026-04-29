@@ -141,7 +141,7 @@ async function loadPersonas() {
     const res = await get('/personas');
     personas = res.personas || [];
     renderPersonaSelect();
-    renderPersonaCards();
+    renderPersonaCards(false);
     updateSidebar();
     if (!currentPersona && personas.length > 0) {
       selectPersona(personas[0].name);
@@ -217,7 +217,7 @@ function formatHeartbeat(ts) {
   return d.toLocaleString();
 }
 
-function renderPersonaCards() {
+function renderPersonaCards(animate = true) {
   const el = $('personaCards');
   if (!el) return;
   if (!personas.length) {
@@ -245,7 +245,7 @@ function renderPersonaCards() {
   `;
   }).join('');
 
-  applyStagger(el, '.persona-card');
+  if (animate) applyStagger(el, '.persona-card');
 
   animateNumber($('dashPersonaCount'), personas.length, 500);
   animateNumber($('dashRunningCount'), personas.filter((p) => p.running).length, 500);
