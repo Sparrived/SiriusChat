@@ -665,7 +665,10 @@ class WebUIServer:
         from sirius_chat.skills.telemetry import SkillTelemetry
 
         all_summaries: dict[str, dict[str, Any]] = {}
-        for name in self.persona_manager.list_personas():
+        for persona_info in self.persona_manager.list_personas():
+            name = persona_info.get("name")
+            if not name:
+                continue
             paths = self.persona_manager.get_persona_paths(name)
             if paths is None:
                 continue
