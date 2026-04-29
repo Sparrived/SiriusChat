@@ -135,6 +135,15 @@ class PersonaManager:
             "persona_name": persona.name if persona else None,
             "persona_summary": persona.persona_summary if persona else None,
             "adapters_count": len(adapters.adapters),
+            "adapters": [
+                {
+                    "type": a.type,
+                    "enabled": a.enabled,
+                    "ws_url": a.ws_url,
+                    "qq_number": getattr(a, "qq_number", ""),
+                }
+                for a in adapters.adapters
+            ],
             "enabled": has_enabled_adapter,
             "running": is_alive,
             "pid": pid,
