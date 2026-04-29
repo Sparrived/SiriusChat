@@ -9,6 +9,7 @@ SKILL_META = {
     "name": "bing_search",
     "description": "使用必应搜索引擎检索指定关键词的网页摘要，返回前3条结果。",
     "version": "1.0.0",
+    "tags": ["web", "search"],
     "dependencies": ["requests", "beautifulsoup4"],
     "parameters": {
         "query": {

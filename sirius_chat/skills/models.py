@@ -173,6 +173,8 @@ class SkillDefinition:
     version: str = "1.0.0"
     developer_only: bool = False
     silent: bool = False
+    tags: list[str] = field(default_factory=list)
+    adapter_types: list[str] = field(default_factory=list)
     source_path: Path | None = None
     _run_func: Callable[..., Any] | None = field(default=None, repr=False)
 

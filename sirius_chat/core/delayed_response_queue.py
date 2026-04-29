@@ -46,6 +46,7 @@ class DelayedResponseQueue:
         channel: str | None = None,
         channel_user_id: str | None = None,
         multimodal_inputs: list[dict[str, str]] | None = None,
+        adapter_type: str | None = None,
     ) -> DelayedResponseItem:
         """Add an item to the delayed queue.
 
@@ -79,6 +80,8 @@ class DelayedResponseQueue:
                 item.user_id = user_id
                 item.channel = channel
                 item.channel_user_id = channel_user_id
+                if adapter_type:
+                    item.adapter_type = adapter_type
                 logger.debug(
                     "Merged %s item %s for group %s (content now %d chars, window %.1fs)",
                     strategy_decision.strategy.value,
@@ -103,6 +106,7 @@ class DelayedResponseQueue:
             window_seconds=self._window_for_item(strategy_decision),
             status="pending",
             multimodal_inputs=list(multimodal_inputs or []),
+            adapter_type=adapter_type,
         )
         if group_id not in self._queues:
             self._queues[group_id] = []

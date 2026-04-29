@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +23,7 @@ from sirius_chat.memory import UserProfile
 from sirius_chat.skills.models import SkillDefinition, SkillInvocationContext, SkillParameter, SkillResult
 from sirius_chat.skills.data_store import SkillDataStore
 from sirius_chat.skills.registry import SkillRegistry
+from sirius_chat.skills.telemetry import SkillExecutionRecord, SkillTelemetry
 from sirius_chat.skills.executor import (
     SkillExecutor,
     parse_skill_calls,
@@ -188,6 +190,7 @@ SKILL_META = {
     "name": "greet",
     "description": "Say hello",
     "version": "1.0.0",
+    "tags": ["demo", "greeting"],
     "parameters": {
         "name": {
             "type": "str",
@@ -245,6 +248,7 @@ class TestSkillRegistry:
         assert skill is not None
         assert skill.description == "Say hello"
         assert skill.version == "1.0.0"
+        assert skill.tags == ["demo", "greeting"]
         assert len(skill.parameters) == 1
         assert skill.parameters[0].name == "name"
         assert skill.parameters[0].required is True
@@ -317,6 +321,47 @@ class TestSkillRegistry:
         assert "Say hello" in text
         assert "name" in text
 
+    def test_build_tool_descriptions_compact(self, tmp_path: Path):
+        skills_dir = tmp_path / "skills"
+        skills_dir.mkdir()
+        (skills_dir / "greet.py").write_text(SAMPLE_SKILL_CODE, encoding="utf-8")
+
+        registry = SkillRegistry()
+        registry.load_from_directory(skills_dir)
+        text = registry.build_tool_descriptions(compact=True)
+        assert "greet" in text
+        assert "Say hello" in text
+        # Compact mode should put params on the same line as the skill name
+        assert "(name:str Name to greet)" in text
+        # Compact mode should NOT have indented parameter lines
+        assert "    - name" not in text
+
+    def test_build_tool_descriptions_filters_by_adapter_type(self, tmp_path: Path):
+        registry = SkillRegistry()
+        registry.register(SkillDefinition(name="global", description="通用技能"))
+        registry.register(SkillDefinition(name="napcat_only", description="QQ专用", adapter_types=["napcat"]))
+        registry.register(SkillDefinition(name="discord_only", description="Discord专用", adapter_types=["discord"]))
+
+        all_text = registry.build_tool_descriptions()
+        assert "global" in all_text
+        assert "napcat_only" in all_text
+        assert "discord_only" in all_text
+
+        napcat_text = registry.build_tool_descriptions(adapter_type="napcat")
+        assert "global" in napcat_text
+        assert "napcat_only" in napcat_text
+        assert "discord_only" not in napcat_text
+
+        discord_text = registry.build_tool_descriptions(adapter_type="discord")
+        assert "global" in discord_text
+        assert "napcat_only" not in discord_text
+        assert "discord_only" in discord_text
+
+        unknown_text = registry.build_tool_descriptions(adapter_type="unknown")
+        assert "global" in unknown_text
+        assert "napcat_only" not in unknown_text
+        assert "discord_only" not in unknown_text
+
     def test_build_tool_descriptions_hides_developer_only_skills_for_non_developer(self):
         registry = SkillRegistry()
         registry.register(SkillDefinition(name="public", description="公开工具"))
@@ -346,6 +391,7 @@ class TestSkillRegistry:
     def test_build_tool_descriptions_empty(self):
         registry = SkillRegistry()
         assert registry.build_tool_descriptions() == ""
+        assert registry.build_tool_descriptions(compact=True) == ""
 
     def test_all_skills(self, tmp_path: Path):
         skills_dir = tmp_path / "skills"
@@ -1018,3 +1064,157 @@ class TestDependencyResolver:
         count = reg.load_from_directory(skills_dir, auto_install_deps=False)
         assert count == 1
         assert "demo" in reg.skill_names
+
+
+class TestSkillDataStoreConcurrency:
+    """SkillDataStore thread-safety with re-entrant lock."""
+
+    def test_concurrent_set_and_save(self, tmp_path: Path):
+        import threading
+
+        store = SkillDataStore(tmp_path / "concurrent.json")
+        errors: list[Exception] = []
+
+        def writer(start: int):
+            try:
+                for i in range(20):
+                    store.set(f"key_{start}_{i}", i)
+                    if i % 5 == 0:
+                        store.save()
+                store.save()
+            except Exception as exc:
+                errors.append(exc)
+
+        threads = [threading.Thread(target=writer, args=(t,)) for t in range(4)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert not errors
+        # Reload and verify all keys are present
+        store2 = SkillDataStore(tmp_path / "concurrent.json")
+        for t in range(4):
+            for i in range(20):
+                assert store2.get(f"key_{t}_{i}") == i
+
+    def test_save_is_atomic(self, tmp_path: Path):
+        """save() should never leave a corrupted main file."""
+        store = SkillDataStore(tmp_path / "atomic.json")
+        store.set("x", 1)
+        store.save()
+        assert (tmp_path / "atomic.json").exists()
+        # Temp file should be cleaned up
+        assert len(list(tmp_path.glob("atomic.*.tmp"))) == 0
+
+
+class TestSkillRetry:
+    """Retry logic for transient failures."""
+
+    def test_no_retry_for_parameter_error(self, tmp_path: Path):
+        """Validation errors should not be retried."""
+        skill = SkillDefinition(
+            name="retry_test",
+            description="Test retry",
+            parameters=[SkillParameter(name="x", type="int", description="num", required=True)],
+            _run_func=lambda **kwargs: {"ok": True},
+        )
+        executor = SkillExecutor(tmp_path)
+        result = executor.execute(skill, {}, max_retries=2)
+        assert not result.success
+        assert "缺少必填参数" in result.error
+
+    def test_retry_for_transient_error(self, tmp_path: Path):
+        """Transient exceptions (e.g. ConnectionError) should be retried."""
+        call_count = 0
+
+        def flaky(**kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count < 3:
+                raise ConnectionError("network is down")
+            return {"ok": True}
+
+        skill = SkillDefinition(
+            name="flaky",
+            description="Sometimes fails",
+            parameters=[],
+            _run_func=flaky,
+        )
+        executor = SkillExecutor(tmp_path)
+        result = executor.execute(skill, {}, max_retries=2)
+        assert result.success is True
+        assert result.data == {"ok": True}
+        assert call_count == 3
+
+    def test_retry_exhausted_returns_failure(self, tmp_path: Path):
+        """If all retries fail, return the last error."""
+        skill = SkillDefinition(
+            name="always_fail",
+            description="Always fails",
+            parameters=[],
+            _run_func=lambda **kwargs: (_ for _ in ()).throw(TimeoutError("too slow")),
+        )
+        executor = SkillExecutor(tmp_path)
+        result = executor.execute(skill, {}, max_retries=1)
+        assert not result.success
+        assert "too slow" in result.error
+
+
+class TestSkillTelemetry:
+    """Skill execution telemetry recording and querying."""
+
+    def test_telemetry_records_success_and_failure(self, tmp_path: Path):
+        from sirius_chat.skills.telemetry import SkillTelemetry
+
+        executor = SkillExecutor(tmp_path)
+        # Executor stores telemetry under {work_path}/skill_data/.telemetry.jsonl
+        telemetry = SkillTelemetry(tmp_path / "skill_data" / ".telemetry.jsonl")
+
+        good_skill = SkillDefinition(
+            name="good", description="ok", parameters=[],
+            _run_func=lambda **kwargs: {"v": 1},
+        )
+        bad_skill = SkillDefinition(
+            name="bad", description="fails", parameters=[],
+            _run_func=lambda **kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
+        )
+
+        r1 = executor.execute(good_skill, {})
+        assert r1.success is True
+
+        r2 = executor.execute(bad_skill, {})
+        assert r2.success is False
+
+        records = telemetry.query(limit=10)
+        assert len(records) == 2
+        assert records[0].skill_name == "good"
+        assert records[0].success is True
+        assert records[0].duration_ms >= 0
+        assert records[1].skill_name == "bad"
+        assert records[1].success is False
+        assert "boom" in records[1].error
+
+    def test_telemetry_summary_aggregation(self, tmp_path: Path):
+        from sirius_chat.skills.telemetry import SkillTelemetry
+
+        telemetry = SkillTelemetry(tmp_path / ".telemetry.jsonl")
+
+        for i in range(3):
+            telemetry.record(
+                SkillExecutionRecord(
+                    skill_name="s1", timestamp=time.time(), success=True, duration_ms=10.0
+                )
+            )
+        telemetry.record(
+            SkillExecutionRecord(
+                skill_name="s1", timestamp=time.time(), success=False, duration_ms=5.0, error="err"
+            )
+        )
+
+        summary = telemetry.summary()
+        assert "s1" in summary
+        assert summary["s1"]["calls"] == 4
+        assert summary["s1"]["successes"] == 3
+        assert summary["s1"]["failures"] == 1
+        assert summary["s1"]["avg_ms"] == 8.75

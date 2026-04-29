@@ -274,7 +274,10 @@ class ResponseAssembler:
 
         # 7. Available skills
         if self.skill_registry is not None:
-            skill_desc = self._build_skill_descriptions(caller_is_developer=caller_is_developer)
+            skill_desc = self._build_skill_descriptions(
+                caller_is_developer=caller_is_developer,
+                adapter_type=getattr(message, "adapter_type", None),
+            )
             if skill_desc:
                 sections.append(skill_desc)
 
@@ -438,10 +441,12 @@ class ResponseAssembler:
             "回复内容请控制在 30 字以内，禁止换行，连续输出，不要刷屏。"
         )
 
-    def _build_skill_descriptions(self, caller_is_developer: bool = False) -> str:
+    def _build_skill_descriptions(self, caller_is_developer: bool = False, adapter_type: str | None = None) -> str:
         """Build a section describing available skills and how to call them.
 
         Filters out developer-only skills when the caller is not a developer.
+        Automatically switches to compact mode when more than 5 skills are visible
+        to keep token usage under control.
         """
         if self.skill_registry is None:
             return ""
@@ -453,7 +458,21 @@ class ResponseAssembler:
                 metadata={"is_developer": caller_is_developer},
             )
             ctx = SkillInvocationContext(caller=caller)
-            desc = self.skill_registry.build_tool_descriptions(invocation_context=ctx)
+
+            # Auto-enable compact mode when many skills are visible to save tokens
+            visible_count = 0
+            for skill in self.skill_registry.all_skills():
+                if getattr(skill, "developer_only", False) and not caller_is_developer:
+                    continue
+                if skill.adapter_types and adapter_type is not None:
+                    if adapter_type not in skill.adapter_types:
+                        continue
+                visible_count += 1
+            use_compact = visible_count > 5
+
+            desc = self.skill_registry.build_tool_descriptions(
+                invocation_context=ctx, compact=use_compact, adapter_type=adapter_type
+            )
         except Exception:
             return ""
         if not desc:
@@ -501,6 +520,7 @@ class ResponseAssembler:
         is_group_chat: bool = False,
         caller_is_developer: bool = False,
         glossary_section: str = "",
+        adapter_type: str | None = None,
     ) -> PromptBundle:
         """Build prompt for a delayed response (topic-gap trigger)."""
         if style_params is None:
@@ -522,7 +542,9 @@ class ResponseAssembler:
             sections.append(f"[群体风格] {style_desc}")
         # Available skills (before user message so it lands in system prompt)
         if self.skill_registry is not None:
-            skill_desc = self._build_skill_descriptions(caller_is_developer=caller_is_developer)
+            skill_desc = self._build_skill_descriptions(
+                caller_is_developer=caller_is_developer, adapter_type=adapter_type
+            )
             if skill_desc:
                 sections.append(skill_desc)
         sections.append(f"[长度要求] {style_params.length_instruction or '保持简洁，控制在 30 字以内，禁止换行'}")
@@ -542,6 +564,7 @@ class ResponseAssembler:
         is_group_chat: bool = False,
         glossary_section: str = "",
         topic_context: str = "",
+        adapter_type: str | None = None,
     ) -> PromptBundle:
         """Build prompt for proactive initiation."""
         identity = (

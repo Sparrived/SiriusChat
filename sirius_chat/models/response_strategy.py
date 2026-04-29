@@ -47,6 +47,7 @@ class DelayedResponseItem:
     window_seconds: float = 30.0
     status: str = "pending"  # pending | triggered | cancelled | sent
     multimodal_inputs: list[dict[str, str]] = field(default_factory=list)
+    adapter_type: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {

@@ -16,6 +16,7 @@ SKILL_META = {
         "支持绝对路径和相对路径，仅支持 UTF-8 编码的文本文件，自动拒绝二进制文件。"
     ),
     "version": "1.0.0",
+    "tags": ["file", "io"],
     "developer_only": False,
     "dependencies": [],
     "parameters": {

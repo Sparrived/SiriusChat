@@ -12,6 +12,7 @@ SKILL_META = {
     "name": "url_content_reader",
     "description": "读取网页链接并提取标题、描述、正文摘要，帮助AI理解链接内容。",
     "version": "1.0.0",
+    "tags": ["web", "content"],
     "dependencies": ["requests", "beautifulsoup4"],
     "parameters": {
         "url": {

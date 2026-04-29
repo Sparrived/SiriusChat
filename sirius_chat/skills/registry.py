@@ -223,6 +223,14 @@ class SkillRegistry:
         version = str(meta.get("version", "1.0.0")).strip()
         developer_only = bool(meta.get("developer_only", False))
         silent = bool(meta.get("silent", False))
+        tags: list[str] = []
+        raw_tags = meta.get("tags", [])
+        if isinstance(raw_tags, list):
+            tags = [str(t).strip() for t in raw_tags if t is not None]
+        adapter_types: list[str] = []
+        raw_adapter_types = meta.get("adapter_types", [])
+        if isinstance(raw_adapter_types, list):
+            adapter_types = [str(t).strip() for t in raw_adapter_types if t is not None]
         if not name:
             name = file_path.stem
         if not description:
@@ -263,6 +271,8 @@ class SkillRegistry:
             version=version,
             developer_only=developer_only,
             silent=silent,
+            tags=tags,
+            adapter_types=adapter_types,
             source_path=file_path,
             _run_func=run_func,
         )
@@ -271,11 +281,20 @@ class SkillRegistry:
         self,
         *,
         invocation_context: SkillInvocationContext | None = None,
+        compact: bool = False,
+        adapter_type: str | None = None,
     ) -> str:
         """Build a formatted text block describing all available skills.
 
         This is injected into the system prompt so the AI knows what tools
         are available and how to call them.
+
+        Args:
+            invocation_context: Optional context for developer-only filtering.
+            compact: If True, use a condensed one-line-per-skill format to
+                save tokens when many skills are registered.
+            adapter_type: If provided, only include skills whose adapter_types
+                is empty or contains this adapter type.
         """
         if not self._skills:
             return ""
@@ -289,17 +308,27 @@ class SkillRegistry:
             ):
                 continue
 
+            # Adapter filtering: skip skills that are locked to other adapters
+            if skill.adapter_types and adapter_type is not None:
+                if adapter_type not in skill.adapter_types:
+                    continue
+
             security_note = "（仅 developer 可调用）" if skill.developer_only else ""
-            lines.append(f"- {skill.name}: {skill.description}{security_note}")
-            if skill.parameters:
-                param_parts: list[str] = []
-                for p in skill.parameters:
-                    required_tag = "必填" if p.required else "可选"
-                    default_tag = f", 默认={p.default}" if not p.required and p.default is not None else ""
-                    param_parts.append(
-                        f"    - {p.name} ({p.type}, {required_tag}{default_tag}): {p.description}"
-                    )
-                lines.extend(param_parts)
+            if compact:
+                param_sig = _build_compact_param_signature(skill.parameters)
+                sig = f"{skill.name}{param_sig}" if param_sig else skill.name
+                lines.append(f"- {sig}: {skill.description}{security_note}")
+            else:
+                lines.append(f"- {skill.name}: {skill.description}{security_note}")
+                if skill.parameters:
+                    param_parts: list[str] = []
+                    for p in skill.parameters:
+                        required_tag = "必填" if p.required else "可选"
+                        default_tag = f", 默认={p.default}" if not p.required and p.default is not None else ""
+                        param_parts.append(
+                            f"    - {p.name} ({p.type}, {required_tag}{default_tag}): {p.description}"
+                        )
+                    lines.extend(param_parts)
         return "\n".join(lines)
 
     @staticmethod
@@ -311,3 +340,22 @@ class SkillRegistry:
         installed = resolve_skill_dependencies(py_file, auto_install=True)
         if installed:
             logger.info("顺手帮 '%s' 把依赖 %s 装好啦", py_file.stem, ", ".join(installed))
+
+
+def _build_compact_param_signature(parameters: list[SkillParameter]) -> str:
+    """Build a compact `(name:type=default desc, ...)` signature string.
+
+    Keeps parameter descriptions so the model still understands semantics,
+    while dropping redundant Chinese labels like "必填/可选/默认=".
+    """
+    if not parameters:
+        return ""
+    parts: list[str] = []
+    for p in parameters:
+        piece = f"{p.name}:{p.type}"
+        if not p.required and p.default is not None:
+            piece += f"={p.default}"
+        if p.description:
+            piece += f" {p.description.strip()}"
+        parts.append(piece)
+    return f"({', '.join(parts)})"

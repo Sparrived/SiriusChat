@@ -15,6 +15,7 @@ SKILL_META = {
         "可以用 list 查看所有提醒，用 cancel 取消指定提醒。"
     ),
     "version": "1.0.0",
+    "tags": ["utility", "time"],
     "developer_only": False,
     "dependencies": [],
     "parameters": {

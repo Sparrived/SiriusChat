@@ -18,6 +18,7 @@ SKILL_META = {
         "当不确定文件是否存在或需要浏览磁盘、项目结构时调用。"
     ),
     "version": "1.0.0",
+    "tags": ["file", "io"],
     "developer_only": False,
     "dependencies": [],
     "parameters": {

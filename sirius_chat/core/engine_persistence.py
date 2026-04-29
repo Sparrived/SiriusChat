@@ -20,10 +20,23 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
+import time
 from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+# Per-file locks to prevent concurrent writes on Windows (WinError 32)
+_write_locks: dict[str, threading.Lock] = {}
+_write_locks_lock = threading.Lock()
+
+def _get_file_lock(path: Path) -> threading.Lock:
+    key = str(path.resolve())
+    with _write_locks_lock:
+        if key not in _write_locks:
+            _write_locks[key] = threading.Lock()
+        return _write_locks[key]
 
 
 class EngineStateStore:
@@ -243,10 +256,27 @@ class EngineStateStore:
 # ---------------------------------------------------------------------------
 
 def _atomic_write(path: Path, data: dict[str, Any]) -> None:
-    """Write JSON atomically using temp file + replace."""
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(
-        json.dumps(data, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-    tmp.replace(path)
+    """Write JSON atomically using temp file + replace.
+
+    Uses a per-file lock to prevent concurrent writes, and retries on
+    Windows PermissionError (file locked by another reader/writer).
+    """
+    lock = _get_file_lock(path)
+    with lock:
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp.write_text(
+            json.dumps(data, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        # On Windows replace() can fail if another handle has the file open.
+        for attempt in range(5):
+            try:
+                tmp.replace(path)
+                return
+            except PermissionError:
+                if attempt < 4:
+                    time.sleep(0.05 * (attempt + 1))
+                else:
+                    raise
+        # Unreachable, but satisfies type checker
+        return

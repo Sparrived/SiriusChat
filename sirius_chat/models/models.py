@@ -21,6 +21,8 @@ class Message(JsonSerializable):
     multimodal_inputs: list[dict[str, str]] = field(default_factory=list)
     # 回复策略：always(默认总是回复) / never(只记忆不回复) / auto(自动判断是否需要回复)
     reply_mode: str = "always"
+    # Adapter 类型，用于按来源过滤可用 Skill（如 "napcat"）
+    adapter_type: str | None = None
 
     @staticmethod
     def _trim_content_tail(content: str) -> str:

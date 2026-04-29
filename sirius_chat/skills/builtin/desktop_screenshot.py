@@ -12,8 +12,9 @@ from sirius_chat.skills.security import ensure_developer_access
 
 SKILL_META = {
     "name": "desktop_screenshot",
-    "description": "当需要判断主机当前在做什么、屏幕上打开了哪些窗口、应用或页面时，捕获当前主机桌面截图并返回给模型进行内部分析",
+    "description": "捕获当前主机桌面截图并返回给模型进行内部分析",
     "version": "1.1.0",
+    "tags": ["system", "image"],
     "developer_only": True,
     "dependencies": ["Pillow"],
     "parameters": {

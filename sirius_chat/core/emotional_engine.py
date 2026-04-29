@@ -1142,8 +1142,9 @@ class EmotionalGroupChatEngine:
         caller_is_developer = bool(caller_profile and caller_profile.is_developer)
 
         # Merge all triggered items into one prompt and one generation call
+        adapter_type = getattr(triggered[0], "adapter_type", None) if triggered else None
         bundle = self._build_delayed_prompt(
-            triggered, group_id, caller_is_developer=caller_is_developer
+            triggered, group_id, caller_is_developer=caller_is_developer, adapter_type=adapter_type
         )
 
         # Use ContextAssembler to build full messages with diary RAG + XML history
@@ -1257,7 +1258,7 @@ class EmotionalGroupChatEngine:
                 )
                 try:
                     result = await self._skill_executor.execute_async(
-                        skill, params, invocation_context=ctx
+                        skill, params, invocation_context=ctx, max_retries=2
                     )
                     if result.success:
                         if not skill.silent:
@@ -1949,6 +1950,7 @@ class EmotionalGroupChatEngine:
                 channel=message.channel,
                 channel_user_id=message.channel_user_id,
                 multimodal_inputs=message.multimodal_inputs,
+                adapter_type=message.adapter_type,
             )
             self._persist_group_state(group_id)
             return {
@@ -1972,6 +1974,7 @@ class EmotionalGroupChatEngine:
                 channel=message.channel,
                 channel_user_id=message.channel_user_id,
                 multimodal_inputs=message.multimodal_inputs,
+                adapter_type=message.adapter_type,
             )
             self._persist_group_state(group_id)
             return {
@@ -2043,7 +2046,7 @@ class EmotionalGroupChatEngine:
         content.extend(multimodal_blocks)
         return content
 
-    def _build_delayed_prompt(self, items: Any, group_id: str, caller_is_developer: bool = False):
+    def _build_delayed_prompt(self, items: Any, group_id: str, caller_is_developer: bool = False, adapter_type: str | None = None):
         """Build prompt bundle for delayed response (supports single item or merged list)."""
         from sirius_chat.core.response_assembler import PromptBundle
         from sirius_chat.models.response_strategy import ResponseStrategy
@@ -2067,6 +2070,7 @@ class EmotionalGroupChatEngine:
             is_group_chat=True,
             caller_is_developer=caller_is_developer,
             glossary_section=glossary,
+            adapter_type=adapter_type,
         )
         return bundle
 
@@ -2123,7 +2127,7 @@ class EmotionalGroupChatEngine:
         pool = unique[:3] if len(unique) >= 3 else unique
         return random.choice(pool)
 
-    def _build_proactive_prompt(self, trigger: dict[str, Any], group_id: str):
+    def _build_proactive_prompt(self, trigger: dict[str, Any], group_id: str, adapter_type: str | None = None):
         """Build prompt bundle for proactive initiation."""
         glossary = self.glossary_manager.build_prompt_section(
             group_id, text=trigger.get("trigger_type", ""), max_terms=3
@@ -2136,6 +2140,7 @@ class EmotionalGroupChatEngine:
             is_group_chat=True,
             glossary_section=glossary,
             topic_context=topic,
+            adapter_type=adapter_type,
         )
 
     async def _generate(

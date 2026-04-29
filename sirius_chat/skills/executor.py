@@ -7,6 +7,7 @@ import inspect
 import json
 import logging
 import re
+import time
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,7 @@ from sirius_chat.skills.models import (
     SkillResult,
 )
 from sirius_chat.skills.security import validate_skill_access
+from sirius_chat.skills.telemetry import SkillExecutionRecord, SkillTelemetry
 from sirius_chat.workspace.layout import WorkspaceLayout
 
 logger = logging.getLogger(__name__)
@@ -57,12 +59,24 @@ def strip_skill_calls(text: str) -> str:
     return SKILL_CALL_PATTERN.sub("", text).strip()
 
 
+def _should_retry(exc: Exception) -> bool:
+    """Heuristic: is this exception likely transient and worth retrying?"""
+    if isinstance(exc, (TimeoutError, ConnectionError)):
+        return True
+    exc_name = type(exc).__name__.lower()
+    return any(
+        keyword in exc_name
+        for keyword in ("timeout", "connection", "temporary", "network", "retry", "unreachable")
+    )
+
+
 class SkillExecutor:
-    """Execute skills with parameter validation and data store injection."""
+    """Execute skills with parameter validation, retry, telemetry, and data store injection."""
 
     def __init__(self, work_path: Path | WorkspaceLayout) -> None:
         self._layout = work_path if isinstance(work_path, WorkspaceLayout) else WorkspaceLayout(work_path)
         self._data_stores: dict[str, SkillDataStore] = {}
+        self._telemetry = SkillTelemetry(self._layout.skill_data_dir() / ".telemetry.jsonl")
 
     def get_data_store(self, skill_name: str) -> SkillDataStore:
         """Get or create the persistent data store for a skill."""
@@ -80,8 +94,9 @@ class SkillExecutor:
         params: dict[str, Any],
         chain_context: SkillChainContext | None = None,
         invocation_context: SkillInvocationContext | None = None,
+        max_retries: int = 0,
     ) -> SkillResult:
-        """Execute a skill synchronously with parameter validation.
+        """Execute a skill synchronously with parameter validation and optional retry.
 
         If *chain_context* is provided, any ``${skill_name}`` / ``${skill_name.field}``
         placeholders in parameter values are resolved against previously executed
@@ -90,70 +105,110 @@ class SkillExecutor:
 
         The data_store is automatically injected as a keyword argument
         if the skill's run() function accepts it.
+
+        Args:
+            max_retries: Number of extra attempts for transient failures
+                (timeout, connection error, etc.).
         """
-        if skill._run_func is None:
-            return SkillResult(success=False, error=f"SKILL '{skill.name}' 没有可执行的 run() 函数")
-
-        # Resolve chain-context template placeholders before validation
-        if chain_context is not None:
-            params = chain_context.resolve_templates(params)
-
-        # Validate required parameters
-        for param_def in skill.parameters:
-            if param_def.required and param_def.name not in params:
-                return SkillResult(
-                    success=False,
-                    error=f"缺少必填参数: {param_def.name}",
-                )
-
-        # Apply defaults for optional parameters
-        call_params: dict[str, Any] = {}
-        for param_def in skill.parameters:
-            if param_def.name in params:
-                call_params[param_def.name] = _coerce_type(
-                    params[param_def.name], param_def.type
-                )
-            elif param_def.default is not None:
-                call_params[param_def.name] = param_def.default
-
-        access_error = validate_skill_access(skill=skill, invocation_context=invocation_context)
-        if access_error:
-            skill_result = SkillResult(success=False, error=access_error)
-            if chain_context is not None:
-                chain_context.store(skill.name, skill_result)
-            return skill_result
-
-        data_store = self._get_data_store(skill.name)
-        injection_plan = _build_injection_plan(skill._run_func)
-        if injection_plan.accepts("data_store"):
-            call_params["data_store"] = data_store
-        if invocation_context is not None and injection_plan.accepts("invocation_context"):
-            call_params["invocation_context"] = invocation_context
+        start_time = time.perf_counter()
+        skill_result: SkillResult | None = None
 
         try:
-            result = skill._run_func(**call_params)
-            # Persist data store after execution
-            data_store.save()
-            skill_result = SkillResult.from_raw_result(result)
-            skill_result.success = True if skill_result.error == "" else skill_result.success
-            logger.debug(
-                "SKILL '%s' 执行成功 | summary=%r | text_blocks=%d | "
-                "multimodal_blocks=%d | internal_metadata=%r",
-                skill.name,
-                skill_result.to_display_text()[:200],
-                len(skill_result.text_blocks),
-                len(skill_result.multimodal_blocks),
-                skill_result.internal_metadata,
-            )
-        except Exception as exc:
-            logger.error("SKILL '%s' 执行异常: %s", skill.name, exc)
-            skill_result = SkillResult(success=False, error=str(exc))
+            if skill._run_func is None:
+                skill_result = SkillResult(success=False, error=f"SKILL '{skill.name}' 没有可执行的 run() 函数")
+                return skill_result
+
+            # Resolve chain-context template placeholders before validation
+            if chain_context is not None:
+                params = chain_context.resolve_templates(params)
+
+            # Validate required parameters
+            for param_def in skill.parameters:
+                if param_def.required and param_def.name not in params:
+                    skill_result = SkillResult(
+                        success=False,
+                        error=f"缺少必填参数: {param_def.name}",
+                    )
+                    return skill_result
+
+            # Apply defaults for optional parameters
+            call_params: dict[str, Any] = {}
+            for param_def in skill.parameters:
+                if param_def.name in params:
+                    call_params[param_def.name] = _coerce_type(
+                        params[param_def.name], param_def.type
+                    )
+                elif param_def.default is not None:
+                    call_params[param_def.name] = param_def.default
+
+            access_error = validate_skill_access(skill=skill, invocation_context=invocation_context)
+            if access_error:
+                skill_result = SkillResult(success=False, error=access_error)
+                return skill_result
+
+            data_store = self._get_data_store(skill.name)
+            injection_plan = _build_injection_plan(skill._run_func)
+            if injection_plan.accepts("data_store"):
+                call_params["data_store"] = data_store
+            if invocation_context is not None and injection_plan.accepts("invocation_context"):
+                call_params["invocation_context"] = invocation_context
+
+            # Run with optional retry for transient failures
+            last_error: Exception | None = None
+            for attempt in range(max_retries + 1):
+                try:
+                    result = skill._run_func(**call_params)
+                    # Persist data store after execution
+                    data_store.save()
+                    skill_result = SkillResult.from_raw_result(result)
+                    skill_result.success = True if skill_result.error == "" else skill_result.success
+                    logger.debug(
+                        "SKILL '%s' 执行成功 | summary=%r | text_blocks=%d | "
+                        "multimodal_blocks=%d | internal_metadata=%r",
+                        skill.name,
+                        skill_result.to_display_text()[:200],
+                        len(skill_result.text_blocks),
+                        len(skill_result.multimodal_blocks),
+                        skill_result.internal_metadata,
+                    )
+                    break
+                except Exception as exc:
+                    last_error = exc
+                    if attempt < max_retries and _should_retry(exc):
+                        logger.warning(
+                            "SKILL '%s' 第%d次执行失败（将重试）: %s",
+                            skill.name, attempt + 1, exc,
+                        )
+                        continue
+                    logger.error("SKILL '%s' 执行异常: %s", skill.name, exc)
+                    skill_result = SkillResult(success=False, error=str(exc))
+                    break
+        finally:
+            # Telemetry is best-effort and must not affect the result
+            if skill_result is not None:
+                duration_ms = (time.perf_counter() - start_time) * 1000
+                try:
+                    caller_id = ""
+                    if invocation_context is not None:
+                        caller_id = getattr(invocation_context, "caller_user_id", "") or ""
+                    self._telemetry.record(
+                        SkillExecutionRecord(
+                            skill_name=skill.name,
+                            timestamp=time.time(),
+                            success=skill_result.success,
+                            duration_ms=round(duration_ms, 2),
+                            error=skill_result.error if not skill_result.success else "",
+                            caller_user_id=caller_id,
+                        )
+                    )
+                except Exception:
+                    pass
 
         # Record into chain context so subsequent skills can reference this result
-        if chain_context is not None:
+        if chain_context is not None and skill_result is not None:
             chain_context.store(skill.name, skill_result)
 
-        return skill_result
+        return skill_result if skill_result is not None else SkillResult(success=False, error="未知错误")
 
     async def execute_async(
         self,
@@ -162,6 +217,7 @@ class SkillExecutor:
         timeout: float = 0,
         chain_context: SkillChainContext | None = None,
         invocation_context: SkillInvocationContext | None = None,
+        max_retries: int = 0,
     ) -> SkillResult:
         """Execute a skill in a thread pool to avoid blocking the event loop.
 
@@ -171,6 +227,7 @@ class SkillExecutor:
             timeout: Max seconds to wait. 0 means no limit.
             chain_context: Optional chain context for template resolution and
                 result accumulation across a multi-skill round.
+            max_retries: Number of extra attempts for transient failures.
         """
         if timeout > 0:
             try:
@@ -181,6 +238,7 @@ class SkillExecutor:
                         params,
                         chain_context,
                         invocation_context,
+                        max_retries,
                     ),
                     timeout=timeout,
                 )
@@ -196,6 +254,7 @@ class SkillExecutor:
             params,
             chain_context,
             invocation_context,
+            max_retries,
         )
 
     def save_all_stores(self) -> None:
