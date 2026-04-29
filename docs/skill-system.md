@@ -38,6 +38,24 @@ def run(name: str, **kwargs):
     return {"greeting": f"你好 {name}，现在是 {datetime.now():%H:%M}"}
 ```
 
+### Adapter 隔离示例
+
+如果你想写一个**只在 QQ/NapCat 群聊中可用**的 skill：
+
+```python
+SKILL_META = {
+    "name": "qq_group_rank",
+    "description": "查询当前 QQ 群的活跃度排行",
+    "adapter_types": ["napcat"],  # 只有 napcat 来源的消息才会注入该 skill
+    "parameters": {},
+}
+
+def run(**kwargs):
+    return {"rank": "本周最活跃：Alice, Bob, Charlie"}
+```
+
+通用 skill（不填 `adapter_types`）在所有 adapter 下都可见。
+
 ### 字段说明
 
 | 字段 | 必填 | 说明 |
@@ -47,6 +65,8 @@ def run(name: str, **kwargs):
 | `version` | ❌ | 语义化版本 |
 | `developer_only` | ❌ | `True` 时只有开发者身份的用户能调用 |
 | `silent` | ❌ | `True` 时技能结果不追加到回复文本，默认 `False` |
+| `tags` | ❌ | 技能标签列表，用于分类和动态过滤，例如 `["web", "search"]` |
+| `adapter_types` | ❌ | 适配器类型列表，限定该 skill 只在特定 adapter 下可用，例如 `["napcat"]`。不填或空列表表示所有 adapter 通用 |
 | `dependencies` | ❌ | 第三方依赖列表，自动安装 |
 | `parameters` | ❌ | 参数 Schema（dict 或 list） |
 
@@ -127,11 +147,15 @@ API：
 
 | SKILL | 权限 | 功能 | 备注 |
 |-------|------|------|------|
-| `system_info` | 所有人 | 返回 CPU、内存、磁盘、网络、OS 信息（依赖 `psutil`） | |
-| `desktop_screenshot` | **仅开发者** | 截取桌面屏幕（依赖 `Pillow`），返回图片 + 文字摘要 | |
-| `learn_term` | 所有人 | 将术语、俚语、黑话记录到自传体记忆 glossary | `silent=True`，结果不追加到回复 |
-| `url_content_reader` | 所有人 | 读取指定网页的文本内容 | |
-| `bing_search` | 所有人 | 通过 Bing 搜索网络内容 | |
+| `system_info` | 所有人 | 返回 CPU、内存、磁盘、网络、OS 信息（依赖 `psutil`） | `tags: ["system", "info"]` |
+| `desktop_screenshot` | **仅开发者** | 截取桌面屏幕（依赖 `Pillow`），返回图片 + 文字摘要 | `tags: ["system", "image"]` |
+| `learn_term` | 所有人 | 将术语、俚语、黑话记录到自传体记忆 glossary | `silent=True`, `tags: ["memory", "learning"]` |
+| `url_content_reader` | 所有人 | 读取指定网页的文本内容 | `tags: ["web", "content"]` |
+| `bing_search` | 所有人 | 通过 Bing 搜索网络内容 | `tags: ["web", "search"]` |
+| `file_read` | 所有人 | 读取任意路径下的文本文件 | `tags: ["file", "io"]` |
+| `file_list` | 所有人 | 列出或搜索文件和目录 | `tags: ["file", "io"]` |
+| `file_write` | **仅开发者** | 创建或修改文本文件 | `tags: ["file", "io"]` |
+| `reminder` | 所有人 | 设置定时提醒 | `tags: ["utility", "time"]` |
 
 内置 SKILL 存放在 `sirius_chat/skills/builtin/`，会被自动加载。如果 workspace 的 `skills/` 目录下有同名文件，**workspace 版本会覆盖内置版本**。
 
@@ -190,6 +214,24 @@ process_message() → _execution() → _generate() → 拿到回复
 
 **最佳实践**：
 - `description` 要写清楚使用场景，AI 靠它判断什么时候调用
+- `tags` 建议填写，便于后续按场景动态筛选技能、减少 Prompt token 消耗
+- `adapter_types` 用于平台专属功能，避免模型在不适用的平台误调用
 - 返回 dict 时尽量包含 `text_blocks` 和 `multimodal_blocks`（图片等），引擎会自动处理
 - 耗时的操作（网络请求、文件读写）在 `run()` 里做，引擎会自动放到线程池执行
 - 出错时返回 `{"error": "..."}`，引擎会格式化失败信息
+
+## Token 优化：自动紧凑模式
+
+当注册的技能数量 **超过 5 个** 时，`ResponseAssembler` 会自动切换到**紧凑描述模式**，将每个技能的参数签名压缩为一行，显著减少注入系统提示词的 token 数量：
+
+```
+# 完整模式（≤5 个技能）
+- bing_search: 使用必应搜索引擎检索指定关键词的网页摘要
+    - query (str, 必填): 搜索关键词
+    - count (int, 可选, 默认=3): 返回结果条数
+
+# 紧凑模式（>5 个技能）
+- bing_search(query:str, count:int=3): 使用必应搜索引擎检索指定关键词的网页摘要
+```
+
+你也可以在调用 `build_tool_descriptions(compact=True)` 时强制启用紧凑模式。
