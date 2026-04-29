@@ -245,22 +245,19 @@ class EmotionalGroupChatEngine:
         user_id = self._perception(group_id, message, participants)
         speaker = message.speaker or "有人"
 
-        # 多 AI 互动抑制：其他 AI 发言且未 @ 自己时
+        # 多 AI 互动抑制：其他 AI 发言且未 @ 自己时，直接静默（不调用 LLM）
         if message.sender_type == "other_ai":
             names = [self.persona.name.lower()] + [a.lower() for a in self.persona.aliases]
             text = (message.content or "").lower()
             is_mentioned = any(name in text for name in names if name)
             if not is_mentioned:
-                # 混合方案：短消息直接静默（省 LLM 调用），长消息走完整 pipeline
-                if len(message.content or "") < 30:
-                    self._log_inner_thought(f"{speaker} 是另一个 AI，说得很短，我先默默听着～")
-                    return {
-                        "strategy": "silent",
-                        "reply": None,
-                        "emotion": {},
-                        "intent": {},
-                    }
-                self._log_inner_thought(f"{speaker} 是另一个 AI，但说得挺长，让我认真想想...")
+                self._log_inner_thought(f"{speaker} 是另一个 AI，没有被 @ 到我，我先默默听着～")
+                return {
+                    "strategy": "silent",
+                    "reply": None,
+                    "emotion": {},
+                    "intent": {},
+                }
 
         # 新增：人类消息明确指向其他 AI 时，当前 AI 直接闭嘴
         if message.sender_type == "human" and self._message_directed_at_other_ai(message.content):
