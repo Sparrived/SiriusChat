@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import logging
 import math
+import os
 from typing import Any
+
+# 阻断 transformers 后台自动连接 HuggingFace Hub（避免国内网络超时）
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 
 from sirius_chat.memory.diary.models import DiaryEntry
 
