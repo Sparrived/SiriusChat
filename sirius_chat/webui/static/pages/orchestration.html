@@ -1,0 +1,32 @@
+<div class="page active" id="page-orchestration">
+  <div class="persona-bar">
+    <label>当前人格</label>
+    <select class="persona-select" id="personaSelectOrch" onchange="selectPersona(this.value)">
+      <option>加载中...</option>
+    </select>
+  </div>
+  <div class="card">
+    <h2>模型编排</h2>
+    <div class="row">
+      <div class="col">
+        <div class="form-group">
+          <label>分析模型</label>
+          <select id="orchAnalysis"></select>
+        </div>
+      </div>
+      <div class="col">
+        <div class="form-group">
+          <label>对话生成模型</label>
+          <select id="orchChat"></select>
+        </div>
+      </div>
+      <div class="col">
+        <div class="form-group">
+          <label>多模态模型</label>
+          <select id="orchVision"></select>
+        </div>
+      </div>
+    </div>
+    <button class="btn success" onclick="saveOrchestration()">💾 保存模型编排</button>
+  </div>
+</div>

@@ -1,0 +1,149 @@
+<div class="page active" id="page-experience">
+  <div class="persona-bar">
+    <label>当前人格</label>
+    <select class="persona-select" id="personaSelectExp" onchange="selectPersona(this.value)">
+      <option>加载中...</option>
+    </select>
+  </div>
+  <div class="card">
+    <h2>体验参数</h2>
+    <div class="row">
+      <div class="col">
+        <div class="form-group">
+          <label>回复模式</label>
+          <select id="expReplyMode">
+            <option value="auto">自动</option>
+            <option value="always">总是回复</option>
+            <option value="never">从不回复</option>
+          </select>
+        </div>
+      </div>
+      <div class="col">
+        <div class="form-group">
+          <label>参与敏感度 (0~1)</label>
+          <input type="number" id="expSensitivity" min="0" max="1" step="0.1" value="0.5">
+        </div>
+      </div>
+      <div class="col">
+        <div class="form-group">
+          <label>热度窗口 (秒)</label>
+          <input type="number" id="expHeatWindow" value="60">
+        </div>
+      </div>
+    </div>
+    <div class="row">
+      <div class="col">
+        <div class="form-group">
+          <label>主动行为</label>
+          <select id="expProactive">
+            <option value="true">启用</option>
+            <option value="false">禁用</option>
+          </select>
+        </div>
+      </div>
+      <div class="col">
+        <div class="form-group">
+          <label>主动间隔 (秒)</label>
+          <input type="number" id="expProactiveInterval" value="300">
+        </div>
+      </div>
+      <div class="col">
+        <div class="form-group">
+          <label>延迟回复</label>
+          <select id="expDelayReply">
+            <option value="true">启用</option>
+            <option value="false">禁用</option>
+          </select>
+        </div>
+      </div>
+    </div>
+    <div class="row">
+      <div class="col">
+        <div class="form-group">
+          <label>待处理消息阈值</label>
+          <input type="number" id="expPendingThreshold" value="4">
+        </div>
+      </div>
+      <div class="col">
+        <div class="form-group">
+          <label>最小回复间隔 (秒)</label>
+          <input type="number" id="expMinReplyInterval" value="0">
+        </div>
+      </div>
+      <div class="col">
+        <div class="form-group">
+          <label>回复频率窗口 (秒)</label>
+          <input type="number" id="expReplyFreqWindow" value="60">
+        </div>
+      </div>
+    </div>
+    <div class="row">
+      <div class="col">
+        <div class="form-group">
+          <label>频率窗口最大回复数</label>
+          <input type="number" id="expReplyFreqMax" value="8">
+        </div>
+      </div>
+      <div class="col">
+        <div class="form-group">
+          <label>提及豁免频率限制</label>
+          <select id="expExemptMention">
+            <option value="true">是</option>
+            <option value="false">否</option>
+          </select>
+        </div>
+      </div>
+      <div class="col">
+        <div class="form-group">
+          <label>最大并发 LLM 调用</label>
+          <input type="number" id="expMaxConcurrent" value="1">
+        </div>
+      </div>
+    </div>
+    <div class="row">
+      <div class="col">
+        <div class="form-group">
+          <label>启用 Skills</label>
+          <select id="expEnableSkills">
+            <option value="true">是</option>
+            <option value="false">否</option>
+          </select>
+        </div>
+      </div>
+      <div class="col">
+        <div class="form-group">
+          <label>最大 Skill 轮次</label>
+          <input type="number" id="expMaxSkillRounds" value="3">
+        </div>
+      </div>
+      <div class="col">
+        <div class="form-group">
+          <label>Skill 超时 (秒)</label>
+          <input type="number" id="expSkillTimeout" value="30">
+        </div>
+      </div>
+    </div>
+    <div class="row">
+      <div class="col">
+        <div class="form-group">
+          <label>自动安装 Skill 依赖</label>
+          <select id="expAutoInstallDeps">
+            <option value="true">是</option>
+            <option value="false">否</option>
+          </select>
+        </div>
+      </div>
+      <div class="col">
+        <div class="form-group">
+          <label>记忆深度</label>
+          <select id="expMemoryDepth">
+            <option value="shallow">浅</option>
+            <option value="moderate">中</option>
+            <option value="deep">深</option>
+          </select>
+        </div>
+      </div>
+    </div>
+    <button class="btn success" onclick="saveExperience()">💾 保存体验参数</button>
+  </div>
+</div>

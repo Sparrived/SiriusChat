@@ -1,0 +1,57 @@
+<div class="page active" id="page-dashboard">
+  <div class="card">
+    <h2 style="display:flex;justify-content:space-between;align-items:center">
+      人格列表
+      <button class="btn" onclick="navTo('persona')">➕ 创建人格</button>
+    </h2>
+    <div class="persona-grid" id="personaCards">加载中...</div>
+  </div>
+
+  <div class="card">
+    <h2>全局状态</h2>
+    <div class="stat-grid">
+      <div class="stat-card">
+        <div class="label">Provider 数量</div>
+        <div class="value" id="dashProviderCount">0</div>
+      </div>
+      <div class="stat-card">
+        <div class="label">人格总数</div>
+        <div class="value" id="dashPersonaCount">0</div>
+      </div>
+      <div class="stat-card">
+        <div class="label">运行中</div>
+        <div class="value" id="dashRunningCount">0</div>
+      </div>
+      <div class="stat-card">
+        <div class="label">已停止</div>
+        <div class="value" id="dashStoppedCount">0</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" id="dashSelectedInfo" style="display:none">
+    <h2>当前选中人格</h2>
+    <div style="display:flex;gap:20px;align-items:flex-start;flex-wrap:wrap">
+      <div style="flex:1;min-width:240px">
+        <div style="font-size:20px;font-weight:600;margin-bottom:4px" id="dsName">—</div>
+        <div style="color:var(--text-2);font-size:13px;margin-bottom:12px" id="dsSummary">—</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px" id="dsTags"></div>
+        <div style="font-size:13px;color:var(--text-2)">
+          状态：<span id="dsStatus">—</span> &nbsp;|&nbsp;
+          最后心跳：<span id="dsHeartbeat">—</span> &nbsp;|&nbsp;
+          PID：<span id="dsPid">—</span>
+        </div>
+      </div>
+      <div style="min-width:140px">
+        <div class="stat-card" style="margin-bottom:8px">
+          <div class="label">Adapters</div>
+          <div class="value" id="dsAdapters">0</div>
+        </div>
+        <div class="stat-card">
+          <div class="label">端口</div>
+          <div class="value" id="dsPort">—</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>

@@ -42,20 +42,35 @@ const pageTitles = {
   napcat: ['NapCat 管理', 'Platform / NapCat'],
 };
 
-function navTo(page) {
+async function navTo(page) {
   currentPage = page;
   document.querySelectorAll('.nav-item').forEach((el) => el.classList.remove('active'));
   document.querySelector(`.nav-item[data-page="${page}"]`)?.classList.add('active');
-  document.querySelectorAll('.page').forEach((el) => el.classList.remove('active'));
-  $(`page-${page}`).classList.add('active');
   const t = pageTitles[page];
-  $('pageTitle').textContent = t[0];
-  $('pageBreadcrumb').textContent = t[1];
+  $('pageTitle').textContent = t?.[0] ?? '';
+  $('pageBreadcrumb').textContent = t?.[1] ?? '';
+
+  const container = $('mainContainer');
+  try {
+    const res = await fetch(`/static/pages/${page}.html`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    container.innerHTML = await res.text();
+  } catch (e) {
+    container.innerHTML = `<div class="card"><h2>加载失败</h2><p>无法加载页面：${page}</p><pre style="color:var(--text-2);font-size:12px">${e.message}</pre></div>`;
+    console.error('navTo error:', e);
+  }
+
+  // 页面加载后重新填充人格下拉框
+  if (personas.length) renderPersonaSelect();
+
+  if (page === 'dashboard') renderPersonaCards();
   if (page === 'global-settings') loadGlobalSettings();
-  if (page === 'persona') loadPersonaPreview();
+  if (page === 'persona') { renderInterviewQuestions(); loadPersonaPreview(); }
   if (page === 'orchestration') loadOrchestration();
   if (page === 'experience') loadExperience();
   if (page === 'groups') loadGroups();
+  if (page === 'providers') _renderProviderDraft();
+  if (page === 'napcat') { ncLoadStatus(); ncLoadLogs(); }
 }
 
 // ── Personas ──────────────────────────────────────────
@@ -742,12 +757,14 @@ async function saveExperience() {
 }
 
 // ── Init ──────────────────────────────────────────────
-renderInterviewQuestions();
-loadPersonas();
-loadProviders();
-loadGlobalSettings();
-ncLoadStatus();
-setInterval(() => {
-  loadPersonas();
-  ncLoadLogs();
-}, 5000);
+(async function init() {
+  await loadPersonas();
+  await loadProviders();
+  await loadGlobalSettings();
+  await ncLoadStatus();
+  await navTo('dashboard');
+  setInterval(() => {
+    loadPersonas();
+    ncLoadLogs();
+  }, 5000);
+})();
