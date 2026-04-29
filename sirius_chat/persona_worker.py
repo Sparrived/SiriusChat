@@ -62,6 +62,9 @@ class PersonaWorker:
         experience = PersonaExperienceConfig.load(self.paths.experience)
         LOG.info("加载 %d 个 adapter，体验模式: %s", len(adapters_cfg.adapters), experience.memory_depth)
 
+        # 1.5 自动发现同项目其他 AI 的 QQ 号
+        self._auto_populate_peer_ai_ids(adapters_cfg)
+
         # 2. 创建 EngineRuntime（experience 参数注入 plugin_config）
         plugin_config = self._build_plugin_config(experience)
         global_data_path = self.persona_dir.parent.parent
@@ -98,6 +101,36 @@ class PersonaWorker:
     # Adapter 启动
     # ------------------------------------------------------------------
 
+    def _auto_populate_peer_ai_ids(self, adapters_cfg: PersonaAdaptersConfig) -> None:
+        """自动扫描同项目其他人格的 QQ 号，填充到 peer_ai_ids 中。"""
+        personas_dir = self.persona_dir.parent
+        if not personas_dir.exists():
+            return
+        other_qqs: list[str] = []
+        for subdir in personas_dir.iterdir():
+            if not subdir.is_dir() or subdir.name == self.persona_dir.name:
+                continue
+            other_paths = PersonaConfigPaths(subdir)
+            if not other_paths.adapters.exists():
+                continue
+            try:
+                other_adapters = PersonaAdaptersConfig.load(other_paths.adapters)
+                for a in other_adapters.adapters:
+                    qq = getattr(a, "qq_number", "")
+                    if qq:
+                        other_qqs.append(str(qq))
+            except Exception:
+                continue
+        if not other_qqs:
+            return
+        for cfg in adapters_cfg.adapters:
+            if isinstance(cfg, NapCatAdapterConfig):
+                existing = set(str(x) for x in cfg.peer_ai_ids)
+                added = [qq for qq in other_qqs if qq not in existing]
+                if added:
+                    cfg.peer_ai_ids.extend(added)
+                    LOG.info("自动填充 peer_ai_ids: %s", cfg.peer_ai_ids)
+
     async def _start_adapter(
         self,
         adapter_cfg: Any,
@@ -115,6 +148,7 @@ class PersonaWorker:
                 "enable_group_chat": adapter_cfg.enable_group_chat,
                 "enable_private_chat": adapter_cfg.enable_private_chat,
                 "auto_install_skill_deps": plugin_config.get("auto_install_skill_deps", True),
+                "peer_ai_ids": adapter_cfg.peer_ai_ids,
             }
             bridge = NapCatBridge(
                 adapter=adapter,
@@ -135,10 +169,9 @@ class PersonaWorker:
     # 配置转换
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _build_plugin_config(experience: PersonaExperienceConfig) -> dict[str, Any]:
+    def _build_plugin_config(self, experience: PersonaExperienceConfig) -> dict[str, Any]:
         """将体验参数转换为 EngineRuntime 的 plugin_config。"""
-        return {
+        config: dict[str, Any] = {
             # 参与决策
             "sensitivity": experience.engagement_sensitivity,
             "reply_cooldown_seconds": int(experience.min_reply_interval_seconds),
@@ -161,6 +194,21 @@ class PersonaWorker:
             "skill_execution_timeout": experience.skill_execution_timeout,
             "memory_depth": experience.memory_depth,
         }
+        # 同项目其他 AI 的名字/别名，用于抑制"人类叫别的 AI 时当前 AI 抢话"
+        other_ai_names: list[str] = []
+        personas_dir = self.persona_dir.parent
+        if personas_dir.exists():
+            for subdir in personas_dir.iterdir():
+                if not subdir.is_dir() or subdir.name == self.persona_dir.name:
+                    continue
+                from sirius_chat.core.persona_store import PersonaStore
+                other_persona = PersonaStore.load(subdir)
+                if other_persona:
+                    other_ai_names.append(other_persona.name)
+                    other_ai_names.extend(other_persona.aliases)
+        if other_ai_names:
+            config["other_ai_names"] = list(dict.fromkeys(other_ai_names))
+        return config
 
     # ------------------------------------------------------------------
     # 心跳与状态

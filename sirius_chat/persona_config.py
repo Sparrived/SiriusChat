@@ -33,6 +33,7 @@ class NapCatAdapterConfig:
     qq_number: str = ""
     allowed_group_ids: list[str] = field(default_factory=list)
     allowed_private_user_ids: list[str] = field(default_factory=list)
+    peer_ai_ids: list[str] = field(default_factory=list)
     enable_group_chat: bool = True
     enable_private_chat: bool = True
     root: str = ""
@@ -46,6 +47,7 @@ class NapCatAdapterConfig:
             "qq_number": self.qq_number,
             "allowed_group_ids": list(self.allowed_group_ids),
             "allowed_private_user_ids": list(self.allowed_private_user_ids),
+            "peer_ai_ids": list(self.peer_ai_ids),
             "enable_group_chat": self.enable_group_chat,
             "enable_private_chat": self.enable_private_chat,
             "root": self.root,
@@ -61,6 +63,7 @@ class NapCatAdapterConfig:
             qq_number=str(data.get("qq_number", "")),
             allowed_group_ids=[str(v) for v in data.get("allowed_group_ids", [])],
             allowed_private_user_ids=[str(v) for v in data.get("allowed_private_user_ids", [])],
+            peer_ai_ids=[str(v) for v in data.get("peer_ai_ids", [])],
             enable_group_chat=bool(data.get("enable_group_chat", True)),
             enable_private_chat=bool(data.get("enable_private_chat", True)),
             root=str(data.get("root", "")),

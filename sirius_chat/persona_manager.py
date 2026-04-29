@@ -126,6 +126,16 @@ class PersonaManager:
         pid = status.get("pid") if status else None
         if not is_alive and pid:
             pid = None  # PID 已死亡
+            # 同步更新状态文件为 stopped，避免下次仍显示 running
+            if status:
+                status["status"] = "stopped"
+                status_path = self.personas_dir / name / "engine_state" / "worker_status.json"
+                try:
+                    tmp = status_path.with_suffix(status_path.suffix + ".tmp")
+                    tmp.write_text(json.dumps(status, ensure_ascii=False), encoding="utf-8")
+                    tmp.replace(status_path)
+                except Exception:
+                    pass
 
         # 是否已启用（至少有一个 adapter enabled）
         has_enabled_adapter = any(a.enabled for a in adapters.adapters)
@@ -147,7 +157,7 @@ class PersonaManager:
             "enabled": has_enabled_adapter,
             "running": is_alive,
             "pid": pid,
-            "status": "running" if is_alive else (status.get("status") if status else "stopped"),
+            "status": "running" if is_alive else "stopped",
             "heartbeat_at": status.get("heartbeat_at") if status else None,
             "work_path": str(pdir),
         }
@@ -493,6 +503,19 @@ class PersonaManager:
         status = self._read_worker_status(name)
         pid = status.get("pid") if status else None
         if pid and self._is_pid_alive(pid):
+            # 额外检查：心跳是否超时（防止 PID 重用或进程僵死）
+            heartbeat_at = status.get("heartbeat_at") if status else None
+            if heartbeat_at:
+                try:
+                    from datetime import datetime, timezone
+                    last_hb = datetime.fromisoformat(heartbeat_at)
+                    if last_hb.tzinfo is None:
+                        last_hb = last_hb.replace(tzinfo=timezone.utc)
+                    elapsed = (datetime.now(timezone.utc) - last_hb).total_seconds()
+                    if elapsed > 60:  # 超过 60 秒没有心跳，认为已死
+                        return False
+                except Exception:
+                    pass
             return True
         return False
 

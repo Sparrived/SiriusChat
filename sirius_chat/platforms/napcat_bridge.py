@@ -262,10 +262,14 @@ class NapCatBridge:
         speaker_name = card or nickname or f"qq_{user_id}"
         uid = f"qq_{user_id}"
 
+        peer_ai_ids = self.plugin_config.get("peer_ai_ids", [])
+        is_peer_ai = str(user_id) in [str(v) for v in peer_ai_ids]
+
         metadata: dict[str, Any] = {
             "platform": "qq",
             "qq_uid": user_id,
             "is_developer": self._is_admin(user_id),
+            "is_ai": is_peer_ai,
         }
         if event.get("message_type") == "group":
             metadata["group_id"] = group_id
@@ -298,6 +302,7 @@ class NapCatBridge:
             group_id=group_id,
             multimodal_inputs=multimodal_inputs,
             adapter_type="napcat",
+            sender_type="other_ai" if is_peer_ai else "human",
         )
 
         try:

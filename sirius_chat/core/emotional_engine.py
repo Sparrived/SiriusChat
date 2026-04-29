@@ -244,6 +244,34 @@ class EmotionalGroupChatEngine:
         # 1. Perception (resolves stable user_id for the sender)
         user_id = self._perception(group_id, message, participants)
         speaker = message.speaker or "有人"
+
+        # 多 AI 互动抑制：其他 AI 发言且未 @ 自己时
+        if message.sender_type == "other_ai":
+            names = [self.persona.name.lower()] + [a.lower() for a in self.persona.aliases]
+            text = (message.content or "").lower()
+            is_mentioned = any(name in text for name in names if name)
+            if not is_mentioned:
+                # 混合方案：短消息直接静默（省 LLM 调用），长消息走完整 pipeline
+                if len(message.content or "") < 30:
+                    self._log_inner_thought(f"{speaker} 是另一个 AI，说得很短，我先默默听着～")
+                    return {
+                        "strategy": "silent",
+                        "reply": None,
+                        "emotion": {},
+                        "intent": {},
+                    }
+                self._log_inner_thought(f"{speaker} 是另一个 AI，但说得挺长，让我认真想想...")
+
+        # 新增：人类消息明确指向其他 AI 时，当前 AI 直接闭嘴
+        if message.sender_type == "human" and self._message_directed_at_other_ai(message.content):
+            self._log_inner_thought(f"{speaker} 明明在叫别人，我先别插嘴了...")
+            return {
+                "strategy": "silent",
+                "reply": None,
+                "emotion": {},
+                "intent": {},
+            }
+
         self._log_inner_thought(f"{speaker} 在群里说话了，让我仔细听听看～")
         await self.event_bus.emit(
             SessionEvent(
@@ -291,7 +319,9 @@ class EmotionalGroupChatEngine:
         )
 
         # 3. Decision
-        decision = self._decision(intent, emotion, group_id, user_id)
+        decision = self._decision(
+            intent, emotion, group_id, user_id, message.sender_type or "human"
+        )
         await self.event_bus.emit(
             SessionEvent(
                 type=SessionEventType.DECISION_COMPLETED,
@@ -368,6 +398,17 @@ class EmotionalGroupChatEngine:
         ba, bb = _bigrams(a), _bigrams(b)
         jaccard = len(ba & bb) / len(ba | bb) if ba and bb else 0.0
         return max(prefix_ratio, jaccard)
+
+    def _message_directed_at_other_ai(self, content: str | None) -> bool:
+        """检测人类消息是否明确指向其他 AI（提到其他 AI 名字且未提及当前 AI）。"""
+        other_names = self.config.get("other_ai_names", [])
+        if not other_names:
+            return False
+        my_names = [self.persona.name.lower()] + [a.lower() for a in self.persona.aliases]
+        text = (content or "").lower()
+        mentions_me = any(name in text for name in my_names if name)
+        mentions_other = any(name.lower() in text for name in other_names if name)
+        return mentions_other and not mentions_me
 
     def _log_inner_thought(
         self, thought: str, emotion: EmotionState | None = None, intensity: float = 0.5
@@ -1779,6 +1820,7 @@ class EmotionalGroupChatEngine:
         emotion: EmotionState,
         group_id: str,
         user_id: str,
+        sender_type: str = "human",
     ) -> StrategyDecision:
         """Decision layer: strategy selection with threshold and rhythm."""
         # Rhythm context
@@ -1799,6 +1841,7 @@ class EmotionalGroupChatEngine:
             heat_level=rhythm.heat_level,
             messages_per_minute=msg_rate,
             relationship_state=relationship_state,
+            sender_type=sender_type,
         )
 
         # Persona reply frequency bias
@@ -1827,6 +1870,7 @@ class EmotionalGroupChatEngine:
             intent,
             is_mentioned=is_mentioned,
             heat_level=rhythm.heat_level,
+            sender_type=sender_type,
         )
 
         # Reply cooldown suppression: delayed responses are throttled,
