@@ -245,19 +245,22 @@ class EmotionalGroupChatEngine:
         user_id = self._perception(group_id, message, participants)
         speaker = message.speaker or "有人"
 
-        # 多 AI 互动抑制：其他 AI 发言且未 @ 自己时，只记记忆不回复
+        # 多 AI 互动抑制：其他 AI 发言且未 @ 自己时
         if message.sender_type == "other_ai":
             names = [self.persona.name.lower()] + [a.lower() for a in self.persona.aliases]
             text = (message.content or "").lower()
             is_mentioned = any(name in text for name in names if name)
             if not is_mentioned:
-                self._log_inner_thought(f"{speaker} 是另一个 AI，没有被 @ 到我，我先默默听着～")
-                return {
-                    "strategy": "silent",
-                    "reply": None,
-                    "emotion": {},
-                    "intent": {},
-                }
+                # 混合方案：短消息直接静默（省 LLM 调用），长消息走完整 pipeline
+                if len(message.content or "") < 30:
+                    self._log_inner_thought(f"{speaker} 是另一个 AI，说得很短，我先默默听着～")
+                    return {
+                        "strategy": "silent",
+                        "reply": None,
+                        "emotion": {},
+                        "intent": {},
+                    }
+                self._log_inner_thought(f"{speaker} 是另一个 AI，但说得挺长，让我认真想想...")
 
         self._log_inner_thought(f"{speaker} 在群里说话了，让我仔细听听看～")
         await self.event_bus.emit(
@@ -306,7 +309,9 @@ class EmotionalGroupChatEngine:
         )
 
         # 3. Decision
-        decision = self._decision(intent, emotion, group_id, user_id)
+        decision = self._decision(
+            intent, emotion, group_id, user_id, message.sender_type or "human"
+        )
         await self.event_bus.emit(
             SessionEvent(
                 type=SessionEventType.DECISION_COMPLETED,
@@ -1794,6 +1799,7 @@ class EmotionalGroupChatEngine:
         emotion: EmotionState,
         group_id: str,
         user_id: str,
+        sender_type: str = "human",
     ) -> StrategyDecision:
         """Decision layer: strategy selection with threshold and rhythm."""
         # Rhythm context
@@ -1814,6 +1820,7 @@ class EmotionalGroupChatEngine:
             heat_level=rhythm.heat_level,
             messages_per_minute=msg_rate,
             relationship_state=relationship_state,
+            sender_type=sender_type,
         )
 
         # Persona reply frequency bias
@@ -1842,6 +1849,7 @@ class EmotionalGroupChatEngine:
             intent,
             is_mentioned=is_mentioned,
             heat_level=rhythm.heat_level,
+            sender_type=sender_type,
         )
 
         # Reply cooldown suppression: delayed responses are throttled,
