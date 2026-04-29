@@ -73,10 +73,11 @@ def _should_retry(exc: Exception) -> bool:
 class SkillExecutor:
     """Execute skills with parameter validation, retry, telemetry, and data store injection."""
 
-    def __init__(self, work_path: Path | WorkspaceLayout) -> None:
+    def __init__(self, work_path: Path | WorkspaceLayout, bridge: Any | None = None) -> None:
         self._layout = work_path if isinstance(work_path, WorkspaceLayout) else WorkspaceLayout(work_path)
         self._data_stores: dict[str, SkillDataStore] = {}
         self._telemetry = SkillTelemetry(self._layout.skill_data_dir() / ".telemetry.jsonl")
+        self._bridge = bridge
 
     def get_data_store(self, skill_name: str) -> SkillDataStore:
         """Get or create the persistent data store for a skill."""
@@ -152,11 +153,18 @@ class SkillExecutor:
                 call_params["data_store"] = data_store
             if invocation_context is not None and injection_plan.accepts("invocation_context"):
                 call_params["invocation_context"] = invocation_context
+            if self._bridge is not None and injection_plan.accepts("bridge"):
+                call_params["bridge"] = self._bridge
 
             # Run with optional retry for transient failures
             last_error: Exception | None = None
             for attempt in range(max_retries + 1):
                 try:
+                    if inspect.iscoroutinefunction(skill._run_func):
+                        # Synchronous execute() cannot await; raise so caller uses execute_async
+                        raise RuntimeError(
+                            f"SKILL '{skill.name}' is async and must be executed via execute_async"
+                        )
                     result = skill._run_func(**call_params)
                     # Persist data store after execution
                     data_store.save()
@@ -221,6 +229,9 @@ class SkillExecutor:
     ) -> SkillResult:
         """Execute a skill in a thread pool to avoid blocking the event loop.
 
+        Async skills (coroutine functions) are awaited directly in the event
+        loop instead of being dispatched to a thread pool.
+
         Args:
             skill: The skill definition to execute.
             params: Parameters to pass to the skill.
@@ -229,6 +240,23 @@ class SkillExecutor:
                 result accumulation across a multi-skill round.
             max_retries: Number of extra attempts for transient failures.
         """
+        if inspect.iscoroutinefunction(skill._run_func):
+            # Async skills run directly in the event loop so they can await
+            # bridge/adapter I/O without thread-pool indirection.
+            coro = self._execute_async_skill(
+                skill, params, chain_context, invocation_context, max_retries
+            )
+            if timeout > 0:
+                try:
+                    return await asyncio.wait_for(coro, timeout=timeout)
+                except asyncio.TimeoutError:
+                    logger.error("SKILL '%s' 执行超时 (限制 %.1f秒)", skill.name, timeout)
+                    return SkillResult(
+                        success=False,
+                        error=f"SKILL执行超时（限制 {timeout:.0f} 秒），请稍后重试或联系管理员",
+                    )
+            return await coro
+
         if timeout > 0:
             try:
                 return await asyncio.wait_for(
@@ -256,6 +284,91 @@ class SkillExecutor:
             invocation_context,
             max_retries,
         )
+
+    async def _execute_async_skill(
+        self,
+        skill: SkillDefinition,
+        params: dict[str, Any],
+        chain_context: SkillChainContext | None = None,
+        invocation_context: SkillInvocationContext | None = None,
+        max_retries: int = 0,
+    ) -> SkillResult:
+        """Execute an async skill directly in the event loop."""
+        start_time = time.perf_counter()
+        try:
+            if skill._run_func is None:
+                return SkillResult(success=False, error=f"SKILL '{skill.name}' 没有可执行的 run() 函数")
+
+            # Resolve chain-context template placeholders before validation
+            if chain_context is not None:
+                for key, value in list(params.items()):
+                    if isinstance(value, str):
+                        resolved = chain_context.resolve(value)
+                        if resolved != value:
+                            params[key] = resolved
+
+            call_params = dict(params)
+            data_store = self._get_data_store(skill.name)
+            injection_plan = _build_injection_plan(skill._run_func)
+            if injection_plan.accepts("data_store"):
+                call_params["data_store"] = data_store
+            if invocation_context is not None and injection_plan.accepts("invocation_context"):
+                call_params["invocation_context"] = invocation_context
+            if self._bridge is not None and injection_plan.accepts("bridge"):
+                call_params["bridge"] = self._bridge
+
+            last_error: Exception | None = None
+            skill_result: SkillResult | None = None
+            for attempt in range(max_retries + 1):
+                try:
+                    result = await skill._run_func(**call_params)
+                    data_store.save()
+                    skill_result = SkillResult.from_raw_result(result)
+                    skill_result.success = True if skill_result.error == "" else skill_result.success
+                    logger.debug(
+                        "SKILL '%s' 执行成功 | summary=%r | text_blocks=%d | "
+                        "multimodal_blocks=%d | internal_metadata=%r",
+                        skill.name,
+                        skill_result.to_display_text()[:200],
+                        len(skill_result.text_blocks),
+                        len(skill_result.multimodal_blocks),
+                        skill_result.internal_metadata,
+                    )
+                    break
+                except Exception as exc:
+                    last_error = exc
+                    if attempt < max_retries and _should_retry(exc):
+                        logger.warning(
+                            "SKILL '%s' 第%d次执行失败（将重试）: %s",
+                            skill.name, attempt + 1, exc,
+                        )
+                        continue
+                    logger.error("SKILL '%s' 执行异常: %s", skill.name, exc)
+                    skill_result = SkillResult.from_raw_result(str(exc))
+                    skill_result.success = False
+                    skill_result.error = str(exc)
+                    break
+
+            elapsed_ms = int((time.perf_counter() - start_time) * 1000)
+            try:
+                self._telemetry.record(
+                    skill_name=skill.name,
+                    success=skill_result.success,
+                    duration_ms=elapsed_ms,
+                    error=skill_result.error if not skill_result.success else None,
+                    caller_user_id=invocation_context.caller if invocation_context else None,
+                )
+            except Exception:
+                pass
+
+            # Record into chain context so subsequent skills can reference this result
+            if chain_context is not None and skill_result is not None:
+                chain_context.store(skill.name, skill_result)
+
+            return skill_result if skill_result is not None else SkillResult(success=False, error="未知错误")
+        except Exception as exc:
+            logger.error("SKILL '%s' 执行异常: %s", skill.name, exc)
+            return SkillResult(success=False, error=str(exc))
 
     def save_all_stores(self) -> None:
         """Persist all dirty data stores."""

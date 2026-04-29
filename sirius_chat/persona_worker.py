@@ -126,6 +126,7 @@ class PersonaWorker:
             await bridge.start()
             self._adapters.append(adapter)
             self._bridges.append(bridge)
+            self._runtime.set_skill_bridge(bridge)
             LOG.info("NapCat adapter 已启动: %s", adapter_cfg.ws_url)
         else:
             LOG.warning("未知 adapter 类型，已跳过: %s", type(adapter_cfg).__name__)
