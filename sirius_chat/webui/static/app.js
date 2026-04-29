@@ -277,12 +277,27 @@ function _addProviderModel(i) {
 
 function _maskKey(key) {
   if (!key) return '未设置';
-  if (key.length <= 8) return '•'.repeat(key.length);
-  return key.slice(0,4) + '••••' + key.slice(-4);
+  if (key.length <= 10) return '••••';
+  return key.slice(0,6) + '••••' + key.slice(-4);
+}
+
+function _shortUrl(url, type) {
+  if (!url) return '—';
+  if (_isBuiltin(type)) {
+    try { return new URL(url).hostname; } catch { return url; }
+  }
+  return url;
 }
 
 function _isBuiltin(type) {
   return BUILTIN_PROVIDER_TYPES.includes(type);
+}
+
+function providerToggleEnabled(i) {
+  providerDraft[i].enabled = providerDraft[i].enabled === false ? true : false;
+  _renderProviderDraft();
+  // 自动保存，避免用户忘记点保存
+  saveProviders();
 }
 
 function providerStartEdit(i) {
@@ -340,24 +355,25 @@ function _renderProviderDraft() {
     }
     // 只读模式
     const modelsHtml = (p.models || []).map(m => `<span class="tag">${m}</span>`).join('');
+    const urlDisplay = _shortUrl(p.base_url, p.type);
     return `
     <div class="provider-row readonly">
       <div class="pv-header">
-        <div class="pv-name">
-          ${p.type || '未命名'}
-          <span class="pv-badge${p.enabled!==false?' enabled':' disabled'}">${p.enabled!==false?'✅ 启用':'⛔ 禁用'}</span>
-          ${builtin?'<span class="pv-badge">内置</span>':''}
+        <div class="pv-title">
+          <span class="pv-platform">${p.type || '未命名'}</span>
+          ${builtin?'<span class="pv-badge builtin">内置</span>':''}
         </div>
         <div class="pv-actions">
+          <div class="toggle-switch${p.enabled!==false?' on':''}" onclick="providerToggleEnabled(${i})" title="${p.enabled!==false?'点击禁用':'点击启用'}"></div>
           <button class="btn small" onclick="providerStartEdit(${i})">✏️ 编辑</button>
           <button class="btn small danger" onclick="providerDraft.splice(${i},1);_renderProviderDraft()">✕</button>
         </div>
       </div>
-      <div class="pv-body">
-        <div class="pv-item"><label>模型</label><div class="pv-val">${modelsHtml||'—'}</div></div>
-        <div class="pv-item"><label>API Key</label><div class="pv-val">${_maskKey(p.api_key)}</div></div>
-        <div class="pv-item"><label>健康检查</label><div class="pv-val">${p.healthcheck_model||'—'}</div></div>
-        <div class="pv-item"><label>URL</label><div class="pv-val">${p.base_url||'—'}</div></div>
+      <div class="pv-models">${modelsHtml||'<span style="color:var(--text-2);font-size:13px">暂无模型</span>'}</div>
+      <div class="pv-meta">
+        <div class="pv-meta-item"><span class="pv-meta-label">🔑</span><span class="pv-meta-val">${_maskKey(p.api_key)}</span></div>
+        <div class="pv-meta-item"><span class="pv-meta-label">🩺</span><span class="pv-meta-val">${p.healthcheck_model||'—'}</span></div>
+        <div class="pv-meta-item"><span class="pv-meta-label">🔗</span><span class="pv-meta-val" title="${p.base_url||''}">${urlDisplay}</span></div>
       </div>
     </div>`;
   }).join('');
