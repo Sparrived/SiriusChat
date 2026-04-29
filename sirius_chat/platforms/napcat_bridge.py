@@ -92,19 +92,24 @@ class ConfigStore:
 class NapCatBridge:
     """QQ 群聊/私聊与 SiriusChat Engine 的桥接器。"""
 
+    _NOT_READY_LOG_INTERVAL = 30.0  # 引擎未就绪提示的日志间隔（秒）
+
     def __init__(
         self,
         adapter: NapCatAdapter,
+        runtime: EngineRuntime,
         work_path: str | Path,
         config: dict[str, Any] | None = None,
     ) -> None:
         self.adapter = adapter
+        self.runtime = runtime
         self.work_path = Path(work_path).resolve()
         self.work_path.mkdir(parents=True, exist_ok=True)
         self.plugin_config = dict(config or {})
 
         self._enabled = True
         self._running = False
+        self._last_not_ready_log: float = 0.0
         self._reply_lock = asyncio.Lock()
         self._image_cache_dir = self.work_path / "image_cache"
 
@@ -128,7 +133,6 @@ class NapCatBridge:
             self._store.set("allowed_group_ids", [old_gid])
             LOG.info("配置迁移: allowed_group_id=%s → allowed_group_ids", old_gid)
 
-        self.runtime = EngineRuntime(self.work_path, plugin_config=self.plugin_config)
         self._bg_task: asyncio.Task | None = None
         self._event_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
 
@@ -202,7 +206,10 @@ class NapCatBridge:
             return
 
         if not self.runtime.is_ready():
-            LOG.warning("引擎未就绪，跳过消息")
+            now = asyncio.get_event_loop().time()
+            if now - self._last_not_ready_log >= self._NOT_READY_LOG_INTERVAL:
+                self._last_not_ready_log = now
+                LOG.warning("引擎未就绪，跳过消息（每 %.0f 秒提示一次）", self._NOT_READY_LOG_INTERVAL)
             return
 
         await self._process_message(gid, uid, prompt, event)
@@ -238,7 +245,10 @@ class NapCatBridge:
             return
 
         if not self.runtime.is_ready():
-            LOG.warning("引擎未就绪，跳过消息")
+            now = asyncio.get_event_loop().time()
+            if now - self._last_not_ready_log >= self._NOT_READY_LOG_INTERVAL:
+                self._last_not_ready_log = now
+                LOG.warning("引擎未就绪，跳过消息（每 %.0f 秒提示一次）", self._NOT_READY_LOG_INTERVAL)
             return
 
         await self._process_message(f"private_{uid}", uid, prompt, event)

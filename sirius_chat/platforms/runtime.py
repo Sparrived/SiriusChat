@@ -122,13 +122,16 @@ class EngineRuntime:
     def is_ready(self) -> bool:
         """检查引擎是否已就绪（provider + persona 均配置完成）。"""
         if not self.has_provider_config():
+            LOG.warning("引擎未就绪: 未配置 Provider。请在 WebUI 的「Provider 配置」页面添加 API Key，或在 data/providers/provider_keys.json 中配置。")
             return False
         if not self.has_persona():
+            LOG.warning("引擎未就绪: 未找到人格配置。请在 WebUI 的「人格配置」页面保存人格，或检查 %s/engine_state/persona.json 是否存在。", self.work_path)
             return False
         try:
             _ = self.engine
             return True
-        except Exception:
+        except Exception as exc:
+            LOG.warning("引擎未就绪: 引擎初始化失败: %s", exc)
             return False
 
     def _build_provider(self) -> AutoRoutingProvider | None:

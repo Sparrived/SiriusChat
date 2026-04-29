@@ -7,8 +7,11 @@
 
     from sirius_chat.platforms import NapCatAdapter, NapCatBridge
 
+    from sirius_chat.platforms.runtime import EngineRuntime
+
+    runtime = EngineRuntime("./work_path", global_data_path="./data")
     adapter = NapCatAdapter(ws_url="ws://localhost:3001", token="napcat_ws")
-    bridge = NapCatBridge(adapter, work_path="./work_path", config={"root": "123456"})
+    bridge = NapCatBridge(adapter, runtime=runtime, work_path="./work_path", config={"root": "123456"})
     await adapter.connect()
     await bridge.start()
 """

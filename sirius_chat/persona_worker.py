@@ -118,6 +118,7 @@ class PersonaWorker:
             }
             bridge = NapCatBridge(
                 adapter=adapter,
+                runtime=self._runtime,
                 work_path=self.persona_dir,
                 config=bridge_config,
             )
