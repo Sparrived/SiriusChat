@@ -40,6 +40,7 @@ class NapCatManager:
         self.instance_dir = Path(instance_dir).resolve() if instance_dir else self.install_dir
         self.config_dir = self.instance_dir / "config"
         self.logs_dir = self.instance_dir / "logs"
+        self._pid_file = self.instance_dir / "napcat.pid"
         self._process: subprocess.Popen | None = None
         self._monitor_task: asyncio.Task | None = None
 
@@ -186,8 +187,64 @@ class NapCatManager:
 
     @property
     def is_running(self) -> bool:
-        """检查 NapCat 进程是否仍在运行。"""
-        return self._process is not None and self._process.poll() is None
+        """检查 NapCat 进程是否仍在运行（含跨进程 pid 文件检测）。"""
+        if self._process is not None and self._process.poll() is None:
+            return True
+        # 跨进程检测：如果另一个 CLI/WebUI 进程已启动同一实例
+        pid = self._read_pid_file()
+        if pid is not None and self._is_process_alive(pid):
+            return True
+        return False
+
+    # ── pid 文件辅助 ─────────────────────────────────────
+
+    def _read_pid_file(self) -> int | None:
+        """读取 pid 文件中的进程号，文件不存在或格式错误返回 None。"""
+        if not self._pid_file.exists():
+            return None
+        try:
+            text = self._pid_file.read_text(encoding="utf-8").strip()
+            return int(text)
+        except (ValueError, OSError):
+            return None
+
+    def _write_pid_file(self, pid: int) -> None:
+        """将进程号写入 pid 文件。"""
+        try:
+            self._pid_file.write_text(str(pid), encoding="utf-8")
+        except OSError as exc:
+            LOG.warning("写入 pid 文件失败: %s", exc)
+
+    def _remove_pid_file(self) -> None:
+        """删除 pid 文件。"""
+        try:
+            if self._pid_file.exists():
+                self._pid_file.unlink()
+        except OSError as exc:
+            LOG.warning("删除 pid 文件失败: %s", exc)
+
+    @staticmethod
+    def _is_process_alive(pid: int) -> bool:
+        """检查指定 pid 的进程是否仍在运行。"""
+        try:
+            import psutil
+            return psutil.pid_exists(pid)
+        except Exception:
+            # fallback: 尝试发送信号 0（Unix）或 ctypes OpenProcess（Windows）
+            if sys.platform == "win32":
+                import ctypes
+                kernel32 = ctypes.windll.kernel32
+                handle = kernel32.OpenProcess(0x0400, False, pid)  # PROCESS_QUERY_INFORMATION
+                if handle:
+                    kernel32.CloseHandle(handle)
+                    return True
+                return False
+            else:
+                try:
+                    os.kill(pid, 0)
+                    return True
+                except OSError:
+                    return False
 
     # ── 安装 ─────────────────────────────────────────────
 
@@ -411,6 +468,9 @@ class NapCatManager:
         if self.is_running:
             return {"success": True, "message": "NapCat 已在运行"}
 
+        # 清理过期的 pid 文件（进程已死但文件残留）
+        self._remove_pid_file()
+
         if not self.is_installed:
             return {"success": False, "message": "NapCat 未安装"}
 
@@ -471,6 +531,7 @@ class NapCatManager:
             return {"success": False, "message": f"启动失败: {exc}"}
 
         LOG.info("NapCat 进程已启动 (pid=%s)", self._process.pid)
+        self._write_pid_file(self._process.pid)
         return {
             "success": True,
             "message": f"NapCat 已启动 (pid={self._process.pid})。首次使用请在弹出的 QQ 窗口中扫码登录。",
@@ -495,6 +556,7 @@ class NapCatManager:
             return {"success": False, "message": f"停止失败: {exc}"}
 
         self._process = None
+        self._remove_pid_file()
         LOG.info("NapCat 已停止")
         return {"success": True, "message": "NapCat 已停止"}
 

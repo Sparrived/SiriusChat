@@ -113,25 +113,18 @@ class NapCatBridge:
         self._reply_lock = asyncio.Lock()
         self._image_cache_dir = self.work_path / "image_cache"
 
-        # 配置持久化
-        self._store = ConfigStore(self.work_path / "qq_bridge_config.json")
-        defaults = {
-            "allowed_group_ids": [_DEFAULT_ALLOWED_GROUP_ID],
-            "allowed_private_user_ids": [],
-            "enable_group_chat": True,
-            "enable_private_chat": True,
-            "auto_install_skill_deps": True,
-            "setup_completed": False,
-            "setup_wizard_running": False,
-        }
-        for key, value in defaults.items():
+        # Bridge 内部状态持久化（setup wizard 等）
+        # 旧文件 qq_bridge_config.json 已废弃，adapter 配置统一走 adapters.json
+        self._state_path = self.work_path / "engine_state" / "bridge_state.json"
+        self._store = ConfigStore(self._state_path)
+        self._migrate_and_cleanup_old_bridge_config()
+
+        for key, value in (
+            ("setup_completed", False),
+            ("setup_wizard_running", False),
+        ):
             if key not in self._store:
                 self._store.set(key, value)
-
-        old_gid = self._store.get("allowed_group_id")
-        if old_gid is not None and isinstance(old_gid, str) and old_gid:
-            self._store.set("allowed_group_ids", [old_gid])
-            LOG.info("配置迁移: allowed_group_id=%s → allowed_group_ids", old_gid)
 
         self._bg_task: asyncio.Task | None = None
         self._event_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
@@ -194,7 +187,8 @@ class NapCatBridge:
             return
         if not self._enabled:
             return
-        if not self._store.get("enable_group_chat", True):
+        cfg = self._load_adapter_cfg()
+        if cfg is not None and getattr(cfg, "enable_group_chat", True) is False:
             return
 
         prompt = await self._render_group_prompt(event)
@@ -231,7 +225,8 @@ class NapCatBridge:
 
         if not self._enabled:
             return
-        if not self._store.get("enable_private_chat", True):
+        cfg = self._load_adapter_cfg()
+        if cfg is not None and getattr(cfg, "enable_private_chat", True) is False:
             return
 
         prompt = await self._render_private_prompt(event)
@@ -302,6 +297,7 @@ class NapCatBridge:
             channel_user_id=user_id,
             group_id=group_id,
             multimodal_inputs=multimodal_inputs,
+            adapter_type="napcat",
         )
 
         try:
@@ -590,8 +586,26 @@ class NapCatBridge:
     def save_data(self) -> None:
         self._store._save()
 
+    def _load_adapter_cfg(self) -> Any | None:
+        """Load the first NapCat adapter config from adapters.json."""
+        adapters_path = self.work_path / "adapters.json"
+        if not adapters_path.exists():
+            return None
+        try:
+            from sirius_chat.persona_config import PersonaAdaptersConfig
+
+            adapters_cfg = PersonaAdaptersConfig.load(adapters_path)
+            if adapters_cfg.adapters:
+                return adapters_cfg.adapters[0]
+        except Exception:
+            pass
+        return None
+
     def _get_allowed_group_ids(self) -> list[str]:
-        gids = self._store.get("allowed_group_ids", [_DEFAULT_ALLOWED_GROUP_ID])
+        cfg = self._load_adapter_cfg()
+        gids = getattr(cfg, "allowed_group_ids", None) if cfg is not None else None
+        if gids is None:
+            gids = [_DEFAULT_ALLOWED_GROUP_ID]
         if isinstance(gids, str):
             try:
                 parsed = json.loads(gids)
@@ -605,7 +619,10 @@ class NapCatBridge:
         return [str(g).strip() for g in gids if g]
 
     def _get_allowed_private_user_ids(self) -> list[str]:
-        uids = self._store.get("allowed_private_user_ids", [])
+        cfg = self._load_adapter_cfg()
+        uids = getattr(cfg, "allowed_private_user_ids", None) if cfg is not None else None
+        if uids is None:
+            uids = []
         if isinstance(uids, str):
             try:
                 parsed = json.loads(uids)
@@ -617,6 +634,25 @@ class NapCatBridge:
                 return [u.strip().strip("'\"[]()") for u in uids.split(",") if u.strip()]
             return [uids.strip()] if uids.strip() else []
         return [str(u).strip() for u in uids if u]
+
+    def _migrate_and_cleanup_old_bridge_config(self) -> None:
+        """Migrate setup state from deprecated qq_bridge_config.json, then delete it."""
+        old_path = self.work_path / "qq_bridge_config.json"
+        if not old_path.exists():
+            return
+        try:
+            old_data = json.loads(old_path.read_text(encoding="utf-8"))
+            for key in ("setup_completed", "setup_wizard_running", "setup_wizard_notified"):
+                if key in old_data:
+                    self._store.set(key, old_data[key])
+            LOG.info("已从 qq_bridge_config.json 迁移 setup 状态到 %s", self._state_path)
+        except Exception as exc:
+            LOG.warning("迁移 qq_bridge_config.json 失败: %s", exc)
+        try:
+            old_path.unlink()
+            LOG.info("已清理旧文件: %s", old_path)
+        except OSError as exc:
+            LOG.warning("删除 qq_bridge_config.json 失败: %s", exc)
 
     # ─── 权限与工具 ───────────────────────────────────────
 

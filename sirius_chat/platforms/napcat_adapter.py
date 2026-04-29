@@ -19,6 +19,19 @@ LOG = logging.getLogger("sirius.platforms.napcat")
 EventHandler = Callable[[dict[str, Any]], Any]
 
 
+def _is_ws_closed(ws: Any) -> bool:
+    """兼容各版本 websockets 的 closed 检测。"""
+    try:
+        return bool(ws.closed)
+    except AttributeError:
+        # websockets >= 14 移除了 .closed，改用 state 枚举
+        try:
+            from websockets.protocol import State
+            return ws.state != State.OPEN
+        except Exception:
+            return getattr(ws, "close_code", None) is not None
+
+
 class NapCatAdapter:
     """轻量级 NapCat OneBot v11 正向 WebSocket 客户端。"""
 
@@ -92,7 +105,7 @@ class NapCatAdapter:
     async def _reconnect_loop(self) -> None:
         """自动重连循环：连接断开后在指定间隔后重试。"""
         while self._running:
-            if self.ws is None or self.ws.closed:
+            if self.ws is None or _is_ws_closed(self.ws):
                 if await self._connect_once():
                     self._listen_task = asyncio.create_task(self._listen_loop())
                     # 等待监听任务结束（连接断开）
@@ -154,7 +167,7 @@ class NapCatAdapter:
 
     async def call_api(self, action: str, params: dict[str, Any]) -> dict[str, Any]:
         """通过 WebSocket 发送 OneBot API 请求并等待响应。"""
-        if not self.ws or self.ws.closed or not self._running:
+        if not self.ws or _is_ws_closed(self.ws) or not self._running:
             raise RuntimeError("WebSocket not connected")
 
         self._echo_counter += 1
