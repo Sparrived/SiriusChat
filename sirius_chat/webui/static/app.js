@@ -185,33 +185,72 @@ async function stopPersona(name) {
 }
 
 // ── Providers ─────────────────────────────────────────
+const BUILTIN_PROVIDER_TYPES = ['deepseek','aliyun-bailian','bigmodel','siliconflow','volcengine-ark','ytea'];
+const PROVIDER_TYPE_OPTIONS = [
+  {value:'openai-compatible',label:'OpenAI Compatible'},
+  {value:'deepseek',label:'DeepSeek'},
+  {value:'aliyun-bailian',label:'阿里云百炼'},
+  {value:'bigmodel',label:'智谱 BigModel'},
+  {value:'siliconflow',label:'SiliconFlow'},
+  {value:'volcengine-ark',label:'火山方舟'},
+  {value:'ytea',label:'YTea'},
+];
+const PROVIDER_DEFAULT_URLS = {
+  'openai-compatible': 'https://api.openai.com',
+  'deepseek': 'https://api.deepseek.com',
+  'aliyun-bailian': 'https://dashscope.aliyuncs.com/compatible-mode',
+  'bigmodel': 'https://open.bigmodel.cn/api/paas/v4',
+  'siliconflow': 'https://api.siliconflow.cn',
+  'volcengine-ark': 'https://ark.cn-beijing.volces.com/api/v3',
+  'ytea': 'https://api.ytea.top',
+};
+
+let providerEditIndex = -1;
+let providerBackup = null;
+
 async function loadProviders() {
   try {
     const res = await get('/providers');
     providerDraft = JSON.parse(JSON.stringify(res.providers || []));
+    providerEditIndex = -1;
+    providerBackup = null;
     _renderProviderDraft();
     $('dashProviderCount').textContent = String(providerDraft.length);
   } catch (e) {}
 }
 
-function _renderProviderModels(i) {
+function _providerTypeSelect(i, selected) {
+  return `<select onchange="_onProviderTypeChange(${i},this.value)">
+    ${PROVIDER_TYPE_OPTIONS.map(o => `<option value="${o.value}"${o.value===selected?' selected':''}>${o.label}</option>`).join('')}
+  </select>`;
+}
+
+function _onProviderTypeChange(i, val) {
+  providerDraft[i].type = val;
+  if (BUILTIN_PROVIDER_TYPES.includes(val)) {
+    providerDraft[i].base_url = PROVIDER_DEFAULT_URLS[val] || '';
+  } else {
+    providerDraft[i].base_url = providerDraft[i].base_url || 'https://';
+  }
+  _renderProviderDraft();
+}
+
+function _renderProviderModelsEdit(i) {
   const p = providerDraft[i];
   const models = p.models || [];
   const tags = models.map((m, mi) => `<span class="tag">${m} <span class="remove" onclick="providerDraft[${i}].models.splice(${mi},1);_renderProviderDraft()">✕</span></span>`).join('');
   return `
-    <div style="margin-top:6px">
-      <div style="display:flex;gap:6px">
-        <input type="text" placeholder="添加模型名" id="pmodel-${i}" style="flex:1;font-size:12px" onkeydown="if(event.key==='Enter'){_addProviderModel(${i})}">
-        <button class="btn small" onclick="_addProviderModel(${i})">添加</button>
-      </div>
-      <div class="tag-list" style="margin-top:4px">${tags}</div>
+    <div class="tag-list">${tags}</div>
+    <div class="pv-models-add">
+      <input type="text" placeholder="添加模型名" id="pmodel-${i}" onkeydown="if(event.key==='Enter'){_addProviderModel(${i})}">
+      <button class="btn small" onclick="_addProviderModel(${i})">添加</button>
     </div>
   `;
 }
 
 function _addProviderModel(i) {
   const input = $(`pmodel-${i}`);
-  const v = input.value.trim();
+  const v = input?.value?.trim();
   if (!v) return;
   providerDraft[i].models = providerDraft[i].models || [];
   if (!providerDraft[i].models.includes(v)) {
@@ -221,35 +260,108 @@ function _addProviderModel(i) {
   _renderProviderDraft();
 }
 
-function _renderProviderDraft() {
-  const el = $('providerList');
-  el.innerHTML = providerDraft
-    .map(
-      (p, i) => `
-    <div class="provider-row" style="flex-wrap:wrap;margin-bottom:12px;padding:12px;background:var(--bg);border-radius:8px">
-      <div style="display:flex;gap:8px;flex-wrap:wrap;width:100%;margin-bottom:6px">
-        <input placeholder="平台" value="${p.type || ''}" oninput="providerDraft[${i}].type=this.value" style="flex:1;min-width:120px">
-        <input placeholder="Base URL" value="${p.base_url || ''}" oninput="providerDraft[${i}].base_url=this.value" style="flex:2;min-width:200px">
-        <input type="password" placeholder="API Key" value="${p.api_key || ''}" oninput="providerDraft[${i}].api_key=this.value" style="flex:2;min-width:200px">
-        <input placeholder="健康检查模型" value="${p.healthcheck_model || ''}" oninput="providerDraft[${i}].healthcheck_model=this.value" style="flex:1;min-width:120px">
-        <button class="btn small" onclick="providerDraft[${i}].enabled=!providerDraft[${i}].enabled;_renderProviderDraft()">${providerDraft[i].enabled !== false ? '启用' : '禁用'}</button>
-        <button class="btn small danger" onclick="providerDraft.splice(${i},1);_renderProviderDraft()">✕</button>
-      </div>
-      ${_renderProviderModels(i)}
-    </div>
-  `
-    )
-    .join('');
-  if (!providerDraft.length)
-    el.innerHTML = '<div style="color:var(--text-2);padding:10px">暂无 Provider，请点击「添加 Provider」。</div>';
+function _maskKey(key) {
+  if (!key) return '未设置';
+  if (key.length <= 8) return '•'.repeat(key.length);
+  return key.slice(0,4) + '••••' + key.slice(-4);
 }
-function addProvider() {
-  providerDraft.push({ type: '', base_url: '', api_key: '', healthcheck_model: '', enabled: true, models: [] });
+
+function _isBuiltin(type) {
+  return BUILTIN_PROVIDER_TYPES.includes(type);
+}
+
+function providerStartEdit(i) {
+  providerBackup = JSON.parse(JSON.stringify(providerDraft[i]));
+  providerEditIndex = i;
   _renderProviderDraft();
 }
+
+function providerCancelEdit() {
+  if (providerEditIndex >= 0 && providerBackup) {
+    providerDraft[providerEditIndex] = providerBackup;
+  }
+  providerEditIndex = -1;
+  providerBackup = null;
+  _renderProviderDraft();
+}
+
+function _renderProviderDraft() {
+  const el = $('providerList');
+  if (!providerDraft.length) {
+    el.innerHTML = '<div style="color:var(--text-2);padding:10px">暂无 Provider，请点击「添加 Provider」。</div>';
+    return;
+  }
+  el.innerHTML = providerDraft.map((p, i) => {
+    const isEditing = i === providerEditIndex;
+    const builtin = _isBuiltin(p.type);
+    if (isEditing) {
+      return `
+      <div class="provider-row editing">
+        <div class="pv-edit-grid">
+          <div class="form-group"><label>平台</label>${_providerTypeSelect(i, p.type || '')}</div>
+          <div class="form-group"><label>Base URL</label>
+            ${builtin
+              ? `<input type="text" value="${PROVIDER_DEFAULT_URLS[p.type]||''}" disabled style="opacity:.6">`
+              : `<input type="text" value="${p.base_url||''}" oninput="providerDraft[${i}].base_url=this.value">`}
+          </div>
+          <div class="form-group"><label>API Key</label><input type="password" value="${p.api_key||''}" oninput="providerDraft[${i}].api_key=this.value" placeholder="sk-..."></div>
+          <div class="form-group"><label>健康检查模型</label><input type="text" value="${p.healthcheck_model||''}" oninput="providerDraft[${i}].healthcheck_model=this.value"></div>
+          <div class="form-group full">
+            <label>模型列表</label>
+            ${_renderProviderModelsEdit(i)}
+          </div>
+        </div>
+        <div class="pv-edit-footer">
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:13px;color:var(--text)">
+            <input type="checkbox"${p.enabled!==false?' checked':''} onchange="providerDraft[${i}].enabled=this.checked"> 启用
+          </label>
+          <div class="pv-actions">
+            <button class="btn success small" onclick="saveProviders()">💾 保存</button>
+            <button class="btn small" onclick="providerCancelEdit()">取消</button>
+            <button class="btn small danger" onclick="providerDraft.splice(${i},1);providerEditIndex=-1;_renderProviderDraft()">删除</button>
+          </div>
+        </div>
+      </div>`;
+    }
+    // 只读模式
+    const modelsHtml = (p.models || []).map(m => `<span class="tag">${m}</span>`).join('');
+    return `
+    <div class="provider-row readonly">
+      <div class="pv-header">
+        <div class="pv-name">
+          ${p.type || '未命名'}
+          <span class="pv-badge${p.enabled!==false?' enabled':' disabled'}">${p.enabled!==false?'✅ 启用':'⛔ 禁用'}</span>
+          ${builtin?'<span class="pv-badge">内置</span>':''}
+        </div>
+        <div class="pv-actions">
+          <button class="btn small" onclick="providerStartEdit(${i})">✏️ 编辑</button>
+          <button class="btn small danger" onclick="providerDraft.splice(${i},1);_renderProviderDraft()">✕</button>
+        </div>
+      </div>
+      <div class="pv-body">
+        <div class="pv-item"><label>模型</label><div class="pv-val">${modelsHtml||'—'}</div></div>
+        <div class="pv-item"><label>API Key</label><div class="pv-val">${_maskKey(p.api_key)}</div></div>
+        <div class="pv-item"><label>健康检查</label><div class="pv-val">${p.healthcheck_model||'—'}</div></div>
+        <div class="pv-item"><label>URL</label><div class="pv-val">${p.base_url||'—'}</div></div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function addProvider() {
+  if (providerEditIndex >= 0) providerCancelEdit();
+  const idx = providerDraft.length;
+  providerDraft.push({ type: 'openai-compatible', base_url: 'https://', api_key: '', healthcheck_model: '', enabled: true, models: [] });
+  providerStartEdit(idx);
+}
+
 async function saveProviders() {
   const res = await post('/providers', { providers: providerDraft });
   toast(res.success ? 'Provider 已保存' : res.error || '保存失败', res.success ? 'success' : 'error');
+  if (res.success) {
+    providerEditIndex = -1;
+    providerBackup = null;
+  }
   loadProviders();
 }
 

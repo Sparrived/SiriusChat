@@ -164,11 +164,53 @@ textarea { min-height: 80px; resize: vertical; }
 .col { flex: 1; min-width: 200px; }
 
 .provider-row {
-  display: grid; grid-template-columns: 1fr 2fr 1.5fr 1fr 80px 40px; gap: 10px;
-  align-items: center; padding: 10px; background: var(--bg); border-radius: 8px; margin-bottom: 8px;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+  padding: 14px; margin-bottom: 10px;
 }
-.provider-row input { padding: 8px 10px; font-size: 13px; }
-.provider-row .btn { padding: 6px 10px; font-size: 12px; }
+.provider-row.readonly .pv-header {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  margin-bottom: 10px;
+}
+.provider-row.readonly .pv-name {
+  font-size: 15px; font-weight: 600; color: var(--text);
+  display: flex; align-items: center; gap: 8px;
+}
+.provider-row.readonly .pv-badge {
+  font-size: 11px; padding: 2px 8px; border-radius: 4px;
+  background: var(--surface-2); color: var(--text-2);
+}
+.provider-row.readonly .pv-badge.enabled { background: rgba(63,185,80,0.15); color: var(--accent-2); }
+.provider-row.readonly .pv-badge.disabled { background: var(--surface-2); color: var(--text-2); opacity: .6; }
+.provider-row.readonly .pv-body {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 8px 16px;
+  font-size: 13px; color: var(--text-2);
+}
+.provider-row.readonly .pv-body .pv-item {
+  display: flex; gap: 6px; align-items: baseline;
+}
+.provider-row.readonly .pv-body .pv-item label {
+  font-size: 12px; color: var(--text-2); margin: 0; min-width: 60px;
+}
+.provider-row.readonly .pv-body .pv-item .pv-val {
+  color: var(--text); word-break: break-all;
+}
+.provider-row .pv-actions { display: flex; gap: 6px; }
+.provider-row .pv-actions .btn { padding: 5px 10px; font-size: 12px; }
+
+.provider-row.editing .pv-edit-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px 14px;
+}
+.provider-row.editing .pv-edit-grid .form-group { margin-bottom: 0; }
+.provider-row.editing .pv-edit-grid .form-group.full { grid-column: 1 / -1; }
+.provider-row.editing .pv-edit-grid input,
+.provider-row.editing .pv-edit-grid select { padding: 8px 10px; font-size: 13px; }
+.provider-row.editing .pv-edit-footer {
+  display: flex; justify-content: space-between; align-items: center; margin-top: 12px;
+}
+.provider-row.editing .pv-models-add {
+  display: flex; gap: 6px; margin-top: 6px;
+}
+.provider-row.editing .pv-models-add input { flex: 1; font-size: 12px; padding: 6px 10px; }
 
 .tag-list { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
 .tag {
