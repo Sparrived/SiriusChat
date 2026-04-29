@@ -1238,7 +1238,7 @@ class EmotionalGroupChatEngine:
                 if profile.is_developer:
                     developer_profiles.append(profile)
 
-            for skill_name, params in calls:
+            for idx, (skill_name, params) in enumerate(calls):
                 skill = self._skill_registry.get(skill_name)
                 if skill is None:
                     err = f"SKILL '{skill_name}' 未找到"
@@ -1296,6 +1296,10 @@ class EmotionalGroupChatEngine:
                     logger.error("SKILL '%s' 执行异常: %s", skill_name, exc)
                     if not skill.silent:
                         skill_results.append(f"[SKILL '{skill_name}' 异常] {exc}")
+
+                # 链式调用中间增加延迟，避免回复过快
+                if idx < len(calls) - 1:
+                    await asyncio.sleep(2)
 
             # If all skills were silent, skip the follow-up generation round.
             if all_silent:
