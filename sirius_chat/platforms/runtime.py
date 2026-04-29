@@ -190,14 +190,18 @@ class EngineRuntime:
         )
         LOG.info("SKILL runtime 已挂载，共 %d 个技能", len(registry.skill_names))
 
-    def set_skill_bridge(self, bridge: Any) -> None:
-        """Attach a platform bridge to the skill executor so skills can call adapter APIs."""
+    def add_skill_bridge(self, adapter_type: str, bridge: Any) -> None:
+        """Register a platform bridge so adapter-specific skills can call adapter APIs.
+
+        Multiple bridges can be registered (e.g. napcat + discord).
+        The SkillExecutor matches them to skills via adapter_types.
+        """
         if self._engine is None:
             return
         executor = getattr(self._engine, "_skill_executor", None)
         if executor is not None:
-            executor._bridge = bridge
-            LOG.info("平台 bridge 已注入 skill executor: %s", type(bridge).__name__)
+            executor.set_bridge(adapter_type, bridge)
+            LOG.info("平台 bridge 已注入 skill executor: %s → %s", adapter_type, type(bridge).__name__)
 
     def _build_engine(self) -> EmotionalGroupChatEngine:
         provider = self._build_provider()

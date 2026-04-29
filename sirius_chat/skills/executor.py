@@ -73,11 +73,30 @@ def _should_retry(exc: Exception) -> bool:
 class SkillExecutor:
     """Execute skills with parameter validation, retry, telemetry, and data store injection."""
 
-    def __init__(self, work_path: Path | WorkspaceLayout, bridge: Any | None = None) -> None:
+    def __init__(self, work_path: Path | WorkspaceLayout) -> None:
         self._layout = work_path if isinstance(work_path, WorkspaceLayout) else WorkspaceLayout(work_path)
         self._data_stores: dict[str, SkillDataStore] = {}
         self._telemetry = SkillTelemetry(self._layout.skill_data_dir() / ".telemetry.jsonl")
-        self._bridge = bridge
+        self._bridges: dict[str, Any] = {}
+
+    def set_bridge(self, adapter_type: str, bridge: Any) -> None:
+        """Register a platform bridge for a given adapter type."""
+        self._bridges[adapter_type] = bridge
+
+    def get_bridge_for_skill(self, skill: SkillDefinition) -> Any | None:
+        """Return the best-matching bridge for a skill.
+
+        If the skill declares adapter_types, return the first matching bridge.
+        Otherwise return the first available bridge (or None).
+        """
+        if not self._bridges:
+            return None
+        if skill.adapter_types:
+            for at in skill.adapter_types:
+                if at in self._bridges:
+                    return self._bridges[at]
+            return None
+        return next(iter(self._bridges.values()), None)
 
     def get_data_store(self, skill_name: str) -> SkillDataStore:
         """Get or create the persistent data store for a skill."""
@@ -153,8 +172,9 @@ class SkillExecutor:
                 call_params["data_store"] = data_store
             if invocation_context is not None and injection_plan.accepts("invocation_context"):
                 call_params["invocation_context"] = invocation_context
-            if self._bridge is not None and injection_plan.accepts("bridge"):
-                call_params["bridge"] = self._bridge
+            bridge = self.get_bridge_for_skill(skill)
+            if bridge is not None and injection_plan.accepts("bridge"):
+                call_params["bridge"] = bridge
 
             # Run with optional retry for transient failures
             last_error: Exception | None = None
@@ -314,8 +334,9 @@ class SkillExecutor:
                 call_params["data_store"] = data_store
             if invocation_context is not None and injection_plan.accepts("invocation_context"):
                 call_params["invocation_context"] = invocation_context
-            if self._bridge is not None and injection_plan.accepts("bridge"):
-                call_params["bridge"] = self._bridge
+            bridge = self.get_bridge_for_skill(skill)
+            if bridge is not None and injection_plan.accepts("bridge"):
+                call_params["bridge"] = bridge
 
             last_error: Exception | None = None
             skill_result: SkillResult | None = None
