@@ -400,7 +400,7 @@ class EmotionalGroupChatEngine:
         return max(prefix_ratio, jaccard)
 
     def _message_directed_at_other_ai(self, content: str | None) -> bool:
-        """检测人类消息是否明确指向其他 AI（提到其他 AI 名字且未提及当前 AI）。"""
+        """检测消息是否明确指向其他 AI（提到其他 AI 名字且当前 AI 不是主被问者）。"""
         other_names = self.config.get("other_ai_names", [])
         if not other_names:
             return False
@@ -408,7 +408,22 @@ class EmotionalGroupChatEngine:
         text = (content or "").lower()
         mentions_me = any(name in text for name in my_names if name)
         mentions_other = any(name.lower() in text for name in other_names if name)
-        return mentions_other and not mentions_me
+        if not mentions_other:
+            return False
+        if not mentions_me:
+            # 只提到其他 AI，没提到自己 → 抑制
+            return True
+        # 同时提到自己和其他 AI → 检查谁是第一个被提到的
+        # 如果自己不是第一个被提到的 → 抑制（让第一个被提到的 AI 主导回复）
+        all_names = [(n, "me") for n in my_names if n] + [(n.lower(), "other") for n in other_names if n]
+        first_pos = len(text)
+        first_who = None
+        for name, who in all_names:
+            pos = text.find(name)
+            if pos != -1 and pos < first_pos:
+                first_pos = pos
+                first_who = who
+        return first_who == "other"
 
     def _log_inner_thought(
         self, thought: str, emotion: EmotionState | None = None, intensity: float = 0.5
