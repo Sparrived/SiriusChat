@@ -23,6 +23,8 @@ class Message(JsonSerializable):
     reply_mode: str = "always"
     # Adapter 类型，用于按来源过滤可用 Skill（如 "napcat"）
     adapter_type: str | None = None
+    # 发送者类型：human / self_ai / other_ai / system
+    sender_type: str = "human"
 
     @staticmethod
     def _trim_content_tail(content: str) -> str:

@@ -244,6 +244,21 @@ class EmotionalGroupChatEngine:
         # 1. Perception (resolves stable user_id for the sender)
         user_id = self._perception(group_id, message, participants)
         speaker = message.speaker or "有人"
+
+        # 多 AI 互动抑制：其他 AI 发言且未 @ 自己时，只记记忆不回复
+        if message.sender_type == "other_ai":
+            names = [self.persona.name.lower()] + [a.lower() for a in self.persona.aliases]
+            text = (message.content or "").lower()
+            is_mentioned = any(name in text for name in names if name)
+            if not is_mentioned:
+                self._log_inner_thought(f"{speaker} 是另一个 AI，没有被 @ 到我，我先默默听着～")
+                return {
+                    "strategy": "silent",
+                    "reply": None,
+                    "emotion": {},
+                    "intent": {},
+                }
+
         self._log_inner_thought(f"{speaker} 在群里说话了，让我仔细听听看～")
         await self.event_bus.emit(
             SessionEvent(
