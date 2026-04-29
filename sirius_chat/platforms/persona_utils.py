@@ -65,10 +65,12 @@ async def generate_persona_from_interview(
     name: str,
     answers: dict[str, str],
     aliases: list[str] | None = None,
+    model: str | None = None,
 ) -> PersonaProfile:
     """基于问卷回答通过 LLM 生成人格设定。"""
-    orch = OrchestrationStore.load(work_path)
-    model = orch.get("analysis_model", "gpt-4o-mini")
+    if model is None:
+        orch = OrchestrationStore.load(work_path)
+        model = orch.get("analysis_model", "gpt-4o-mini")
 
     qa_lines = []
     for i, q in enumerate(INTERVIEW_QUESTIONS, 1):

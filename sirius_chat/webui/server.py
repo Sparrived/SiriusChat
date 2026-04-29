@@ -23,6 +23,7 @@ from sirius_chat.core.persona_store import PersonaStore
 from sirius_chat.models.persona import PersonaProfile
 from sirius_chat.persona_config import PersonaAdaptersConfig, PersonaConfigPaths, PersonaExperienceConfig
 from sirius_chat.providers.routing import WorkspaceProviderManager
+from sirius_chat.platforms.napcat_manager import NapCatManager
 from sirius_chat.platforms.persona_utils import generate_persona_from_interview
 
 LOG = logging.getLogger("sirius.webui")
@@ -35,6 +36,17 @@ def _json_response(data: dict[str, Any], status: int = 200) -> web.Response:
 def _get_name(request: web.Request) -> str:
     """从 URL 路径参数获取人格名称。"""
     return str(request.match_info.get("name", "")).strip()
+
+
+@web.middleware
+async def _no_cache_middleware(request: web.Request, handler: Any) -> web.StreamResponse:
+    """为静态文件禁用浏览器缓存。"""
+    response = await handler(request)
+    if request.path.startswith("/static/"):
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
 
 
 class WebUIServer:
@@ -51,10 +63,10 @@ class WebUIServer:
         self.host = host
         self.port = port
         self.napcat_manager = None
+        self._napcat_instances: dict[str, Any] = {}
         if napcat_install_dir is not None:
-            from .napcat_manager import NapCatManager
             self.napcat_manager = NapCatManager(napcat_install_dir)
-        self.app = web.Application()
+        self.app = web.Application(middlewares=[_no_cache_middleware])
         self._setup_routes()
         self.runner: web.AppRunner | None = None
         self.site: web.TCPSite | None = None
@@ -69,6 +81,7 @@ class WebUIServer:
         self.app.router.add_post("/api/global-config", self.api_global_config_post)
         self.app.router.add_get("/api/providers", self.api_providers_get)
         self.app.router.add_post("/api/providers", self.api_providers_post)
+        self.app.router.add_get("/api/models", self.api_available_models_get)
         self.app.router.add_get("/api/napcat/status", self.api_napcat_status)
         self.app.router.add_post("/api/napcat/install", self.api_napcat_install)
         self.app.router.add_post("/api/napcat/configure", self.api_napcat_configure)
@@ -78,6 +91,7 @@ class WebUIServer:
 
         # ─── 多人格 API ───────────────────────────────────────
         self.app.router.add_get("/api/personas", self.api_personas_list)
+        self.app.router.add_post("/api/personas", self.api_personas_create)
         self.app.router.add_get("/api/personas/{name}", self.api_persona_status)
         self.app.router.add_post("/api/personas/{name}/start", self.api_persona_start)
         self.app.router.add_post("/api/personas/{name}/stop", self.api_persona_stop)
@@ -223,6 +237,35 @@ class WebUIServer:
     async def api_personas_list(self, request: web.Request) -> web.Response:
         return _json_response({"personas": self.persona_manager.list_personas()})
 
+    async def api_personas_create(self, request: web.Request) -> web.Response:
+        try:
+            body = await request.json()
+        except Exception:
+            return _json_response({"error": "Invalid JSON"}, 400)
+        name = str(body.get("name", "")).strip()
+        if not name:
+            return _json_response({"error": "name is required"}, 400)
+        persona_name = str(body.get("persona_name", "") or name).strip()
+        keywords = body.get("keywords")
+        if isinstance(keywords, str):
+            keywords = [k.strip() for k in keywords.split() if k.strip()]
+        try:
+            pdir = self.persona_manager.create_persona(
+                name,
+                persona_name=persona_name,
+                keywords=keywords,
+            )
+            return _json_response({
+                "success": True,
+                "name": name,
+                "path": str(pdir),
+            })
+        except FileExistsError as exc:
+            return _json_response({"error": str(exc)}, 409)
+        except Exception as exc:
+            LOG.exception("创建人格失败")
+            return _json_response({"error": str(exc)}, 500)
+
     async def api_persona_status(self, request: web.Request) -> web.Response:
         name = _get_name(request)
         info = self.persona_manager.get_persona_status(name)
@@ -232,16 +275,64 @@ class WebUIServer:
 
     async def api_persona_start(self, request: web.Request) -> web.Response:
         name = _get_name(request)
+
+        # 如果配置了 NapCat，先启动对应实例
+        if self.napcat_manager is not None:
+            paths = self.persona_manager.get_persona_paths(name)
+            if paths is not None:
+                adapters = PersonaAdaptersConfig.load(paths.adapters)
+                for a in adapters.adapters:
+                    if a.type != "napcat" or not a.enabled:
+                        continue
+                    qq = getattr(a, "qq_number", "")
+                    port = int(a.ws_url.rsplit(":", 1)[-1]) if ":" in a.ws_url else 3001
+                    if not qq:
+                        return _json_response({"error": f"人格 {name} 的 NapCat 未配置 QQ 号"}, 400)
+
+                    instance_mgr = NapCatManager.for_persona(
+                        global_install_dir=self.napcat_manager.install_dir,
+                        persona_name=name,
+                    )
+                    LOG.info("配置 NapCat 实例 %s (QQ: %s, 端口: %s)...", name, qq, port)
+                    instance_mgr.configure(qq_number=qq, ws_port=port)
+                    result = await instance_mgr.start(qq_number=qq)
+                    if not result["success"]:
+                        return _json_response({"error": f"启动 NapCat 失败: {result['message']}"}, 500)
+                    LOG.info("NapCat 实例 %s 已启动，等待 WS 就绪...", name)
+                    ready = await instance_mgr.wait_for_ws(port=port, timeout=120.0)
+                    if not ready:
+                        return _json_response({"error": "NapCat WS 未就绪，请检查 QQ 是否已扫码登录"}, 500)
+                    self._napcat_instances[name] = instance_mgr
+                    break  # 只处理第一个启用的 napcat adapter
+
         ok = self.persona_manager.start_persona(name)
         return _json_response({"success": ok, "name": name})
 
     async def api_persona_stop(self, request: web.Request) -> web.Response:
         name = _get_name(request)
         ok = self.persona_manager.stop_persona(name)
+
+        # 停止对应的 NapCat 实例
+        instance_mgr = self._napcat_instances.pop(name, None)
+        if instance_mgr is not None:
+            try:
+                await instance_mgr.stop()
+            except Exception as exc:
+                LOG.warning("停止 NapCat 实例 %s 失败: %s", name, exc)
+
         return _json_response({"success": ok, "name": name})
 
     async def api_persona_delete(self, request: web.Request) -> web.Response:
         name = _get_name(request)
+
+        # 先停止对应的 NapCat 实例
+        instance_mgr = self._napcat_instances.pop(name, None)
+        if instance_mgr is not None:
+            try:
+                await instance_mgr.stop()
+            except Exception as exc:
+                LOG.warning("停止 NapCat 实例 %s 失败: %s", name, exc)
+
         ok = self.persona_manager.remove_persona(name)
         return _json_response({"success": ok, "name": name})
 
@@ -283,8 +374,18 @@ class WebUIServer:
         p_name = str(body.get("name", "小星")).strip()
         keywords = [k.strip() for k in str(body.get("keywords", "")).split() if k.strip()]
         aliases = [a.strip() for a in body.get("aliases", []) if isinstance(a, str) and a.strip()]
+        model = str(body.get("model", "gpt-4o-mini")).strip()
+        # 使用全局 provider 配置
+        provider_mgr = WorkspaceProviderManager(self.persona_manager.data_path)
+        providers = provider_mgr.load()
+        provider = None
+        if providers:
+            from sirius_chat.providers.routing import AutoRoutingProvider
+            provider = AutoRoutingProvider(providers)
         try:
-            persona = PersonaGenerator.from_keywords(p_name, keywords)
+            persona = PersonaGenerator.from_keywords(
+                p_name, keywords, provider_async=provider, model=model
+            )
             persona.aliases = aliases
             return _json_response({"success": True, "persona": asdict(persona)})
         except Exception as exc:
@@ -300,6 +401,7 @@ class WebUIServer:
         p_name = str(body.get("name", "小星")).strip()
         answers = body.get("answers", {})
         aliases = [a.strip() for a in body.get("aliases", []) if isinstance(a, str) and a.strip()]
+        model = str(body.get("model", "gpt-4o-mini")).strip()
         pdir = self.persona_manager.get_persona_dir(name)
         # 使用全局 provider 配置
         provider_mgr = WorkspaceProviderManager(self.persona_manager.data_path)
@@ -315,11 +417,54 @@ class WebUIServer:
                 name=p_name,
                 answers=answers,
                 aliases=aliases,
+                model=model,
             )
             return _json_response({"success": True, "persona": asdict(persona)})
         except Exception as exc:
             LOG.exception("问卷人格生成失败")
             return _json_response({"error": str(exc)}, 500)
+
+    # ─── 多人格 API: 模型列表 ─────────────────────────────
+
+    def _build_model_choices(self) -> tuple[list[str], list[dict[str, str]]]:
+        """返回 (available_models, model_choices)。
+        available_models 为裸模型名列表；model_choices 为 {label, value} 列表，
+        label 格式为 provider_name/model_name。
+        """
+        available_models: list[str] = []
+        model_choices: list[dict[str, str]] = []
+        try:
+            provider_mgr = WorkspaceProviderManager(self.persona_manager.data_path)
+            for cfg in provider_mgr.load().values():
+                if cfg.enabled:
+                    for m in cfg.models:
+                        available_models.append(m)
+                        model_choices.append({
+                            "label": f"{cfg.provider_type}/{m}",
+                            "value": m,
+                        })
+            # 去重并保持稳定顺序
+            seen: set[str] = set()
+            deduped_models: list[str] = []
+            deduped_choices: list[dict[str, str]] = []
+            for m, c in zip(available_models, model_choices):
+                if m not in seen:
+                    seen.add(m)
+                    deduped_models.append(m)
+                    deduped_choices.append(c)
+            available_models = deduped_models
+            model_choices = deduped_choices
+        except Exception:
+            pass
+        return available_models, model_choices
+
+    async def api_available_models_get(self, request: web.Request) -> web.Response:
+        """返回全局可用模型列表（含 provider 前缀显示名）。"""
+        available_models, model_choices = self._build_model_choices()
+        return _json_response({
+            "available_models": available_models,
+            "model_choices": model_choices,
+        })
 
     # ─── 多人格 API: 模型编排 ─────────────────────────────
 
@@ -327,21 +472,13 @@ class WebUIServer:
         name = _get_name(request)
         pdir = self.persona_manager.get_persona_dir(name)
         orch = OrchestrationStore.load(pdir)
-        # 聚合全局 Provider 中所有可用模型
-        available_models: list[str] = []
-        try:
-            provider_mgr = WorkspaceProviderManager(self.persona_manager.data_path)
-            for cfg in provider_mgr.load().values():
-                if cfg.enabled:
-                    available_models.extend(cfg.models)
-            available_models = sorted(set(available_models))
-        except Exception:
-            pass
+        available_models, model_choices = self._build_model_choices()
         return _json_response({
             "analysis_model": orch.get("analysis_model", "gpt-4o-mini"),
             "chat_model": orch.get("chat_model", "gpt-4o"),
             "vision_model": orch.get("vision_model", "gpt-4o"),
             "available_models": available_models,
+            "model_choices": model_choices,
         })
 
     async def api_orchestration_post(self, request: web.Request) -> web.Response:

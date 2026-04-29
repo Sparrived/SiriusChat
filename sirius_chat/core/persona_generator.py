@@ -100,6 +100,7 @@ class PersonaGenerator:
         trait_keywords: list[str],
         *,
         provider_async: Any | None = None,
+        model: str = "gpt-4o-mini",
     ) -> PersonaProfile:
         """Create persona from keyword tags. Applies rule-based mapping,
         optionally refines with LLM if provider is available."""
@@ -129,7 +130,9 @@ class PersonaGenerator:
         # Optional LLM refinement
         if provider_async is not None:
             try:
-                refined = PersonaGenerator._llm_refine_keywords(profile, trait_keywords, provider_async)
+                refined = PersonaGenerator._llm_refine_keywords(
+                    profile, trait_keywords, provider_async, model=model
+                )
                 if refined:
                     profile = refined
             except Exception as exc:

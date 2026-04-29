@@ -36,9 +36,10 @@ const pageTitles = {
   'global-settings': ['全局设置', 'Configuration / Global'],
   providers: ['Provider 配置', 'Configuration / Providers'],
   persona: ['人格配置', 'Configuration / Persona'],
+  'create-persona': ['新建人格', 'Configuration / Create Persona'],
   orchestration: ['模型编排', 'Configuration / Orchestration'],
   experience: ['体验参数', 'Configuration / Experience'],
-  groups: ['群管理', 'Configuration / Groups'],
+  adapters: ['Adapter 配置', 'Configuration / Adapters'],
   napcat: ['NapCat 管理', 'Platform / NapCat'],
 };
 
@@ -61,14 +62,20 @@ async function navTo(page) {
   }
 
   // 页面加载后重新填充人格下拉框
-  if (personas.length) renderPersonaSelect();
+  renderPersonaSelect();
+
+  // 如果尚未选中有数据的人格，默认选中第一个
+  if (!currentPersona && personas.length > 0) {
+    selectPersona(personas[0].name);
+  }
 
   if (page === 'dashboard') renderPersonaCards();
   if (page === 'global-settings') loadGlobalSettings();
-  if (page === 'persona') { renderInterviewQuestions(); loadPersonaPreview(); }
+  if (page === 'persona') loadPersonaPreview();
+  if (page === 'create-persona') { renderInterviewQuestions(); loadAvailableModels(); }
   if (page === 'orchestration') loadOrchestration();
   if (page === 'experience') loadExperience();
-  if (page === 'groups') loadGroups();
+  if (page === 'adapters') loadAdapters();
   if (page === 'providers') _renderProviderDraft();
   if (page === 'napcat') { ncLoadStatus(); ncLoadLogs(); }
 }
@@ -86,22 +93,31 @@ async function loadPersonas() {
     }
   } catch (e) {
     console.error('loadPersonas', e);
+    personas = [];
+    renderPersonaSelect();
+    updateSidebar();
   }
 }
 
 function renderPersonaSelect() {
-  const opts = personas.map((p) => `<option value="${p.name}">${p.persona_name || p.name}</option>`).join('');
-  document.querySelectorAll('.persona-select').forEach((el) => {
-    el.innerHTML = opts || '<option>无人格</option>';
-    if (currentPersona) el.value = currentPersona;
+  document.querySelectorAll('.persona-select-bar').forEach((el) => {
+    if (!personas.length) {
+      el.innerHTML = '<span style="color:var(--text-2);font-size:13px">暂无人格</span>';
+      return;
+    }
+    el.innerHTML = personas.map((p) => {
+      const selected = p.name === currentPersona;
+      return `<div class="persona-chip ${p.running ? 'running' : ''} ${selected ? 'selected' : ''}" onclick="selectPersona('${p.name}')">`
+        + `<div class="chip-status">${p.running ? '●' : '○'}</div>`
+        + `<div class="chip-name">${p.persona_name || p.name}</div>`
+        + `</div>`;
+    }).join('');
   });
 }
 
 function selectPersona(name) {
   currentPersona = name;
-  document.querySelectorAll('.persona-select').forEach((el) => {
-    if (el.querySelector(`option[value="${name}"]`)) el.value = name;
-  });
+  renderPersonaSelect();
   loadPersonaStatus();
 }
 
@@ -115,7 +131,7 @@ async function loadPersonaStatus() {
     if (currentPage === 'persona') loadPersonaPreview();
     if (currentPage === 'orchestration') loadOrchestration();
     if (currentPage === 'experience') loadExperience();
-    if (currentPage === 'groups') loadGroups();
+    if (currentPage === 'adapters') loadAdapters();
   } catch (e) {
     console.error('loadPersonaStatus', e);
   }
@@ -141,6 +157,7 @@ function formatHeartbeat(ts) {
 
 function renderPersonaCards() {
   const el = $('personaCards');
+  if (!el) return;
   if (!personas.length) {
     el.innerHTML = '<div style="color:var(--text-2);padding:20px">暂无人格。使用 CLI <code>python main.py persona create &lt;name&gt;</code> 创建。</div>';
     return;
@@ -148,8 +165,9 @@ function renderPersonaCards() {
   el.innerHTML = personas.map((p) => {
     const port = p.adapters?.[0]?.ws_url?.split(':').pop() || '—';
     const hb = formatHeartbeat(p.heartbeat_at);
+    const isSelected = p.name === currentPersona;
     return `
-    <div class="persona-card ${p.running ? 'running' : ''}">
+    <div class="persona-card ${p.running ? 'running' : ''} ${isSelected ? 'selected' : ''}" onclick="selectPersona('${p.name}')">
       <div class="p-port">端口 ${port}</div>
       <div class="p-name">${p.persona_name || p.name}</div>
       <div class="p-meta">${p.persona_summary || p.name}</div>
@@ -157,9 +175,9 @@ function renderPersonaCards() {
       <div style="font-size:11px;color:var(--text-2);margin-bottom:8px">心跳: ${hb}</div>
       <div class="p-actions">
         ${p.running
-          ? `<button class="btn danger" onclick="stopPersona('${p.name}')">⏹ 停止</button>`
-          : `<button class="btn success" onclick="startPersona('${p.name}')">▶ 启动</button>`}
-        <button class="btn" onclick="selectPersona('${p.name}'); navTo('persona')">⚙️ 配置</button>
+          ? `<button class="btn danger" onclick="event.stopPropagation(); stopPersona('${p.name}')">⏹ 停止</button>`
+          : `<button class="btn success" onclick="event.stopPropagation(); startPersona('${p.name}')">▶ 启动</button>`}
+        <button class="btn" onclick="event.stopPropagation(); selectPersona('${p.name}'); navTo('persona')">⚙️ 配置</button>
       </div>
     </div>
   `;
@@ -451,13 +469,15 @@ async function savePersona(jsonStr) {
 
 async function generatePersonaKeywords() {
   if (!currentPersona) { toast('请先选择人格', 'error'); return; }
-  const btn = document.querySelector('#page-persona .btn');
+  const btn = $('kwBtn');
+  if (!btn) return;
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner"></span> 生成中...';
   const res = await post(pApi('/persona/keywords'), {
     name: $('kwName').value,
     keywords: $('kwKeywords').value,
     aliases: $('kwAliases').value.split(/\s+/).filter(Boolean),
+    model: $('kwModel').value,
   });
   btn.disabled = false;
   btn.innerHTML = '✨ 生成人格';
@@ -493,7 +513,8 @@ function renderInterviewQuestions() {
 
 async function generatePersonaInterview() {
   if (!currentPersona) { toast('请先选择人格', 'error'); return; }
-  const btn = document.querySelectorAll('#page-persona .btn')[1];
+  const btn = $('ivBtn');
+  if (!btn) return;
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner"></span> 生成中...';
   const answers = {};
@@ -505,6 +526,7 @@ async function generatePersonaInterview() {
     name: $('ivName').value,
     aliases: $('ivAliases').value.split(/\s+/).filter(Boolean),
     answers,
+    model: $('ivModel').value,
   });
   btn.disabled = false;
   btn.innerHTML = '✨ 生成人格';
@@ -516,17 +538,30 @@ async function generatePersonaInterview() {
 }
 
 // ── Orchestration ─────────────────────────────────────
-function _fillSelect(id, value, models) {
+function _fillSelect(id, value, choices) {
   const el = $(id);
+  if (!el) return;
   el.innerHTML = '';
-  const opts = models.length ? models : [value || 'gpt-4o'];
-  opts.forEach((m) => {
+  const opts = choices.length ? choices : [{ label: value || 'gpt-4o', value: value || 'gpt-4o' }];
+  opts.forEach((c) => {
     const opt = document.createElement('option');
-    opt.value = m;
-    opt.textContent = m;
-    if (m === value) opt.selected = true;
+    const label = typeof c === 'string' ? c : c.label;
+    const val = typeof c === 'string' ? c : c.value;
+    opt.value = val;
+    opt.textContent = label;
+    if (val === value) opt.selected = true;
     el.appendChild(opt);
   });
+}
+
+async function loadAvailableModels() {
+  try {
+    const res = await get('/api/models');
+    const choices = res.model_choices || [];
+    const defaultModel = 'gpt-4o-mini';
+    _fillSelect('kwModel', defaultModel, choices);
+    _fillSelect('ivModel', defaultModel, choices);
+  } catch (e) {}
 }
 
 async function loadOrchestration() {
@@ -534,10 +569,10 @@ async function loadOrchestration() {
   try {
     const res = await get(pApi('/orchestration'));
     const orch = res || {};
-    const models = orch.available_models || [];
-    _fillSelect('orchAnalysis', orch.analysis_model || 'gpt-4o-mini', models);
-    _fillSelect('orchChat', orch.chat_model || 'gpt-4o', models);
-    _fillSelect('orchVision', orch.vision_model || 'gpt-4o', models);
+    const choices = orch.model_choices || [];
+    _fillSelect('orchAnalysis', orch.analysis_model || 'gpt-4o-mini', choices);
+    _fillSelect('orchChat', orch.chat_model || 'gpt-4o', choices);
+    _fillSelect('orchVision', orch.vision_model || 'gpt-4o', choices);
   } catch (e) {}
 }
 
@@ -552,16 +587,68 @@ async function saveOrchestration() {
 }
 
 // ── Groups ────────────────────────────────────────────
-async function loadGroups() {
+async function loadAdapters() {
   if (!currentPersona) return;
   try {
-    const adapters = personaState.adapters || [];
+    const res = await get(pApi('/adapters'));
+    const adapters = res.adapters || [];
+    personaState.adapters = adapters;
     const a = adapters[0] || {};
+    $('adEnabled').value = String(a.enabled !== false);
+    $('adQQ').value = a.qq_number || '';
+    $('adWsUrl').value = a.ws_url || 'ws://localhost:3001';
+    $('adToken').value = a.token || 'napcat_ws';
+    $('adRoot').value = a.root || '';
+    $('adEnableGroup').value = String(a.enable_group_chat !== false);
+    $('adEnablePrivate').value = String(a.enable_private_chat !== false);
     renderGroups(a.allowed_group_ids || []);
     renderPrivates(a.allowed_private_user_ids || []);
-    $('enableGroupChat').checked = a.enable_group_chat !== false;
-    $('enablePrivateChat').checked = a.enable_private_chat !== false;
   } catch (e) {}
+}
+
+async function createBlankPersona() {
+  const name = $('cpName').value.trim();
+  if (!name) { toast('请输入人格标识', 'error'); return; }
+  const res = await post('/personas', {
+    name: name,
+    persona_name: $('cpPersonaName').value.trim() || name,
+    keywords: $('cpKeywords').value.trim() || undefined,
+  });
+  if (res.success) {
+    toast('人格创建成功');
+    await loadPersonas();
+    selectPersona(name);
+    $('cpName').value = '';
+    $('cpPersonaName').value = '';
+    $('cpKeywords').value = '';
+  } else {
+    toast(res.error || '创建失败', 'error');
+  }
+}
+
+async function saveAdapters() {
+  if (!currentPersona) { toast('请先选择人格', 'error'); return; }
+  const adapters = personaState.adapters || [];
+  const a = adapters[0] || {};
+  const res = await post(pApi('/adapters'), {
+    adapters: [{
+      type: 'napcat',
+      enabled: $('adEnabled').value === 'true',
+      qq_number: $('adQQ').value.trim(),
+      ws_url: $('adWsUrl').value.trim(),
+      token: $('adToken').value.trim(),
+      root: $('adRoot').value.trim(),
+      enable_group_chat: $('adEnableGroup').value === 'true',
+      enable_private_chat: $('adEnablePrivate').value === 'true',
+      allowed_group_ids: a.allowed_group_ids || [],
+      allowed_private_user_ids: a.allowed_private_user_ids || [],
+    }]
+  });
+  toast(res.success ? 'Adapter 配置已保存' : res.error || '保存失败', res.success ? 'success' : 'error');
+  if (res.success) {
+    const refreshed = await get(pApi('/adapters'));
+    personaState.adapters = refreshed.adapters || [];
+  }
 }
 
 function renderGroups(list) {
@@ -608,19 +695,6 @@ function removePrivate(u) {
   const a = adapters[0] || {};
   a.allowed_private_user_ids = (a.allowed_private_user_ids || []).filter((x) => x !== u);
   renderPrivates(a.allowed_private_user_ids);
-}
-
-async function saveConfig() {
-  if (!currentPersona) { toast('请先选择人格', 'error'); return; }
-  const adapters = personaState.adapters || [];
-  const a = adapters[0] || {};
-  a.allowed_group_ids = a.allowed_group_ids || [];
-  a.allowed_private_user_ids = a.allowed_private_user_ids || [];
-  a.enable_group_chat = $('enableGroupChat').checked;
-  a.enable_private_chat = $('enablePrivateChat').checked;
-  const res = await post(pApi('/adapters'), { adapters });
-  toast(res.success ? '配置已保存' : res.error || '失败', res.success ? 'success' : 'error');
-  loadPersonaStatus();
 }
 
 // ── Engine ────────────────────────────────────────────
