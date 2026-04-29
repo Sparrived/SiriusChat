@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import base64
+import logging
 import mimetypes
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 from urllib.parse import unquote, urlparse
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -186,6 +189,13 @@ def prepare_openai_compatible_messages(
                         )
                         prepared_part["image_url"] = prepared_image_url
                         local_image_path_conversions += 1
+                    elif not raw_url.lower().startswith(("http://", "https://", "data:")):
+                        # 跳过无效的图片 URL（例如已清理的本地缓存路径），
+                        # 避免提供商返回 400 Bad Request。
+                        logger.warning(
+                            "跳过无效的图片 URL（非本地文件且非网络地址）: %s", raw_url
+                        )
+                        continue
             prepared_parts.append(prepared_part)
 
         prepared_message["content"] = prepared_parts
