@@ -697,7 +697,7 @@ function _fillSelect(id, value, choices) {
 
 async function loadAvailableModels() {
   try {
-    const res = await get('/api/models');
+    const res = await get('/models');
     const choices = res.model_choices || [];
     const defaultModel = 'gpt-4o-mini';
     _fillSelect('kwModel', defaultModel, choices);
