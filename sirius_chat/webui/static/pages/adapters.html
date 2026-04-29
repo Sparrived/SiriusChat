@@ -83,6 +83,9 @@
     </div>
     <div class="tag-list" id="privateTags"></div>
 
-    <button class="btn success" onclick="saveAdapters()">💾 保存配置</button>
+    <div id="adaptersDirtyHint" style="display:none;color:var(--warn);font-size:13px;margin-bottom:12px">
+      ⚠️ 白名单有未保存的更改
+    </div>
+    <button class="btn success" id="adaptersSaveBtn" onclick="saveAdapters()">💾 保存配置</button>
   </div>
 </div>

@@ -747,6 +747,7 @@ async function loadAdapters() {
     adapterPrivateIds = a.allowed_private_user_ids || [];
     renderGroups(adapterGroupIds);
     renderPrivates(adapterPrivateIds);
+    clearAdaptersDirty();
   } catch (e) {
     // 保底初始化，避免 addGroup / saveAdapters 操作空对象
     adapterGroupIds = [];
@@ -794,6 +795,7 @@ async function saveAdapters() {
   toast(res.success ? 'Adapter 配置已保存' : res.error || '保存失败', res.success ? 'success' : 'error');
   if (res.success) {
     flashSuccess(document.activeElement);
+    clearAdaptersDirty();
     const refreshed = await get(pApi('/adapters'));
     personaState.adapters = refreshed.adapters || [];
     const a = personaState.adapters[0] || {};
@@ -813,6 +815,25 @@ function renderPrivates(list) {
     .join('');
 }
 
+function markAdaptersDirty() {
+  const hint = $('adaptersDirtyHint');
+  const btn = $('adaptersSaveBtn');
+  if (hint) hint.style.display = '';
+  if (btn) {
+    btn.style.borderColor = 'var(--warn)';
+    btn.style.color = 'var(--warn)';
+  }
+}
+function clearAdaptersDirty() {
+  const hint = $('adaptersDirtyHint');
+  const btn = $('adaptersSaveBtn');
+  if (hint) hint.style.display = 'none';
+  if (btn) {
+    btn.style.borderColor = '';
+    btn.style.color = '';
+  }
+}
+
 function addGroup() {
   const v = $('newGroupId').value.trim();
   if (v) {
@@ -820,11 +841,13 @@ function addGroup() {
     if (!adapterGroupIds.includes(v)) adapterGroupIds.push(v);
     $('newGroupId').value = '';
     renderGroups(adapterGroupIds);
+    markAdaptersDirty();
   }
 }
 function removeGroup(g) {
   adapterGroupIds = (adapterGroupIds || []).filter((x) => x !== g);
   renderGroups(adapterGroupIds);
+  markAdaptersDirty();
 }
 function addPrivate() {
   const v = $('newPrivateId').value.trim();
@@ -833,11 +856,13 @@ function addPrivate() {
     if (!adapterPrivateIds.includes(v)) adapterPrivateIds.push(v);
     $('newPrivateId').value = '';
     renderPrivates(adapterPrivateIds);
+    markAdaptersDirty();
   }
 }
 function removePrivate(u) {
   adapterPrivateIds = (adapterPrivateIds || []).filter((x) => x !== u);
   renderPrivates(adapterPrivateIds);
+  markAdaptersDirty();
 }
 
 // ── Engine ────────────────────────────────────────────
