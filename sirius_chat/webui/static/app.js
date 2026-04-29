@@ -224,12 +224,47 @@ function renderPersonaCards(animate = true) {
     el.innerHTML = '<div style="color:var(--text-2);padding:20px">暂无人格。使用 CLI <code>python main.py persona create &lt;name&gt;</code> 创建。</div>';
     return;
   }
+
+  // 非动画刷新尝试增量更新，避免 DOM 重建导致的跳动
+  if (!animate) {
+    const cards = el.querySelectorAll('.persona-card');
+    let needRebuild = cards.length !== personas.length;
+    if (!needRebuild) {
+      for (let i = 0; i < personas.length; i++) {
+        if (cards[i].dataset.name !== personas[i].name) { needRebuild = true; break; }
+      }
+    }
+    if (!needRebuild) {
+      cards.forEach((card, i) => {
+        const p = personas[i];
+        const isSelected = p.name === currentPersona;
+        card.className = `persona-card ${p.running ? 'running' : ''} ${isSelected ? 'selected' : ''}`;
+        card.querySelector('.p-status').textContent = p.running ? '● 运行中' : (p.status === 'stale' ? '○ 心跳超时' : '○ 已停止');
+        const hbEl = card.querySelector('.p-status').nextElementSibling;
+        if (hbEl) hbEl.textContent = '心跳: ' + formatHeartbeat(p.heartbeat_at);
+        const actions = card.querySelector('.p-actions');
+        if (actions) {
+          actions.innerHTML = (p.running
+            ? `<button class="btn danger" onclick="event.stopPropagation(); stopPersona('${p.name}')">⏹ 停止</button>`
+            : `<button class="btn success" onclick="event.stopPropagation(); startPersona('${p.name}')">▶ 启动</button>`)
+            + `<button class="btn" onclick="event.stopPropagation(); selectPersona('${p.name}'); navTo('persona')">⚙️ 配置</button>`;
+        }
+      });
+      $('dashPersonaCount').textContent = String(personas.length);
+      $('dashRunningCount').textContent = String(personas.filter((p) => p.running).length);
+      $('dashStoppedCount').textContent = String(personas.filter((p) => !p.running).length);
+      return;
+    }
+    // 结构变化需要重建，先移除动画类避免新子元素触发 stagger
+    el.classList.remove('animate-stagger');
+  }
+
   el.innerHTML = personas.map((p) => {
     const port = p.adapters?.[0]?.ws_url?.split(':').pop() || '—';
     const hb = formatHeartbeat(p.heartbeat_at);
     const isSelected = p.name === currentPersona;
     return `
-    <div class="persona-card ${p.running ? 'running' : ''} ${isSelected ? 'selected' : ''}" onclick="selectPersona('${p.name}')">
+    <div class="persona-card ${p.running ? 'running' : ''} ${isSelected ? 'selected' : ''}" data-name="${p.name}" onclick="selectPersona('${p.name}')">
       <div class="p-port">端口 ${port}</div>
       <div class="p-name">${p.persona_name || p.name}</div>
       <div class="p-meta">${p.persona_summary || p.name}</div>
@@ -247,9 +282,15 @@ function renderPersonaCards(animate = true) {
 
   if (animate) applyStagger(el, '.persona-card');
 
-  animateNumber($('dashPersonaCount'), personas.length, 500);
-  animateNumber($('dashRunningCount'), personas.filter((p) => p.running).length, 500);
-  animateNumber($('dashStoppedCount'), personas.filter((p) => !p.running).length, 500);
+  if (animate) {
+    animateNumber($('dashPersonaCount'), personas.length, 500);
+    animateNumber($('dashRunningCount'), personas.filter((p) => p.running).length, 500);
+    animateNumber($('dashStoppedCount'), personas.filter((p) => !p.running).length, 500);
+  } else {
+    $('dashPersonaCount').textContent = String(personas.length);
+    $('dashRunningCount').textContent = String(personas.filter((p) => p.running).length);
+    $('dashStoppedCount').textContent = String(personas.filter((p) => !p.running).length);
+  }
 
   // 更新选中人格详细信息
   const sp = personas.find((p) => p.name === currentPersona);
