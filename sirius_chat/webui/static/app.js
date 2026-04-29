@@ -361,7 +361,7 @@ function _renderProviderDraft() {
     <div class="provider-row readonly">
       <div class="pv-header">
         <div class="pv-header-left">
-          <div class="pv-status ${enabled?'on':'off'}" onclick="providerToggleEnabled(${i})" title="${enabled?'点击禁用':'点击启用'}"></div>
+          <span class="pv-status ${enabled?'on':'off'}" onclick="providerToggleEnabled(${i})">${enabled?'启用':'禁用'}</span>
           <span class="pv-platform">${p.type || '未命名'}</span>
           ${builtin?'<span class="pv-badge builtin">内置</span>':''}
         </div>
@@ -370,17 +370,11 @@ function _renderProviderDraft() {
           <button class="btn small danger" onclick="providerDraft.splice(${i},1);_renderProviderDraft()">删除</button>
         </div>
       </div>
-      <div class="pv-section">
-        <div class="pv-section-label">模型</div>
-        <div class="pv-models">${modelsHtml||'<span style="color:var(--text-2);font-size:12px">暂无模型</span>'}</div>
-      </div>
-      <div class="pv-section">
-        <div class="pv-section-label">配置</div>
-        <div class="pv-meta">
-          <div class="pv-meta-item">🔑 <span class="mono">${_maskKey(p.api_key)}</span></div>
-          <div class="pv-meta-item">🩺 <span class="mono">${p.healthcheck_model||'—'}</span></div>
-          <div class="pv-meta-item">🔗 <span class="mono" title="${p.base_url||''}">${urlDisplay}</span></div>
-        </div>
+      <div class="pv-models">${modelsHtml||'<span style="color:var(--text-2);font-size:12px">暂无模型</span>'}</div>
+      <div class="pv-meta">
+        <div class="pv-meta-item">🔑 <span class="mono">${_maskKey(p.api_key)}</span></div>
+        <div class="pv-meta-item">🩺 <span class="mono">${p.healthcheck_model||'—'}</span></div>
+        <div class="pv-meta-item">🔗 <span class="mono" title="${p.base_url||''}">${urlDisplay}</span></div>
       </div>
     </div>`;
   }).join('');

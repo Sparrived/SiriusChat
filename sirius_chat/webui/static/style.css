@@ -178,15 +178,15 @@ textarea { min-height: 80px; resize: vertical; }
   flex-wrap: wrap;
 }
 .provider-row.readonly .pv-status {
-  width: 10px; height: 10px; border-radius: 50%;
-  cursor: pointer; flex-shrink: 0; transition: .2s;
+  font-size: 11px; padding: 2px 8px; border-radius: 4px;
+  cursor: pointer; font-weight: 500; transition: .15s;
+  user-select: none;
 }
 .provider-row.readonly .pv-status.on {
-  background: var(--accent-2);
-  box-shadow: 0 0 0 3px rgba(63,185,80,0.15);
+  background: rgba(63,185,80,0.15); color: var(--accent-2);
 }
 .provider-row.readonly .pv-status.off {
-  background: var(--surface-3);
+  background: var(--surface-3); color: var(--text-2);
 }
 .provider-row.readonly .pv-platform {
   font-size: 15px; font-weight: 600; color: var(--text);
@@ -198,19 +198,9 @@ textarea { min-height: 80px; resize: vertical; }
 .provider-row.readonly .pv-badge.builtin {
   background: rgba(88,166,255,0.12); color: var(--accent);
 }
-.provider-row.readonly .pv-section {
-  margin-bottom: 8px;
-}
-.provider-row.readonly .pv-section:last-child {
-  margin-bottom: 0;
-}
-.provider-row.readonly .pv-section-label {
-  font-size: 11px; color: var(--text-2); opacity: .6;
-  margin-bottom: 4px; text-transform: uppercase;
-  letter-spacing: 0.5px;
-}
 .provider-row.readonly .pv-models {
   display: flex; gap: 6px; flex-wrap: wrap;
+  margin-bottom: 8px;
 }
 .provider-row.readonly .pv-meta {
   display: flex; gap: 18px; flex-wrap: wrap;
