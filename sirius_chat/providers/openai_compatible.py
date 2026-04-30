@@ -94,6 +94,12 @@ class OpenAICompatibleProvider(LLMProvider):
                 f"| 网络错误: {exc.reason}"
             )
             raise RuntimeError(f"提供商网络错误：{exc.reason}") from exc
+        except (ConnectionError, TimeoutError) as exc:
+            logger.error(
+                f"[模型调用失败] {request.model} | Provider: {self._provider_name} | URL: {url} "
+                f"| 连接被远程关闭或超时: {exc}"
+            )
+            raise RuntimeError(f"提供商连接异常：{exc}") from exc
 
         logger.debug(
             f"[模型原始响应] {request.model} | Provider: {self._provider_name} | URL: {url} "

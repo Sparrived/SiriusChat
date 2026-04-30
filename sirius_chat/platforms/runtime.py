@@ -21,6 +21,7 @@ from sirius_chat.core.persona_store import PersonaStore
 from sirius_chat.providers.routing import AutoRoutingProvider, ProviderConfig
 from sirius_chat.skills.registry import SkillRegistry
 from sirius_chat.skills.executor import SkillExecutor
+from sirius_chat.token.store import TokenUsageStore
 
 LOG = logging.getLogger("sirius.platforms.runtime")
 

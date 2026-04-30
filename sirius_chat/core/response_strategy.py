@@ -42,10 +42,15 @@ class ResponseStrategyEngine:
         relevance = intent.relevance_score
         threshold = intent.threshold
 
+        # threshold 参与决策：threshold 越低 → 等效 urgency 越高 → 越容易触发回复
+        # 以 sensitivity=0.5 时的典型 threshold=0.45 为基准
+        scale = 0.45 / max(threshold, 0.1)
+        scaled_urgency = urgency * scale
+
         # Heat suppression: reduce scores in hot/overheated groups
         heat_mult = {"cold": 1.0, "warm": 1.0, "hot": 0.85, "overheated": 0.68}
         rel_mult = {"cold": 1.0, "warm": 1.0, "hot": 0.92, "overheated": 0.85}
-        urgency *= heat_mult.get(heat_level, 1.0)
+        scaled_urgency *= heat_mult.get(heat_level, 1.0)
         relevance *= rel_mult.get(heat_level, 1.0)
 
         # Special rules
@@ -69,7 +74,7 @@ class ResponseStrategyEngine:
                 reason="direct_mention_help_seeking",
             )
 
-        if intent.social_intent == SocialIntent.EMOTIONAL and urgency >= 70:
+        if intent.social_intent == SocialIntent.EMOTIONAL and scaled_urgency >= 70:
             # Emotional crisis stays immediate unless severely overheated
             if heat_level == "overheated":
                 return StrategyDecision(
@@ -131,26 +136,26 @@ class ResponseStrategyEngine:
 
         # Standard matrix (with higher thresholds for peer-AI messages)
         if sender_type == "other_ai":
-            if urgency >= 90 and relevance >= 0.75:
+            if scaled_urgency >= 90 and relevance >= 0.75:
                 strategy = ResponseStrategy.IMMEDIATE
                 reason = "peer_ai_high_urgency_high_relevance"
-            elif urgency >= 75 and relevance >= 0.6:
+            elif scaled_urgency >= 75 and relevance >= 0.6:
                 strategy = ResponseStrategy.DELAYED
                 reason = "peer_ai_medium_urgency_delayed"
-            elif urgency >= 50 and relevance >= 0.55:
+            elif scaled_urgency >= 50 and relevance >= 0.55:
                 strategy = ResponseStrategy.DELAYED
                 reason = "peer_ai_low_urgency_delayed"
             else:
                 strategy = ResponseStrategy.SILENT
                 reason = "peer_ai_below_threshold"
         else:
-            if urgency >= 80 and relevance >= 0.7:
+            if scaled_urgency >= 80 and relevance >= 0.7:
                 strategy = ResponseStrategy.IMMEDIATE
                 reason = "high_urgency_high_relevance"
-            elif urgency >= 60 and relevance >= 0.55:
+            elif scaled_urgency >= 60 and relevance >= 0.55:
                 strategy = ResponseStrategy.DELAYED
                 reason = "medium_urgency_delayed"
-            elif urgency >= 35 and relevance >= 0.5:
+            elif scaled_urgency >= 35 and relevance >= 0.5:
                 strategy = ResponseStrategy.DELAYED
                 reason = "low_urgency_delayed"
             else:
