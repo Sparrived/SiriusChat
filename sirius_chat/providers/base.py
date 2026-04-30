@@ -3,12 +3,28 @@ from __future__ import annotations
 import base64
 import logging
 import mimetypes
+import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 from urllib.parse import unquote, urlparse
 
 logger = logging.getLogger(__name__)
+
+# Thread-local storage for passing real token usage from provider back to caller.
+_LAST_GENERATION_USAGE: threading.local = threading.local()
+
+
+def set_last_generation_usage(usage: dict[str, Any] | None) -> None:
+    """Store the last provider response usage dict (e.g. {"prompt_tokens": 42, "completion_tokens": 7})."""
+    _LAST_GENERATION_USAGE.usage = usage
+
+
+def get_last_generation_usage() -> dict[str, Any] | None:
+    """Retrieve and clear the last stored usage dict."""
+    usage = getattr(_LAST_GENERATION_USAGE, "usage", None)
+    _LAST_GENERATION_USAGE.usage = None
+    return usage
 
 
 @dataclass(slots=True)

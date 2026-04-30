@@ -261,6 +261,9 @@ class TokenUsageRecord(JsonSerializable):
     output_chars: int = 0
     estimation_method: str = "char_div4"
     retries_used: int = 0
+    persona_name: str = ""
+    group_id: str = ""
+    provider_name: str = ""
 
 
 @dataclass(slots=True)

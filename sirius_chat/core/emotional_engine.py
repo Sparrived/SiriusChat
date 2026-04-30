@@ -190,6 +190,7 @@ class EmotionalGroupChatEngine:
         from sirius_chat.config import TokenUsageRecord
 
         self.token_usage_records: list[TokenUsageRecord] = []
+        self.token_store: Any | None = None  # injected by EngineRuntime
 
         # SKILL system
         self._skill_registry: Any | None = None
@@ -2314,22 +2315,46 @@ class EmotionalGroupChatEngine:
         output_chars = len(reply)
         estimated_output_tokens = max(1, (output_chars + 3) // 4)
         from sirius_chat.config import TokenUsageRecord
+        from sirius_chat.providers.base import get_last_generation_usage
 
-        self.token_usage_records.append(
-            TokenUsageRecord(
-                actor_id="assistant",
-                task_name=task_name,
-                model=cfg.model_name,
-                prompt_tokens=estimated_input_tokens,
-                completion_tokens=estimated_output_tokens,
-                total_tokens=estimated_input_tokens + estimated_output_tokens,
-                input_chars=len(system_prompt)
-                + sum(len(str(m.get("content", ""))) for m in messages),
-                output_chars=output_chars,
-                estimation_method="char_div4",
-                retries_used=0,
-            )
+        real_usage = get_last_generation_usage()
+        if real_usage and isinstance(real_usage, dict):
+            prompt_tokens = int(real_usage.get("prompt_tokens", estimated_input_tokens))
+            completion_tokens = int(real_usage.get("completion_tokens", estimated_output_tokens))
+            total_tokens = int(real_usage.get("total_tokens", prompt_tokens + completion_tokens))
+            estimation_method = "provider_real"
+        else:
+            prompt_tokens = estimated_input_tokens
+            completion_tokens = estimated_output_tokens
+            total_tokens = estimated_input_tokens + estimated_output_tokens
+            estimation_method = "char_div4"
+
+        persona_name = self.persona.name if self.persona else ""
+        provider_name = getattr(self.provider_async, "_provider_name", "unknown")
+
+        record = TokenUsageRecord(
+            actor_id="assistant",
+            task_name=task_name,
+            model=cfg.model_name,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=total_tokens,
+            input_chars=len(system_prompt)
+            + sum(len(str(m.get("content", ""))) for m in messages),
+            output_chars=output_chars,
+            estimation_method=estimation_method,
+            retries_used=0,
+            persona_name=persona_name,
+            group_id=group_id,
+            provider_name=provider_name,
         )
+        self.token_usage_records.append(record)
+
+        if self.token_store is not None:
+            try:
+                self.token_store.add(record)
+            except Exception:
+                pass
 
         return reply
 

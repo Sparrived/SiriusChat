@@ -12,6 +12,7 @@ from sirius_chat.providers.base import (
     LLMProvider,
     prepare_openai_compatible_messages,
     resolve_generation_timeout_seconds,
+    set_last_generation_usage,
 )
 from sirius_chat.providers.response_utils import extract_assistant_text
 
@@ -121,6 +122,13 @@ class OpenAICompatibleProvider(LLMProvider):
                 f"| 响应为空 | message_keys={list(message.keys())}"
             )
             raise RuntimeError("提供商响应内容为空。")
+
+        # Pass real token usage back to the engine tracker
+        usage = data.get("usage")
+        if usage and isinstance(usage, dict):
+            set_last_generation_usage(dict(usage))
+        else:
+            set_last_generation_usage(None)
 
         logger.info(f"{self._provider_name} 的 {request.model} 回复我了，写了 {len(content)} 个字～")
         logger.debug(

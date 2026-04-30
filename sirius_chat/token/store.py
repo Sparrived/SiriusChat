@@ -13,7 +13,7 @@ from pathlib import Path
 from sirius_chat.config import TokenUsageRecord
 from sirius_chat.workspace.layout import WorkspaceLayout
 
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 2
 
 _CREATE_TABLE = """\
 CREATE TABLE IF NOT EXISTS token_usage (
@@ -29,7 +29,10 @@ CREATE TABLE IF NOT EXISTS token_usage (
     input_chars     INTEGER NOT NULL DEFAULT 0,
     output_chars    INTEGER NOT NULL DEFAULT 0,
     estimation_method TEXT  NOT NULL DEFAULT 'char_div4',
-    retries_used    INTEGER NOT NULL DEFAULT 0
+    retries_used    INTEGER NOT NULL DEFAULT 0,
+    persona_name    TEXT    NOT NULL DEFAULT '',
+    group_id        TEXT    NOT NULL DEFAULT '',
+    provider_name   TEXT    NOT NULL DEFAULT ''
 );
 """
 
@@ -39,6 +42,9 @@ _CREATE_INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_tu_task    ON token_usage(task_name);",
     "CREATE INDEX IF NOT EXISTS idx_tu_model   ON token_usage(model);",
     "CREATE INDEX IF NOT EXISTS idx_tu_ts      ON token_usage(timestamp);",
+    "CREATE INDEX IF NOT EXISTS idx_tu_persona ON token_usage(persona_name);",
+    "CREATE INDEX IF NOT EXISTS idx_tu_group   ON token_usage(group_id);",
+    "CREATE INDEX IF NOT EXISTS idx_tu_provider ON token_usage(provider_name);",
 ]
 
 _CREATE_META = """\
@@ -95,8 +101,19 @@ class TokenUsageStore:
         conn.execute(_CREATE_TABLE)
         for idx_sql in _CREATE_INDEXES:
             conn.execute(idx_sql)
+        # Schema migration: add columns if upgrading from v1
+        existing_cols = {
+            row[1] for row in conn.execute("PRAGMA table_info(token_usage)")
+        }
+        for col, ddl in (
+            ("persona_name", "ALTER TABLE token_usage ADD COLUMN persona_name TEXT NOT NULL DEFAULT ''"),
+            ("group_id", "ALTER TABLE token_usage ADD COLUMN group_id TEXT NOT NULL DEFAULT ''"),
+            ("provider_name", "ALTER TABLE token_usage ADD COLUMN provider_name TEXT NOT NULL DEFAULT ''"),
+        ):
+            if col not in existing_cols:
+                conn.execute(ddl)
         conn.execute(
-            "INSERT OR IGNORE INTO _meta(key, value) VALUES(?, ?)",
+            "INSERT OR REPLACE INTO _meta(key, value) VALUES(?, ?)",
             ("schema_version", str(_SCHEMA_VERSION)),
         )
         conn.commit()
@@ -118,8 +135,9 @@ class TokenUsageStore:
             """INSERT INTO token_usage
                (session_id, timestamp, actor_id, task_name, model,
                 prompt_tokens, completion_tokens, total_tokens,
-                input_chars, output_chars, estimation_method, retries_used)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                input_chars, output_chars, estimation_method, retries_used,
+                persona_name, group_id, provider_name)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 self._session_id,
                 ts,
@@ -133,6 +151,9 @@ class TokenUsageStore:
                 record.output_chars,
                 record.estimation_method,
                 record.retries_used,
+                record.persona_name,
+                record.group_id,
+                record.provider_name,
             ),
         )
         conn.commit()
@@ -147,8 +168,9 @@ class TokenUsageStore:
             """INSERT INTO token_usage
                (session_id, timestamp, actor_id, task_name, model,
                 prompt_tokens, completion_tokens, total_tokens,
-                input_chars, output_chars, estimation_method, retries_used)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                input_chars, output_chars, estimation_method, retries_used,
+                persona_name, group_id, provider_name)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             [
                 (
                     self._session_id,
@@ -163,6 +185,9 @@ class TokenUsageStore:
                     r.output_chars,
                     r.estimation_method,
                     r.retries_used,
+                    r.persona_name,
+                    r.group_id,
+                    r.provider_name,
                 )
                 for r in records
             ],
@@ -220,6 +245,55 @@ class TokenUsageStore:
         rows = conn.execute(
             f"SELECT * FROM token_usage{where} ORDER BY timestamp",
             params,
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    # ------------------------------------------------------------------
+    # Analytics helpers
+    # ------------------------------------------------------------------
+
+    def get_summary(self) -> dict[str, Any]:
+        """Return aggregated token usage summary."""
+        conn = self._connect()
+        row = conn.execute(
+            """SELECT
+                COUNT(*) as total_calls,
+                COALESCE(SUM(prompt_tokens), 0) as total_prompt_tokens,
+                COALESCE(SUM(completion_tokens), 0) as total_completion_tokens,
+                COALESCE(SUM(total_tokens), 0) as total_tokens,
+                COALESCE(SUM(input_chars), 0) as total_input_chars,
+                COALESCE(SUM(output_chars), 0) as total_output_chars
+            FROM token_usage"""
+        ).fetchone()
+        return dict(row) if row else {}
+
+    def get_breakdown_by(self, column: str) -> list[dict[str, Any]]:
+        """Return token usage grouped by a column (e.g. 'task_name', 'model', 'group_id')."""
+        if column not in {"task_name", "model", "group_id", "provider_name", "persona_name"}:
+            return []
+        conn = self._connect()
+        rows = conn.execute(
+            f"""SELECT
+                {column} as name,
+                COUNT(*) as calls,
+                COALESCE(SUM(prompt_tokens), 0) as prompt_tokens,
+                COALESCE(SUM(completion_tokens), 0) as completion_tokens,
+                COALESCE(SUM(total_tokens), 0) as total_tokens
+            FROM token_usage
+            WHERE {column} != ''
+            GROUP BY {column}
+            ORDER BY total_tokens DESC"""
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def get_recent_records(self, limit: int = 50) -> list[dict[str, Any]]:
+        """Return the most recent token usage records."""
+        conn = self._connect()
+        rows = conn.execute(
+            """SELECT * FROM token_usage
+            ORDER BY timestamp DESC
+            LIMIT ?""",
+            (limit,),
         ).fetchall()
         return [dict(row) for row in rows]
 

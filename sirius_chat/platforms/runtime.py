@@ -100,6 +100,10 @@ class EngineRuntime:
         self.plugin_config = dict(plugin_config or {})
         self._engine: EmotionalGroupChatEngine | None = None
         self._running = False
+        self.token_store = TokenUsageStore(
+            self.work_path / "token" / "token_usage.db",
+            session_id="default",
+        )
 
     def has_provider_config(self) -> bool:
         """检查是否已配置有效的 Provider。"""
@@ -248,6 +252,9 @@ class EngineRuntime:
             LOG.info("引擎状态已恢复")
         except Exception as exc:
             LOG.warning("引擎状态恢复失败（首次运行可忽略）: %s", exc)
+
+        # 注入 TokenUsageStore
+        engine.token_store = self.token_store
 
         # 初始化并注入 SKILL runtime
         try:
