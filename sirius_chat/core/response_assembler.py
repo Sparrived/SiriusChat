@@ -191,6 +191,50 @@ class ResponseAssembler:
             return ""
         return f"[跨群认知]\n{cross_group_text}"
 
+    @staticmethod
+    def _build_relationship_context(
+        user_profile: UserSemanticProfile | None,
+        caller_is_developer: bool = False,
+    ) -> str | None:
+        """Build a qualitative relationship description for the prompt.
+
+        Never exposes raw trust_score / familiarity numbers.
+        """
+        if caller_is_developer:
+            return "[关系状态] 该用户是你的开发者，你们关系很亲密，可以畅所欲言。"
+
+        if user_profile is None:
+            return None
+
+        rs = user_profile.relationship_state
+        if not rs:
+            return None
+
+        # First interaction takes precedence
+        if not rs.first_interaction_at:
+            return "[关系状态] 你和该用户是第一次交流，请保持友好和礼貌。"
+
+        familiarity = rs.compute_familiarity()
+        trust = rs.trust_score
+
+        # High trust + familiar
+        if trust > 0.7 and familiarity >= 0.6:
+            return "[关系状态] 你和该用户已经很熟了，彼此很信任，可以自然随意。"
+        # High trust alone
+        if trust > 0.7:
+            return "[关系状态] 你和该用户建立了不错的信任关系，可以比较放松。"
+        # Familiar but not high trust
+        if familiarity >= 0.6:
+            return "[关系状态] 你和该用户比较熟悉。"
+        # Low trust
+        if trust < 0.3:
+            return "[关系状态] 你和该用户还不太熟，请保持礼貌和适度距离。"
+        # Acquaintance
+        if familiarity >= 0.3:
+            return "[关系状态] 你和该用户的关系一般。"
+        # Stranger
+        return "[关系状态] 你和该用户还不太熟。"
+
     def assemble(
         self,
         *,
@@ -283,6 +327,11 @@ class ResponseAssembler:
 
         # 3. Empathy strategy (persona-aware)
         sections.append(self._build_empathy_instruction(empathy_strategy))
+
+        # 3b. Relationship context (qualitative, no raw numbers)
+        rel_ctx = self._build_relationship_context(user_profile, caller_is_developer)
+        if rel_ctx:
+            sections.append(rel_ctx)
 
         # 4. Memory references
         if memories:
@@ -563,6 +612,7 @@ class ResponseAssembler:
         glossary_section: str = "",
         adapter_type: str | None = None,
         is_first_interaction: bool = False,
+        user_profile: UserSemanticProfile | None = None,
     ) -> PromptBundle:
         """Build prompt for a delayed response (topic-gap trigger)."""
         if style_params is None:
@@ -584,6 +634,9 @@ class ResponseAssembler:
                 "这是你第一次和当前说话者交流，请保持友好、礼貌，"
                 "可以适当自我介绍，让对方感受到你的热情和善意。"
             )
+        rel_ctx = self._build_relationship_context(user_profile, caller_is_developer)
+        if rel_ctx:
+            sections.append(rel_ctx)
         if self.other_ai_names:
             sections.append(
                 "[群成员区分]\n"
