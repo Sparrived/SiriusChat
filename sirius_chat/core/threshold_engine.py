@@ -34,11 +34,12 @@ class ThresholdEngine:
         relationship_state: RelationshipState | None = None,
         hour_of_day: int | None = None,
         sender_type: str = "human",
+        is_developer: bool = False,
     ) -> float:
         """Compute dynamic threshold."""
         base = self.base_high - sensitivity * (self.base_high - self.base_low)
         activity = self._activity_factor(heat_level, messages_per_minute)
-        relationship = self._relationship_factor(relationship_state)
+        relationship = self._relationship_factor(relationship_state, is_developer)
         time_f = self._time_factor(hour_of_day)
         # peer-AI 消息的阈值更高（更难触发回复）
         peer_factor = 1.3 if sender_type == "other_ai" else 1.0
@@ -62,9 +63,24 @@ class ThresholdEngine:
         return base
 
     @staticmethod
-    def _relationship_factor(state: RelationshipState | None) -> float:
+    def _relationship_factor(state: RelationshipState | None, is_developer: bool = False) -> float:
+        if is_developer:
+            return 0.5  # Developer gets highest priority
+
         if state is None:
             return 1.0
+
+        # First interaction: lower threshold to be friendly
+        if not state.first_interaction_at:
+            return 0.7
+
+        # Trust-based分层
+        if state.trust_score < 0.3:
+            return 1.2  # Low trust → harder to trigger
+        if state.trust_score > 0.7:
+            return 0.7  # High trust → easier to trigger
+
+        # Familiarity-based分层
         familiarity = state.compute_familiarity()
         if familiarity >= 0.9:
             return 0.6
@@ -72,7 +88,7 @@ class ThresholdEngine:
             return 0.8
         if familiarity >= 0.3:
             return 1.0
-        return 1.2
+        return 1.1  # Slightly harder but not as harsh as before
 
     @staticmethod
     def _time_factor(hour: int | None) -> float:

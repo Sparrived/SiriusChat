@@ -114,10 +114,14 @@ class TestPersonaBiasesThreshold:
         intent_mod = IntentAnalysisV3(urgency_score=30, relevance_score=0.4)
         emotion = EmotionState()
 
-        low_engine._decision(intent_low, emotion, "g1", "u1")
+        # Prime both engines with the same user state so relationship_factor
+        # is identical; only the persona frequency bias should differ.
         mod_engine._decision(intent_mod, emotion, "g1", "u1")
+        intent_mod2 = IntentAnalysisV3(urgency_score=30, relevance_score=0.4)
+        mod_engine._decision(intent_mod2, emotion, "g1", "u1")
+        low_engine._decision(intent_low, emotion, "g1", "u1")
         # low frequency should make it harder to reply (higher threshold than moderate)
-        assert intent_low.threshold > intent_mod.threshold
+        assert intent_low.threshold > intent_mod2.threshold
 
 
 class TestPersonaPersistence:

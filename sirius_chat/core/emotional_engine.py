@@ -1914,6 +1914,12 @@ class EmotionalGroupChatEngine:
             getattr(user_profile, "relationship_state", None) if user_profile else None
         )
 
+        # Determine if sender is a developer
+        caller_is_developer = False
+        if user_id:
+            caller = self.user_manager.get_user(user_id, group_id)
+            caller_is_developer = bool(caller and caller.is_developer)
+
         # Message rate (per minute) from recent messages
         msg_rate = self._message_rate_per_minute(recent_msgs)
 
@@ -1923,6 +1929,7 @@ class EmotionalGroupChatEngine:
             messages_per_minute=msg_rate,
             relationship_state=relationship_state,
             sender_type=sender_type,
+            is_developer=caller_is_developer,
         )
 
         # Persona reply frequency bias
@@ -1941,7 +1948,7 @@ class EmotionalGroupChatEngine:
         intent.time_factor = self.threshold_engine._time_factor(None)
         if relationship_state:
             intent.relationship_factor = self.threshold_engine._relationship_factor(
-                relationship_state
+                relationship_state, is_developer=caller_is_developer
             )
 
         # Check if directly mentioned
