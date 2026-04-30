@@ -16,8 +16,12 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import zipfile
 from pathlib import Path
+
+import websockets
+import websockets.exceptions
 
 LOG = logging.getLogger("napcat_manager")
 
@@ -187,7 +191,10 @@ class NapCatManager:
 
     @property
     def is_running(self) -> bool:
-        """检查 NapCat 进程是否仍在运行（含跨进程 pid 文件检测）。"""
+        """检查 NapCat 进程是否仍在运行（含跨进程 pid 文件检测）。
+
+        注意：不通过 QQ.exe 进程名判断，因为用户的普通 QQ 也会被检测到。
+        """
         if self._process is not None and self._process.poll() is None:
             return True
         # 跨进程检测：如果另一个 CLI/WebUI 进程已启动同一实例
@@ -195,6 +202,31 @@ class NapCatManager:
         if pid is not None and self._is_process_alive(pid):
             return True
         return False
+
+    @staticmethod
+    def _is_qq_process_running() -> bool:
+        """按进程名检测 QQ/NapCat 是否仍在运行（Windows 用 tasklist，Linux 用 pgrep）。"""
+        if sys.platform == "win32":
+            try:
+                result = subprocess.run(
+                    ["tasklist", "/FI", "IMAGENAME eq QQ.exe", "/FO", "CSV", "/NH"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5.0,
+                )
+                return "QQ.exe" in result.stdout
+            except Exception:
+                return False
+        else:
+            try:
+                result = subprocess.run(
+                    ["pgrep", "-f", "napcat"],
+                    capture_output=True,
+                    timeout=5.0,
+                )
+                return result.returncode == 0
+            except Exception:
+                return False
 
     # ── pid 文件辅助 ─────────────────────────────────────
 
@@ -369,9 +401,9 @@ class NapCatManager:
         ws_token: str = "napcat_ws",
         report_self_message: bool = False,
     ) -> dict:
-        """生成 NapCat 配置文件。
+        """生成 NapCat 配置文件（merge 模式，保留用户手动修改的字段）。
 
-        会生成两个文件:
+        会生成/更新两个文件:
             - config/napcat_{qq}.json   NapCat 核心配置
             - config/onebot11_{qq}.json OneBot v11 协议配置
 
@@ -383,8 +415,8 @@ class NapCatManager:
 
         self.config_dir.mkdir(parents=True, exist_ok=True)
 
-        # NapCat 核心配置
-        napcat_config = {
+        # NapCat 核心配置 — merge 现有配置
+        napcat_defaults = {
             "fileLog": False,
             "consoleLog": True,
             "fileLogLevel": "debug",
@@ -403,13 +435,14 @@ class NapCatManager:
             "autoTimeSync": True,
         }
         napcat_path = self.config_dir / f"napcat_{qq_number}.json"
+        napcat_config = self._load_json(napcat_path, napcat_defaults)
         napcat_path.write_text(
             json.dumps(napcat_config, indent=2, ensure_ascii=False),
             encoding="utf-8",
         )
 
-        # OneBot v11 协议配置
-        onebot_config = {
+        # OneBot v11 协议配置 — merge 现有配置，只更新 WS 服务器参数
+        onebot_defaults = {
             "network": {
                 "websocketServers": [
                     {
@@ -443,6 +476,22 @@ class NapCatManager:
             },
         }
         onebot_path = self.config_dir / f"onebot11_{qq_number}.json"
+        onebot_config = self._load_json(onebot_path, onebot_defaults)
+        # 精确更新 websocketServers[0] 的关键字段，保留其他服务器配置
+        ws_servers = onebot_config.setdefault("network", {}).setdefault("websocketServers", [])
+        if not ws_servers:
+            ws_servers.append(onebot_defaults["network"]["websocketServers"][0])
+        ws0 = ws_servers[0]
+        ws0["enable"] = True
+        ws0["name"] = "WsServer"
+        ws0["host"] = "localhost"
+        ws0["port"] = ws_port
+        ws0["reportSelfMessage"] = report_self_message
+        ws0["enableForcePushEvent"] = True
+        ws0["messagePostFormat"] = "array"
+        ws0["token"] = ws_token
+        ws0["debug"] = False
+        ws0["heartInterval"] = 30000
         onebot_path.write_text(
             json.dumps(onebot_config, indent=2, ensure_ascii=False),
             encoding="utf-8",
@@ -450,6 +499,32 @@ class NapCatManager:
 
         LOG.info("NapCat 配置已生成: %s", self.config_dir)
         return {"success": True, "message": f"配置已生成 (QQ: {qq_number}, WS: localhost:{ws_port})"}
+
+    @staticmethod
+    def _load_json(path: Path, defaults: dict) -> dict:
+        """读取 JSON 文件，不存在或解析失败时返回 defaults 的深拷贝。"""
+        if not path.exists():
+            return json.loads(json.dumps(defaults))
+        try:
+            with path.open("r", encoding="utf-8") as f:
+                existing = json.load(f)
+            if not isinstance(existing, dict):
+                return json.loads(json.dumps(defaults))
+            # 递归 merge：defaults 为底，existing 覆盖
+            return NapCatManager._deep_merge(json.loads(json.dumps(defaults)), existing)
+        except Exception:
+            return json.loads(json.dumps(defaults))
+
+    @staticmethod
+    def _deep_merge(base: dict, override: dict) -> dict:
+        """递归合并两个字典，override 覆盖 base 的同键值。"""
+        result = dict(base)
+        for key, value in override.items():
+            if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+                result[key] = NapCatManager._deep_merge(result[key], value)
+            else:
+                result[key] = value
+        return result
 
     # ── 启动 / 停止 ──────────────────────────────────────
 
@@ -465,11 +540,16 @@ class NapCatManager:
         Returns:
             {"success": bool, "message": str}
         """
-        if self.is_running:
+        # 只检查本进程是否已跟踪同一实例；跨进程 QQ 检测只打日志，不阻止启动
+        # （用户的普通 QQ 也会显示为 QQ.exe，不能因此跳过启动）
+        if self._process is not None and self._process.poll() is None:
             return {"success": True, "message": "NapCat 已在运行"}
 
         # 清理过期的 pid 文件（进程已死但文件残留）
         self._remove_pid_file()
+
+        if self._is_qq_process_running():
+            LOG.warning("检测到 QQ.exe 正在运行，NapCat 将尝试注入现有 QQ 或启动新实例")
 
         if not self.is_installed:
             return {"success": False, "message": "NapCat 未安装"}
@@ -538,10 +618,32 @@ class NapCatManager:
         }
 
     async def stop(self) -> dict:
-        """停止 NapCat 进程（同时会关闭 QQ）。"""
+        """停止 NapCat 进程。
+
+        Windows 下不直接 kill QQ 进程（NapCat 与 QQ 同进程，会误杀用户普通 QQ），
+        仅断开内部引用并清理 pid 文件。Linux 下保持原有 terminate/kill 逻辑。
+        """
         if not self.is_running:
+            self._process = None
+            self._remove_pid_file()
             return {"success": True, "message": "NapCat 未在运行"}
 
+        if sys.platform == "win32":
+            # Windows：只清理引用，不杀进程（避免关闭用户普通 QQ）
+            if self._process is not None:
+                try:
+                    self._process.terminate()
+                except Exception:
+                    pass
+                self._process = None
+            self._remove_pid_file()
+            LOG.info("Windows 下已断开 NapCat 引用（QQ 进程保持运行）")
+            return {
+                "success": True,
+                "message": "Windows 下已断开 NapCat 引用（QQ 进程保持运行）",
+            }
+
+        # Linux：直接 terminate/kill
         try:
             self._process.terminate()  # type: ignore[union-attr]
             await asyncio.wait_for(
@@ -566,14 +668,24 @@ class NapCatManager:
         self,
         host: str = "localhost",
         port: int = 3001,
+        token: str | None = None,
         timeout: float = 120.0,
-    ) -> bool:
-        """轮询等待 NapCat WebSocket 端口就绪。
+    ) -> dict:
+        """轮询等待 NapCat WebSocket 真正就绪（真实握手 + 接收首条消息验证）。
 
         首次启动时 QQ 需要扫码，超时时间建议设长一些。
+
+        Returns:
+            {"ready": bool, "self_id": str | None, "error": str | None}
         """
-        deadline = asyncio.get_event_loop().time() + timeout
-        while asyncio.get_event_loop().time() < deadline:
+        ws_url = f"ws://{host}:{port}"
+        warned_5 = False
+        warned_10 = False
+        start = time.time()
+        expire_time = start + timeout
+
+        while time.time() < expire_time:
+            # 阶段 1：快速 TCP 端口检测（避免每次都做 WS 握手）
             try:
                 reader, writer = await asyncio.wait_for(
                     asyncio.open_connection(host, port),
@@ -581,13 +693,52 @@ class NapCatManager:
                 )
                 writer.close()
                 await writer.wait_closed()
-                LOG.info("NapCat WebSocket 已就绪 (%s:%s)", host, port)
-                return True
             except Exception:
                 await asyncio.sleep(2.0)
+                continue
+
+            # 阶段 2：真实 WebSocket 握手 + 验证
+            try:
+                headers: dict[str, str] = {}
+                if token:
+                    headers["Authorization"] = f"Bearer {token}"
+                async with websockets.connect(
+                    ws_url,
+                    additional_headers=headers,
+                    open_timeout=5.0,
+                    close_timeout=2.0,
+                ) as ws:
+                    # NapCat 连接后会发送一条 meta_event / lifecycle 消息
+                    raw = await asyncio.wait_for(ws.recv(), timeout=5.0)
+                    data = json.loads(raw)
+                    self_id = data.get("self_id")
+                    if self_id:
+                        LOG.info(
+                            "NapCat WebSocket 已就绪 (%s:%s, QQ=%s)",
+                            host, port, self_id,
+                        )
+                        return {"ready": True, "self_id": str(self_id), "error": None}
+                    # 收到消息但没有 self_id，也认为是就绪（可能是其他事件）
+                    return {"ready": True, "self_id": None, "error": None}
+            except websockets.exceptions.InvalidStatusCode as exc:
+                if exc.status_code == 401:
+                    LOG.warning("NapCat WebSocket Token 错误 (401)")
+                    return {"ready": False, "self_id": None, "error": "WebSocket Token 错误"}
+            except Exception:
+                pass
+
+            elapsed = time.time() - start
+            if not warned_5 and elapsed >= 5:
+                LOG.warning("NapCat WebSocket 已等待 5s 仍未就绪...")
+                warned_5 = True
+            if not warned_10 and elapsed >= 10:
+                LOG.warning("NapCat WebSocket 已等待 10s 仍未就绪...")
+                warned_10 = True
+
+            await asyncio.sleep(2.0)
 
         LOG.warning("等待 NapCat WebSocket 超时 (%s 秒)", timeout)
-        return False
+        return {"ready": False, "self_id": None, "error": f"超时 ({timeout}s)"}
 
     # ── 日志 ─────────────────────────────────────────────
 
@@ -614,10 +765,12 @@ class NapCatManager:
 
     def get_status(self) -> dict:
         """获取 NapCat 完整状态信息。"""
+        qq_running = self._is_qq_process_running()
         return {
             "installed": self.is_installed,
             "running": self.is_running,
             "qq_installed": self.is_qq_installed(),
             "qq_path": self.get_qq_path(),
+            "qq_running": qq_running,
             "install_dir": str(self.install_dir),
         }

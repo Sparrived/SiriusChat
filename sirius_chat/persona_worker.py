@@ -206,6 +206,10 @@ class PersonaWorker:
                 if other_persona:
                     other_ai_names.append(other_persona.name)
                     other_ai_names.extend(other_persona.aliases)
+        # 合并手动配置的其他 AI 名字
+        manual_names = experience.other_ai_names
+        if manual_names:
+            other_ai_names.extend(manual_names)
         if other_ai_names:
             config["other_ai_names"] = list(dict.fromkeys(other_ai_names))
         return config

@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import shutil
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -64,8 +65,11 @@ class WebUIServer:
         self.port = port
         self.napcat_manager = None
         self._napcat_instances: dict[str, Any] = {}
+        self._napcat_registry_path = Path("data/napcat_instance_registry.json")
         if napcat_install_dir is not None:
             self.napcat_manager = NapCatManager(napcat_install_dir)
+            self._napcat_registry_path = Path(napcat_install_dir).parent / "napcat_instance_registry.json"
+            self._load_napcat_registry()
         self.app = web.Application(middlewares=[_no_cache_middleware])
         self._setup_routes()
         self.runner: web.AppRunner | None = None
@@ -298,19 +302,61 @@ class WebUIServer:
                         persona_name=name,
                     )
                     LOG.info("配置 NapCat 实例 %s (QQ: %s, 端口: %s)...", name, qq, port)
-                    instance_mgr.configure(qq_number=qq, ws_port=port)
+                    token = getattr(a, "token", "napcat_ws")
+                    instance_mgr.configure(qq_number=qq, ws_port=port, ws_token=token)
                     result = await instance_mgr.start(qq_number=qq)
                     if not result["success"]:
                         return _json_response({"error": f"启动 NapCat 失败: {result['message']}"}, 500)
                     LOG.info("NapCat 实例 %s 已启动，等待 WS 就绪...", name)
-                    ready = await instance_mgr.wait_for_ws(port=port, timeout=120.0)
-                    if not ready:
-                        return _json_response({"error": "NapCat WS 未就绪，请检查 QQ 是否已扫码登录"}, 500)
+                    ready_info = await instance_mgr.wait_for_ws(port=port, token=token, timeout=120.0)
+                    if not ready_info.get("ready"):
+                        # 回滚：停止已启动的 NapCat，避免僵尸进程
+                        error_msg = ready_info.get("error") or "NapCat WS 未就绪"
+                        LOG.warning("NapCat 实例 %s WS 未就绪，执行回滚: %s", name, error_msg)
+                        try:
+                            await instance_mgr.stop()
+                        except Exception as exc:
+                            LOG.warning("回滚停止 NapCat 实例 %s 失败: %s", name, exc)
+                        return _json_response(
+                            {"error": f"{error_msg}，请检查 QQ 是否已扫码登录"}, 500
+                        )
+                    self_id = ready_info.get("self_id")
+                    if self_id:
+                        LOG.info("NapCat 实例 %s 账号验证通过 (QQ=%s)", name, self_id)
                     self._napcat_instances[name] = instance_mgr
+                    self._save_napcat_registry()
                     break  # 只处理第一个启用的 napcat adapter
 
         ok = self.persona_manager.start_persona(name)
         return _json_response({"success": ok, "name": name})
+
+    def _load_napcat_registry(self) -> None:
+        """从磁盘恢复 NapCat 实例引用（WebUI 重启后使用）。"""
+        if not self._napcat_registry_path.exists():
+            return
+        try:
+            data = json.loads(self._napcat_registry_path.read_text(encoding="utf-8"))
+            for name, info in data.items():
+                instance_dir = info.get("instance_dir")
+                if instance_dir and Path(instance_dir).exists():
+                    self._napcat_instances[name] = NapCatManager(
+                        install_dir=self.napcat_manager.install_dir if self.napcat_manager else "",
+                        instance_dir=instance_dir,
+                    )
+        except Exception as exc:
+            LOG.warning("加载 NapCat 实例注册表失败: %s", exc)
+
+    def _save_napcat_registry(self) -> None:
+        """将 NapCat 实例引用持久化到磁盘。"""
+        try:
+            data: dict[str, dict[str, Any]] = {}
+            for name, mgr in self._napcat_instances.items():
+                data[name] = {"instance_dir": str(mgr.instance_dir)}
+            tmp = self._napcat_registry_path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            tmp.replace(self._napcat_registry_path)
+        except Exception as exc:
+            LOG.warning("保存 NapCat 实例注册表失败: %s", exc)
 
     async def api_persona_stop(self, request: web.Request) -> web.Response:
         name = _get_name(request)
@@ -323,6 +369,7 @@ class WebUIServer:
                 await instance_mgr.stop()
             except Exception as exc:
                 LOG.warning("停止 NapCat 实例 %s 失败: %s", name, exc)
+        self._save_napcat_registry()
 
         return _json_response({"success": ok, "name": name})
 
@@ -337,6 +384,17 @@ class WebUIServer:
             except Exception as exc:
                 LOG.warning("停止 NapCat 实例 %s 失败: %s", name, exc)
 
+        # 清理 NapCat 实例目录
+        if self.napcat_manager is not None:
+            instance_dir = Path(self.napcat_manager.install_dir) / "instances" / name
+            if instance_dir.exists():
+                try:
+                    shutil.rmtree(instance_dir)
+                    LOG.info("已清理 NapCat 实例目录: %s", instance_dir)
+                except Exception as exc:
+                    LOG.warning("清理 NapCat 实例目录 %s 失败: %s", instance_dir, exc)
+
+        self._save_napcat_registry()
         ok = self.persona_manager.remove_persona(name)
         return _json_response({"success": ok, "name": name})
 

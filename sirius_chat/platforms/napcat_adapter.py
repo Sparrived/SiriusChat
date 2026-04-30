@@ -36,6 +36,10 @@ def _is_ws_closed(ws: Any) -> bool:
 class NapCatAdapter:
     """轻量级 NapCat OneBot v11 正向 WebSocket 客户端。"""
 
+    _RECONNECT_BASE_DELAY = 1.0
+    _RECONNECT_MAX_DELAY = 30.0
+    _MAX_RECONNECT_ATTEMPTS = 5  # 0 = 无限重试
+
     def __init__(
         self,
         ws_url: str,
@@ -64,8 +68,14 @@ class NapCatAdapter:
         self._reconnect_task = asyncio.create_task(self._reconnect_loop())
 
     async def close(self) -> None:
-        """关闭连接并清理资源。"""
+        """关闭连接并清理资源（取消所有在途 API 调用）。"""
         self._running = False
+        # 取消所有 pending futures，避免在途调用挂死
+        for echo, future in list(self._pending.items()):
+            if not future.done():
+                future.cancel()
+        self._pending.clear()
+
         if self._reconnect_task:
             self._reconnect_task.cancel()
             try:
@@ -104,10 +114,14 @@ class NapCatAdapter:
             self.ws = None
 
     async def _reconnect_loop(self) -> None:
-        """自动重连循环：连接断开后在指定间隔后重试。"""
+        """自动重连循环：连接断开后指数退避重试。"""
+        delay = self._RECONNECT_BASE_DELAY
+        attempts = 0
         while self._running:
             if self.ws is None or _is_ws_closed(self.ws):
                 if await self._connect_once():
+                    delay = self._RECONNECT_BASE_DELAY
+                    attempts = 0
                     self._listen_task = asyncio.create_task(self._listen_loop())
                     # 等待监听任务结束（连接断开）
                     try:
@@ -118,7 +132,15 @@ class NapCatAdapter:
                     except Exception as exc:
                         LOG.warning("Listen task ended: %s", exc)
                 else:
-                    await asyncio.sleep(self.reconnect_interval)
+                    if self._MAX_RECONNECT_ATTEMPTS > 0 and attempts >= self._MAX_RECONNECT_ATTEMPTS:
+                        LOG.error(
+                            "NapCat WS 重连次数耗尽 (%s 次)，停止重连",
+                            self._MAX_RECONNECT_ATTEMPTS,
+                        )
+                        break
+                    await asyncio.sleep(delay)
+                    delay = min(delay * 2, self._RECONNECT_MAX_DELAY)
+                    attempts += 1
             else:
                 await asyncio.sleep(self.reconnect_interval)
 

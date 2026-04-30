@@ -46,6 +46,9 @@ class PersonaManager:
         self._processes: dict[str, subprocess.Popen] = {}
         self._port_registry_path = self.data_path / "adapter_port_registry.json"
 
+        import atexit
+        atexit.register(self._cleanup_stale_worker_statuses)
+
     # ------------------------------------------------------------------
     # 端口分配
     # ------------------------------------------------------------------
@@ -64,17 +67,36 @@ class PersonaManager:
             encoding="utf-8",
         )
 
+    @staticmethod
+    def _is_port_free(port: int) -> bool:
+        """检查端口是否在 OS 层面可用。"""
+        import socket
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.bind(("localhost", port))
+                return True
+        except OSError:
+            return False
+
     def _allocate_port(self, name: str) -> int:
-        """为指定人格分配一个未被占用的 WebSocket 端口（从 3001 开始递增）。"""
+        """为指定人格分配一个未被占用的 WebSocket 端口（从 3001 开始递增，并验证 OS 可用性）。"""
         ports = self._load_port_registry()
-        # 如果已有分配，直接复用
+        # 如果已有分配，先验证是否仍可用
         if name in ports:
-            return ports[name]
+            allocated = ports[name]
+            if self._is_port_free(allocated):
+                return allocated
+            # 端口已被占用，重新分配
+            LOG.warning("人格 %s 的端口 %s 已被占用，重新分配", name, allocated)
+            del ports[name]
+
         base_port = int(self.global_config.get("napcat_base_port", 3001))
         used = set(ports.values())
         port = base_port
-        while port in used:
+        while port in used or not self._is_port_free(port):
             port += 1
+            if port > 65535:
+                raise RuntimeError("无可用端口")
         ports[name] = port
         self._save_port_registry(ports)
         LOG.info("为 %s 分配端口: %s", name, port)
@@ -447,13 +469,29 @@ class PersonaManager:
             status = self._read_worker_status(name)
             pid = status.get("pid") if status else None
             if pid:
-                try:
-                    import os as _os
-                    _os.kill(pid, signal.SIGTERM if sys.platform != "win32" else signal.CTRL_BREAK_EVENT)
-                    LOG.info("已向孤儿进程发送终止信号: %s (pid=%s)", name, pid)
-                    return True
-                except Exception as exc:
-                    LOG.warning("终止孤儿进程失败 %s: %s", name, exc)
+                if sys.platform == "win32":
+                    # Windows: 使用 taskkill 终止孤儿进程（比 CTRL_BREAK_EVENT 更可靠）
+                    try:
+                        result = subprocess.run(
+                            ["taskkill", "/PID", str(pid), "/T", "/F"],
+                            capture_output=True,
+                            timeout=10.0,
+                        )
+                        if result.returncode == 0:
+                            LOG.info("已终止孤儿进程: %s (pid=%s)", name, pid)
+                        else:
+                            LOG.warning("终止孤儿进程失败 %s (pid=%s): %s", name, pid, result.stderr.decode(errors="ignore"))
+                        return True
+                    except Exception as exc:
+                        LOG.warning("终止孤儿进程失败 %s: %s", name, exc)
+                else:
+                    try:
+                        import os as _os
+                        _os.kill(pid, signal.SIGTERM)
+                        LOG.info("已向孤儿进程发送 SIGTERM: %s (pid=%s)", name, pid)
+                        return True
+                    except Exception as exc:
+                        LOG.warning("终止孤儿进程失败 %s: %s", name, exc)
             return False
 
         # 先发送 SIGTERM（Windows 用 CTRL_BREAK_EVENT）
@@ -480,15 +518,44 @@ class PersonaManager:
         LOG.info("人格已停止: %s", name)
         return True
 
+    def _cleanup_stale_worker_statuses(self) -> None:
+        """清理所有过期的 worker_status.json（atexit 钩子）。"""
+        for info in self.list_personas():
+            name = info["name"]
+            status = self._read_worker_status(name)
+            if status is None:
+                continue
+            pid = status.get("pid")
+            if pid and not self._is_pid_alive(pid):
+                try:
+                    status_path = self.personas_dir / name / "engine_state" / "worker_status.json"
+                    if status_path.exists():
+                        status_path.unlink()
+                        LOG.info("已清理过期 worker_status: %s", name)
+                except Exception:
+                    pass
+
     @staticmethod
     def _is_pid_alive(pid: int) -> bool:
-        """通过信号 0 检测 PID 是否存活（不发送实际信号）。"""
+        """检测 PID 是否存活（Windows 安全）。"""
         try:
-            import os
-            os.kill(pid, 0)
-            return True
-        except (OSError, ProcessLookupError):
-            return False
+            import psutil
+            return psutil.pid_exists(pid)
+        except Exception:
+            if sys.platform == "win32":
+                import ctypes
+                kernel32 = ctypes.windll.kernel32
+                handle = kernel32.OpenProcess(0x0400, False, pid)  # PROCESS_QUERY_INFORMATION
+                if handle:
+                    kernel32.CloseHandle(handle)
+                    return True
+                return False
+            try:
+                import os
+                os.kill(pid, 0)
+                return True
+            except OSError:
+                return False
 
     def is_running(self, name: str) -> bool:
         """检查人格进程是否仍在运行。"""
@@ -503,6 +570,13 @@ class PersonaManager:
         status = self._read_worker_status(name)
         pid = status.get("pid") if status else None
         if pid and self._is_pid_alive(pid):
+            # 额外检查：进程命令行是否包含 persona_worker（防止 PID 重用）
+            if not self._is_pid_persona_worker(pid):
+                LOG.warning(
+                    "人格 %s 的 worker_status PID=%s 不是 persona_worker，可能是 PID 重用",
+                    name, pid,
+                )
+                return False
             # 额外检查：心跳是否超时（防止 PID 重用或进程僵死）
             heartbeat_at = status.get("heartbeat_at") if status else None
             if heartbeat_at:
@@ -518,6 +592,17 @@ class PersonaManager:
                     pass
             return True
         return False
+
+    @staticmethod
+    def _is_pid_persona_worker(pid: int) -> bool:
+        """检查指定 PID 的进程是否真的是 persona_worker。"""
+        try:
+            import psutil
+            proc = psutil.Process(pid)
+            cmdline = " ".join(proc.cmdline())
+            return "persona_worker" in cmdline
+        except Exception:
+            return True  # 无法验证时保守返回 True
 
     def start_all(self) -> dict[str, bool]:
         """启动所有已启用的人格。"""
