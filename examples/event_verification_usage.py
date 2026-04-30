@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """
-Example: Event Memory V2 â€?Buffer-based Batch Observation Extraction
+Example: Event Memory V2 â€” Buffer-based Batch Observation Extraction
 
 Demonstrates the V2 event memory strategy:
 1. Messages are buffered per user (no LLM calls on each message)
@@ -132,7 +132,7 @@ def demo_categories():
 
 if __name__ == "__main__":
     print("=" * 60)
-    print("Event Memory V2 â€?Batch Observation Extraction Demo")
+    print("Event Memory V2 â€” Batch Observation Extraction Demo")
     print("=" * 60 + "\n")
 
     asyncio.run(demo_buffer_and_extract())
