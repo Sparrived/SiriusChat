@@ -2304,6 +2304,11 @@ class EmotionalGroupChatEngine:
         # Sanitise: strip any echoed <conversation_history> XML blocks
         reply = self._strip_conversation_history_xml(reply)
 
+        # LLM 自选跳过：如果输出包含 <skip/>（忽略大小写与空白），则返回空
+        if re.search(r"<\s*skip\s*/?\s*>", reply, flags=re.IGNORECASE):
+            LOG.info("[%s] LLM 主动选择跳过回复（输出 skip 标签）。", task_name)
+            reply = ""
+
         # Record token usage
         output_chars = len(reply)
         estimated_output_tokens = max(1, (output_chars + 3) // 4)

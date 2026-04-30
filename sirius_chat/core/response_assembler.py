@@ -455,7 +455,9 @@ class ResponseAssembler:
         return (
             "[输出格式]\n"
             "直接输出你要说的话，不要添加任何额外标签或格式标记。\n"
-            "回复内容请控制在 30 字以内，禁止换行，连续输出，不要刷屏。"
+            "回复内容请控制在 30 字以内，禁止换行，连续输出，不要刷屏。\n"
+            "如果你认为现在不需要回复（例如话题与你无关、群聊过热不想插话、"
+            "或者有人@其他AI），你可以直接输出 <skip/>，系统将不会发送任何消息。"
         )
 
     def _build_skill_descriptions(self, caller_is_developer: bool = False, adapter_type: str | None = None) -> str:
@@ -603,6 +605,14 @@ class ResponseAssembler:
             f"[语气] {suggested_tone}",
             "[提醒] 不要和之前主动发起过的话题或句式重复，尝试换个角度或新的切入点。",
         ]
+        if self.other_ai_names:
+            sections.append(
+                "[群成员区分]\n"
+                f"群里还有以下 AI/Bot（他们不是你）：{', '.join(self.other_ai_names)}。\n"
+                "你可以正常参与关于他们的话题讨论，但要分清身份——"
+                "当有人@他们或直呼他们名字时，那是在叫他们，不是你；"
+                "不要把自己的名字和他们的名字搞混，也不要替他们回答。"
+            )
         if topic_context:
             sections.append(
                 f"[话题建议] 你可以基于这段群聊记忆自然地开启话题：{topic_context}"
