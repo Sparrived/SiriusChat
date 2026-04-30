@@ -297,6 +297,14 @@ class WebUIServer:
                     if not qq:
                         return _json_response({"error": f"人格 {name} 的 NapCat 未配置 QQ 号"}, 400)
 
+                    # 检查是否已有运行中的 NapCat 实例，避免重复启动
+                    existing = self._napcat_instances.get(name)
+                    if existing and existing.is_running:
+                        LOG.info("NapCat 实例 %s 已在运行，跳过启动", name)
+                        break
+                    if existing:
+                        self._napcat_instances.pop(name, None)
+
                     instance_mgr = NapCatManager.for_persona(
                         global_install_dir=self.napcat_manager.install_dir,
                         persona_name=name,
