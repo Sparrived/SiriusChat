@@ -843,11 +843,13 @@ class WebUIServer:
             if paths is None:
                 continue
             db_path = paths.dir / "token" / "token_usage.db"
+            LOG.debug("Token 统计检查 %s: db_path=%s exists=%s", name, db_path, db_path.exists())
             if not db_path.exists():
                 continue
             try:
                 store = TokenUsageStore(db_path, session_id="default")
                 summary = store.get_summary()
+                LOG.info("Token 统计 %s: %s", name, summary)
                 if summary.get("total_calls", 0):
                     persona_breakdown.append({
                         "persona_name": name,
@@ -856,7 +858,8 @@ class WebUIServer:
                     for key in total_summary:
                         total_summary[key] += summary.get(key, 0)
                 store.close()
-            except Exception:
+            except Exception as exc:
+                LOG.warning("Token 统计读取失败 %s: %s", name, exc)
                 continue
 
         return _json_response({
