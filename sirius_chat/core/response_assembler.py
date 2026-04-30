@@ -235,9 +235,9 @@ class ResponseAssembler:
         # Stranger
         return "[关系状态] 你和该用户还不太熟。"
 
+    @staticmethod
     def _build_relationship_contexts(
-        self,
-        user_profiles: list[UserSemanticProfile],
+        user_profiles: list[Any],
         caller_is_developer: bool = False,
     ) -> str | None:
         """Build relationship descriptions for multiple users (merged messages)."""
@@ -250,15 +250,15 @@ class ResponseAssembler:
             if profile.user_id in seen:
                 continue
             seen.add(profile.user_id)
-            ctx = self._build_relationship_context(profile, caller_is_developer)
+            ctx = ResponseAssembler._build_relationship_context(profile, caller_is_developer)
             if ctx:
-                # Replace generic "该用户" with user_id for disambiguation
-                ctx = ctx.replace("该用户", f"用户 {profile.user_id}")
+                # Replace generic "该用户" with the actual user name/ID
+                ctx = ctx.replace("该用户", profile.user_id)
                 contexts.append(ctx)
 
         if not contexts:
             return None
-        return "\n".join(contexts[:3])  # Cap at 3 to avoid prompt bloat
+        return "\n".join(contexts)
 
     def assemble(
         self,
