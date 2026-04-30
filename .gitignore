@@ -19,6 +19,7 @@ data/
 test_data/
 logs/
 null
+napcat_instance_registry.json
 .pytest_cache/
 .coverage
 coverage.xml
