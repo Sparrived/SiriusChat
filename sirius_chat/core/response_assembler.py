@@ -540,6 +540,7 @@ class ResponseAssembler:
         caller_is_developer: bool = False,
         glossary_section: str = "",
         adapter_type: str | None = None,
+        is_first_interaction: bool = False,
     ) -> PromptBundle:
         """Build prompt for a delayed response (topic-gap trigger)."""
         if style_params is None:
@@ -555,6 +556,12 @@ class ResponseAssembler:
             identity,
             "[当前场景] 群里的话题有了自然间隙，你决定插一句。",
         ]
+        if is_first_interaction:
+            sections.append(
+                "[首次互动]\n"
+                "这是你第一次和当前说话者交流，请保持友好、礼貌，"
+                "可以适当自我介绍，让对方感受到你的热情和善意。"
+            )
         if self.other_ai_names:
             sections.append(
                 "[群成员区分]\n"

@@ -1225,8 +1225,16 @@ class EmotionalGroupChatEngine:
 
         # Merge all triggered items into one prompt and one generation call
         adapter_type = getattr(triggered[0], "adapter_type", None) if triggered else None
+        is_first_interaction = any(
+            bool(getattr(item, "emotion_state", {}).get("_is_first_interaction"))
+            for item in triggered
+        )
         bundle = self._build_delayed_prompt(
-            triggered, group_id, caller_is_developer=caller_is_developer, adapter_type=adapter_type
+            triggered,
+            group_id,
+            caller_is_developer=caller_is_developer,
+            adapter_type=adapter_type,
+            is_first_interaction=is_first_interaction,
         )
 
         # Use ContextAssembler to build full messages with diary RAG + XML history
@@ -2052,6 +2060,18 @@ class EmotionalGroupChatEngine:
                 "intent": intent.to_dict(),
             }
 
+        # Detect first interaction: if user has no prior interaction timestamp,
+        # this is their first message to the AI in this group.
+        is_first_interaction = False
+        if user_id:
+            sp = self.semantic_memory.get_user_profile(group_id, user_id)
+            if sp and sp.relationship_state and not sp.relationship_state.first_interaction_at:
+                is_first_interaction = True
+
+        emotion_state = emotion.to_dict()
+        if is_first_interaction:
+            emotion_state["_is_first_interaction"] = True
+
         if decision.strategy == ResponseStrategy.IMMEDIATE:
             self._log_inner_thought("让我先稍等片刻，看看有没有后续消息...")
             self.delayed_queue.enqueue(
@@ -2059,7 +2079,7 @@ class EmotionalGroupChatEngine:
                 user_id=user_id,
                 message_content=message.content,
                 strategy_decision=decision,
-                emotion_state=emotion.to_dict(),
+                emotion_state=emotion_state,
                 candidate_memories=[m.get("content", "") for m in memories],
                 channel=message.channel,
                 channel_user_id=message.channel_user_id,
@@ -2084,7 +2104,7 @@ class EmotionalGroupChatEngine:
                 user_id=user_id,
                 message_content=message.content,
                 strategy_decision=decision,
-                emotion_state=emotion.to_dict(),
+                emotion_state=emotion_state,
                 candidate_memories=[m.get("content", "") for m in memories],
                 channel=message.channel,
                 channel_user_id=message.channel_user_id,
@@ -2163,7 +2183,14 @@ class EmotionalGroupChatEngine:
         content.extend(multimodal_blocks)
         return content
 
-    def _build_delayed_prompt(self, items: Any, group_id: str, caller_is_developer: bool = False, adapter_type: str | None = None):
+    def _build_delayed_prompt(
+        self,
+        items: Any,
+        group_id: str,
+        caller_is_developer: bool = False,
+        adapter_type: str | None = None,
+        is_first_interaction: bool = False,
+    ):
         """Build prompt bundle for delayed response (supports single item or merged list)."""
         from sirius_chat.core.response_assembler import PromptBundle
         from sirius_chat.models.response_strategy import ResponseStrategy
@@ -2188,6 +2215,7 @@ class EmotionalGroupChatEngine:
             caller_is_developer=caller_is_developer,
             glossary_section=glossary,
             adapter_type=adapter_type,
+            is_first_interaction=is_first_interaction,
         )
         return bundle
 
