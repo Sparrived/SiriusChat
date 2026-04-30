@@ -489,7 +489,7 @@ class EmotionalGroupChatEngine:
         if strategy == "immediate" and reply:
             self._log_inner_thought(f"回复已经想好了，希望 {speaker} 能喜欢我的回答～")
         elif strategy == "delayed":
-            self._log_inner_thought(f"{speaker} 的话我先记下了，等气氛合适的时候再回。")
+            pass  # 决策层已输出，避免重复日志
         elif strategy == "silent":
             self._log_inner_thought(f"{speaker} 的话我在心里默默消化了，暂时先不说话。")
 
@@ -2064,7 +2064,6 @@ class EmotionalGroupChatEngine:
             }
 
         if decision.strategy == ResponseStrategy.DELAYED:
-            self._log_inner_thought("现在不是最佳时机，我先把这个话题记在小本本上，等会儿再回。")
             self.delayed_queue.enqueue(
                 group_id=group_id,
                 user_id=user_id,
