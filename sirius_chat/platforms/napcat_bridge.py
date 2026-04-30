@@ -111,7 +111,7 @@ class NapCatBridge:
         self._running = False
         self.adapter_type = "napcat"
         self._last_not_ready_log: float = 0.0
-        self._reply_lock = asyncio.Lock()
+        self._reply_locks: dict[str, asyncio.Lock] = {}
         self._image_cache_dir = self.work_path / "image_cache"
 
         # Bridge 内部状态持久化（setup wizard 等）
@@ -328,8 +328,13 @@ class NapCatBridge:
                     else:
                         await self._send_private_text_raw(user_id, clean_reply)
             LOG.info("%s 消息处理完成 | strategy=%s | speaker=%s", group_id, result.get("strategy"), speaker_name)
+        except asyncio.CancelledError:
+            raise
+        except RuntimeError as exc:
+            # 引擎内部错误（如模型调用失败），记录但不吞掉上下文
+            LOG.error("引擎处理错误 (%s/%s): %s", group_id, user_id, exc)
         except Exception as exc:
-            LOG.error("消息处理异常: %s", exc)
+            LOG.exception("消息处理异常 (%s/%s): %s", group_id, user_id, exc)
 
     # ─── 后台投递 ─────────────────────────────────────────
 
@@ -495,8 +500,16 @@ class NapCatBridge:
 
     # ─── 发送工具 ─────────────────────────────────────────
 
+    def _get_reply_lock(self, key: str) -> asyncio.Lock:
+        """获取指定 key（group_id 或 user_id）的独立发送锁。"""
+        lock = self._reply_locks.get(key)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._reply_locks[key] = lock
+        return lock
+
     async def _send_group_text_raw(self, group_id: str, text: str) -> None:
-        async with self._reply_lock:
+        async with self._get_reply_lock(group_id):
             try:
                 await self.adapter.send_group_msg(group_id, text)
                 LOG.info("回复群 %s: %s", group_id, text[:120])
@@ -504,7 +517,7 @@ class NapCatBridge:
                 LOG.warning("发送群消息失败: %s", exc)
 
     async def _send_private_text_raw(self, user_id: str, text: str) -> None:
-        async with self._reply_lock:
+        async with self._get_reply_lock(user_id):
             try:
                 await self.adapter.send_private_msg(user_id, text)
                 LOG.info("回复私聊 %s: %s", user_id, text[:120])

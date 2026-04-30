@@ -156,7 +156,10 @@ class EmotionalGroupChatEngine:
         self.rhythm_analyzer = RhythmAnalyzer()
 
         # Execution layer (persona-injected)
-        self.response_assembler = ResponseAssembler(persona=self.persona)
+        self.response_assembler = ResponseAssembler(
+            persona=self.persona,
+            other_ai_names=self.config.get("other_ai_names", []),
+        )
         self.style_adapter = StyleAdapter()
         task_overrides = {task: {"model_name": model} for task, model in self._task_models.items()}
         self.model_router = ModelRouter(
@@ -266,16 +269,6 @@ class EmotionalGroupChatEngine:
                         "intent": {},
                     }
                 self._log_inner_thought(f"{speaker} 是另一个 AI，但说得挺长，让我认真想想...")
-
-        # 新增：人类消息明确指向其他 AI 时，当前 AI 直接闭嘴
-        if message.sender_type == "human" and self._message_directed_at_other_ai(message.content):
-            self._log_inner_thought(f"{speaker} 明明在叫别人，我先别插嘴了...")
-            return {
-                "strategy": "silent",
-                "reply": None,
-                "emotion": {},
-                "intent": {},
-            }
 
         self._log_inner_thought(f"{speaker} 在群里说话了，让我仔细听听看～")
         await self.event_bus.emit(

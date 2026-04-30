@@ -171,6 +171,17 @@ class PersonaProfile:
         # ── 1. Identity anchor ──
         sections.append(f"[角色：{self.name}]")
 
+        # 强身份锚定：明确告诉模型"你是谁"和"你不是谁"
+        identity_lines = [f"你的名字是「{self.name}」"]
+        if self.aliases:
+            identity_lines.append(f"别名：{'、'.join(self.aliases)}")
+        identity_anchor = "，".join(identity_lines) + "。"
+        identity_anchor += (
+            "你只会在有人@你或提到你的名字/别名时回应。"
+            "你不是群里其他人，不要替别人回答，也不要把提到别人的话当成是对你说的。"
+        )
+        sections.append(f"【身份锚定】\n{identity_anchor}")
+
         anchor = self.persona_summary or ""
         if not anchor and self.backstory:
             first = self.backstory.split("。")[0] + "。" if "。" in self.backstory else self.backstory

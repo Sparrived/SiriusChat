@@ -160,6 +160,9 @@ class PersonaExperienceConfig:
     # 记忆深度（影响 prompt 注入的日记/记忆数量）
     memory_depth: str = "deep"  # shallow|moderate|deep
 
+    # 群里其他 AI/Bot 的名字（手动指定，防止抢话和身份混淆）
+    other_ai_names: list[str] = field(default_factory=list)
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "reply_mode": self.reply_mode,
@@ -179,6 +182,7 @@ class PersonaExperienceConfig:
             "skill_execution_timeout": self.skill_execution_timeout,
             "auto_install_skill_deps": self.auto_install_skill_deps,
             "memory_depth": self.memory_depth,
+            "other_ai_names": list(self.other_ai_names),
         }
 
     @classmethod
@@ -197,6 +201,7 @@ class PersonaExperienceConfig:
             reply_frequency_exempt_on_mention=bool(data.get("reply_frequency_exempt_on_mention", True)),
             max_concurrent_llm_calls=int(data.get("max_concurrent_llm_calls", 1)),
             enable_skills=bool(data.get("enable_skills", True)),
+            other_ai_names=[str(v) for v in data.get("other_ai_names", [])],
             max_skill_rounds=int(data.get("max_skill_rounds", 3)),
             skill_execution_timeout=float(data.get("skill_execution_timeout", 30.0)),
             auto_install_skill_deps=bool(data.get("auto_install_skill_deps", True)),

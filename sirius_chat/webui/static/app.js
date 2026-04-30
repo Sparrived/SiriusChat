@@ -9,6 +9,10 @@ let currentPage = 'dashboard';
 let adapterGroupIds = [];
 let adapterPrivateIds = [];
 
+// 缓存上次统计数据，避免无变化时重复重建 DOM 触发跳动
+let _lastTelemetryData = null;
+let _lastTokenData = null;
+
 function $(id) { return document.getElementById(id); }
 
 /* ── Animation helpers ──────────────────────────────── */
@@ -320,6 +324,10 @@ async function loadTokenStats() {
   if (!callsEl || !totalEl) return;
   try {
     const res = await get('/tokens');
+    const dataKey = JSON.stringify(res);
+    if (_lastTokenData === dataKey) return; // 数据未变化，跳过重建
+    _lastTokenData = dataKey;
+
     const summary = res.summary || {};
     const personaList = res.personas || [];
     animateNumber(callsEl, summary.total_calls || 0, 500);
@@ -343,6 +351,7 @@ async function loadTokenStats() {
       }
     }
   } catch (e) {
+    _lastTokenData = null;
     if (personasEl) personasEl.innerHTML = '<div style="color:var(--text-2);padding:12px">Token 统计加载失败</div>';
   }
 }
@@ -353,6 +362,10 @@ async function loadTelemetry() {
   if (!container) return;
   try {
     const res = await get('/telemetry');
+    const dataKey = JSON.stringify(res);
+    if (_lastTelemetryData === dataKey) return; // 数据未变化，跳过重建
+    _lastTelemetryData = dataKey;
+
     const skills = res.skills || {};
     const total = res.total_calls || 0;
     if (totalEl) totalEl.textContent = String(total);
@@ -377,6 +390,7 @@ async function loadTelemetry() {
     }).join('');
     applyStagger(container, '.stat-card');
   } catch (e) {
+    _lastTelemetryData = null;
     container.innerHTML = '<div style="color:var(--text-2);padding:12px">统计加载失败</div>';
   }
 }
@@ -1048,6 +1062,7 @@ async function loadExperience() {
     $('expSkillTimeout').value = e.skill_execution_timeout ?? 30;
     $('expAutoInstallDeps').value = String(e.auto_install_skill_deps !== false);
     $('expMemoryDepth').value = e.memory_depth || 'deep';
+    $('expOtherAINames').value = (e.other_ai_names || []).join(', ');
   } catch (e) {}
 }
 
@@ -1072,6 +1087,7 @@ async function saveExperience() {
       skill_execution_timeout: parseFloat($('expSkillTimeout').value),
       auto_install_skill_deps: $('expAutoInstallDeps').value === 'true',
       memory_depth: $('expMemoryDepth').value,
+      other_ai_names: $('expOtherAINames').value.split(',').map(s => s.trim()).filter(Boolean),
     }
   });
   toast(res.success ? '体验参数已保存' : res.error || '保存失败', res.success ? 'success' : 'error');

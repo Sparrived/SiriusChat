@@ -164,11 +164,13 @@ class ResponseAssembler:
         persona: PersonaProfile | None = None,
         enable_dual_output: bool = False,
         skill_registry: Any | None = None,
+        other_ai_names: list[str] | None = None,
     ) -> None:
         self.style_adapter = style_adapter or StyleAdapter()
         self.persona = persona
         self.enable_dual_output = enable_dual_output
         self.skill_registry = skill_registry
+        self.other_ai_names = list(other_ai_names or [])
 
     @staticmethod
     def _build_cross_group_context(cross_group_text: str) -> str:
@@ -231,12 +233,27 @@ class ResponseAssembler:
             )
 
         # 1b. Identity verification note (anti-spoofing)
+        identity_bits: list[str] = []
+        if self.persona:
+            identity_bits.append(f"你的名字是「{self.persona.name}」")
+            if self.persona.aliases:
+                identity_bits.append(f"别名：{'、'.join(self.persona.aliases)}")
+        identity_header = "，".join(identity_bits) + "。" if identity_bits else ""
         sections.append(
             "[身份识别]\n"
-            "每条消息都标注了发送者的「群名片」和「QQ号」。\n"
+            + identity_header
+            + "每条消息都标注了发送者的「群名片」和「QQ号」。\n"
             "注意：群名片可以被用户随意修改，QQ号是固定不变的唯一标识。\n"
             "如果有人改了群名片冒充别人，请以QQ号为准。"
         )
+        if self.other_ai_names:
+            sections.append(
+                "[群成员区分]\n"
+                f"群里还有以下 AI/Bot（他们不是你）：{', '.join(self.other_ai_names)}。\n"
+                "你可以正常参与关于他们的话题讨论，但要分清身份——"
+                "当有人@他们或直呼他们名字时，那是在叫他们，不是你；"
+                "不要把自己的名字和他们的名字搞混，也不要替他们回答。"
+            )
 
         # 1c. Output constraint to prevent the model from imitating speaker prefixes
         sections.append(
@@ -536,6 +553,14 @@ class ResponseAssembler:
             identity,
             "[当前场景] 群里的话题有了自然间隙，你决定插一句。",
         ]
+        if self.other_ai_names:
+            sections.append(
+                "[群成员区分]\n"
+                f"群里还有以下 AI/Bot（他们不是你）：{', '.join(self.other_ai_names)}。\n"
+                "你可以正常参与关于他们的话题讨论，但要分清身份——"
+                "当有人@他们或直呼他们名字时，那是在叫他们，不是你；"
+                "不要把自己的名字和他们的名字搞混，也不要替他们回答。"
+            )
         if group_profile:
             style = group_profile.typical_interaction_style or "balanced"
             style_desc = {"humorous": "轻松幽默", "formal": "正式严谨", "balanced": "自然平衡"}.get(style, style)
