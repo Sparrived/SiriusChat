@@ -920,7 +920,11 @@ class EmotionalGroupChatEngine:
         messages = [{"role": "user", "content": "（你决定主动开口）"}]
         style = self.style_adapter.adapt(heat_level="warm", pace="steady", is_group_chat=False)
 
-        raw_reply = await self._generate(system_prompt, messages, group_id, style)
+        user_comm_style = getattr(user_profile, "communication_style", "") if user_profile else ""
+        raw_reply = await self._generate(
+            system_prompt, messages, group_id, style,
+            user_communication_style=user_comm_style,
+        )
         reply = raw_reply.strip()
 
         clean_reply = strip_skill_calls(reply).strip()
@@ -1113,8 +1117,12 @@ class EmotionalGroupChatEngine:
             sections.append(f"之前你答应过 {who} 会提醒他，现在时间到了：{content}")
             system_prompt = "\n\n".join(sections)
             messages = [{"role": "user", "content": "（提醒时间到了）"}]
+            user_profile = self.semantic_memory.get_global_user_profile(user_id)
+            user_comm_style = getattr(user_profile, "communication_style", "") if user_profile else ""
             raw_reply = await self._generate(
-                system_prompt, messages, group_id, task_name="proactive_generate"
+                system_prompt, messages, group_id,
+                task_name="proactive_generate",
+                user_communication_style=user_comm_style,
             )
             reply = strip_skill_calls(raw_reply).strip()
             if reply:
@@ -1281,8 +1289,21 @@ class EmotionalGroupChatEngine:
         _any_partial_sent = False
         last_round_had_partial = False
 
+        # Determine user communication style from the triggered batch
+        resolved_uid = None
+        for item in triggered:
+            uid = getattr(item, "user_id", None)
+            if uid:
+                resolved_uid = uid
+                break
+        user_profile = self.semantic_memory.get_user_profile(group_id, resolved_uid) if resolved_uid else None
+        user_comm_style = getattr(user_profile, "communication_style", "") if user_profile else ""
+
         for _round in range(max_skill_rounds + 1):
-            raw_reply = await self._generate(system_prompt, messages, group_id)
+            raw_reply = await self._generate(
+                system_prompt, messages, group_id,
+                user_communication_style=user_comm_style,
+            )
             reply = raw_reply.strip()
 
             calls = parse_skill_calls(reply)
@@ -2296,6 +2317,7 @@ class EmotionalGroupChatEngine:
         style_params: StyleParams | None = None,
         task_name: str = "response_generate",
         urgency: int = 0,
+        user_communication_style: str = "",
     ) -> str:
         """Call LLM provider to generate response.
 
@@ -2318,6 +2340,7 @@ class EmotionalGroupChatEngine:
             task_name,
             urgency=urgency,
             heat_level=rhythm.heat_level,
+            user_communication_style=user_communication_style,
         )
 
         # Apply style params if provided (override router's max_tokens)

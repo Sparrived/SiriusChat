@@ -126,22 +126,35 @@ class StyleAdapter:
                 elif persona.emoji_preference == "none":
                     tone_instruction += "，不用表情包"
 
-        # User style override (second priority, if no persona or persona has no style)
-        if not persona or not persona.communication_style:
-            style = (user_communication_style or "").strip().lower()
-            if style == "concise":
-                max_tokens = min(max_tokens, 80)
-                length_instruction = "请控制在 30 字以内，用1-2句话简洁回复，不要换行。"
-                temperature = 0.5
-            elif style == "detailed":
-                length_instruction = "可以给出较详细的解释。"
-                temperature = 0.7
-            elif style == "formal":
-                tone_instruction = "保持礼貌正式的语气"
-                temperature = 0.5
-            elif style == "casual":
-                tone_instruction = "保持轻松随意的语气，可以用表情"
-                temperature = 0.8
+        # User style awareness
+        user_style = (user_communication_style or "").strip().lower()
+        persona_style = (persona.communication_style or "").strip().lower() if persona else ""
+        if user_style:
+            if not persona or not persona.communication_style:
+                # No persona style → user style controls length/temperature directly
+                if user_style == "concise":
+                    max_tokens = min(max_tokens, 80)
+                    length_instruction = "请控制在 30 字以内，用1-2句话简洁回复，不要换行。"
+                    temperature = 0.5
+                elif user_style == "detailed":
+                    length_instruction = "可以给出较详细的解释。"
+                    temperature = 0.7
+                elif user_style == "formal":
+                    tone_instruction = "保持礼貌正式的语气"
+                    temperature = 0.5
+                elif user_style == "casual":
+                    tone_instruction = "保持轻松随意的语气，可以用表情"
+                    temperature = 0.8
+            elif user_style != persona_style:
+                # Persona has style → user style becomes a supplementary tone hint
+                style_desc = {
+                    "concise": "简洁",
+                    "detailed": "详细",
+                    "formal": "正式",
+                    "casual": "随意",
+                    "humorous": "幽默",
+                }.get(user_style, user_style)
+                tone_instruction += f"。注意：该用户习惯较{style_desc}的沟通方式，可适当适配"
 
         return StyleParams(
             max_tokens=max_tokens,
