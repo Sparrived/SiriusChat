@@ -297,12 +297,29 @@ class WebUIServer:
                     if not qq:
                         return _json_response({"error": f"人格 {name} 的 NapCat 未配置 QQ 号"}, 400)
 
+                    token = getattr(a, "token", "napcat_ws")
+
                     # 检查是否已有运行中的 NapCat 实例，避免重复启动
                     existing = self._napcat_instances.get(name)
-                    if existing and existing.is_running:
-                        LOG.info("NapCat 实例 %s 已在运行，跳过启动", name)
-                        break
                     if existing:
+                        if existing.is_running:
+                            LOG.info("NapCat 实例 %s 已在运行，跳过启动", name)
+                            break
+                        # 进程检测失败，但可能 WS 仍然可用（外部进程或跨进程启动）
+                        try:
+                            ws_check = await existing.wait_for_ws(
+                                port=port, token=token, timeout=5.0
+                            )
+                            if ws_check.get("ready"):
+                                LOG.info(
+                                    "NapCat 实例 %s WS 已就绪（外部进程），跳过启动",
+                                    name,
+                                )
+                                break
+                        except Exception as exc:
+                            LOG.debug(
+                                "NapCat 实例 %s WS 快速检测失败: %s", name, exc
+                            )
                         self._napcat_instances.pop(name, None)
 
                     instance_mgr = NapCatManager.for_persona(
@@ -310,7 +327,6 @@ class WebUIServer:
                         persona_name=name,
                     )
                     LOG.info("配置 NapCat 实例 %s (QQ: %s, 端口: %s)...", name, qq, port)
-                    token = getattr(a, "token", "napcat_ws")
                     instance_mgr.configure(qq_number=qq, ws_port=port, ws_token=token)
                     result = await instance_mgr.start(qq_number=qq)
                     if not result["success"]:
