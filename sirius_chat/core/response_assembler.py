@@ -288,6 +288,15 @@ class ResponseAssembler:
         if memories:
             sections.append(self._build_memory_context(memories))
 
+        # 4b. User interest graph (high-participation topics)
+        if user_profile and user_profile.interest_graph:
+            interests = [
+                node.topic for node in user_profile.interest_graph
+                if getattr(node, "participation", 0) >= 0.3 and getattr(node, "topic", "")
+            ]
+            if interests:
+                sections.append(f"[用户兴趣] {'、'.join(interests[:3])}")
+
         # 5. Group style + persona style
         if group_profile:
             sections.append(self._build_group_style(group_profile, style_params))
