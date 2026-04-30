@@ -50,6 +50,7 @@ class DelayedResponseItem:
     adapter_type: str | None = None
     heat_level: str = "warm"  # cold | warm | hot | overheated
     pace: str = "steady"      # accelerating | steady | decelerating | silent
+    related_user_ids: list[str] = field(default_factory=list)  # merged messages may involve multiple users
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -68,4 +69,5 @@ class DelayedResponseItem:
             "multimodal_inputs": self.multimodal_inputs,
             "heat_level": self.heat_level,
             "pace": self.pace,
+            "related_user_ids": list(self.related_user_ids),
         }

@@ -113,6 +113,9 @@ class DelayedResponseQueue:
                 item.channel_user_id = channel_user_id
                 if adapter_type:
                     item.adapter_type = adapter_type
+                # Track all users whose messages were merged into this item
+                if user_id and user_id not in item.related_user_ids:
+                    item.related_user_ids.append(user_id)
                 logger.debug(
                     "Merged %s item %s for group %s (content now %d chars, window %.1fs)",
                     strategy_decision.strategy.value,
@@ -140,6 +143,7 @@ class DelayedResponseQueue:
             adapter_type=adapter_type,
             heat_level=heat_level,
             pace=pace,
+            related_user_ids=[user_id] if user_id else [],
         )
         if group_id not in self._queues:
             self._queues[group_id] = []

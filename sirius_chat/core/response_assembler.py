@@ -235,6 +235,31 @@ class ResponseAssembler:
         # Stranger
         return "[关系状态] 你和该用户还不太熟。"
 
+    def _build_relationship_contexts(
+        self,
+        user_profiles: list[UserSemanticProfile],
+        caller_is_developer: bool = False,
+    ) -> str | None:
+        """Build relationship descriptions for multiple users (merged messages)."""
+        if not user_profiles:
+            return None
+
+        contexts: list[str] = []
+        seen: set[str] = set()
+        for profile in user_profiles:
+            if profile.user_id in seen:
+                continue
+            seen.add(profile.user_id)
+            ctx = self._build_relationship_context(profile, caller_is_developer)
+            if ctx:
+                # Replace generic "该用户" with user_id for disambiguation
+                ctx = ctx.replace("该用户", f"用户 {profile.user_id}")
+                contexts.append(ctx)
+
+        if not contexts:
+            return None
+        return "\n".join(contexts[:3])  # Cap at 3 to avoid prompt bloat
+
     def assemble(
         self,
         *,
@@ -612,7 +637,7 @@ class ResponseAssembler:
         glossary_section: str = "",
         adapter_type: str | None = None,
         is_first_interaction: bool = False,
-        user_profile: UserSemanticProfile | None = None,
+        user_profiles: list[UserSemanticProfile] | None = None,
     ) -> PromptBundle:
         """Build prompt for a delayed response (topic-gap trigger)."""
         if style_params is None:
@@ -634,7 +659,7 @@ class ResponseAssembler:
                 "这是你第一次和当前说话者交流，请保持友好、礼貌，"
                 "可以适当自我介绍，让对方感受到你的热情和善意。"
             )
-        rel_ctx = self._build_relationship_context(user_profile, caller_is_developer)
+        rel_ctx = self._build_relationship_contexts(user_profiles, caller_is_developer)
         if rel_ctx:
             sections.append(rel_ctx)
         if self.other_ai_names:

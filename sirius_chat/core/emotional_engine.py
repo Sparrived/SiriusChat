@@ -2241,17 +2241,18 @@ class EmotionalGroupChatEngine:
         glossary = self.glossary_manager.build_prompt_section(
             group_id, text=message_content, max_terms=5
         )
-        # Resolve user profile for relationship context (best-effort from triggered items)
-        delayed_user_id = None
+        # Collect relationship context for all users involved in the triggered batch
+        related_uids: set[str] = set()
         for item in items:
-            uid = getattr(item, "user_id", None)
-            if uid:
-                delayed_user_id = uid
-                break
-        delayed_user_profile = (
-            self.semantic_memory.get_user_profile(group_id, delayed_user_id)
-            if delayed_user_id else None
-        )
+            for uid in getattr(item, "related_user_ids", []):
+                if uid:
+                    related_uids.add(uid)
+        delayed_user_profiles: list[Any] = []
+        for uid in related_uids:
+            prof = self.semantic_memory.get_user_profile(group_id, uid)
+            if prof:
+                delayed_user_profiles.append(prof)
+
         bundle = self.response_assembler.assemble_delayed(
             message_content=message_content,
             group_profile=self.semantic_memory.get_group_profile(group_id),
@@ -2260,7 +2261,7 @@ class EmotionalGroupChatEngine:
             glossary_section=glossary,
             adapter_type=adapter_type,
             is_first_interaction=is_first_interaction,
-            user_profile=delayed_user_profile,
+            user_profiles=delayed_user_profiles,
         )
         return bundle
 
