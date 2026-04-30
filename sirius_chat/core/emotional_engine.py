@@ -1151,7 +1151,8 @@ class EmotionalGroupChatEngine:
                 the skill runs, rather than batching everything at the end.
         """
         recent = self._get_recent_messages(group_id, n=10)
-        triggered = self.delayed_queue.tick(group_id, recent)
+        rhythm = self.rhythm_analyzer.analyze(group_id, recent)
+        triggered = self.delayed_queue.tick(group_id, recent, rhythm)
         if not triggered:
             return []
 
@@ -2019,6 +2020,23 @@ class EmotionalGroupChatEngine:
                 caller_profile = self.user_manager.get_user(resolved_uid, group_id)
         caller_is_developer = bool(caller_profile and caller_profile.is_developer)
 
+        # overheated + burst + not directed → downgrade to SILENT
+        is_directed = getattr(intent, "directed_at_current_ai", False)
+        if (
+            rhythm.heat_level == "overheated"
+            and rhythm.burst_detected
+            and not is_directed
+            and decision.strategy in (ResponseStrategy.IMMEDIATE, ResponseStrategy.DELAYED)
+        ):
+            self._log_inner_thought("群聊太热闹了，我先不插话了...")
+            self._persist_group_state(group_id)
+            return {
+                "strategy": "silent",
+                "reply": None,
+                "emotion": emotion.to_dict(),
+                "intent": intent.to_dict(),
+            }
+
         if decision.strategy == ResponseStrategy.IMMEDIATE:
             self._log_inner_thought("让我先稍等片刻，看看有没有后续消息...")
             self.delayed_queue.enqueue(
@@ -2032,6 +2050,8 @@ class EmotionalGroupChatEngine:
                 channel_user_id=message.channel_user_id,
                 multimodal_inputs=message.multimodal_inputs,
                 adapter_type=message.adapter_type,
+                heat_level=rhythm.heat_level,
+                pace=rhythm.pace,
             )
             self._persist_group_state(group_id)
             return {
@@ -2056,6 +2076,8 @@ class EmotionalGroupChatEngine:
                 channel_user_id=message.channel_user_id,
                 multimodal_inputs=message.multimodal_inputs,
                 adapter_type=message.adapter_type,
+                heat_level=rhythm.heat_level,
+                pace=rhythm.pace,
             )
             self._persist_group_state(group_id)
             return {

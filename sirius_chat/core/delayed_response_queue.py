@@ -21,11 +21,35 @@ from sirius_chat.models.response_strategy import (
     ResponseStrategy,
     StrategyDecision,
 )
+from sirius_chat.core.rhythm import RhythmAnalysis
 
 logger = logging.getLogger(__name__)
 
-_GAP_TRIGGER_SECONDS = 10.0
 _IMMEDIATE_DEBOUNCE_SECONDS = 8.0
+
+# Heat-based window multipliers: hotter groups = longer wait
+_HEAT_WINDOW_MULT = {
+    "cold": 0.7,
+    "warm": 1.0,
+    "hot": 1.5,
+    "overheated": 2.5,
+}
+
+# Heat-based gap thresholds: hotter groups need longer silence to trigger
+_HEAT_GAP_SECONDS = {
+    "cold": 5.0,
+    "warm": 10.0,
+    "hot": 15.0,
+    "overheated": 25.0,
+}
+
+# Pace modifiers for gap threshold
+_PACE_GAP_MULT = {
+    "accelerating": 1.5,
+    "steady": 1.0,
+    "decelerating": 0.5,
+    "silent": 0.0,  # handled separately: trigger if window half-expired
+}
 
 
 class DelayedResponseQueue:
@@ -47,12 +71,15 @@ class DelayedResponseQueue:
         channel_user_id: str | None = None,
         multimodal_inputs: list[dict[str, str]] | None = None,
         adapter_type: str | None = None,
+        heat_level: str = "warm",
+        pace: str = "steady",
     ) -> DelayedResponseItem:
         """Add an item to the delayed queue.
 
         For IMMEDIATE strategy, if the same group already has a pending
-        IMMEDIATE item, merge the message content and reset the debounce
-        timer so rapid-fire messages are consolidated into one reply.
+        item, merge the message content. The debounce timer is NOT reset
+        on merge (prevents infinite postponement in busy groups), but
+        window may shorten if the new message is more urgent.
         """
         from sirius_chat.core.utils import now_iso
 
@@ -64,13 +91,17 @@ class DelayedResponseQueue:
         for item in queue:
             if item.status == "pending":
                 item.message_content += f"\n{message_content}"
-                item.enqueue_time = now_iso()
+                # CRITICAL: do NOT reset enqueue_time on merge.
+                # Otherwise busy groups would postpone the reply forever.
                 # Keep the shorter window so urgent messages are not delayed
-                new_window = self._window_for_item(strategy_decision)
+                new_window = self._window_for_item(strategy_decision, heat_level)
                 item.window_seconds = min(item.window_seconds, new_window)
                 # Upgrade strategy to IMMEDIATE if any merged message is immediate
                 if strategy_decision.strategy == ResponseStrategy.IMMEDIATE:
                     item.strategy_decision = strategy_decision
+                # Update heat/pace to the latest state
+                item.heat_level = heat_level
+                item.pace = pace
                 item.emotion_state.update(emotion_state or {})
                 if candidate_memories:
                     item.candidate_memories.extend(candidate_memories)
@@ -103,19 +134,24 @@ class DelayedResponseQueue:
             emotion_state=dict(emotion_state or {}),
             candidate_memories=list(candidate_memories or []),
             enqueue_time=now_iso(),
-            window_seconds=self._window_for_item(strategy_decision),
+            window_seconds=self._window_for_item(strategy_decision, heat_level),
             status="pending",
             multimodal_inputs=list(multimodal_inputs or []),
             adapter_type=adapter_type,
+            heat_level=heat_level,
+            pace=pace,
         )
         if group_id not in self._queues:
             self._queues[group_id] = []
         self._queues[group_id].append(item)
         logger.debug(
-            "Enqueued %s item %s for group %s",
+            "Enqueued %s item %s for group %s (window %.1fs, heat=%s, pace=%s)",
             strategy_decision.strategy.value,
             item.item_id,
             group_id,
+            item.window_seconds,
+            heat_level,
+            pace,
         )
         return item
 
@@ -123,6 +159,7 @@ class DelayedResponseQueue:
         self,
         group_id: str,
         recent_messages: list[dict[str, Any]],
+        rhythm: RhythmAnalysis | None = None,
     ) -> list[DelayedResponseItem]:
         """Process queue for a group based on recent conversation.
 
@@ -153,7 +190,7 @@ class DelayedResponseQueue:
             if item.status != "pending":
                 continue
 
-            action = self._evaluate_item(item, recent_messages)
+            action = self._evaluate_item(item, recent_messages, rhythm)
             if action == "trigger":
                 item.status = "triggered"
                 triggered.append(item)
@@ -192,6 +229,7 @@ class DelayedResponseQueue:
         self,
         item: DelayedResponseItem,
         recent_messages: list[dict[str, Any]],
+        rhythm: RhythmAnalysis | None = None,
     ) -> str:
         """Evaluate whether to trigger, cancel, or keep waiting."""
         now = datetime.now(timezone.utc)
@@ -219,39 +257,78 @@ class DelayedResponseQueue:
         if item.strategy_decision.strategy == ResponseStrategy.IMMEDIATE:
             return "wait"
 
+        # Pace-aware early trigger: if conversation went silent and
+        # our window is at least half-expired, go ahead.
+        if item.pace == "silent" and enqueue_dt:
+            elapsed = (now - enqueue_dt).total_seconds()
+            if elapsed >= item.window_seconds * 0.5:
+                logger.debug(
+                    "Item %s triggered (silent pace + half window: %.1fs >= %.1fs)",
+                    item.item_id,
+                    elapsed,
+                    item.window_seconds * 0.5,
+                )
+                return "trigger"
+
         # DELAYED items also check topic gap (trigger)
         if recent_messages:
             last_msg_time = recent_messages[-1].get("timestamp", "")
             last_dt = _parse_iso(last_msg_time)
             if last_dt:
                 gap = (now - last_dt).total_seconds()
-                if gap >= _GAP_TRIGGER_SECONDS:
+                gap_threshold = self._gap_for_item(item, rhythm)
+                if gap >= gap_threshold:
                     logger.debug(
                         "Delayed item %s triggered (topic gap: %.1fs >= %.1fs)",
                         item.item_id,
                         gap,
-                        _GAP_TRIGGER_SECONDS,
+                        gap_threshold,
                     )
                     return "trigger"
                 logger.debug(
                     "Delayed item %s waiting (topic gap: %.1fs < %.1fs)",
                     item.item_id,
                     gap,
-                    _GAP_TRIGGER_SECONDS,
+                    gap_threshold,
                 )
 
         return "wait"
 
     @staticmethod
-    def _window_for_item(strategy_decision: StrategyDecision) -> float:
-        """Return debounce/wait window based on strategy and urgency."""
+    def _window_for_item(strategy_decision: StrategyDecision, heat_level: str = "warm") -> float:
+        """Return debounce/wait window based on strategy, urgency, and heat."""
         if strategy_decision.strategy == ResponseStrategy.IMMEDIATE:
             return _IMMEDIATE_DEBOUNCE_SECONDS
         if strategy_decision.urgency >= 70:
-            return 15.0
-        if strategy_decision.urgency >= 40:
-            return 30.0
-        return 60.0
+            base = 15.0
+        elif strategy_decision.urgency >= 40:
+            base = 30.0
+        else:
+            base = 60.0
+        mult = _HEAT_WINDOW_MULT.get(heat_level, 1.0)
+        return base * mult
+
+    @staticmethod
+    def _gap_for_item(item: DelayedResponseItem, rhythm: RhythmAnalysis | None = None) -> float:
+        """Compute dynamic topic-gap threshold for a queued item.
+
+        Considers both the heat level at enqueue time and the current pace.
+        """
+        base = _HEAT_GAP_SECONDS.get(item.heat_level, 10.0)
+        # If live rhythm is provided, apply pace modifier
+        if rhythm is not None:
+            pace_mult = _PACE_GAP_MULT.get(rhythm.pace, 1.0)
+            # silent pace is handled separately in _evaluate_item (half-window trigger)
+            if rhythm.pace == "silent":
+                pace_mult = 1.0
+            base *= pace_mult
+        else:
+            # Fallback: use item's own pace snapshot
+            pace_mult = _PACE_GAP_MULT.get(item.pace, 1.0)
+            if item.pace == "silent":
+                pace_mult = 1.0
+            base *= pace_mult
+        return max(3.0, base)  # Minimum 3-second gap
 
 
 def _parse_iso(ts: str) -> datetime | None:
