@@ -162,6 +162,11 @@ class ResponseStrategyEngine:
                 strategy = ResponseStrategy.SILENT
                 reason = "below_threshold"
 
+        # 社交底线：没被点名就没有抢话权，最高只能 delayed
+        if not is_mentioned and strategy == ResponseStrategy.IMMEDIATE:
+            strategy = ResponseStrategy.DELAYED
+            reason = f"not_directed_{reason}"
+
         score = (urgency / 100.0) * 0.6 + relevance * 0.4
 
         return StrategyDecision(
