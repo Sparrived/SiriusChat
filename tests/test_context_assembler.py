@@ -95,6 +95,7 @@ class TestContextAssembler:
         basic.add_entry("g1", "alice", "human", "你好")
 
         indexer = DiaryIndexer()
+        indexer._model = None  # 禁用语义搜索，确保可预测的按序返回
         for i in range(1, 16):
             indexer.add(
                 DiaryEntry(
