@@ -1216,6 +1216,13 @@ class EmotionalGroupChatEngine:
                 caller_profile = self.user_manager.get_user(resolved_uid, group_id)
         caller_is_developer = bool(caller_profile and caller_profile.is_developer)
 
+        # Trust score for SKILL permission control
+        caller_trust = 0.5  # default for new / unknown users
+        if resolved_uid:
+            semantic_profile = self.semantic_memory.get_user_profile(group_id, resolved_uid)
+            if semantic_profile and semantic_profile.relationship_state:
+                caller_trust = semantic_profile.relationship_state.trust_score
+
         # Merge all triggered items into one prompt and one generation call
         adapter_type = getattr(triggered[0], "adapter_type", None) if triggered else None
         bundle = self._build_delayed_prompt(
@@ -1321,6 +1328,14 @@ class EmotionalGroupChatEngine:
                     if not all_silent:
                         skill_results.append(f"[{err}]")
                     continue
+                # Trust-based permission: low-trust non-developers cannot invoke skills
+                if caller_trust < 0.3 and not caller_is_developer:
+                    err = f"SKILL '{skill_name}' 被拒绝：信任度不足 ({caller_trust:.2f})"
+                    logger.warning(err)
+                    if not all_silent:
+                        skill_results.append(f"[SKILL '{skill_name}' 拒绝] 你还不够熟，这个技能暂不可用")
+                    continue
+
                 if skill.developer_only and not caller_is_developer:
                     err = f"SKILL '{skill_name}' 被拒绝：caller 不是 developer"
                     logger.warning(err)
