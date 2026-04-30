@@ -244,13 +244,19 @@ class SemanticMemoryManager:
         valence: float = 0.0,
         urgency_score: int = 0,
         social_intent: str = "",
+        is_mentioned: bool = False,
+        burst_detected: bool = False,
     ) -> None:
         """Update relationship state based on interaction signals."""
         from sirius_chat.core.utils import now_iso
+        from datetime import datetime, timezone, timedelta
+
         profile = self.get_user_profile(group_id, user_id)
         rs = profile.relationship_state
 
-        rs.last_interaction_at = now_iso()
+        now = datetime.now(timezone.utc)
+        now_iso_str = now_iso()
+        rs.last_interaction_at = now_iso_str
         if not rs.first_interaction_at:
             rs.first_interaction_at = rs.last_interaction_at
 
@@ -262,15 +268,42 @@ class SemanticMemoryManager:
             rs.emotional_intimacy * 0.9 + abs(valence) * 0.1, 4
         )
 
-        # Trust score from high-urgency help requests
+        # Trust score: positive feedback
+        # 1. High-urgency help requests
         if urgency_score > 70:
             rs.trust_score = round(min(1.0, rs.trust_score + 0.02), 4)
+        # 2. Every normal interaction builds trust slowly
+        else:
+            rs.trust_score = round(min(1.0, rs.trust_score + 0.005), 4)
+        # 3. Being mentioned and continuing the conversation shows engagement
+        if is_mentioned:
+            rs.trust_score = round(min(1.0, rs.trust_score + 0.005), 4)
+
+        # Trust score: negative feedback
+        # 1. Burst / spam behavior
+        if burst_detected:
+            rs.trust_score = round(max(0.1, rs.trust_score - 0.05), 4)
+
+        # Trust score: long-term decay (inactive for >30 days)
+        try:
+            last_dt = datetime.fromisoformat(rs.last_interaction_at.replace("Z", "+00:00"))
+            if now - last_dt > timedelta(days=30):
+                rs.trust_score = round(max(0.1, rs.trust_score - 0.02), 4)
+        except Exception:
+            pass
 
         # Dependency score from help-seeking intent
         intent_lower = (social_intent or "").lower()
         if "help" in intent_lower or "求助" in intent_lower:
             rs.dependency_score = round(min(1.0, rs.dependency_score + 0.03), 4)
 
+        self.save_user_profile(group_id, user_id)
+
+    def penalize_trust(self, group_id: str, user_id: str, delta: float = 0.03) -> None:
+        """Reduce trust score (e.g. after SKILL invocation rejected)."""
+        profile = self.get_user_profile(group_id, user_id)
+        rs = profile.relationship_state
+        rs.trust_score = round(max(0.1, rs.trust_score - delta), 4)
         self.save_user_profile(group_id, user_id)
 
     # ------------------------------------------------------------------

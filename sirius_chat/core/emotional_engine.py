@@ -1366,6 +1366,9 @@ class EmotionalGroupChatEngine:
                     logger.warning(err)
                     if not all_silent:
                         skill_results.append(f"[SKILL '{skill_name}' 拒绝] 你还不够熟，这个技能暂不可用")
+                    # Penalize trust for attempting to invoke skill without permission
+                    if resolved_uid:
+                        self.semantic_memory.penalize_trust(group_id, resolved_uid, delta=0.03)
                     continue
 
                 if skill.developer_only and not caller_is_developer:
@@ -2013,6 +2016,8 @@ class EmotionalGroupChatEngine:
             valence=emotion.valence,
             urgency_score=getattr(intent, "urgency_score", 0),
             social_intent=str(social_intent) if social_intent else "",
+            is_mentioned=is_mentioned,
+            burst_detected=rhythm.burst_detected,
         )
 
         return decision
