@@ -23,7 +23,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from sirius_chat.logging_config import configure_logging
+from sirius_chat.logging_config import configure_logging, setup_log_archival
 from sirius_chat.persona_config import (
     NapCatAdapterConfig,
     PersonaAdaptersConfig,
@@ -312,6 +312,7 @@ async def _main() -> None:
 
     pdir = Path(args.config).resolve()
     log_file = pdir / "logs" / "worker.log"
+    setup_log_archival(log_file)
     configure_logging(
         level=args.log_level.upper(),
         format_type="console",
