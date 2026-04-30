@@ -738,3 +738,80 @@ class WebUIServer:
             "skills": all_summaries,
             "total_calls": sum(s["calls"] for s in all_summaries.values()),
         })
+
+    async def api_tokens_get(self, request: web.Request) -> web.Response:
+        """Return aggregated token usage across all personas."""
+        from sirius_chat.token.store import TokenUsageStore
+
+        total_summary = {
+            "total_calls": 0,
+            "total_prompt_tokens": 0,
+            "total_completion_tokens": 0,
+            "total_tokens": 0,
+            "total_input_chars": 0,
+            "total_output_chars": 0,
+        }
+        persona_breakdown: list[dict[str, Any]] = []
+
+        for persona_info in self.persona_manager.list_personas():
+            name = persona_info.get("name")
+            if not name:
+                continue
+            paths = self.persona_manager.get_persona_paths(name)
+            if paths is None:
+                continue
+            db_path = paths.dir / "token" / "token_usage.db"
+            if not db_path.exists():
+                continue
+            try:
+                store = TokenUsageStore(db_path, session_id="default")
+                summary = store.get_summary()
+                if summary.get("total_calls", 0):
+                    persona_breakdown.append({
+                        "persona_name": name,
+                        **summary,
+                    })
+                    for key in total_summary:
+                        total_summary[key] += summary.get(key, 0)
+                store.close()
+            except Exception:
+                continue
+
+        return _json_response({
+            "summary": total_summary,
+            "personas": persona_breakdown,
+        })
+
+    async def api_persona_tokens_get(self, request: web.Request) -> web.Response:
+        """Return detailed token usage for a single persona."""
+        from sirius_chat.token.store import TokenUsageStore
+
+        name = _get_name(request)
+        paths = self.persona_manager.get_persona_paths(name)
+        if paths is None:
+            return _json_response({"error": "人格不存在"}, 404)
+
+        db_path = paths.dir / "token" / "token_usage.db"
+        if not db_path.exists():
+            return _json_response({
+                "summary": {},
+                "by_task": [],
+                "by_model": [],
+                "by_group": [],
+                "recent": [],
+            })
+
+        try:
+            store = TokenUsageStore(db_path, session_id="default")
+            result = {
+                "summary": store.get_summary(),
+                "by_task": store.get_breakdown_by("task_name"),
+                "by_model": store.get_breakdown_by("model"),
+                "by_group": store.get_breakdown_by("group_id"),
+                "recent": store.get_recent_records(limit=30),
+            }
+            store.close()
+            return _json_response(result)
+        except Exception as exc:
+            LOG.warning("读取 Token 统计失败 %s: %s", name, exc)
+            return _json_response({"error": str(exc)}, 500)

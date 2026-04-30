@@ -124,7 +124,7 @@ async function navTo(page) {
     selectPersona(personas[0].name);
   }
 
-  if (page === 'dashboard') { renderPersonaCards(); loadProviders(); loadTelemetry(); }
+  if (page === 'dashboard') { renderPersonaCards(); loadProviders(); loadTelemetry(); loadTokenStats(); }
   if (page === 'global-settings') loadGlobalSettings();
   if (page === 'persona') loadPersonaPreview();
   if (page === 'create-persona') { renderInterviewQuestions(); loadAvailableModels(); }
@@ -146,8 +146,9 @@ async function loadPersonas() {
     if (!currentPersona && personas.length > 0) {
       selectPersona(personas[0].name);
     }
-    // Load telemetry in parallel (don't block persona list)
+    // Load telemetry and token stats in parallel (don't block persona list)
     loadTelemetry();
+    loadTokenStats();
   } catch (e) {
     console.error('loadPersonas', e);
     personas = [];
@@ -307,6 +308,42 @@ function renderPersonaCards(animate = true) {
     $('dsPort').textContent = sp.adapters?.[0]?.ws_url?.split(':').pop() || '—';
   } else {
     ds.style.display = 'none';
+  }
+}
+
+async function loadTokenStats() {
+  const callsEl = $('dashTokenCalls');
+  const promptEl = $('dashTokenPrompt');
+  const completionEl = $('dashTokenCompletion');
+  const totalEl = $('dashTokenTotal');
+  const personasEl = $('dashTokenPersonas');
+  if (!callsEl || !totalEl) return;
+  try {
+    const res = await get('/tokens');
+    const summary = res.summary || {};
+    const personaList = res.personas || [];
+    animateNumber(callsEl, summary.total_calls || 0, 500);
+    animateNumber(promptEl, summary.total_prompt_tokens || 0, 500);
+    animateNumber(completionEl, summary.total_completion_tokens || 0, 500);
+    animateNumber(totalEl, summary.total_tokens || 0, 500);
+    if (personasEl) {
+      if (!personaList.length) {
+        personasEl.innerHTML = '<div style="color:var(--text-2);padding:12px">暂无 Token 消耗记录</div>';
+      } else {
+        personasEl.innerHTML = personaList.map((p) => `
+          <div class="stat-card">
+            <div class="label">${p.persona_name || '未知'}</div>
+            <div class="value">${p.total_tokens || 0}</div>
+            <div style="font-size:11px;color:var(--text-2)">
+              ${p.total_calls || 0} 次调用 &nbsp;|&nbsp; ${p.total_prompt_tokens || 0} + ${p.total_completion_tokens || 0}
+            </div>
+          </div>
+        `).join('');
+        applyStagger(personasEl, '.stat-card');
+      }
+    }
+  } catch (e) {
+    if (personasEl) personasEl.innerHTML = '<div style="color:var(--text-2);padding:12px">Token 统计加载失败</div>';
   }
 }
 
@@ -1050,6 +1087,7 @@ async function saveExperience() {
   await navTo('dashboard');
   setInterval(() => {
     loadPersonas();
+    loadTokenStats();
     ncLoadLogs();
   }, 5000);
 })();

@@ -56,6 +56,32 @@
   </div>
 
   <div class="card">
+    <h2>Token 消耗统计</h2>
+    <div class="stat-grid">
+      <div class="stat-card">
+        <div class="label">总调用次数</div>
+        <div class="value" id="dashTokenCalls">0</div>
+      </div>
+      <div class="stat-card">
+        <div class="label">Prompt Tokens</div>
+        <div class="value" id="dashTokenPrompt">0</div>
+      </div>
+      <div class="stat-card">
+        <div class="label">Completion Tokens</div>
+        <div class="value" id="dashTokenCompletion">0</div>
+      </div>
+      <div class="stat-card">
+        <div class="label">总 Tokens</div>
+        <div class="value" id="dashTokenTotal">0</div>
+      </div>
+    </div>
+    <div style="margin-top:16px">
+      <div style="font-size:13px;font-weight:600;margin-bottom:8px">按人格分布</div>
+      <div class="stat-grid" id="dashTokenPersonas">加载中...</div>
+    </div>
+  </div>
+
+  <div class="card">
     <h2>Skill 使用统计</h2>
     <div class="stat-grid" id="dashSkillStats">加载中...</div>
     <div style="margin-top:12px;font-size:12px;color:var(--text-2)">
