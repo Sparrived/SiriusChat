@@ -301,6 +301,55 @@ class WorkspaceConfig:
                 "enable_auto_compression": self.session_defaults.enable_auto_compression,
             },
             "orchestration_defaults": dict(self.orchestration_defaults),
+            "provider_policy": {"prefer_workspace_registry": self.provider_policy.prefer_workspace_registry},
+        }
+
+
+@dataclass(slots=True)
+class MultiModelConfig:
+    """多模型协作配置对象。"""
+
+    task_models: dict[str, str]
+    task_temperatures: dict[str, float] | None = None
+    task_max_tokens: dict[str, int] | None = None
+    task_retries: dict[str, int] | None = None
+    max_multimodal_inputs_per_turn: int = 4
+    max_multimodal_value_length: int = 4096
+
+    def __post_init__(self) -> None:
+        if self.task_temperatures is None:
+            self.task_temperatures = {}
+        if self.task_max_tokens is None:
+            self.task_max_tokens = {}
+        if self.task_retries is None:
+            self.task_retries = {}
+
+    def to_orchestration_policy(self) -> OrchestrationPolicy:
+        """转换为 OrchestrationPolicy 对象。"""
+        return OrchestrationPolicy(
+            unified_model="",
+            task_models=self.task_models,
+            task_temperatures=self.task_temperatures or {},
+            task_max_tokens=self.task_max_tokens or {},
+            task_retries=self.task_retries or {},
+            max_multimodal_inputs_per_turn=self.max_multimodal_inputs_per_turn,
+            max_multimodal_value_length=self.max_multimodal_value_length,
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "work_path": str(self.work_path),
+            "data_path": str(self.data_path),
+            "layout_version": self.layout_version,
+            "bootstrap_signature": self.bootstrap_signature,
+            "active_agent_key": self.active_agent_key,
+            "session_defaults": {
+                "history_max_messages": self.session_defaults.history_max_messages,
+                "history_max_chars": self.session_defaults.history_max_chars,
+                "max_recent_participant_messages": self.session_defaults.max_recent_participant_messages,
+                "enable_auto_compression": self.session_defaults.enable_auto_compression,
+            },
+            "orchestration_defaults": dict(self.orchestration_defaults),
             "provider_policy": {
                 "prefer_workspace_registry": self.provider_policy.prefer_workspace_registry,
             },

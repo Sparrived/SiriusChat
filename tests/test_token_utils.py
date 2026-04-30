@@ -108,7 +108,7 @@ def test_estimate_tokens_long_text() -> None:
 def test_token_usage_baseline_and_summary() -> None:
     from sirius_chat.config import TokenUsageRecord
     from sirius_chat.models import Transcript
-    from sirius_chat.api import build_token_usage_baseline, summarize_token_usage
+    from sirius_chat import build_token_usage_baseline, summarize_token_usage
 
     transcript = Transcript()
     transcript.add_token_usage_record(

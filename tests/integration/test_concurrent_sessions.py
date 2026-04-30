@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from sirius_chat.api import SessionConfig, JsonSessionStore, AgentPreset, Agent
+from sirius_chat import SessionConfig, JsonSessionStore, AgentPreset, Agent
 from .conftest import MockLLMProvider
 
 

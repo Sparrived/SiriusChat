@@ -15,7 +15,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from sirius_chat.api import create_emotional_engine
+from sirius_chat.core.emotional_engine import create_emotional_engine
 from sirius_chat.core.emotional_engine import EmotionalGroupChatEngine
 from sirius_chat.core.persona_store import PersonaStore
 from sirius_chat.providers.routing import AutoRoutingProvider, ProviderConfig

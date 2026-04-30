@@ -241,7 +241,7 @@ class SetupWizard:
 
     async def _collect_provider_configs(self, root_uid: str) -> list[dict]:
         try:
-            from sirius_chat.api import get_supported_provider_platforms
+            from sirius_chat.providers import get_supported_provider_platforms
             supported = get_supported_provider_platforms()
         except Exception:
             supported = {}

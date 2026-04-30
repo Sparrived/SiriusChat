@@ -11,6 +11,7 @@ from sirius_chat.config.models import (
     Agent,
     AgentPreset,
     MemoryPolicy,
+    MultiModelConfig,
     OrchestrationPolicy,
     ProviderPolicy,
     SessionConfig,
@@ -31,6 +32,8 @@ from sirius_chat.config.helpers import (
     configure_orchestration_temperatures,
     auto_configure_multimodal_agent,
     create_agent_with_multimodal,
+    create_multimodel_config,
+    setup_multimodel_config,
 )
 
 __all__ = [
@@ -38,6 +41,7 @@ __all__ = [
     "Agent",
     "AgentPreset",
     "MemoryPolicy",
+    "MultiModelConfig",
     "OrchestrationPolicy",
     "ProviderPolicy",
     "SessionConfig",
@@ -54,4 +58,6 @@ __all__ = [
     "configure_orchestration_temperatures",
     "auto_configure_multimodal_agent",
     "create_agent_with_multimodal",
+    "create_multimodel_config",
+    "setup_multimodel_config",
 ]

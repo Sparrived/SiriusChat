@@ -46,6 +46,33 @@ from sirius_chat.skills.executor import strip_skill_calls
 logger = logging.getLogger(__name__)
 
 
+def create_emotional_engine(
+    work_path: Any,
+    *,
+    provider: Any | None = None,
+    persona: Any | None = None,
+    config: dict[str, Any] | None = None,
+) -> "EmotionalGroupChatEngine":
+    """Factory for EmotionalGroupChatEngine (v0.28+).
+
+    Args:
+        work_path: Workspace path for persistence.
+        provider: Optional LLM provider for async generation tasks.
+        persona: Optional PersonaProfile or string archetype name.
+        config: Optional engine configuration dict.
+
+    Returns:
+        Configured EmotionalGroupChatEngine instance.
+    """
+    provider_async = provider if provider is None or hasattr(provider, "generate_async") else None
+    return EmotionalGroupChatEngine(
+        work_path=work_path,
+        provider_async=provider_async,
+        persona=persona,
+        config=config,
+    )
+
+
 class EmotionalGroupChatEngine:
     """Next-generation engine for emotional group chat (v0.28+)."""
 

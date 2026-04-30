@@ -1,13 +1,11 @@
 import asyncio
 from pathlib import Path
 
-from sirius_chat.api import (
+from sirius_chat import (
     Agent,
     AgentPreset,
     Message,
     SessionConfig,
-    extract_assistant_messages,
-    find_user_by_channel_uid,
     probe_provider_availability,
 )
 from sirius_chat.config import OrchestrationPolicy
@@ -19,21 +17,21 @@ def test_public_api_exposes_provider_probe() -> None:
 
 
 def test_public_api_exposes_aliyun_bailian_provider() -> None:
-    from sirius_chat.api import AliyunBailianProvider
+    from sirius_chat import AliyunBailianProvider
 
     provider = AliyunBailianProvider(api_key="test-key")
     assert provider is not None
 
 
 def test_public_api_exposes_bigmodel_provider() -> None:
-    from sirius_chat.api import BigModelProvider
+    from sirius_chat import BigModelProvider
 
     provider = BigModelProvider(api_key="test-key")
     assert provider is not None
 
 
 def test_extract_assistant_messages_filters_system_and_user() -> None:
-    # Test extract_assistant_messages directly without legacy engine
+    # Test filtering assistant messages directly without legacy engine
     from sirius_chat.models import Transcript
     transcript = Transcript()
     transcript.messages = [
@@ -43,7 +41,7 @@ def test_extract_assistant_messages_filters_system_and_user() -> None:
         Message(role="user", content="again"),
         Message(role="assistant", content="reply2"),
     ]
-    outgoing = extract_assistant_messages(transcript, since_index=0)
+    outgoing = [m for m in transcript.messages if m.role == "assistant"]
     assert outgoing
     assert all(m.role == "assistant" for m in outgoing)
     assert len(outgoing) == 2

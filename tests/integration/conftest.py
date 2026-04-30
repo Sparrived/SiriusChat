@@ -9,7 +9,7 @@ from typing import Generator
 
 import pytest
 
-from sirius_chat.api import (
+from sirius_chat import (
     JsonSessionStore,
     SessionConfig,
     LLMProvider,

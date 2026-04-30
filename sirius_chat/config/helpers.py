@@ -8,7 +8,7 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Any
 
-from sirius_chat.config.models import Agent, MemoryPolicy, OrchestrationPolicy, SessionConfig
+from sirius_chat.config.models import Agent, MemoryPolicy, MultiModelConfig, OrchestrationPolicy, SessionConfig
 from sirius_chat.exceptions import OrchestrationConfigError
 
 
@@ -356,6 +356,49 @@ def configure_orchestration_models(
     )
     
     return updated_config
+
+
+def setup_multimodel_config(
+    *,
+    session_config: SessionConfig,
+    task_models: dict[str, str],
+    task_temperatures: dict[str, float] | None = None,
+    task_max_tokens: dict[str, int] | None = None,
+    task_retries: dict[str, int] | None = None,
+    max_multimodal_inputs_per_turn: int = 4,
+    max_multimodal_value_length: int = 4096,
+) -> SessionConfig:
+    """在现有会话配置中设置多模型编排。"""
+    config = MultiModelConfig(
+        task_models=task_models,
+        task_temperatures=task_temperatures or {},
+        task_max_tokens=task_max_tokens or {},
+        task_retries=task_retries or {},
+        max_multimodal_inputs_per_turn=max_multimodal_inputs_per_turn,
+        max_multimodal_value_length=max_multimodal_value_length,
+    )
+    session_config.orchestration = config.to_orchestration_policy()
+    return session_config
+
+
+def create_multimodel_config(
+    *,
+    task_models: dict[str, str],
+    task_temperatures: dict[str, float] | None = None,
+    task_max_tokens: dict[str, int] | None = None,
+    task_retries: dict[str, int] | None = None,
+    max_multimodal_inputs_per_turn: int = 4,
+    max_multimodal_value_length: int = 4096,
+) -> MultiModelConfig:
+    """创建多模型配置对象。"""
+    return MultiModelConfig(
+        task_models=task_models,
+        task_temperatures=task_temperatures or {},
+        task_max_tokens=task_max_tokens or {},
+        task_retries=task_retries or {},
+        max_multimodal_inputs_per_turn=max_multimodal_inputs_per_turn,
+        max_multimodal_value_length=max_multimodal_value_length,
+    )
 
 
 def configure_orchestration_temperatures(
