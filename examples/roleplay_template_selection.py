@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 
-from sirius_chat.api import (
+from sirius_chat import (
     PersonaSpec,
     RolePlayAnswer,
     generate_humanized_roleplay_questions,
@@ -12,8 +12,8 @@ from sirius_chat.api import (
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="导出指定人格问卷模板的高层问题骨架")
-    parser.add_argument("--template", default="default", help="问卷模板名，如 companion / romance / group_chat")
+    parser = argparse.ArgumentParser(description="导出指定人格问卷模板的高层问题骨�?)
+    parser.add_argument("--template", default="default", help="问卷模板名，�?companion / romance / group_chat")
     parser.add_argument("--agent-name", default="北辰", help="示例人格名称")
     return parser
 

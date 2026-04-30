@@ -127,7 +127,6 @@
 ```
 sirius_chat/
 ├── __init__.py              # 顶层公开 API 统一重导出（严格 __all__）
-├── api/                     # 公开 API facade（engine/models/providers/session 等）
 ├── async_engine/            # 兼容导出 + prompts/orchestration/utils 辅助层
 ├── cache/                   # 可扩展缓存框架（LRU + TTL）
 ├── config/                  # 配置模型、JSONC 管理、WorkspaceConfig / SessionConfig
@@ -267,8 +266,8 @@ make clean         # 清理构建产物、缓存
 
 ### 强制约定
 1. **每模块首行必须是 `from __future__ import annotations`**。
-2. **`__all__` 纪律**：`sirius_chat/__init__.py` 与 `sirius_chat/api/__init__.py` 均定义严格的 `__all__`。
-3. **禁止在顶层暴露内部包**：`core`、`memory`、`config`、`async_engine`、`session`、`token`、`cache`、`performance` 等内部模块**不得**通过 `sirius_chat` 顶层直接访问；外部调用必须走 `sirius_chat.api`。
+2. **`__all__` 纪律**：`sirius_chat/__init__.py` 定义严格的 `__all__`。
+3. **禁止在顶层暴露内部包**：`core`、`memory`、`config`、`async_engine`、`session`、`token`、`cache`、`performance` 等内部模块**不得**通过 `sirius_chat` 顶层直接访问；外部调用走 `sirius_chat` 顶层公开 API。
 4. **模块级 logger**：使用标准库 `logging`，格式为 `'%(asctime)s - %(name)s - %(levelname)s - %(message)s'`。
 5. **dataclass 优先**：核心数据契约使用 `@dataclass` 定义。
 6. **原子文件写入**：配置持久化使用临时文件 + replace。
@@ -379,7 +378,7 @@ data/
 | `sirius_chat/persona_config.py` | 人格级配置模型 |
 | `sirius_chat/platforms/napcat_manager.py` | NapCat 多实例管理 |
 | `sirius_chat/webui/server.py` | WebUI REST API |
-| `sirius_chat/api/__init__.py` | 公开 API 导出清单 |
+| `sirius_chat/__init__.py` | 顶层公开 API 导出清单 |
 | `tests/conftest.py` | 测试最小 fixture |
 | `scripts/ci_check.py` | 统一 CI 检查脚本 |
 | `docs/architecture.md` | 架构边界与模块交互权威文档 |
