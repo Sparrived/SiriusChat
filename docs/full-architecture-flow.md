@@ -1,15 +1,14 @@
 # Sirius Chat 全量架构与流程图
 
-本文档描述当前代码的真实执行路径与模块边界，重点覆盖：
+本文档描述 v1.0 多人格架构的真实执行路径与模块边界，重点覆盖：
 
-- 入口层如何进入 workspace 与 session
-- `WorkspaceRuntime`、`ConfigManager`、`WorkspaceLayout` 的协作关系
-- **v1.0 默认引擎** `EmotionalGroupChatEngine` 的四层认知架构流水线
-- provider 路由、roleplay 资产、session store 与 memory 的落盘位置
+- 主进程（`PersonaManager`）如何扫描、调度和启停多个人格
+- 单个人格子进程（`PersonaWorker`）如何加载配置、启动 `EngineRuntime` 与 `NapCatBridge`
+- `EmotionalGroupChatEngine` 的四层认知架构流水线
+- 提醒系统从创建到投递的完整链路
+- 数据隔离、Provider 共享、NapCat 多实例与日志归档
 
-> **v1.0 重大变更**：`EmotionalGroupChatEngine` 是唯一引擎。`AsyncRolePlayEngine` 已完全移除。
-
-历史迁移文档只用于说明版本演进，不作为当前架构的事实来源；当前实现以本文档、[docs/architecture.md](docs/architecture.md) 和实际代码为准。
+> **v1.0 重大变更**：项目已从单 workspace 单会话模式演进为**多人格多进程异步架构**。`PersonaManager` 是生产环境唯一推荐入口；`WorkspaceRuntime` 等旧版兼容层仍保留在 `workspace/` 目录，但不再作为推荐调用方式。
 
 ---
 
@@ -17,87 +16,130 @@
 
 ```mermaid
 flowchart TD
-  Entry["外部入口\nmain.py / sirius_chat/cli.py / sirius_chat.api"] --> Runtime["WorkspaceRuntime\n高层入口与持久化所有者"]
-  Runtime --> Layout["WorkspaceLayout\n统一计算 config root / data root 路径"]
-  Runtime --> Config["ConfigManager\nworkspace.json + config/session_config.json"]
-  Runtime --> ProviderMgr["WorkspaceProviderManager\nproviders/provider_keys.json"]
-  Runtime --> Roleplay["roleplay_prompting\nroleplay/generated_agents.json"]
-  Config --> SessionCfg["SessionConfig\n由 workspace 默认值 + 已选 agent 资产构建"]
-  ProviderMgr --> Provider["AutoRoutingProvider 或显式 Provider"]
-  Roleplay --> SessionCfg
+    subgraph MainProcess["主进程"]
+        CLI["python main.py run"]
+        PM["PersonaManager\n扫描/启停/端口分配"]
+        WebUI["WebUIServer\naiohttp REST + 静态页面"]
+        NM["NapCatManager\n全局安装/多实例调度"]
+    end
 
-  Provider --> EmotionalEngine["EmotionalGroupChatEngine\nsirius_chat/core/emotional_engine.py\n（v1.0.0 默认引擎）"]
-  EmotionalEngine --> NewCognitive["core/cognition.py\ncore/response_strategy.py\ncore/threshold_engine.py\ncore/rhythm.py"]
-  EmotionalEngine --> NewMemory["memory/basic/\nmemory/diary/\nmemory/user/\nmemory/glossary/\nmemory/context_assembler.py"]
-  EmotionalEngine --> NewExecution["core/response_assembler.py\ncore/delayed_response_queue.py\ncore/proactive_trigger.py\ncore/model_router.py"]
-  EmotionalEngine --> Skills
-  EmotionalEngine --> Token
-  EmotionalEngine --> EngineState["core/engine_persistence.py\nengine_state/"]
+    CLI --> PM
+    CLI --> WebUI
+    CLI --> NM
 
-  SessionStore --> Outputs["会话输出\nsessions/<session_id>/session_state.db\nparticipants.json\nmemory/*\ntoken/token_usage.db"]
-  EngineState --> Outputs
+    subgraph PersonaA["人格子进程 A"]
+        PWA["PersonaWorker\n--config data/personas/akane"]
+        RTA["EngineRuntime"]
+        EngineA["EmotionalGroupChatEngine"]
+        BridgeA["NapCatBridge\nadapter_type=napcat"]
+        AdapterA["NapCatAdapter\nOneBot v11 WS"]
+        PWA --> RTA --> EngineA
+        PWA --> BridgeA --> AdapterA
+        RTA --> BridgeA
+    end
+
+    subgraph PersonaB["人格子进程 B"]
+        PWB["PersonaWorker\n--config data/personas/sirius"]
+        RTB["EngineRuntime"]
+        EngineB["EmotionalGroupChatEngine"]
+        BridgeB["NapCatBridge\nadapter_type=napcat"]
+        AdapterB["NapCatAdapter\nOneBot v11 WS"]
+        PWB --> RTB --> EngineB
+        PWB --> BridgeB --> AdapterB
+        RTB --> BridgeB
+    end
+
+    PM -->|subprocess.Popen\nCREATE_NEW_CONSOLE| PWA
+    PM -->|subprocess.Popen\nCREATE_NEW_CONSOLE| PWB
+    NM -->|共享全局二进制\n独立配置/日志| AdapterA
+    NM -->|共享全局二进制\n独立配置/日志| AdapterB
+
+    PM -->|维护| Registry["data/adapter_port_registry.json\n端口分配表"]
+    EngineA -->|共用| Providers["data/providers/provider_keys.json\n全局 Provider 注册表"]
+    EngineB -->|共用| Providers
 ```
 
-### 当前版本的几个关键事实
+### 当前版本的关键事实
 
-- 推荐外部入口是 `open_workspace_runtime(...)` / `WorkspaceRuntime`，而不是让调用方自己管理文件布局。
-- `WorkspaceLayout` 是路径的单一事实来源，决定配置资产与运行态数据分别落在哪里。
-- **v1.0.0 默认引擎** `EmotionalGroupChatEngine` 的实现位于 `sirius_chat/core/emotional_engine.py`，采用四层认知架构（感知→认知→决策→执行）与简化记忆模型（基础记忆 → 日记记忆）。
-- **Legacy 引擎 `AsyncRolePlayEngine` 已完全移除**；`sirius_chat/async_engine/` 仅保留辅助导出与配置常量。
-- `sirius_chat/async_engine/` 承担 legacy 兼容导出、提示词与工具函数。
-- `UserManager` 采用简化 `UserProfile`（user_id, name, aliases, identities, metadata），群隔离存储 `{group_id: {user_id: UserProfile}}`。跨平台身份解析由 `IdentityResolver` 解耦。
-- SKILL runtime 会先加载包内置技能（`system_info`、`desktop_screenshot`、`learn_term`、`url_content_reader`、`bing_search`），再加载 workspace `skills/`；同名 workspace 文件覆盖内置实现。
-- 用户态记忆、事件记忆、自身记忆、session store、token store 都已经收敛到 workspace 语义下。
-- v1.0.0 新增存储路径：`memory/basic/`（基础记忆归档）、`memory/diary/`（日记条目与索引）、`memory/glossary/`（名词解释）。
+| 层面 | 关键模块 | 职责 |
+|------|---------|------|
+| **主进程** | `PersonaManager` | 扫描人格目录、端口分配、启停调度、读取子进程心跳 |
+| **主进程** | `WebUIServer` | aiohttp REST API + 静态管理面板，支持多人格状态查看与配置 |
+| **主进程** | `NapCatManager` | 全局 NapCat 安装检查/自动安装；为每个人格创建独立实例目录 |
+| **子进程** | `PersonaWorker` | 单个人格独立运行入口：加载配置、创建 EngineRuntime、启动 NapCatBridge、心跳 |
+| **子进程** | `EngineRuntime` | 单个人格运行时封装：懒加载 EmotionalGroupChatEngine，注入 SkillBridge |
+| **子进程** | `NapCatBridge` | QQ 群聊/私聊桥接：接收 OneBot 事件、渲染 prompt、调用 engine、后台投递 |
+| **核心** | `EmotionalGroupChatEngine` | v1.0 唯一引擎：四层认知架构（感知→认知→决策→执行）+ 三层记忆底座 |
+
+- **数据隔离**：每个人格拥有独立的 `data/personas/{name}/` 目录，包含 `persona.json`、`adapters.json`、`experience.json`、`orchestration.json`、以及运行时的 `memory/`、`diary/`、`engine_state/`、`logs/`。
+- **Provider 全局共享**：所有人格共用 `data/providers/provider_keys.json`。`EngineRuntime._build_provider()` 优先从全局位置加载 `ProviderRegistry`，回退到人格目录（兼容旧版）。
+- **NapCat 多实例**：`NapCatManager.for_persona(global_install_dir, persona_name)` 创建 `napcat/instances/{name}/` 目录，共享全局二进制（`NapCatWinBootMain.exe` 等），拥有独立配置和日志。
+- **端口分配**：`PersonaManager` 维护 `data/adapter_port_registry.json`，从 `global_config.napcat_base_port`（默认 3001）递增自动分配。每个 NapCat adapter 的 `ws_url` 格式为 `ws://localhost:{port}`。
+- **日志归档**：`persona_worker.py` 启动时自动调用 `setup_log_archival()`，将旧的 `logs/worker.log` 按时间戳移入 `logs/archive/`，再创建新日志。
+- **心跳机制**：子进程每 10 秒写入 `engine_state/worker_status.json`，主进程通过 `get_status()` 读取。
 
 ---
 
-## 2. Workspace 启动与配置流
+## 2. 主进程启动流
 
 ```mermaid
 flowchart TD
-  A["调用方提供\nwork_path\n可选 config_path\n可选 bootstrap"] --> B["WorkspaceRuntime.open(...)"]
-  B --> C["WorkspaceLayout\n解析 data_root / config_root"]
-  C --> D["ensure_directories()\n创建 config/providers/roleplay/skills\n与 sessions/memory/token/skill_data"]
-  D --> E["_apply_bootstrap()\n合并 active_agent_key\nsession_defaults\norchestration_defaults\nprovider_entries"]
-  E --> F["ConfigManager.load_workspace_config()"]
-  F --> G["读取 workspace.json"]
-  F --> H["读取 config/session_config.json\nJSONC 注释快照"]
-  G --> I["合并 workspace 默认值"]
-  H --> I
-  I --> J["重叠字段按较新的文件生效\n确保人工编辑不会在重启后被回滚"]
-  J --> K["WorkspaceProviderManager.load()\n读取 providers/provider_keys.json"]
-  J --> L["load_generated_agent_library()\n读取 roleplay/generated_agents.json"]
-  K --> M["_build_session_config()"]
-  L --> M
-  M --> N["得到 SessionConfig\n包含 preset.agent / global_system_prompt / orchestration"]
-  N --> O["启动 WorkspaceConfigWatcher\n监听 workspace.json\nsession_config.json\nprovider_keys.json\ngenerated_agents.json"]
+    A["python main.py run"] --> B["加载 data/global_config.json"]
+    B --> C["创建 PersonaManager\n扫描 data/personas/ 目录"]
+    C --> D["NapCatManager 全局安装检查\n自动安装缺失的 NapCat 二进制"]
+    D --> E["为每个 enabled 人格\n分配 NapCat 端口与实例目录"]
+    E --> F["为每个人格启动 NapCat 实例\nCREATE_NEW_CONSOLE"]
+    F --> G["为每个人格启动 PersonaWorker 子进程\npython -m sirius_chat.persona_worker --config {pdir}"]
+    G --> H["启动 WebUIServer\naiohttp REST API"]
+    H --> I["主进程阻塞等待\nSIGTERM/SIGINT 优雅退出"]
+    I --> J["停止所有子进程\n停止 NapCat 实例\n停止 WebUI"]
 ```
 
-### 这条链路的职责分工
+### 职责分工
 
-- `WorkspaceRuntime`：拥有初始化、配置刷新、session 锁、store 生命周期和参与者元数据写回。**v1.0.0 新增**：`create_emotional_engine()` 工厂方法，为新引擎绑定 workspace provider 与 work_path。
-- `WorkspaceLayout`：决定所有目录与文件名，不让外部调用方拼接路径。**v1.0.0 新增**：`episodic/`、`semantic/`、`engine_state/` 目录纳入布局。
-- `ConfigManager`：负责 workspace 级默认值的读写，以及从 workspace + roleplay 资产构建可运行的 `SessionConfig`。
-- `WorkspaceProviderManager`：只管理 provider 注册表，不参与对话编排。
-- `roleplay_prompting`：只管理 agent 资产与提示词生成，不直接执行业务会话。
+- **`PersonaManager`**：拥有所有人格的生命周期。`create_persona()` 创建新人格目录与默认配置；`start_persona()` 启动单个人格（含 NapCat 自动管理）；`run_all()` 批量启动所有 enabled 人格；`get_logs()` 读取 `logs/worker.log`。
+- **`NapCatManager`**：只管理 NapCat 全局二进制和多实例目录，不介入对话生成。`start(qq_number)` 在独立窗口启动 NapCat；`stop()` 终止实例。
+- **`WebUIServer`**：只暴露 REST API 和静态页面，不直接操作 NapCat 进程。
 
 ---
 
-## 3. v0.28 Emotional 引擎单轮消息执行流
+## 3. 人格子进程启动流
 
-> Emotional 路径通过 `EmotionalGroupChatEngine.process_message(...)` 处理单轮消息。引擎内部采用四层认知架构，每层职责单一、可独立测试。
+```mermaid
+flowchart TD
+    A["PersonaWorker.run()"] --> B["加载 adapters.json / experience.json / orchestration.json"]
+    B --> C["创建 EngineRuntime\nwork_path=人格目录\nglobal_data_path=data/"]
+    C --> D["启动 EngineRuntime\n懒加载 EmotionalGroupChatEngine\n启动 6 个后台任务"]
+    D --> E["为每个 enabled adapter\n创建 NapCatAdapter + NapCatBridge"]
+    E --> F["bridge.start()\n启动 _background_delivery_loop"]
+    F --> G["runtime.add_skill_bridge('napcat', bridge)\n注入 bridge 到 SkillExecutor"]
+    G --> H["启动心跳循环\n每 10 秒写入 worker_status.json"]
+    H --> I["阻塞等待关闭信号"]
+    I --> J["清理：停止 bridge、关闭 adapter、停止 runtime"]
+```
+
+### 子进程内的关键协作
+
+- `PersonaWorker` 为每个 `NapCatAdapterConfig` 创建一个 `NapCatAdapter`（WebSocket 连接）和一个 `NapCatBridge`（事件处理 + 后台投递）。
+- `NapCatBridge` 的 `config` 包含 `allowed_group_ids`、`allowed_private_user_ids`、`enable_group_chat`、`enable_private_chat`、`peer_ai_ids` 等。
+- `EngineRuntime.add_skill_bridge(adapter_type, bridge)` 将 bridge 注入 `SkillExecutor._bridges`，使平台专属 SKILL（如 `send_image`）能拿到正确的 bridge。
+- 所有 bridge 共享同一个 `EngineRuntime` 和同一个 `EmotionalGroupChatEngine`；每个 bridge 有自己的 `allowed_gids` 配置，但 engine 的 `_pending_reminders` 是共享的。
+
+---
+
+## 4. v1.0 Emotional 引擎单轮消息执行流
+
+> Emotional 路径通过 `EmotionalGroupChatEngine.process_message(message, participants, group_id)` 处理单轮消息。引擎内部采用四层认知架构，每层职责单一、可独立测试。
 
 ```mermaid
 flowchart TD
   A["外部消息\nMessage + Participant[] + group_id"] --> B["EmotionalGroupChatEngine.process_message(...)"]
 
   subgraph Perception["① 感知层"]
-    B --> C1["MessageNormalizer：标准化消息格式\n补全 group_id（默认 'default'）"]
-    C1 --> C2["IdentityResolver.resolve() → UserManager.register()（群隔离）"]
-    C2 --> C3["BasicMemoryManager.add_entry()（按群滑动窗口，硬限制 30，上下文窗口 5）"]
-    C3 --> C3a["HeatCalculator.compute_heat()"]
-    C3a --> C4["更新 group_last_message_at"]
+    B --> C1["IdentityResolver.resolve() → UserManager.register()（群隔离）"]
+    C1 --> C2["BasicMemoryManager.add_entry()（按群滑动窗口，硬限制 30，上下文窗口 5）"]
+    C2 --> C3["HeatCalculator.compute_heat()"]
+    C3 --> C4["更新 group_last_message_at"]
     C4 --> E1["emit PERCEPTION_COMPLETED"]
   end
 
@@ -124,197 +166,223 @@ flowchart TD
     G1 -- PROACTIVE --> G5["由 ProactiveTrigger 外部触发\n生成自然开场白"]
     G2 --> G6["StyleAdapter\nmax_tokens / temperature / tone 动态适配"]
     G6 --> G7["ModelRouter 选模型\n构建 GenerationRequest"]
-    G7 --> G8["Provider.generate_async()\n或 sync via asyncio.to_thread"]
-    G8 --> G8a["parse_dual_output()\n<think> → 内心独白\n<say> → 说出口的话"]
-    G8a --> G8b["<think> 存入 DiaryManager\n形成群聊日记；glossary 术语同步更新"]
-    G8a --> G9["SKILL 调用解析与执行（支持 silent 模式，如 learn_term）"]
+    G7 --> G8["Provider.generate_async()"]
+    G8 --> G9["SKILL 调用解析与执行\n支持多轮链式调用"]
     G9 --> G10["Token 追踪记录"]
     G10 --> E4["emit EXECUTION_COMPLETED"]
   end
 
   E4 --> H["_background_update()\n更新群体氛围 + 群规范学习 + 情感孤岛检测\n日记生成（冷群检测 → DiaryGenerator）"]
-  H --> I["返回结果 dict\n{strategy, reply, emotion, intent, thought}"]
+  H --> I["返回结果 dict\n{strategy, reply, emotion, intent}"]
 ```
 
 ### Emotional 路径需要特别注意的语义
 
 - **群隔离是 P0**：所有记忆操作必须携带 `group_id`。`UserManager.entries` 为 `{group_id: {user_id: UserProfile}}` 双层字典。
 - **四层认知架构**：感知 → 认知 → 决策 → 执行，每层通过 `SessionEventBus` 发出事件，外部可订阅监控。
-- **统一认知分析器**：`CognitionAnalyzer` 联合分析情绪+意图，规则引擎覆盖 ~90% 情况（零 LLM 成本），复杂情况单次 LLM fallback（~10% 命中）。情绪结果自然流入意图紧急度评分，无需额外异步边界。
+- **统一认知分析器**：`CognitionAnalyzer` 联合分析情绪+意图，规则引擎覆盖 ~90% 情况（零 LLM 成本），复杂情况单次 LLM fallback（~10% 命中）。
 - **简化记忆模型**：
   - `BasicMemoryManager`：按群滑动窗口（硬限制 30 条，上下文窗口 5 条），含热度计算（HeatCalculator）。当群体变冷（heat < 0.25）且沉默 > 300s 时，上下文窗口外消息归档为日记素材。
   - `DiaryManager`：LLM 生成的群聊摘要，含关键词和 source_ids 回链基础记忆。支持 sentence-transformers 嵌入索引（可选）和关键词回退搜索。检索按 token 预算（默认 800 tokens）截断。
   - `ContextAssembler`：将基础记忆最近 n 条以 XML 格式嵌入 system prompt（`<conversation_history><message speaker="..." user_id="..." role="...">content</message></conversation_history>`），日记检索 top_k 条同样注入 system_prompt，最终只返回 `[system, user]` 2 条消息；`_generate()` 自动清洗模型仿写的 `<conversation_history>` 标签。
   - `GlossaryManager`：AI 自身名词解释，替代旧 AutobiographicalMemory。
-  - `SemanticMemoryManager`：群语义画像（氛围历史、群体规范、关系状态），已实装持久化、被动学习、氛围记录与关系状态更新，不再是 stub。
+  - `SemanticMemoryManager`：群语义画像（氛围历史、群体规范、关系状态），已实装持久化、被动学习、氛围记录与关系状态更新。
 - **四种响应策略**：
-  - `IMMEDIATE`：直接生成回复（高 urgency 或被 @ 时）；被 @ 时直接返回 IMMEDIATE，overheated 除外降级为 DELAYED。
-  - `DELAYED`：入延迟队列，等待话题间隙或合并后触发；reply cooldown 只抑制 DELAYED，不抑制 IMMEDIATE。
+  - `IMMEDIATE`：直接生成回复（高 urgency 或被 @ 时）。
+  - `DELAYED`：入延迟队列，等待话题间隙或合并后触发。
   - `SILENT`：不回复，仅后台观察与学习。
   - `PROACTIVE`：由外部触发器（时间/记忆/情感）决定何时发起。
-- **后台任务**（`start_background_tasks()` / `stop_background_tasks()`）：
-  - 延迟队列 ticker（每 10 秒）
+- **后台任务**（`start_background_tasks()` / `stop_background_tasks()`）共 6 个：
+  - 延迟队列 ticker（每 3 秒，由 bridge 驱动）
   - 主动触发 checker（每 60 秒）
-  - 日记生成 promoter：检查冷群的基础记忆归档，经 `DiaryGenerator` 生成日记并写入 `DiaryManager`
-- **状态持久化**：`save_state()` / `load_state()` 持久化 basic memory、assistant emotion、group timestamps、diary index 到 `memory/` 目录；`working_memory` 已迁移为 `basic_memory`（`BasicMemoryManager`），`user_memory` 已迁移为 `user_manager`（`UserManager`）。
-- **Token 追踪**：`_generate()` 中估算 input/output tokens，记录到 `token_usage_records`，随状态持久化。
+  - 日记生成 promoter（可配置间隔）
+  - 日记 consolidator（可配置间隔）
+  - 开发者主动私聊 checker（可配置间隔）
+  - **提醒检查器 `_bg_reminder_checker`**（每 10 秒）
+- **状态持久化**：`save_state()` / `load_state()` 持久化 basic memory、assistant emotion、group timestamps、diary index 到 `memory/` 目录。
+- **Token 追踪**：`_generate()` 中估算 input/output tokens，记录到 `token_usage_records`。
 
 ---
 
-## 5. 分层视图与模块职责
+## 5. 后台投递循环
 
-| 分层 | 关键模块 | 主要职责 |
-| --- | --- | --- |
-| 入口层 | `main.py`、`sirius_chat/cli.py`、`sirius_chat/api/*` | 接收外部输入、暴露稳定 API、拼接最少的运行参数。**v1.0.0 新增**：`main.py --engine {legacy,emotional}` 切换 |
-| Workspace 层 | `workspace/layout.py`、`workspace/runtime.py`、`workspace/config_watcher.py`、`workspace/roleplay_manager.py` | 路径布局、配置热刷新、session 队列与锁、静默批处理、participants 元数据、roleplay 资产与 workspace 默认值联动。**v1.0.0 新增**：`create_emotional_engine()` 工厂方法 |
-| 配置构建层 | `config/models.py`、`config/manager.py`、`config/jsonc.py`、`config/helpers.py` | `WorkspaceConfig` / `SessionConfig` / `OrchestrationPolicy` 契约、JSON/JSONC 读写、workspace 默认值与 orchestration 构造 |
-| **认知编排层** | `core/emotional_engine.py`、`core/response_assembler.py`、`core/response_strategy.py`、`core/threshold_engine.py`、`core/rhythm.py`、`core/cognition.py` | 四层认知架构（感知→认知→决策→执行）、回复策略、阈值引擎、节奏分析 |
-| **v0.28 新编排核心层** | `core/emotional_engine.py`、`core/cognition.py`、`core/response_strategy.py`、`core/threshold_engine.py`、`core/rhythm.py`、`core/response_assembler.py`、`core/delayed_response_queue.py`、`core/proactive_trigger.py`、`core/model_router.py`、`core/engine_persistence.py` | 四层认知架构、统一认知分析、响应策略、动态阈值、对话节奏、共情生成、延迟队列、主动触发、模型路由、状态持久化 |
-| 兼容与辅助层 | `async_engine/prompts.py`、`async_engine/orchestration.py`、`async_engine/utils.py`、`async_engine/__init__.py` | 提示词生成、任务常量与配置、辅助工具、向后兼容导出 |
-| 记忆层 | `memory/basic/`、`memory/diary/`、`memory/user/`、`memory/glossary/`、`memory/context_assembler.py` | 基础记忆（工作窗口+热度+归档）、日记记忆（LLM生成+检索）、用户管理（简化UserProfile）、名词解释、上下文组装器 |
-| Provider 层 | `providers/base.py`、`providers/routing.py`、各 provider 文件、`providers/middleware/` | 统一请求协议、provider 注册表、自动路由、具体上游接入、中间件增强 |
-| 会话与统计层 | `session/store.py`、`session/runner.py`、`token/store.py`、`token/usage.py`、`token/analytics.py` | Transcript 持久化、兼容运行器、token 归档、跨会话分析 |
-| 扩展层 | `skills/`、`cache/`、`performance/` | SKILL 注册、依赖解析、执行与 data store；缓存框架；性能采样与基准 |
-
-### 真实的 engine 位置
-
-- **v1.0.0 默认引擎**：`EmotionalGroupChatEngine` 的实现位于 `sirius_chat/core/emotional_engine.py`。
-- `sirius_chat/core/cognition.py`：统一情绪+意图分析器（`CognitionAnalyzer`）。
-- `sirius_chat/core/response_assembler.py`：返回 `PromptBundle`（system_prompt + user_content），负责指令级上下文组装；`<think>` / `<say>` 双输出解析。历史消息由 `ContextAssembler` 以 XML 格式嵌入 system prompt。
-- `sirius_chat/memory/glossary/`：名词解释（AI 自身知识库）。
-- `sirius_chat/memory/basic/`：基础记忆（按群滑动窗口、热度跟踪、归档存储）。
-- `sirius_chat/memory/diary/`：日记记忆（LLM 生成摘要、索引、token 预算检索）。
-- `sirius_chat/memory/context_assembler.py`：上下文组装器（basic + diary → OpenAI messages）。
-- `sirius_chat/core/identity_resolver.py`：跨平台身份解析器。
-- **v1.0 引擎**：`EmotionalGroupChatEngine` 位于 `sirius_chat/core/emotional_engine.py`，采用简化记忆模型（基础记忆 + 日记记忆 + 名词解释 + 用户画像）。
-
----
-
-## 6. 文件所有权与路径语义
-
-`WorkspaceLayout` 把路径分成两类：
-
-- config root：配置资产、provider 注册表、roleplay 资产、skills 代码
-- data root：会话状态、记忆数据、token 计量、skill_data
-
-| 路径 | 所属 root | 生产者 | 用途 |
-| --- | --- | --- | --- |
-| `workspace.json` | config root | `ConfigManager.save_workspace_config()` | 机器可读的 workspace 清单与默认值 |
-| `config/session_config.json` | config root | `ConfigManager.save_workspace_config()`、CLI 默认模板 | 人类可编辑的 JSONC 快照 |
-| `providers/provider_keys.json` | config root | `WorkspaceProviderManager` | provider 注册表、healthcheck 与模型映射 |
-| `roleplay/generated_agents.json` | config root | `roleplay_prompting.py` | 已生成 agent 资产库与选中 agent |
-| `roleplay/generated_agent_traces/<agent_key>.json` | config root | `roleplay_prompting.py` | 提示词生成完整轨迹 |
-| `skills/` | config root | `SkillRegistry`、runtime 初始化 | SKILL 源文件与 README 引导；同名 workspace 文件可覆盖内置 SKILL |
-| `sessions/<session_id>/session_state.db` | data root | `SqliteSessionStore` | 默认结构化会话存储（legacy 路径） |
-| `sessions/<session_id>/session_state.json` | data root | `JsonSessionStore` | 可选 JSON store（legacy 路径） |
-| `sessions/<session_id>/participants.json` | data root | `WorkspaceRuntime` | 会话参与者与主用户元数据 |
-| `memory/basic/<group_id>.jsonl` | data root | `BasicMemoryFileStore` | **v1.0**：基础记忆条目 |
-| `memory/diary/<group_id>.jsonl` | data root | `DiaryManager` | **v1.0**：日记条目 |
-| `memory/diary/index/<group_id>.json` | data root | `DiaryIndexer` | **v1.0**：日记索引（关键词+可选嵌入） |
-| `memory/glossary/terms.json` | data root | `GlossaryManager` | **v1.0**：名词解释 |
-| `user_memory/groups/<group_id>/<user_id>.json` | data root | `UserManager` | 群隔离用户档案（简化 UserProfile） |
-| `token/token_usage.db` | data root | `TokenUsageStore` | 跨会话 token 使用记录 |
-| `skill_data/*.json` | data root | `SkillDataStore` | 每个 SKILL 的独立数据存储 |
-| `primary_user.json` | data root | `main.py` | 主用户档案保留文件 |
-
-### `workspace.json` 与 `config/session_config.json` 的关系
-
-- `workspace.json`：偏机器侧、结构稳定、便于 runtime 直接读取。
-- `config/session_config.json`：偏人工编辑，带注释，用于暴露完整可配置项。
-- 两者存在重叠字段时，当前实现按文件修改时间选择较新的版本作为事实来源。
-
----
-
-## 7. Provider 路由流
+`NapCatBridge._background_delivery_loop()` 每 3 秒执行一次，负责投递以下四类异步消息：
 
 ```mermaid
 flowchart TD
-  A["来源 A\nSession JSON / bootstrap provider_entries"] --> D
-  B["来源 B\nproviders/provider_keys.json"] --> D["WorkspaceProviderManager / ProviderRegistry"]
-  D --> E["ProviderConfig 列表"]
-  E --> F["AutoRoutingProvider"]
-  F --> G{"请求模型如何匹配"}
-  G -- "命中 ProviderConfig.models" --> H["使用该 provider"]
-  G -- "否则命中 healthcheck_model" --> H
-  G -- "都未命中" --> I["回退到第一个 enabled provider"]
-  H --> J["具体 provider\nOpenAI / BigModel / Bailian / DeepSeek / SiliconFlow / Ark / YTea"]
-  I --> J
+    A["_background_delivery_loop\n每 3 秒"] --> B{"enabled & ready?"}
+    B -->|是| C["遍历 allowed_gids"]
+    C --> D["tick_delayed_queue()\n投递延迟回复"]
+    D --> E["proactive_check()\n投递主动发言"]
+    E --> F["私聊延迟队列"]
+    F --> G["Developer 主动私聊"]
+    G --> H["提醒投递：pop_reminders(gid, adapter_type)"]
+    H --> I["群聊：_send_group_text_raw()"]
+    H --> J["私聊：_send_private_text_raw()\n依赖 _active_private_groups"]
 ```
 
-### 当前路由规则
+### 提醒投递的特殊机制
+
+提醒系统涉及三个独立组件的协作：
+
+1. **`reminder` SKILL**（`sirius_chat/skills/builtin/reminder.py`）：
+   - 创建/列出/取消提醒记录
+   - 支持 `adapter_type` 参数（可选），用于指定通过哪个 adapter 投递
+   - 记录保存到 `{work_path}/skill_data/reminder.json`
+
+2. **`EmotionalGroupChatEngine._check_due_reminders()`**（后台任务，每 10 秒）：
+   - 扫描 `reminder.json` 中到期的提醒
+   - 调用 `_generate_reminder_message()` 用 LLM 生成人格化的提醒消息
+   - 将生成的消息放入 `_pending_reminders[group_id]`
+   - 若 `group_id` 以 `private_` 开头，自动加入 `_active_private_groups`（确保 engine 重启后仍能投递）
+
+3. **`NapCatBridge._background_delivery_loop()`**（每 3 秒）：
+   - 群聊提醒：遍历 `allowed_gids`，`pop_reminders(gid, adapter_type)` 并发送
+   - 私聊提醒：遍历 `_active_private_groups`，`pop_reminders(gid, adapter_type)` 并发送
+   - `adapter_type` 过滤确保多 adapter 场景下每个 bridge 只投递属于自己的提醒
+
+### 提醒创建时的上下文注入
+
+当 AI 在对话中调用 `[SKILL_CALL: reminder | {"action": "create", ...}]` 时：
+
+1. `SkillExecutor` 执行 `reminder.run()`，将提醒记录存入 `SkillDataStore`
+2. 引擎检测到 skill 名称为 `reminder` 且 action 为 `create`，调用 `_inject_group_id_into_latest_reminder(group_id)`
+3. 该方法将当前 `group_id` 和 `adapter_type`（来自 `message.adapter_type`）注入最新创建的提醒记录
+4. 如果 skill 调用时未指定 `adapter_type`，引擎会自动注入当前 adapter_type
+
+---
+
+## 6. 分层视图与模块职责
+
+| 分层 | 关键模块 | 主要职责 |
+| --- | --- | --- |
+| **入口层** | `main.py` | 统一 CLI 入口：无参数启动 WebUI；`run` 启动所有人格 + NapCat + WebUI；`persona` 子命令管理单个人格 |
+| **主进程管理层** | `sirius_chat/persona_manager.py` | 多人格生命周期管理：扫描、创建、删除、迁移、启停、监控、日志读取 |
+| **子进程入口** | `sirius_chat/persona_worker.py` | 单个人格独立运行入口：加载配置、创建 EngineRuntime、启动 NapCatBridge、心跳、日志归档 |
+| **子进程运行时** | `sirius_chat/platforms/runtime.py` | `EngineRuntime`：懒加载 EmotionalGroupChatEngine，管理 provider 和 skill bridge 注入 |
+| **平台桥接层** | `sirius_chat/platforms/napcat_bridge.py`、`napcat_adapter.py`、`napcat_manager.py` | NapCat OneBot v11 WebSocket 适配、QQ 群聊/私聊事件处理、后台投递循环、setup wizard |
+| **认知编排层** | `core/emotional_engine.py`、`core/cognition.py`、`core/response_strategy.py`、`core/threshold_engine.py`、`core/rhythm.py`、`core/response_assembler.py` | 四层认知架构、统一认知分析、响应策略、动态阈值、对话节奏、prompt 组装 |
+| **记忆层** | `memory/basic/`、`memory/diary/`、`memory/user/`、`memory/glossary/`、`memory/semantic/`、`memory/context_assembler.py` | 基础记忆（工作窗口+热度+归档）、日记记忆（LLM生成+检索）、用户管理、名词解释、语义记忆、上下文组装器 |
+| **Provider 层** | `providers/base.py`、`providers/routing.py`、各 provider 文件、`providers/middleware/` | 统一请求协议、provider 注册表、自动路由、具体上游接入、中间件增强 |
+| **SKILL 层** | `skills/registry.py`、`skills/executor.py`、`skills/data_store.py`、`skills/builtin/` | SKILL 注册、依赖解析、执行与 data store；内置技能含 system_info、desktop_screenshot、learn_term、url_content_reader、bing_search、file_read、file_list、file_write、reminder |
+| **配置层** | `sirius_chat/persona_config.py` | 人格级配置模型：adapters、experience、paths |
+| **WebUI 层** | `webui/server.py`、`webui/static/` | aiohttp REST API + 管理面板（Dashboard + 配置面板） |
+| **工具层** | `cache/`、`performance/`、`token/` | 缓存框架、性能采样与基准、token 统计与 SQLite 持久化 |
+
+---
+
+## 7. 文件所有权与路径语义
+
+### 全局路径（所有人格共用）
+
+| 路径 | 说明 |
+| --- | --- |
+| `data/global_config.json` | 全局配置：webui_host/port、auto_manage_napcat、log_level |
+| `data/providers/provider_keys.json` | Provider 凭证注册表（所有人格共用） |
+| `data/adapter_port_registry.json` | NapCat 端口分配表（PersonaManager 维护） |
+| `data/rbac.json` | 权限控制配置 |
+
+### 人格隔离路径（`data/personas/{name}/`）
+
+| 路径 | 生产者 | 用途 |
+| --- | --- | --- |
+| `persona.json` | `PersonaStore` | 人格定义（PersonaProfile）：name、aliases、personality_traits、backstory 等 |
+| `orchestration.json` | `OrchestrationStore` | 模型编排：analysis_model、chat_model、vision_model |
+| `adapters.json` | `PersonaAdaptersConfig` | 平台适配器列表（NapCatAdapterConfig 等） |
+| `experience.json` | `PersonaExperienceConfig` | 体验参数：reply_mode、engagement_sensitivity、max_skill_rounds 等 |
+| `engine_state/persona.json` | `PersonaStore.save()` | 运行时人格状态持久化 |
+| `engine_state/worker_status.json` | `PersonaWorker._write_status()` | 子进程心跳（status、pid、heartbeat_at） |
+| `engine_state/enabled` | WebUI/CLI | 启停标志文件（`1` 启用，`0` 禁用） |
+| `engine_state/bridge_state.json` | `ConfigStore` | Bridge 内部状态（setup_completed 等） |
+| `memory/basic/<group_id>.jsonl` | `BasicMemoryFileStore` | 基础记忆条目 |
+| `memory/diary/<group_id>.jsonl` | `DiaryManager` | 日记条目 |
+| `memory/diary/index/<group_id>.json` | `DiaryIndexer` | 日记索引（关键词+可选嵌入） |
+| `memory/glossary/terms.json` | `GlossaryManager` | 名词解释 |
+| `memory/semantic/` | `SemanticMemoryManager` | 群语义画像（氛围历史、群体规范、关系状态） |
+| `skill_data/reminder.json` | `SkillDataStore` | 提醒数据存储 |
+| `skill_data/*.json` | `SkillDataStore` | 其他 SKILL 的独立数据存储 |
+| `logs/worker.log` | `FlushingFileHandler` | 子进程主日志（启动时自动归档旧日志到 `logs/archive/`） |
+| `image_cache/` | `NapCatBridge` | 群聊图片缓存 |
+
+### NapCat 多实例路径
+
+| 路径 | 说明 |
+| --- | --- |
+| `napcat/NapCatWinBootMain.exe` | 全局共享二进制 |
+| `napcat/instances/{persona_name}/` | 人格专属实例目录 |
+| `napcat/instances/{persona_name}/config/napcat_{qq}.json` | 独立 NapCat 配置 |
+| `napcat/instances/{persona_name}/config/onebot11_{qq}.json` | 独立 OneBot v11 配置 |
+| `napcat/instances/{persona_name}/logs/` | 独立日志目录 |
+
+---
+
+## 8. Provider 路由
+
+`ProviderRegistry`（全局共享，从 `data/providers/provider_keys.json` 加载）维护所有已配置的 provider。`EngineRuntime._build_provider()` 创建 `AutoRoutingProvider` 或直接使用显式 provider。
+
+当前路由规则：
 
 - 优先看 `ProviderConfig.models` 的显式模型列表。
 - 其次看 `healthcheck_model` 的精确匹配。
 - 都未命中时，回退到第一个启用的 provider。
-- 如果 runtime 没有显式注入 provider，且 workspace 注册表中有 provider，`WorkspaceRuntime` 会优先创建 `AutoRoutingProvider`。
-- 当 `provider_keys.json` 被 watcher 检测到变化时，runtime 会重建 engine，确保新 provider 配置真正生效。
-- **v1.0.0 新增**：`EmotionalGroupChatEngine` 内部通过 `ModelRouter` 按任务类型（`emotion_analyze` / `intent_analyze` / `response_generate` / `memory_extract`）选择模型、温度和 token 上限；urgency ≥ 80 时切换更强模型，urgency ≥ 95 时最大化 token 上限。
+- `EmotionalGroupChatEngine` 内部通过 `ModelRouter` 按任务类型（`emotion_analyze` / `intent_analyze` / `response_generate` / `memory_extract` / `proactive_generate` / `vision`）选择模型、温度和 token 上限；urgency ≥ 80 时切换更强模型。
 
 ---
 
-## 8. Roleplay 资产与 SessionConfig 构建流
+## 9. 人格系统提示词构建
 
-```mermaid
-flowchart TD
-  A["问题模板\ntrait_keywords\nanswers\ndependency_files"] --> B["PersonaSpec"]
-  B --> C["先落盘 pending PersonaSpec\n避免生成失败丢失输入"]
-  C --> D["调用生成模型\nroleplay_prompting.py"]
-  D --> E["解析为 GeneratedSessionPreset"]
-  E --> F["写 roleplay/generated_agents.json"]
-  E --> G["写 generated_agent_traces/<agent_key>.json"]
-  F --> H["select_generated_agent_profile()\n或 RoleplayWorkspaceManager.bootstrap_active_agent()"]
-  H --> I["workspace.active_agent_key 更新"]
-  I --> J["ConfigManager.build_session_config()\n把 agent 资产 + workspace 默认值组装成 SessionConfig"]
-```
+`PersonaProfile.build_system_prompt()` 从人格字段构建系统提示词，包含以下区块：
 
-### 这一层的边界
+1. **【角色】** - `name`
+2. **身份锚点** - `persona_summary`（若为空则取 `backstory` 第一句）
+3. **【背景故事】** - 完整的 `backstory`（v1.0.1+ 新增）
+4. **【人格底色】** - `personality_traits` + `core_values` + `flaws`
+5. **【情绪反应】** - `emotional_baseline` + `stress_response` + `empathy_style`
+6. **【关系模式】** - `social_role` + `boundaries`
+7. **【说话方式】** - `communication_style` + `speech_rhythm` + `catchphrases` + `humor_style`
+8. **【回应习惯】** - `reply_frequency` + `taboo_topics` + `preferred_topics`
+9. **【场景行为】** - 群聊场景指令
 
-- `roleplay_prompting.py` 只负责生成、持久化和选择 agent 资产。
-- `WorkspaceRuntime` 不生成人格，只消费已经选中的资产。
-- `RoleplayWorkspaceManager` 是“选中 agent + 更新 workspace 默认值”的组合封装。
-- **v1.0 说明**：`EmotionalGroupChatEngine` 不直接消费 roleplay 资产；`ResponseAssembler` 负责构建 `PromptBundle`（system_prompt 注入 persona、情绪、共情、日记记忆、glossary、skill 与输出格式；user_content 为当前消息格式化内容）。历史对话通过 `ContextAssembler.build_messages()` 从 `basic_memory` 提取，以 XML 格式嵌入 system prompt，最终只返回 `[system, user]` 2 条消息传入 LLM。
+若设置了 `full_system_prompt`，则完全覆盖上述自动构建的提示词。
 
 ---
 
-## 9. 关键运行产物
+## 10. 关键运行产物
 
 | 产物 | 来源 | 被谁消费 |
 | --- | --- | --- |
-| `Transcript.messages` | `EmotionalGroupChatEngine` | 对话展示、session store |
-| `Transcript.user_manager` | `UserManager` | 提示词注入、识人、participants 写回；`profile.aliases` 为强绑定，`profile.metadata` 存放扩展属性 |
-| `Transcript.reply_runtime` | 引擎运行时 | `reply_mode=auto` 节奏控制（legacy 路径） |
-| `Transcript.session_summary` | 自动压缩逻辑 | 后续主模型上下文（legacy 路径） |
-| `Transcript.token_usage_records` | provider 调用后 | 内存统计与 `TokenUsageStore` 持久化（legacy 路径） |
-| `SessionEventBus` 事件流 | `EmotionalGroupChatEngine` | `on_reply` 外部回调 |
+| `worker.log` | `PersonaWorker._main()` | WebUI/CLI 日志查看；启动时自动归档到 `logs/archive/` |
+| `worker_status.json` | `PersonaWorker._write_status()` | `PersonaManager.get_status()` 监控子进程健康 |
 | `BasicMemoryManager` 窗口 | `EmotionalGroupChatEngine` | 当前群对话上下文、RhythmAnalyzer 输入、热度计算 |
 | `DiaryManager` 条目 | `EmotionalGroupChatEngine._bg_diary_promoter()` | 群聊摘要、长期记忆检索素材 |
-| `SemanticMemoryManager` 画像 | `EmotionalGroupChatEngine` | ThresholdEngine 关系因子、ResponseAssembler 群风格；已实装持久化、被动学习、氛围记录与关系状态更新 |
-| `EngineStateStore` 快照 | `EmotionalGroupChatEngine.save_state()` / `load_state()` | 引擎重启后状态恢复 |
-| `engine.token_usage_records` | `EmotionalGroupChatEngine._generate()` | Token 使用追踪与持久化；`_generate()` 接收 `system_prompt` + 标准 `messages` 列表，不再做字符串分割 |
+| `SemanticMemoryManager` 画像 | `EmotionalGroupChatEngine` | ThresholdEngine 关系因子、ResponseAssembler 群风格 |
+| `_pending_reminders` | `EmotionalGroupChatEngine._check_due_reminders()` | `NapCatBridge._background_delivery_loop()` 定时投递 |
+| `SessionEventBus` 事件流 | `EmotionalGroupChatEngine` | 外部监控、统计、调试 |
+| `skill_data/reminder.json` | `reminder` SKILL | `_bg_reminder_checker` 扫描到期提醒 |
 
 ---
 
-## 10. 文档同步规则
+## 11. 文档同步规则
 
 当以下任一条件发生变化时，必须同步检查本文档：
 
-1. 入口层改变：`main.py`、`cli.py`、`api/engine.py` 的推荐调用方式变化。
-2. workspace 布局改变：`WorkspaceLayout` 新增、删除或迁移路径。
-3. provider 行为改变：路由规则、注册表格式、支持平台变化。
-4. engine 主流程改变：辅助任务、参与决策、SKILL 循环、消息压缩逻辑变化。
-5. roleplay 资产流改变：`generated_agents.json`、trace、选中 agent 语义变化。
-6. **v1.0.0 新增**：`emotional_engine.py` 与 `cognition.py` 统一认知架构的行为或数据流变化。
-7. **v1.0.0 新增**：记忆存储布局变化（群隔离、新增 `episodic/` / `semantic/` / `engine_state/` 路径）。
+1. **入口层改变**：`main.py` 子命令、推荐调用方式变化。
+2. **多人格管理层改变**：`PersonaManager`、`PersonaWorker` 的启停调度、端口分配、心跳机制变化。
+3. **NapCat 多实例改变**：`NapCatManager` 的安装路径、实例目录结构、配置格式变化。
+4. **engine 主流程改变**：`EmotionalGroupChatEngine` 的认知架构、后台任务、SKILL 循环、提醒系统变化。
+5. **记忆存储布局变化**：新增/删除/迁移 `memory/`、`diary/`、`semantic/`、`engine_state/` 路径。
+6. **平台桥接层改变**：`NapCatBridge` 的事件处理、后台投递、提醒投递逻辑变化。
+7. **Provider 行为改变**：路由规则、注册表格式、全局共享机制变化。
 
 推荐同步顺序：
 
 1. 先更新 `docs/full-architecture-flow.md`。
-2. 再同步 [docs/architecture.md](docs/architecture.md)。
-3. 若外部用法变化，再同步 [docs/external-usage.md](docs/external-usage.md) 和 [README.md](README.md)。
-4. 最后同步 `.github/skills/` 下的相关 SKILL。
+2. 再同步 `docs/architecture.md`。
+3. 若外部用法变化，再同步 `docs/external-usage.md` 和 `README.md`。
+4. 最后同步受影响的模块文档（`engine-emotional.md`、`skill-system.md`、`persona-system.md` 等）。
 
 ---
 
-> **文档版本**：v1.0.0  
-> **最后更新**：2026-04-26  
+> **文档版本**：v1.0.1
+> **最后更新**：2026-04-30
 > **对应代码分支**：`master`

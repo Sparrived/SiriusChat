@@ -136,7 +136,7 @@ API：
 
 **特性**：
 - 懒加载（第一次访问时才读文件）
-- 脏检测（只有修改过才写回磁盘）
+- 脏检测（`set()` 自动标记 dirty，只有修改过才写回磁盘）
 - 原子写入（temp file + replace）
 
 **Artifact 目录**：二进制文件（如截图）存到 `{work_path}/skill_data/artifacts/{skill_name}/`
@@ -155,7 +155,7 @@ API：
 | `file_read` | 所有人 | 读取任意路径下的文本文件 | `tags: ["file", "io"]` |
 | `file_list` | 所有人 | 列出或搜索文件和目录 | `tags: ["file", "io"]` |
 | `file_write` | **仅开发者** | 创建或修改文本文件 | `tags: ["file", "io"]` |
-| `reminder` | 所有人 | 设置定时提醒 | `tags: ["utility", "time"]` |
+| `reminder` | 所有人 | 设置定时提醒，支持 `adapter_type` 参数指定投递平台 | `tags: ["utility", "time"]` |
 
 内置 SKILL 存放在 `sirius_chat/skills/builtin/`，会被自动加载。如果 workspace 的 `skills/` 目录下有同名文件，**workspace 版本会覆盖内置版本**。
 

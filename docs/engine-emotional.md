@@ -141,15 +141,18 @@ threshold = base × activity_factor × relationship_factor × time_factor
 
 ## 后台任务
 
-引擎启动后会创建 4 个 `asyncio.Task`：
+引擎启动后会创建 6 个后台 `asyncio.Task`：
 
 | 任务 | 间隔 | 职责 |
 |------|------|------|
-| **延迟队列 ticker** | 10 秒 | 扫描所有群聊的延迟队列，检测话题间隙并触发回复 |
+| **延迟队列 ticker** | 3 秒（由 bridge 驱动） | 扫描所有群聊的延迟队列，检测话题间隙并触发回复 |
 | **主动触发 checker** | 60 秒 | 检查沉默群聊，决定是否主动开口 |
 | **日记生成 promoter** | 可配置 | 检查冷群（heat < 0.25 且沉默 > 300s）的基础记忆归档，经 `DiaryGenerator` 生成日记并写入 `DiaryManager` |
+| **日记 consolidator** | 可配置 | 合并相似的日记条目，减少冗余 |
+| **开发者主动私聊 checker** | 可配置 | 检查开发者私聊的主动记忆对话触发条件 |
+| **提醒检查器 `_bg_reminder_checker`** | 10 秒 | 扫描到期提醒，生成人格化提醒消息并入 `_pending_reminders` 队列 |
 
-这些任务的生命周期由引擎自己管理（`start_background_tasks()` / `stop_background_tasks()`），WorkspaceRuntime 不负责启动它们。
+这些任务的生命周期由引擎自己管理（`start_background_tasks()` / `stop_background_tasks()`），EngineRuntime 不负责启动它们。
 
 ## 事件总线（Event Bus）
 
@@ -159,9 +162,9 @@ threshold = base × activity_factor × relationship_factor × time_factor
 PERCEPTION_COMPLETED → COGNITION_COMPLETED → DECISION_COMPLETED → EXECUTION_COMPLETED
 ```
 
-外加 2 个后台事件：
+外加 3 个后台事件：
 ```
-DELAYED_RESPONSE_TRIGGERED → PROACTIVE_RESPONSE_TRIGGERED
+DELAYED_RESPONSE_TRIGGERED → PROACTIVE_RESPONSE_TRIGGERED → REMINDER_TRIGGERED
 ```
 
 外部可以通过 `SessionEventBus.subscribe()` 拿到 `AsyncIterator` 实时监听这些事件。事件总线是**有损广播**——如果消费者慢了，队列满后事件会被丢弃，不会阻塞引擎。
