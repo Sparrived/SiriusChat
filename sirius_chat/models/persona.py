@@ -178,6 +178,9 @@ class PersonaProfile:
         if anchor:
             sections.append(anchor)
 
+        if self.backstory:
+            sections.append(f"【背景故事】\n{self.backstory}")
+
         # ── 2. Who you are (narrative fusion of traits + values + backstory) ──
         identity_bits: list[str] = []
         if self.personality_traits:
