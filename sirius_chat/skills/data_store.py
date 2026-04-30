@@ -78,6 +78,7 @@ class SkillDataStore:
         with self._lock:
             self._data[key] = value
             self._dirty = True
+            self._dirty = True
 
     def delete(self, key: str) -> bool:
         """Delete a key. Returns True if key existed."""

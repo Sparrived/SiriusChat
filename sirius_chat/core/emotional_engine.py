@@ -214,7 +214,10 @@ class EmotionalGroupChatEngine:
         self._last_developer_chat_at: dict[str, float] = {}
 
         # Reminder (timer) pending queue
-        self._pending_reminders: dict[str, list[str]] = {}
+        self._pending_reminders: dict[str, list[dict[str, Any]]] = {}
+
+        # Current adapter type for skill context injection
+        self._current_adapter_type: str = ""
 
         # Short-term reply deduplication cache per group (timestamp, content)
         self._recent_sent_replies: dict[str, list[tuple[float, str]]] = {}
@@ -240,6 +243,7 @@ class EmotionalGroupChatEngine:
             - intent: dict
         """
         content = message.content
+        self._current_adapter_type = message.adapter_type or ""
 
         # 1. Perception (resolves stable user_id for the sender)
         user_id = self._perception(group_id, message, participants)
@@ -1001,15 +1005,24 @@ class EmotionalGroupChatEngine:
     # Reminder (timer) support
     # ------------------------------------------------------------------
 
-    def pop_reminders(self, group_id: str) -> list[str]:
+    def pop_reminders(self, group_id: str, adapter_type: str | None = None) -> list[str]:
         """Pop pending reminder messages for a group.
 
         Called by the external delivery loop to retrieve and send due reminders.
+        If *adapter_type* is provided, only reminders created for that adapter
+        are returned; unmatched items remain in the queue.
         """
-        return self._pending_reminders.pop(group_id, [])
+        items = self._pending_reminders.pop(group_id, [])
+        if adapter_type is None:
+            return [item["text"] for item in items]
+        matched = [item for item in items if item.get("adapter_type") == adapter_type]
+        unmatched = [item for item in items if item.get("adapter_type") != adapter_type]
+        if unmatched:
+            self._pending_reminders[group_id] = unmatched
+        return [item["text"] for item in matched]
 
     def _inject_group_id_into_latest_reminder(self, group_id: str) -> None:
-        """Attach group_id to the most recently created reminder."""
+        """Attach group_id and adapter_type to the most recently created reminder."""
         if self._skill_executor is None:
             return
         try:
@@ -1024,8 +1037,14 @@ class EmotionalGroupChatEngine:
                     str(r.get("created_at", "1970-01-01T00:00:00+00:00")).replace("Z", "+00:00")
                 ),
             )
+            updated = False
             if "group_id" not in latest:
                 latest["group_id"] = group_id
+                updated = True
+            if "adapter_type" not in latest:
+                latest["adapter_type"] = self._current_adapter_type
+                updated = True
+            if updated:
                 store.set("reminders", reminders)
                 store.save()
         except Exception as exc:
@@ -1053,7 +1072,7 @@ class EmotionalGroupChatEngine:
         store = self._skill_executor.get_data_store("reminder")
         reminders = list(store.get("reminders", []))
         now = datetime.now(timezone.utc)
-        triggered: list[tuple[str, str, str, str]] = []
+        triggered: list[tuple[str, str, str, str, str]] = []
         remaining: list[dict[str, Any]] = []
 
         for r in reminders:
@@ -1063,7 +1082,8 @@ class EmotionalGroupChatEngine:
                     content = r.get("content", "提醒时间到啦")
                     user_id = r.get("user_id", "")
                     user_name = r.get("user_name", "")
-                    triggered.append((gid, content, user_id, user_name))
+                    adapter_type = r.get("adapter_type", "")
+                    triggered.append((gid, content, user_id, user_name, adapter_type))
                     r["last_fired_at"] = now.isoformat()
                     r["fire_count"] = r.get("fire_count", 0) + 1
                     if r.get("mode") == "once":
@@ -1076,11 +1096,15 @@ class EmotionalGroupChatEngine:
             store.set("reminders", remaining)
             store.save()
 
-        for gid, content, user_id, user_name in triggered:
+        for gid, content, user_id, user_name, adapter_type in triggered:
             reply = await self._generate_reminder_message(gid, content, user_id, user_name)
             if reply:
-                self._pending_reminders.setdefault(gid, []).append(reply)
+                self._pending_reminders.setdefault(gid, []).append(
+                    {"text": reply, "adapter_type": adapter_type}
+                )
                 self._log_inner_thought(f"AI 生成提醒：{reply[:40]}")
+                if gid.startswith("private_"):
+                    self._active_private_groups.add(gid)
 
     async def _generate_reminder_message(
         self, group_id: str, content: str, user_id: str, user_name: str

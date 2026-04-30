@@ -109,6 +109,7 @@ class NapCatBridge:
 
         self._enabled = True
         self._running = False
+        self.adapter_type = "napcat"
         self._last_not_ready_log: float = 0.0
         self._reply_lock = asyncio.Lock()
         self._image_cache_dir = self.work_path / "image_cache"
@@ -414,14 +415,14 @@ class NapCatBridge:
                     for gid in allowed_gids:
                         if not self._running:
                             break
-                        reminders = self.runtime.engine.pop_reminders(gid)
+                        reminders = self.runtime.engine.pop_reminders(gid, self.adapter_type)
                         for reply in reminders:
                             await self._send_group_text_raw(gid, reply)
                             LOG.info("群提醒已发送: %s", reply[:80])
                     for gid in list(self.runtime.engine._active_private_groups):
                         if not self._running:
                             break
-                        reminders = self.runtime.engine.pop_reminders(gid)
+                        reminders = self.runtime.engine.pop_reminders(gid, self.adapter_type)
                         for reply in reminders:
                             uid = gid.replace("private_", "").replace("qq_", "")
                             await self._send_private_text_raw(uid, reply)

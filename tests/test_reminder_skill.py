@@ -184,6 +184,33 @@ def test_valid_hhmm():
     assert _is_valid_hhmm("abc") is False
 
 
+def test_create_with_adapter_type(store: MockDataStore):
+    result = run(
+        action="create",
+        content="adapter reminder",
+        mode="once",
+        minutes_after=5,
+        adapter_type="napcat",
+        data_store=store,
+    )
+    assert result["success"] is True
+    reminders = store.get("reminders")
+    assert reminders[0]["adapter_type"] == "napcat"
+
+
+def test_create_default_adapter_type_empty(store: MockDataStore):
+    result = run(
+        action="create",
+        content="default adapter",
+        mode="once",
+        minutes_after=5,
+        data_store=store,
+    )
+    assert result["success"] is True
+    reminders = store.get("reminders")
+    assert "adapter_type" not in reminders[0]
+
+
 def test_weekday_name():
     assert _weekday_name(0) == "周一"
     assert _weekday_name(6) == "周日"

@@ -60,6 +60,12 @@ SKILL_META = {
             "description": "提醒任务ID（cancel 时使用，可通过 list 查看）",
             "required": False,
         },
+        "adapter_type": {
+            "type": "str",
+            "description": "指定提醒消息通过哪个 adapter 发送，例如 'napcat'。留空则自动使用创建时的 adapter。",
+            "required": False,
+            "default": "",
+        },
     },
 }
 
@@ -73,6 +79,7 @@ def run(
     time: str = "",
     weekday: int = -1,
     reminder_id: str = "",
+    adapter_type: str = "",
     data_store: Any = None,
     invocation_context: Any = None,
     **kwargs: Any,
@@ -94,6 +101,7 @@ def run(
             weekday=weekday,
             user_id=user_id,
             user_name=user_name,
+            adapter_type=adapter_type,
             data_store=data_store,
         )
     if action == "list":
@@ -121,6 +129,7 @@ def _do_create(
     weekday: int,
     user_id: str,
     user_name: str,
+    adapter_type: str,
     data_store: Any | None,
 ) -> dict[str, Any]:
     if not content or not content.strip():
@@ -149,6 +158,8 @@ def _do_create(
         "last_fired_at": None,
         "fire_count": 0,
     }
+    if adapter_type.strip():
+        reminder["adapter_type"] = adapter_type.strip().lower()
 
     if mode == "once":
         if minutes_after and minutes_after > 0:
