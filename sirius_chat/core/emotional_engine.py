@@ -150,8 +150,8 @@ class EmotionalGroupChatEngine:
         self.delayed_queue = DelayedResponseQueue()
         self.proactive_trigger = ProactiveTrigger(
             silence_threshold_minutes=self.config.get("proactive_silence_minutes", 60),
-            active_start_hour=self.config.get("proactive_active_start_hour", 12),
-            active_end_hour=self.config.get("proactive_active_end_hour", 21),
+            active_start_hour=self.config.get("proactive_active_start_hour", 8),
+            active_end_hour=self.config.get("proactive_active_end_hour", 23),
         )
         self.rhythm_analyzer = RhythmAnalyzer()
 
@@ -856,11 +856,14 @@ class EmotionalGroupChatEngine:
         min_silence: float,
         interval: float,
     ) -> bool:
-        """Check whether it's appropriate to proactively chat with a developer.
+        """Check whether it's appropriate to proactively chat with a developer."""
+        # Active hours check
+        start = self.config.get("proactive_active_start_hour", 8)
+        end = self.config.get("proactive_active_end_hour", 23)
+        local_hour = datetime.fromtimestamp(now).hour
+        if not (start <= local_hour < end):
+            return False
 
-        Unlike group proactive, developer private-chat is NOT restricted by
-        active-hours window, but it DOES wait for a reply before sending again.
-        """
         # Respect silence since last message
         last_msg_iso = self._group_last_message_at.get(group_id)
         if last_msg_iso:

@@ -1050,6 +1050,8 @@ async function loadExperience() {
     $('expHeatWindow').value = e.heat_window_seconds ?? 60;
     $('expProactive').value = String(e.proactive_enabled !== false);
     $('expProactiveInterval').value = e.proactive_interval_seconds ?? 300;
+    $('expActiveStart').value = e.proactive_active_start_hour ?? 8;
+    $('expActiveEnd').value = e.proactive_active_end_hour ?? 23;
     $('expDelayReply').value = String(e.delay_reply_enabled !== false);
     $('expPendingThreshold').value = e.pending_message_threshold ?? 4;
     $('expMinReplyInterval').value = e.min_reply_interval_seconds ?? 0;
@@ -1075,6 +1077,8 @@ async function saveExperience() {
       heat_window_seconds: parseFloat($('expHeatWindow').value),
       proactive_enabled: $('expProactive').value === 'true',
       proactive_interval_seconds: parseFloat($('expProactiveInterval').value),
+      proactive_active_start_hour: parseInt($('expActiveStart').value, 10),
+      proactive_active_end_hour: parseInt($('expActiveEnd').value, 10),
       delay_reply_enabled: $('expDelayReply').value === 'true',
       pending_message_threshold: parseFloat($('expPendingThreshold').value),
       min_reply_interval_seconds: parseFloat($('expMinReplyInterval').value),

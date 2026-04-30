@@ -47,6 +47,18 @@
       </div>
       <div class="col">
         <div class="form-group">
+          <label>活跃时段 (时)</label>
+          <div style="display:flex;gap:8px;align-items:center">
+            <input type="number" id="expActiveStart" min="0" max="23" value="8" style="flex:1">
+            <span>~</span>
+            <input type="number" id="expActiveEnd" min="0" max="23" value="23" style="flex:1">
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="row">
+      <div class="col">
+        <div class="form-group">
           <label>延迟回复</label>
           <select id="expDelayReply">
             <option value="true">启用</option>

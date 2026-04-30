@@ -139,6 +139,8 @@ class PersonaExperienceConfig:
     # 主动行为
     proactive_enabled: bool = True
     proactive_interval_seconds: float = 300.0
+    proactive_active_start_hour: int = 8
+    proactive_active_end_hour: int = 23
 
     # 延迟回复
     delay_reply_enabled: bool = True
@@ -170,6 +172,8 @@ class PersonaExperienceConfig:
             "heat_window_seconds": self.heat_window_seconds,
             "proactive_enabled": self.proactive_enabled,
             "proactive_interval_seconds": self.proactive_interval_seconds,
+            "proactive_active_start_hour": self.proactive_active_start_hour,
+            "proactive_active_end_hour": self.proactive_active_end_hour,
             "delay_reply_enabled": self.delay_reply_enabled,
             "pending_message_threshold": self.pending_message_threshold,
             "min_reply_interval_seconds": self.min_reply_interval_seconds,
@@ -193,6 +197,8 @@ class PersonaExperienceConfig:
             heat_window_seconds=float(data.get("heat_window_seconds", 60.0)),
             proactive_enabled=bool(data.get("proactive_enabled", True)),
             proactive_interval_seconds=float(data.get("proactive_interval_seconds", 300.0)),
+            proactive_active_start_hour=int(data.get("proactive_active_start_hour", 8)),
+            proactive_active_end_hour=int(data.get("proactive_active_end_hour", 23)),
             delay_reply_enabled=bool(data.get("delay_reply_enabled", True)),
             pending_message_threshold=float(data.get("pending_message_threshold", 4.0)),
             min_reply_interval_seconds=float(data.get("min_reply_interval_seconds", 0.0)),

@@ -233,8 +233,8 @@ class EngineRuntime:
             "delayed_queue_tick_interval_seconds": int(self.plugin_config.get("delayed_queue_tick_interval_seconds", 3)),
             "proactive_check_interval_seconds": int(self.plugin_config.get("proactive_check_interval_seconds", 60)),
             "proactive_silence_minutes": int(self.plugin_config.get("proactive_silence_minutes", 60)),
-            "proactive_active_start_hour": int(self.plugin_config.get("proactive_active_start_hour", 12)),
-            "proactive_active_end_hour": int(self.plugin_config.get("proactive_active_end_hour", 21)),
+            "proactive_active_start_hour": int(self.plugin_config.get("proactive_active_start_hour", 8)),
+            "proactive_active_end_hour": int(self.plugin_config.get("proactive_active_end_hour", 23)),
             "memory_promote_interval_seconds": int(self.plugin_config.get("memory_promote_interval_seconds", 300)),
             # Developer proactive private-chat memory conversations
             "proactive_developer_chat_interval_seconds": int(self.plugin_config.get("proactive_developer_chat_interval_seconds", 1800)),
