@@ -96,6 +96,8 @@ const pageTitles = {
   adapters: ['Adapter 配置', 'Configuration / Adapters'],
   napcat: ['NapCat 管理', 'Platform / NapCat'],
   'token-tracker': ['Token 追踪', 'Analytics / Token Tracker'],
+  'cognition': ['认知分析', 'Analytics / Cognition'],
+  'diary': ['日记', 'Analytics / Diary'],
 };
 
 async function navTo(page) {
@@ -139,6 +141,8 @@ async function navTo(page) {
   if (page === 'providers') _renderProviderDraft();
   if (page === 'napcat') { ncLoadStatus(); ncLoadLogs(); }
   if (page === 'token-tracker') loadTokenTracker();
+  if (page === 'cognition') loadCognition();
+  if (page === 'diary') diaryLoadData();
 }
 
 // ── Personas ──────────────────────────────────────────
@@ -197,6 +201,8 @@ async function loadPersonaStatus() {
     if (currentPage === 'experience') loadExperience();
     if (currentPage === 'adapters') loadAdapters();
     if (currentPage === 'token-tracker') ttLoadData();
+    if (currentPage === 'cognition') loadCognition();
+    if (currentPage === 'diary') diaryLoadData();
   } catch (e) {
     console.error('loadPersonaStatus', e);
   }
@@ -422,14 +428,21 @@ function renderSectionBars(container, breakdown, breakdownByTask) {
     return;
   }
 
+  // 去重 nodes：同名节点只保留一个（ECharts 按 name 聚合）
+  const nodeMap = new Map();
+  nodes.forEach((n) => { if (!nodeMap.has(n.name)) nodeMap.set(n.name, n); });
+  const uniqueNodes = Array.from(nodeMap.values());
+
+  // Sankey 数据结构变化大，每次重建实例避免增量更新内部状态错乱
   let chart = echarts.getInstanceByDom(container);
-  if (!chart) {
-    chart = echarts.init(container, 'dark');
-    const onResize = () => chart.resize();
+  if (chart) {
+    chart.dispose();
     window.removeEventListener('resize', container._sankeyResize);
-    window.addEventListener('resize', onResize);
-    container._sankeyResize = onResize;
   }
+  chart = echarts.init(container, 'dark');
+  const onResize = () => chart.resize();
+  window.addEventListener('resize', onResize);
+  container._sankeyResize = onResize;
 
   chart.setOption({
     backgroundColor: 'transparent',
@@ -446,7 +459,7 @@ function renderSectionBars(container, breakdown, breakdownByTask) {
       type: 'sankey',
       layout: 'none',
       emphasis: { focus: 'adjacency' },
-      data: nodes,
+      data: uniqueNodes,
       links: links,
       top: 10, bottom: 10, left: 10, right: hasTaskBreakdown ? 140 : 110,
       nodeWidth: hasTaskBreakdown ? 22 : 28,
@@ -460,7 +473,7 @@ function renderSectionBars(container, breakdown, breakdownByTask) {
       },
       itemStyle: { borderWidth: 1, borderColor: '#0d1117' },
     }],
-  }, true);
+  });
 }
 
 function renderTimeSeries(container, hourly) {
@@ -671,6 +684,7 @@ function _renderExtraStats(prefix, res) {
   const durEl = $(`${prefix}AvgDuration`);
   const outRatioEl = $(`${prefix}OutputRatio`);
   const emptyEl = $(`${prefix}EmptyRate`);
+  const emptyTabEl = $(`${prefix}EmptyRateTab`);
   const bloatEl = $(`${prefix}BloatAlert`);
   const failEl = $(`${prefix}FailureRate`);
   const depthEl = $(`${prefix}AvgDepth`);
@@ -692,7 +706,9 @@ function _renderExtraStats(prefix, res) {
   if (outRatioEl) outRatioEl.textContent = eff.output_ratio ? `${eff.output_ratio}` : '—';
 
   const empty = res.empty_reply_stats || {};
-  if (emptyEl) emptyEl.textContent = empty.empty_rate_pct ? `${empty.empty_rate_pct}%` : '—';
+  const emptyText = empty.empty_rate_pct ? `${empty.empty_rate_pct}%` : '—';
+  if (emptyEl) emptyEl.textContent = emptyText;
+  if (emptyTabEl) emptyTabEl.textContent = emptyText;
 
   const fail = res.failure_stats || {};
   if (failEl) {
@@ -732,18 +748,14 @@ async function loadTokenStats() {
   const totalEl = $('dashTokenTotal');
   const avgEl = $('dashTokenAvgRound');
   const avgDetailEl = $('dashTokenAvgRoundDetail');
-  const personasEl = $('dashTokenPersonas');
-  const sectionEl = $('dashSectionBreakdown');
-  const tsEl = $('dashTimeSeries');
   if (!callsEl || !totalEl) return;
   try {
     const res = await get('/tokens');
     const dataKey = JSON.stringify(res);
-    if (_lastTokenData === dataKey) return; // 数据未变化，跳过重建
+    if (_lastTokenData === dataKey) return;
     _lastTokenData = dataKey;
 
     const summary = res.summary || {};
-    const personaList = res.personas || [];
     animateNumber(callsEl, summary.total_calls || 0, 500);
     animateNumber(promptEl, summary.total_prompt_tokens || 0, 500);
     animateNumber(completionEl, summary.total_completion_tokens || 0, 500);
@@ -754,80 +766,8 @@ async function loadTokenStats() {
       const calls = avg.total_calls || 0;
       avgDetailEl.textContent = calls ? `${calls} 次回复 · ${(avg.avg_prompt_tokens || 0).toLocaleString()} + ${(avg.avg_completion_tokens || 0).toLocaleString()}` : '暂无回复记录';
     }
-    renderTimeSeries(tsEl, res.hourly || []);
-    renderActiveHours($('dashActiveHours'), res.hourly_distribution || []);
-    _renderExtraStats('dash', res);
-    if (personasEl) {
-      if (!personaList.length) {
-        personasEl.innerHTML = '<div style="color:var(--text-2);padding:12px">暂无 Token 消耗记录</div>';
-      } else if (typeof echarts !== 'undefined') {
-        const pieData = personaList.map((p) => ({
-          value: p.total_tokens || 0,
-          name: p.persona_name || p.name || '未知',
-          calls: p.total_calls || 0,
-          prompt: p.total_prompt_tokens || 0,
-          completion: p.total_completion_tokens || 0,
-        }));
-        let chart = echarts.getInstanceByDom(personasEl);
-        if (!chart) {
-          chart = echarts.init(personasEl, 'dark');
-          const onResize = () => chart.resize();
-          window.removeEventListener('resize', personasEl._pieResize);
-          window.addEventListener('resize', onResize);
-          personasEl._pieResize = onResize;
-        }
-        chart.setOption({
-          backgroundColor: 'transparent',
-          tooltip: {
-            trigger: 'item',
-            formatter: (p) => {
-              const d = p.data;
-              return `<b>${d.name}</b><br/>占比: <b>${p.percent}%</b><br/>Tokens: ${d.value.toLocaleString()}<br/>调用: ${d.calls} 次<br/>Prompt: ${d.prompt.toLocaleString()}<br/>Completion: ${d.completion.toLocaleString()}`;
-            },
-          },
-          legend: {
-            orient: 'vertical',
-            right: 10,
-            top: 'center',
-            textStyle: { fontSize: 12, color: '#c9d1d9' },
-            itemWidth: 12,
-            itemHeight: 12,
-          },
-          series: [{
-            type: 'pie',
-            radius: ['35%', '65%'],
-            center: ['35%', '50%'],
-            avoidLabelOverlap: true,
-            itemStyle: { borderRadius: 6, borderColor: '#0d1117', borderWidth: 2 },
-            label: { show: false },
-            emphasis: {
-              label: { show: true, fontSize: 13, fontWeight: 'bold', color: '#e8eaf0' },
-              itemStyle: { shadowBlur: 10, shadowOffsetX: 0, shadowColor: 'rgba(0,0,0,0.5)' },
-            },
-            data: pieData,
-          }],
-        }, true);
-      } else {
-        // Fallback to stat cards if ECharts not available
-        personasEl.innerHTML = personaList.map((p) => `
-          <div class="stat-card">
-            <div class="label">${p.persona_name || '未知'}</div>
-            <div class="value">${p.total_tokens || 0}</div>
-            <div style="font-size:11px;color:var(--text-2)">
-              ${p.total_calls || 0} 次调用 &nbsp;|&nbsp; ${p.total_prompt_tokens || 0} + ${p.total_completion_tokens || 0}
-            </div>
-          </div>
-        `).join('');
-        applyStagger(personasEl, '.stat-card');
-      }
-    }
-    if (sectionEl) {
-      renderSectionBars(sectionEl, res.section_breakdown || {});
-    }
   } catch (e) {
     _lastTokenData = null;
-    if (personasEl) personasEl.innerHTML = '<div style="color:var(--text-2);padding:12px">Token 统计加载失败</div>';
-    if (sectionEl) sectionEl.innerHTML = '<div style="color:var(--text-2);padding:12px">模块分布加载失败</div>';
   }
 }
 
@@ -1562,6 +1502,8 @@ async function loadTokenTracker() {
   document.querySelectorAll('#page-token-tracker .btn[data-range]').forEach((b) => {
     b.classList.toggle('active', b.dataset.range === _ttState.range);
   });
+  // Reset to overview tab on page load
+  ttSwitchTab('overview');
   await ttLoadData();
 }
 
@@ -1624,34 +1566,51 @@ async function ttLoadData() {
       avgDetailEl.textContent = calls ? `${calls} 次回复 · ${(avg.avg_prompt_tokens || 0).toLocaleString()} + ${(avg.avg_completion_tokens || 0).toLocaleString()}` : '暂无回复记录';
     }
 
-    // Time series
-    renderTimeSeries($('ttTimeSeries'), res.hourly || []);
-
-    // Extra stats
-    _renderExtraStats('tt', res);
-
-    // Section breakdown
-    renderSectionBars($('ttSectionBreakdown'), res.section_breakdown || {}, res.section_breakdown_by_task || {});
-
-    // Task hierarchy (parent/child)
-    renderTaskHierarchy('ttTaskHierarchy', res.by_task || []);
-    // Dimension breakdowns
-    ttRenderDimensionList('ttByModel', res.by_model || []);
-    ttRenderDimensionList('ttByGroup', res.by_group || []);
-    ttRenderDimensionList('ttByProvider', res.by_provider || []);
-
-    // Active hours
-    renderActiveHours($('ttActiveHours'), res.hourly_distribution || []);
-
-    // Recent calls table
-    ttRenderRecentTable();
-
-    // Cognition events (fetch separately)
-    ttLoadCognition(name);
+    // Render charts for the currently active tab only
+    ttRenderActiveTab();
   } catch (e) {
     console.error('ttLoadData', e);
-    const els = ['ttSectionBreakdown', 'ttTaskHierarchy', 'ttByModel', 'ttByGroup', 'ttByProvider', 'ttActiveHours'];
+    const els = ['ttTimeSeries', 'ttActiveHours', 'ttSectionBreakdown', 'ttTaskHierarchy', 'ttByModel', 'ttByGroup', 'ttByProvider'];
     els.forEach((id) => { const el = $(id); if (el) el.textContent = '加载失败'; });
+  }
+}
+
+// ── Tab switching ──────────────────────────────────────
+let _ttActiveTab = 'overview';
+
+function ttSwitchTab(tab) {
+  _ttActiveTab = tab;
+  document.querySelectorAll('#ttTabBar .tab-btn').forEach((b) => {
+    b.classList.toggle('active', b.dataset.tab === tab);
+  });
+  document.querySelectorAll('#page-token-tracker .tab-panel').forEach((p) => {
+    p.classList.toggle('active', p.dataset.tab === tab);
+  });
+  // Defer chart rendering so the container has layout
+  requestAnimationFrame(() => ttRenderActiveTab());
+}
+
+function ttRenderActiveTab() {
+  const res = _ttState.data;
+  if (!res) return;
+  switch (_ttActiveTab) {
+    case 'overview':
+      renderTimeSeries($('ttTimeSeries'), res.hourly || []);
+      renderActiveHours($('ttActiveHours'), res.hourly_distribution || []);
+      _renderExtraStats('tt', res);
+      break;
+    case 'module':
+      renderSectionBars($('ttSectionBreakdown'), res.section_breakdown || {}, res.section_breakdown_by_task || {});
+      renderTaskHierarchy('ttTaskHierarchy', res.by_task || []);
+      break;
+    case 'dimension':
+      ttRenderDimensionList('ttByModel', res.by_model || []);
+      ttRenderDimensionList('ttByGroup', res.by_group || []);
+      ttRenderDimensionList('ttByProvider', res.by_provider || []);
+      break;
+    case 'detail':
+      ttRenderRecentTable();
+      break;
   }
 }
 
@@ -1806,15 +1765,92 @@ function renderTaskHierarchy(containerId, items) {
   }, true);
 }
 
-async function ttLoadCognition(name) {
+async function loadCognition() {
+  renderPersonaSelect();
+  if (!currentPersona && personas.length > 0) {
+    selectPersona(personas[0].name);
+  }
+  if (!currentPersona) return;
   try {
-    const res = await get(`/personas/${name}/cognition?limit=100`);
-    renderEmotionDistribution($('ttEmotionDistribution'), res.emotion_distribution || {});
-    renderEmotionTimeline($('ttEmotionTimeline'), res.events || []);
+    const res = await get(`/personas/${currentPersona}/cognition?limit=100`);
+    renderEmotionDistribution($('cogEmotionDistribution'), res.emotion_distribution || {});
+    renderEmotionTimeline($('cogEmotionTimeline'), res.events || []);
   } catch (e) {
-    console.error('ttLoadCognition', e);
-    const els = ['ttEmotionDistribution', 'ttEmotionTimeline'];
+    console.error('loadCognition', e);
+    const els = ['cogEmotionDistribution', 'cogEmotionTimeline'];
     els.forEach((id) => { const el = $(id); if (el) el.textContent = '加载失败'; });
+  }
+}
+
+async function diaryLoadData() {
+  renderPersonaSelect();
+  if (!currentPersona && personas.length > 0) {
+    selectPersona(personas[0].name);
+  }
+  if (!currentPersona) return;
+  try {
+    const filterEl = $('diaryGroupFilter');
+    const groupId = filterEl ? filterEl.value : '';
+    const qs = groupId ? `?group_id=${encodeURIComponent(groupId)}` : '';
+    const res = await get(`/personas/${currentPersona}/diary${qs}`);
+
+    // Stats
+    const stats = res.stats || {};
+    const totalEl = $('diaryTotal');
+    const groupsEl = $('diaryGroups');
+    if (totalEl) totalEl.textContent = (stats.total || 0).toLocaleString();
+    if (groupsEl) groupsEl.textContent = (stats.groups || 0).toLocaleString();
+
+    // Keywords
+    const kwContainer = $('diaryKeywords');
+    const topKws = stats.top_keywords || [];
+    if (kwContainer) {
+      if (!topKws.length) {
+        kwContainer.innerHTML = '<span style="color:var(--text-2)">暂无关键词</span>';
+      } else {
+        kwContainer.innerHTML = topKws.map(([kw, cnt]) => `
+          <span style="background:var(--bg-2);border:1px solid var(--border);border-radius:12px;padding:3px 10px;font-size:12px;color:var(--text)">${kw} <span style="color:var(--text-2)">${cnt}</span></span>
+        `).join('');
+      }
+    }
+
+    // Group filter options
+    if (filterEl) {
+      const currentVal = filterEl.value;
+      const groups = res.groups || [];
+      filterEl.innerHTML = '<option value="">全部群聊</option>'
+        + groups.map((g) => `<option value="${g}">${g}</option>`).join('');
+      filterEl.value = currentVal;
+    }
+
+    // Entries
+    const listEl = $('diaryList');
+    const entries = res.entries || [];
+    if (listEl) {
+      if (!entries.length) {
+        listEl.innerHTML = '<div style="color:var(--text-2);padding:12px">暂无日记</div>';
+      } else {
+        listEl.innerHTML = entries.map((e) => {
+          const ts = e.created_at ? new Date(e.created_at).toLocaleString('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—';
+          const kws = (e.keywords || []).slice(0, 8).map((k) => `<span style="background:var(--bg-2);border:1px solid var(--border);border-radius:8px;padding:2px 8px;font-size:11px;color:var(--text-2)">${k}</span>`).join('');
+          return `
+            <div style="background:var(--bg-2);border:1px solid var(--border);border-radius:8px;padding:12px">
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+                <span style="font-size:12px;color:var(--text-2)">${ts}</span>
+                <span style="font-size:11px;color:var(--text-2);background:var(--bg);padding:2px 8px;border-radius:4px">${e.group_id || '—'}</span>
+              </div>
+              <div style="font-size:14px;font-weight:600;margin-bottom:6px;color:var(--text)">${e.summary || '无摘要'}</div>
+              <div style="font-size:13px;color:var(--text);line-height:1.6;margin-bottom:8px;white-space:pre-wrap">${e.content || ''}</div>
+              <div style="display:flex;flex-wrap:wrap;gap:4px">${kws}</div>
+            </div>
+          `;
+        }).join('');
+      }
+    }
+  } catch (e) {
+    console.error('diaryLoadData', e);
+    const listEl = $('diaryList');
+    if (listEl) listEl.innerHTML = '<div style="color:var(--text-2);padding:12px">加载失败</div>';
   }
 }
 

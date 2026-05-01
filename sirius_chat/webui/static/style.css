@@ -129,6 +129,35 @@ body {
   grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
   gap: 16px; margin-bottom: 24px;
 }
+
+/* ── Tabs ───────────────────────────────────────────── */
+.tab-bar {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 20px;
+  padding: 4px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow-x: auto;
+}
+.tab-btn {
+  padding: 8px 16px;
+  border-radius: 8px;
+  font-size: 13px;
+  cursor: pointer;
+  border: none;
+  background: none;
+  color: var(--text-2);
+  white-space: nowrap;
+  transition: .15s;
+  font-family: inherit;
+}
+.tab-btn:hover { background: var(--surface-2); color: var(--text); }
+.tab-btn.active { background: var(--surface-3); color: var(--accent); font-weight: 500; }
+
+.tab-panel { display: none; }
+.tab-panel.active { display: block; }
 .stat-card {
   background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius);
   padding: 16px;

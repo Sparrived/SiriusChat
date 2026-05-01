@@ -1056,7 +1056,7 @@ class WebUIServer:
 
     async def api_persona_cognition_get(self, request: web.Request) -> web.Response:
         """Return recent cognition events for a single persona."""
-        from sirius_chat.token.cognition_store import CognitionEventStore
+        from sirius_chat.memory.cognition_store import CognitionEventStore
 
         name = _get_name(request)
         paths = self.persona_manager.get_persona_paths(name)
