@@ -53,15 +53,23 @@ class PersonaManager:
     # 端口分配
     # ------------------------------------------------------------------
 
-    def _load_port_registry(self) -> dict[str, int]:
+    def _load_port_registry(self) -> dict[str, dict[str, Any]]:
         if not self._port_registry_path.exists():
             return {}
         try:
-            return json.loads(self._port_registry_path.read_text(encoding="utf-8"))
+            raw = json.loads(self._port_registry_path.read_text(encoding="utf-8"))
+            # Backward-compat: old format was dict[str, int]
+            migrated: dict[str, dict[str, Any]] = {}
+            for k, v in raw.items():
+                if isinstance(v, int):
+                    migrated[k] = {"port": v}
+                elif isinstance(v, dict):
+                    migrated[k] = v
+            return migrated
         except Exception:
             return {}
 
-    def _save_port_registry(self, ports: dict[str, int]) -> None:
+    def _save_port_registry(self, ports: dict[str, dict[str, Any]]) -> None:
         self._port_registry_path.write_text(
             json.dumps(ports, ensure_ascii=False, indent=2),
             encoding="utf-8",
@@ -77,6 +85,13 @@ class PersonaManager:
                 return True
         except OSError:
             return False
+
+    def _is_port_leased(self, record: dict[str, Any]) -> bool:
+        """Return True if the port record has an active lease."""
+        leased_until = record.get("leased_until")
+        if leased_until is None:
+            return False
+        return time.time() < leased_until
 
     def _allocate_port(self, name: str) -> int:
         """为指定人格分配一个未被占用的 WebSocket 端口（从 3001 开始递增，并验证 OS 可用性）。"""
