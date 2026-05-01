@@ -309,6 +309,8 @@ class CognitionAnalyzer:
         user_id: str,
         group_id: str | None = None,
         context_messages: list[dict[str, Any]] | None = None,
+        *,
+        sender_type: str = "human",
     ) -> tuple[EmotionState, IntentAnalysisV3, EmpathyStrategy]:
         """Joint analysis: emotion, intent, directedness, and empathy in one pass.
 
@@ -337,7 +339,7 @@ class CognitionAnalyzer:
         if self.provider_async is not None:
             try:
                 llm_result = await self._llm_cognition(
-                    message, context_messages, current_user_id=user_id
+                    message, context_messages, current_user_id=user_id, sender_type=sender_type
                 )
                 if llm_result is not None:
                     social_intent = llm_result["social_intent"]
@@ -384,6 +386,9 @@ class CognitionAnalyzer:
         directed_score = self._synthesize_directed_score(
             directed_scores, llm_directed_score
         )
+        # Discount directedness when message is from another AI
+        if sender_type == "other_ai":
+            directed_score = min(directed_score, directed_score * 0.5 + 0.1)
         directed = directed_score >= 0.6
 
         if directed:
@@ -568,6 +573,7 @@ class CognitionAnalyzer:
         context_messages: list[dict[str, Any]] | None = None,
         *,
         current_user_id: str = "",
+        sender_type: str = "human",
     ) -> dict[str, Any] | None:
         """Single LLM call for joint emotion + intent + directedness analysis."""
         from sirius_chat.providers.base import GenerationRequest, LLMProvider
@@ -603,6 +609,8 @@ class CognitionAnalyzer:
                 conv_ctx += f"\n【对话参与者】{', '.join(participants)}\n"
             if current_user_id:
                 conv_ctx += f"【当前发言者】{current_user_id}\n"
+        if sender_type == "other_ai":
+            conv_ctx += "【注意：当前消息来自群里的另一个 AI，不是人类用户】\n"
 
         prompt = _LLM_COGNITION_PROMPT.format(
             ai_identity=ai_id,

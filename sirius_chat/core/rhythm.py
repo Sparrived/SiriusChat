@@ -30,6 +30,7 @@ class RhythmAnalysis:
     attention_window_open: bool = False
     burst_detected: bool = False
     conversation_flows: int = 1
+    turn_gap_readiness: float = 0.5  # 0~1, how ready the conversation is for AI insertion
 
 
 class RhythmAnalyzer:
@@ -76,6 +77,9 @@ class RhythmAnalyzer:
         # Flows (simplified: count unique user transitions)
         flows = self._count_flows(recent)
 
+        # Turn gap readiness: detect natural breakpoints in conversation
+        gap_readiness = self._compute_turn_gap_readiness(recent, stability, burst)
+
         return RhythmAnalysis(
             heat_level=heat_level,
             heat_score=round(heat_score, 3),
@@ -85,6 +89,7 @@ class RhythmAnalyzer:
             attention_window_open=attention_open,
             burst_detected=burst,
             conversation_flows=flows,
+            turn_gap_readiness=round(gap_readiness, 3),
         )
 
     @staticmethod
@@ -196,6 +201,59 @@ class RhythmAnalyzer:
                 if span <= 30:
                     return True
         return False
+
+    @staticmethod
+    def _compute_turn_gap_readiness(
+        messages: list[dict[str, Any]], stability: float, burst: bool
+    ) -> float:
+        """Detect how ready the conversation is for AI insertion.
+
+        High readiness = natural breakpoint (question, topic shift, silence).
+        Low readiness = conversation in full flow, don't interrupt.
+        """
+        if not messages:
+            return 0.5
+        readiness = 0.3  # base
+        last = str(messages[-1].get("content", ""))
+        last_lower = last.lower()
+
+        # Low topic stability = potential turning point
+        if stability < 0.3:
+            readiness += 0.25
+
+        # Question = seeking response
+        if any(m in last for m in ["?", "？", "吗", "呢", "怎么", "为什么", "如何"]):
+            readiness += 0.2
+
+        # Topic transition words = natural gap
+        transitions = ["对了", "不过", "话说回来", "说到", "顺便", "另外", "总之", "那么", "所以"]
+        if any(w in last for w in transitions):
+            readiness += 0.15
+
+        # Short context-dependent message = conversational follow-up
+        if len(last) <= 8:
+            readiness += 0.1
+
+        # Silence before last message = people re-engaging
+        if len(messages) >= 2:
+            t1 = _parse_ts(messages[-2].get("timestamp", ""))
+            t2 = _parse_ts(messages[-1].get("timestamp", ""))
+            if t1 and t2:
+                gap = (t2 - t1).total_seconds()
+                if gap > 120:
+                    readiness += 0.15
+
+        # Burst = don't interrupt
+        if burst:
+            readiness -= 0.35
+
+        # Long monologue from same user = wait for them to finish
+        if len(messages) >= 3:
+            last_uid = messages[-1].get("user_id")
+            if last_uid and all(m.get("user_id") == last_uid for m in messages[-3:]):
+                readiness -= 0.2
+
+        return max(0.0, min(1.0, readiness))
 
     @staticmethod
     def _count_flows(messages: list[dict[str, Any]]) -> int:

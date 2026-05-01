@@ -322,7 +322,9 @@ class EmotionalGroupChatEngine:
             }
 
         # 2. Cognition (unified emotion + intent)
-        intent, emotion, memories, empathy = await self._cognition(content, user_id, group_id)
+        intent, emotion, memories, empathy = await self._cognition(
+            content, user_id, group_id, sender_type=message.sender_type
+        )
         # 内心活动：理解消息后的感受
         self._log_cognition_thought(speaker, intent, emotion)
         await self.event_bus.emit(
@@ -1416,6 +1418,12 @@ class EmotionalGroupChatEngine:
             )
             reply = raw_reply.strip()
 
+            # Expression deduplication: skip if too similar to recent replies
+            if self._check_expression_redundancy(reply, group_id):
+                self._log_inner_thought("这话我好像刚说过...换个说法或者先不说了吧")
+                reply = ""
+                break
+
             calls = parse_skill_calls(reply)
             if not calls or self._skill_registry is None or self._skill_executor is None:
                 break
@@ -1965,6 +1973,8 @@ class EmotionalGroupChatEngine:
         content: str,
         user_id: str,
         group_id: str,
+        *,
+        sender_type: str = "human",
     ) -> tuple[IntentAnalysisV3, EmotionState, list[dict[str, Any]], Any]:
         """Cognitive layer: unified emotion + intent + empathy + memory retrieval."""
         # Build context from recent working memory (exclude current message)
@@ -1977,7 +1987,8 @@ class EmotionalGroupChatEngine:
         # Joint cognition (emotion + intent + empathy in one pass)
         t0 = time.perf_counter()
         emotion, intent, empathy = await self.cognition_analyzer.analyze(
-            content, user_id, group_id, context_messages
+            content, user_id, group_id, context_messages,
+            sender_type=sender_type,
         )
         cognition_duration_ms = round((time.perf_counter() - t0) * 1000, 2)
         if self.cognition_analyzer._last_request is not None:
@@ -2005,6 +2016,11 @@ class EmotionalGroupChatEngine:
             )
         except Exception:
             pass
+
+        # Enhance topic relevance with semantic memory
+        intent.topic_relevance_score = self._enhance_topic_relevance(
+            intent.topic_relevance_score, content, group_id, user_id
+        )
 
         # Memory retrieval now happens in execution via ContextAssembler
         memories = []
@@ -2191,6 +2207,22 @@ class EmotionalGroupChatEngine:
             if resolved_uid:
                 caller_profile = self.user_manager.get_user(resolved_uid, group_id)
         caller_is_developer = bool(caller_profile and caller_profile.is_developer)
+
+        # Turn gap suppression: don't interrupt conversation in full flow
+        if (
+            rhythm.turn_gap_readiness < 0.25
+            and intent.directed_score < 0.8
+            and decision.strategy == ResponseStrategy.IMMEDIATE
+        ):
+            decision = StrategyDecision(
+                strategy=ResponseStrategy.DELAYED,
+                score=decision.score * 0.8,
+                threshold=decision.threshold,
+                urgency=decision.urgency,
+                relevance=decision.relevance,
+                reason=f"gap_not_ready:{decision.reason}",
+            )
+            self._log_inner_thought("大家正聊得起劲呢，我先不插话了，等个合适的时机...")
 
         # overheated + burst + not directed → downgrade to SILENT
         is_directed = intent.directed_score >= 0.6
@@ -2759,6 +2791,73 @@ class EmotionalGroupChatEngine:
             }
             for e in entries
         ]
+
+    def _enhance_topic_relevance(
+        self,
+        base_score: float,
+        message: str,
+        group_id: str,
+        user_id: str,
+    ) -> float:
+        """Enhance topic relevance using semantic memory."""
+        text_lower = (message or "").lower()
+        if not text_lower:
+            return base_score
+        boost = 0.0
+
+        # Group-level topic signals
+        group_profile = self.semantic_memory.get_group_profile(group_id)
+        if group_profile:
+            if group_profile.dominant_topic and group_profile.dominant_topic.lower() in text_lower:
+                boost += 0.15
+            for topic in (group_profile.interest_topics or [])[:5]:
+                if topic and topic.lower() in text_lower:
+                    boost += 0.08
+
+        # User-level interest signals
+        if user_id:
+            user_profile = self.semantic_memory.get_user_profile(group_id, user_id)
+            if user_profile and user_profile.interest_graph:
+                for node in user_profile.interest_graph:
+                    topic = getattr(node, "topic", "")
+                    if topic and topic.lower() in text_lower:
+                        participation = getattr(node, "participation", 0.5)
+                        boost += 0.1 * participation
+
+        return min(1.0, base_score + boost)
+
+    def _check_expression_redundancy(self, reply: str, group_id: str) -> bool:
+        """Check if reply is too similar to recent AI expressions."""
+        if not reply:
+            return False
+        recent = self._get_recent_messages(group_id, n=10)
+        own_recent = [m["content"] for m in recent if m.get("user_id") == "assistant"]
+        if not own_recent:
+            return False
+        for past in own_recent[-5:]:
+            if not past:
+                continue
+            sim = self._expression_similarity(reply, past)
+            if sim > 0.55:
+                return True
+        return False
+
+    @staticmethod
+    def _expression_similarity(a: str, b: str) -> float:
+        """Simple character bigram Jaccard similarity."""
+        if not a or not b:
+            return 0.0
+
+        def bigrams(s: str) -> set[str]:
+            return {s[i : i + 2] for i in range(len(s) - 1)}
+
+        bg_a = bigrams(a)
+        bg_b = bigrams(b)
+        if not bg_a or not bg_b:
+            return 0.0
+        inter = len(bg_a & bg_b)
+        union = len(bg_a | bg_b)
+        return inter / union if union else 0.0
 
     @staticmethod
     def _strip_conversation_history_xml(text: str) -> str:
