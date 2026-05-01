@@ -129,7 +129,7 @@ async function navTo(page) {
     selectPersona(personas[0].name);
   }
 
-  if (page === 'dashboard') { renderPersonaCards(); loadProviders(); loadTelemetry(); loadTokenStats(); }
+  if (page === 'dashboard') { renderPersonaCards(); loadProviders(); _lastTelemetryData = null; _lastTokenData = null; loadTelemetry(); loadTokenStats(); }
   if (page === 'global-settings') loadGlobalSettings();
   if (page === 'persona') loadPersonaPreview();
   if (page === 'create-persona') { renderInterviewQuestions(); loadAvailableModels(); }
@@ -437,7 +437,54 @@ async function loadTokenStats() {
     if (personasEl) {
       if (!personaList.length) {
         personasEl.innerHTML = '<div style="color:var(--text-2);padding:12px">暂无 Token 消耗记录</div>';
+      } else if (typeof echarts !== 'undefined') {
+        const pieData = personaList.map((p) => ({
+          value: p.total_tokens || 0,
+          name: p.persona_name || p.name || '未知',
+          calls: p.total_calls || 0,
+          prompt: p.total_prompt_tokens || 0,
+          completion: p.total_completion_tokens || 0,
+        }));
+        let chart = echarts.getInstanceByDom(personasEl);
+        if (chart) chart.dispose();
+        chart = echarts.init(personasEl, 'dark');
+        chart.setOption({
+          backgroundColor: 'transparent',
+          tooltip: {
+            trigger: 'item',
+            formatter: (p) => {
+              const d = p.data;
+              return `<b>${d.name}</b><br/>占比: <b>${p.percent}%</b><br/>Tokens: ${d.value.toLocaleString()}<br/>调用: ${d.calls} 次<br/>Prompt: ${d.prompt.toLocaleString()}<br/>Completion: ${d.completion.toLocaleString()}`;
+            },
+          },
+          legend: {
+            orient: 'vertical',
+            right: 10,
+            top: 'center',
+            textStyle: { fontSize: 12, color: '#c9d1d9' },
+            itemWidth: 12,
+            itemHeight: 12,
+          },
+          series: [{
+            type: 'pie',
+            radius: ['35%', '65%'],
+            center: ['35%', '50%'],
+            avoidLabelOverlap: true,
+            itemStyle: { borderRadius: 6, borderColor: '#0d1117', borderWidth: 2 },
+            label: { show: false },
+            emphasis: {
+              label: { show: true, fontSize: 13, fontWeight: 'bold', color: '#e8eaf0' },
+              itemStyle: { shadowBlur: 10, shadowOffsetX: 0, shadowColor: 'rgba(0,0,0,0.5)' },
+            },
+            data: pieData,
+          }],
+        });
+        const onResize = () => chart.resize();
+        window.removeEventListener('resize', personasEl._pieResize);
+        window.addEventListener('resize', onResize);
+        personasEl._pieResize = onResize;
       } else {
+        // Fallback to stat cards if ECharts not available
         personasEl.innerHTML = personaList.map((p) => `
           <div class="stat-card">
             <div class="label">${p.persona_name || '未知'}</div>
@@ -1270,12 +1317,75 @@ function ttRenderDimensionList(containerId, items) {
     el.innerHTML = '<div style="color:var(--text-2)">暂无数据</div>';
     return;
   }
-  el.innerHTML = items.slice(0, 8).map((it) => `
-    <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--border);font-size:13px">
-      <span style="color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:140px" title="${it.name}">${it.name}</span>
-      <span style="color:var(--text-2);font-family:ui-monospace,monospace">${it.total_tokens || 0}</span>
-    </div>
-  `).join('');
+  if (typeof echarts === 'undefined') {
+    // Fallback to text list if ECharts not loaded
+    el.innerHTML = items.slice(0, 8).map((it) => `
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--border);font-size:13px">
+        <span style="color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:140px" title="${it.name}">${it.name}</span>
+        <span style="color:var(--text-2);font-family:ui-monospace,monospace">${it.total_tokens || 0}</span>
+      </div>
+    `).join('');
+    return;
+  }
+
+  const sorted = [...items].sort((a, b) => (b.total_tokens || 0) - (a.total_tokens || 0)).slice(0, 10);
+  const data = sorted.map((it) => ({
+    value: it.total_tokens || 0,
+    name: it.name || '未知',
+    calls: it.calls || 0,
+    prompt: it.prompt_tokens || 0,
+    completion: it.completion_tokens || 0,
+  }));
+
+  let chart = echarts.getInstanceByDom(el);
+  if (chart) chart.dispose();
+  chart = echarts.init(el, 'dark');
+
+  chart.setOption({
+    backgroundColor: 'transparent',
+    tooltip: {
+      trigger: 'axis',
+      axisPointer: { type: 'shadow' },
+      formatter: (params) => {
+        const p = params[0];
+        const d = p.data;
+        return `<b>${d.name}</b><br/>总 Tokens: <b>${d.value.toLocaleString()}</b><br/>调用: ${d.calls} 次<br/>Prompt: ${d.prompt.toLocaleString()}<br/>Completion: ${d.completion.toLocaleString()}`;
+      },
+    },
+    grid: { top: 8, bottom: 8, left: 8, right: 48, containLabel: true },
+    xAxis: { type: 'value', axisLabel: { fontSize: 11, color: '#8b949e' }, splitLine: { lineStyle: { color: '#30363d' } } },
+    yAxis: {
+      type: 'category',
+      data: data.map((d) => d.name).reverse(),
+      axisLabel: { fontSize: 11, color: '#c9d1d9' },
+      axisLine: { show: false },
+      axisTick: { show: false },
+    },
+    series: [{
+      type: 'bar',
+      data: data.reverse(),
+      barWidth: 14,
+      itemStyle: {
+        borderRadius: [0, 4, 4, 0],
+        color: new echarts.graphic.LinearGradient(0, 0, 1, 0, [
+          { offset: 0, color: '#58a6ff' },
+          { offset: 1, color: '#a371f7' },
+        ]),
+      },
+      label: {
+        show: true,
+        position: 'right',
+        fontSize: 11,
+        color: '#c9d1d9',
+        formatter: (p) => p.value.toLocaleString(),
+      },
+    }],
+  });
+
+  const onResize = () => chart.resize();
+  window.removeEventListener('resize', el._barResize);
+  window.addEventListener('resize', onResize);
+  el._barResize = onResize;
 }
 
 function renderTaskHierarchy(containerId, items) {
@@ -1283,6 +1393,10 @@ function renderTaskHierarchy(containerId, items) {
   if (!el) return;
   if (!items.length) {
     el.innerHTML = '<div style="color:var(--text-2)">暂无数据</div>';
+    return;
+  }
+  if (typeof echarts === 'undefined') {
+    el.innerHTML = '<div style="color:var(--text-2)">图表库未加载</div>';
     return;
   }
 
@@ -1295,53 +1409,56 @@ function renderTaskHierarchy(containerId, items) {
     persona_generate: '人格生成',
   };
 
-  const grandTotal = items.reduce((s, it) => s + (it.total_tokens || 0), 0);
-  const main = items.find((it) => it.name === 'response_generate');
-  const children = items.filter((it) => it.name !== 'response_generate');
+  const colors = ['#58a6ff', '#3fb950', '#d29922', '#f85149', '#a371f7', '#e3b341'];
+  const data = items.map((it, i) => ({
+    value: it.total_tokens || 0,
+    name: labels[it.name] || it.name,
+    calls: it.calls || 0,
+    prompt: it.prompt_tokens || 0,
+    completion: it.completion_tokens || 0,
+    itemStyle: { color: colors[i % colors.length] },
+  }));
 
-  const pct = (val) => {
-    if (!grandTotal) return '0%';
-    return Math.round((val / grandTotal) * 100) + '%';
-  };
+  let chart = echarts.getInstanceByDom(el);
+  if (chart) chart.dispose();
+  chart = echarts.init(el, 'dark');
 
-  const fmt = (n) => (n || 0).toLocaleString();
+  chart.setOption({
+    backgroundColor: 'transparent',
+    tooltip: {
+      trigger: 'item',
+      formatter: (p) => {
+        const d = p.data;
+        return `<b>${d.name}</b><br/>占比: <b>${p.percent}%</b><br/>Tokens: ${d.value.toLocaleString()}<br/>调用: ${d.calls} 次<br/>Prompt: ${d.prompt.toLocaleString()}<br/>Completion: ${d.completion.toLocaleString()}`;
+      },
+    },
+    legend: {
+      orient: 'vertical',
+      right: 10,
+      top: 'center',
+      textStyle: { fontSize: 12, color: '#c9d1d9' },
+      itemWidth: 12,
+      itemHeight: 12,
+    },
+    series: [{
+      type: 'pie',
+      radius: ['40%', '70%'],
+      center: ['40%', '50%'],
+      avoidLabelOverlap: true,
+      itemStyle: { borderRadius: 6, borderColor: '#0d1117', borderWidth: 2 },
+      label: { show: false },
+      emphasis: {
+        label: { show: true, fontSize: 14, fontWeight: 'bold', color: '#e8eaf0' },
+        itemStyle: { shadowBlur: 10, shadowOffsetX: 0, shadowColor: 'rgba(0,0,0,0.5)' },
+      },
+      data,
+    }],
+  });
 
-  const buildStats = (it) => `
-    <div class="th-stat-row">
-      <span class="th-stat">调用: <b>${fmt(it.calls)}</b></span>
-      <span class="th-stat">Prompt: <b>${fmt(it.prompt_tokens)}</b></span>
-      <span class="th-stat">Completion: <b>${fmt(it.completion_tokens)}</b></span>
-      <span class="th-stat">Total: <b>${fmt(it.total_tokens)}</b><span class="th-pct">(${pct(it.total_tokens)})</span></span>
-    </div>
-  `;
-
-  let html = '<div class="task-hierarchy">';
-
-  if (main) {
-    html += `
-      <div class="th-parent">
-        <div class="th-parent-header"><span class="th-icon">📊</span> ${labels[main.name] || main.name}</div>
-        <div class="th-parent-body">${buildStats(main)}</div>
-      </div>
-    `;
-  }
-
-  if (children.length) {
-    html += '<div class="th-group-title">🔍 辅助任务</div>';
-    html += '<div class="th-children">';
-    children.forEach((it) => {
-      html += `
-        <div class="th-child">
-          <div class="th-child-header">${labels[it.name] || it.name}</div>
-          <div class="th-child-body">${buildStats(it)}</div>
-        </div>
-      `;
-    });
-    html += '</div>';
-  }
-
-  html += '</div>';
-  el.innerHTML = html;
+  const onResize = () => chart.resize();
+  window.removeEventListener('resize', el._donutResize);
+  window.addEventListener('resize', onResize);
+  el._donutResize = onResize;
 }
 
 function ttRenderRecentTable() {
