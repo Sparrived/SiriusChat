@@ -134,11 +134,6 @@ class EmotionalGroupChatEngine:
             "response_generate": chat_model,
             "proactive_generate": chat_model,
             "empathy_generate": chat_model,
-            # 人格/后台类
-            "persona_generate": analysis_model,
-            "silent_thought": analysis_model,
-            "polish": analysis_model,
-            "reflection": analysis_model,
             # 多模态覆盖
             "vision": vision_model,
         }
@@ -449,7 +444,7 @@ class EmotionalGroupChatEngine:
         return first_who == "other"
 
     def _log_inner_thought(
-        self, thought: str, emotion: EmotionState | None = None, intensity: float = 0.5
+        self, thought: str, intensity: float = 0.5
     ) -> None:
         """Log a persona-style inner monologue at INFO level."""
         prefix = f"[{self.persona.name}]" if self.persona else "[内心]"

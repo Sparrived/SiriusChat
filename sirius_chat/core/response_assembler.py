@@ -186,12 +186,6 @@ class ResponseAssembler:
         self.other_ai_names = list(other_ai_names or [])
 
     @staticmethod
-    def _build_cross_group_context(cross_group_text: str) -> str:
-        if not cross_group_text:
-            return ""
-        return f"[跨群认知]\n{cross_group_text}"
-
-    @staticmethod
     def _build_relationship_context(
         user_profile: UserSemanticProfile | None,
         caller_is_developer: bool = False,
@@ -383,7 +377,7 @@ class ResponseAssembler:
 
         # 6b. Cross-group user awareness (if available)
         if cross_group_context:
-            sections.append(self._build_cross_group_context(cross_group_context))
+            sections.append(f"[跨群认知]\n{cross_group_context}")
 
         # 7. Available skills
         if self.skill_registry is not None:

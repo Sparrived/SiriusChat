@@ -462,66 +462,6 @@ class CognitionAnalyzer:
                 confidence=min(1.0, existing.confidence + 0.05),
             )
 
-    def detect_emotion_islands(
-        self,
-        group_id: str,
-        recent_emotions: dict[str, EmotionState],
-    ) -> list[dict[str, Any]]:
-        """Detect users whose emotion deviates significantly from group mean."""
-        if not recent_emotions or len(recent_emotions) < 2:
-            return []
-
-        group = self.group_cache.get(group_id)
-        if group is None:
-            valences = [e.valence for e in recent_emotions.values()]
-            arousals = [e.arousal for e in recent_emotions.values()]
-            group = EmotionState(
-                valence=sum(valences) / len(valences),
-                arousal=sum(arousals) / len(arousals),
-                intensity=0.5,
-                confidence=0.5,
-            )
-
-        valences = [e.valence for e in recent_emotions.values()]
-        mean_v = sum(valences) / len(valences)
-        std_v = (
-            math.sqrt(sum((v - mean_v) ** 2 for v in valences) / len(valences))
-            if len(valences) > 1
-            else 0.0
-        )
-
-        arousals = [e.arousal for e in recent_emotions.values()]
-        mean_a = sum(arousals) / len(arousals)
-        std_a = (
-            math.sqrt(sum((a - mean_a) ** 2 for a in arousals) / len(arousals))
-            if len(arousals) > 1
-            else 0.0
-        )
-
-        islands = []
-        for uid, emotion in recent_emotions.items():
-            dev_v = abs(emotion.valence - group.valence)
-            dev_a = abs(emotion.arousal - group.arousal)
-            z_v = dev_v / std_v if std_v > 0.01 else dev_v * 2
-            z_a = dev_a / std_a if std_a > 0.01 else dev_a * 2
-            if z_v > 1.5 or z_a > 1.5:
-                islands.append(
-                    {
-                        "user_id": uid,
-                        "deviation_score": round(max(z_v, z_a), 2),
-                        "user_emotion": {
-                            "valence": round(emotion.valence, 2),
-                            "arousal": round(emotion.arousal, 2),
-                        },
-                        "group_emotion": {
-                            "valence": round(group.valence, 2),
-                            "arousal": round(group.arousal, 2),
-                        },
-                        "description": "情感孤岛" if z_v > 1.5 else "唤醒度异常",
-                    }
-                )
-        return islands
-
     # ------------------------------------------------------------------
     # LLM fallback
     # ------------------------------------------------------------------

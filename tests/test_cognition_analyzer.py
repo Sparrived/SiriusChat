@@ -73,29 +73,6 @@ class TestCognitionAnalyzerContext:
         assert "g1" in ca.group_cache
         assert ca.group_cache["g1"].valence > 0
 
-    @pytest.mark.asyncio
-    async def test_emotion_islands_detect_outlier(self):
-        ca = CognitionAnalyzer()
-        ca.update_group_sentiment("g1", EmotionState(valence=0.2, arousal=0.3))
-        recent = {
-            "alice": EmotionState(valence=0.2, arousal=0.3),
-            "bob": EmotionState(valence=0.15, arousal=0.25),
-            "charlie": EmotionState(valence=-0.9, arousal=0.8),
-        }
-        islands = ca.detect_emotion_islands("g1", recent)
-        assert len(islands) == 1
-        assert islands[0]["user_id"] == "charlie"
-
-    @pytest.mark.asyncio
-    async def test_emotion_islands_no_outliers(self):
-        ca = CognitionAnalyzer()
-        recent = {
-            "alice": EmotionState(valence=0.1, arousal=0.2),
-            "bob": EmotionState(valence=0.15, arousal=0.25),
-        }
-        islands = ca.detect_emotion_islands("g1", recent)
-        assert islands == []
-
 
 class TestCognitionAnalyzerUrgency:
     @pytest.mark.asyncio
