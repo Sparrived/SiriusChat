@@ -17,6 +17,23 @@
   --sidebar-w: 260px;
   --header-h: 56px;
 }
+
+html[data-theme="light"] {
+  --bg: #f5f6f8;
+  --surface: #ffffff;
+  --surface-2: #f0f1f4;
+  --surface-3: #e4e6eb;
+  --card: #ffffff;
+  --text: #1a1d26;
+  --text-2: #6b7280;
+  --accent: #2563eb;
+  --accent-2: #16a34a;
+  --success: #16a34a;
+  --danger: #dc2626;
+  --warn: #ca8a04;
+  --border: #d1d5db;
+  --shadow: 0 4px 20px rgba(0,0,0,0.1);
+}
 * { box-sizing: border-box; }
 html, body { height: 100%; margin: 0; }
 body {
