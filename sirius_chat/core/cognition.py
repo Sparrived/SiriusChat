@@ -1051,8 +1051,8 @@ class CognitionAnalyzer:
                 if ai_txt and ai_txt in text:
                     ref = 0.8
                     break
-            # Standard quote markers
-            if ref == 0.0 and re.search(r"^[>\s]*.{3,30}$", text, re.MULTILINE):
+            # Standard quote markers (require leading > to avoid matching normal short messages)
+            if ref == 0.0 and re.search(r"^>[>\s]*.{3,200}$", text, re.MULTILINE):
                 ref = 0.4
         scores["reference_score"] = ref
 

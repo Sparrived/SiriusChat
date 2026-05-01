@@ -2437,9 +2437,58 @@ class EmotionalGroupChatEngine:
                 except Exception:
                     pass
 
+    @staticmethod
+    def _normalize_topic(topic: str) -> str:
+        """Simple topic normalization for deduplication."""
+        t = topic.lower().replace(" ", "").replace("　", "").replace("·", "").replace("•", "")
+        for suffix in ("游戏", "手游", "网游", "端游", "单机", "系列", " franchise"):
+            if t.endswith(suffix) and len(t) > len(suffix):
+                t = t[: -len(suffix)]
+        return t
+
+    def _merge_interest_graph(
+        self,
+        existing: list[Any],
+        fresh: list[dict[str, Any]],
+        decay: float = 0.85,
+        cutoff: float = 0.1,
+        max_items: int = 5,
+    ) -> list[dict[str, Any]]:
+        """Merge fresh interests with decayed existing ones, deduplicating by normalized topic.
+
+        Strategy:
+        1. Decay existing participation by `decay`; drop below `cutoff`.
+        2. Fresh interests take priority (overwrite existing on same normalized topic).
+        3. Sort by participation descending, keep top `max_items`.
+        """
+        merged: dict[str, dict[str, Any]] = {}
+
+        # 1. Decay existing
+        for node in existing:
+            topic = getattr(node, "topic", "")
+            part = getattr(node, "participation", 0.0) * decay
+            if topic and part >= cutoff:
+                key = self._normalize_topic(topic)
+                merged[key] = {"topic": topic, "participation": round(min(1.0, part), 2)}
+
+        # 2. Overlay fresh (higher priority)
+        for item in fresh:
+            topic = str(item.get("topic", "")).strip()
+            conf = float(item.get("confidence", 0.0))
+            if topic:
+                key = self._normalize_topic(topic)
+                merged[key] = {"topic": topic, "participation": round(min(1.0, max(0.0, conf)), 2)}
+
+        # 3. Sort and truncate
+        sorted_items = sorted(merged.values(), key=lambda x: x["participation"], reverse=True)
+        return sorted_items[:max_items]
+
     async def _analyze_user_profile_async(self, user_id: str, group_id: str) -> None:
         """Use a lightweight LLM to infer communication_style and interest_graph
-        from the user's recent messages. Fire-and-forget from background_update."""
+        from the user's recent messages. Fire-and-forget from background_update.
+
+        Interests are merged with existing graph (decay + dedup) rather than overwritten.
+        """
         batch = self.semantic_memory.get_user_content_batch(user_id, max_n=10)
         if not batch:
             return
@@ -2455,6 +2504,20 @@ class EmotionalGroupChatEngine:
         if not unique:
             return
 
+        # Load existing interests to feed into prompt and later merge
+        profile = self.semantic_memory.get_user_profile(group_id, user_id)
+        existing_interests = getattr(profile, "interest_graph", None) or []
+        existing_str = ""
+        if existing_interests:
+            items = ", ".join(
+                f"{getattr(n, 'topic', '')}({getattr(n, 'participation', 0.0):.2f})"
+                for n in existing_interests[:5]
+            )
+            existing_str = (
+                f"\n\n该用户已有的兴趣标签（供参考，如话题仍在继续请保留并适当提升confidence，"
+                f"不要重复创建相似话题）：{items}\n"
+            )
+
         user_messages = "\n".join(f"{i+1}. {t}" for i, t in enumerate(unique))
         system_prompt = (
             "你是一名用户行为分析师。根据用户的最近发言，"
@@ -2466,6 +2529,7 @@ class EmotionalGroupChatEngine:
             '{"communication_style": "concise|detailed|formal|casual|humorous|emotional|questioning|neutral", '
             '"style_reason": "简短说明", '
             '"interests": [{"topic": "话题名", "confidence": 0.0~1.0}, ...最多5个]}'
+            f"{existing_str}"
         )
 
         try:
@@ -2476,7 +2540,6 @@ class EmotionalGroupChatEngine:
                 task_name="cognition_analyze",
                 urgency=0,
             )
-            import json
             # Extract JSON from possible markdown code block
             text = raw.strip()
             if "```json" in text:
@@ -2487,13 +2550,16 @@ class EmotionalGroupChatEngine:
             result = json.loads(text)
             style = str(result.get("communication_style", "")).strip()
             interests_raw = result.get("interests", [])
-            interest_graph: list[dict[str, Any]] = []
+            fresh_interests: list[dict[str, Any]] = []
             for item in interests_raw:
                 if isinstance(item, dict):
                     topic = str(item.get("topic", "")).strip()
                     conf = float(item.get("confidence", 0.0))
                     if topic:
-                        interest_graph.append({"topic": topic, "participation": round(min(1.0, max(0.0, conf)), 2)})
+                        fresh_interests.append({"topic": topic, "confidence": conf})
+
+            # Merge with decayed existing graph instead of overwriting
+            interest_graph = self._merge_interest_graph(existing_interests, fresh_interests)
 
             self.semantic_memory.set_user_profile_fields(
                 group_id,

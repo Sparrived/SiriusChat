@@ -249,6 +249,16 @@ class NapCatBridge:
         speaker_name = card or nickname or f"qq_{user_id}"
         uid = f"qq_{user_id}"
 
+        msg_preview = prompt[:200].replace("\n", " ") if prompt else ""
+        LOG.info(
+            "[收到消息] %s | sender=%s(%s) uid=%s | content=%s",
+            f"group={group_id}" if event.get("message_type") == "group" else f"private={user_id}",
+            nickname or "",
+            card or "",
+            user_id,
+            msg_preview,
+        )
+
         peer_ai_ids = self.plugin_config.get("peer_ai_ids", [])
         is_peer_ai = str(user_id) in [str(v) for v in peer_ai_ids]
 
@@ -454,7 +464,10 @@ class NapCatBridge:
                             info = await self.adapter.get_group_member_info(group_id, target_uid)
                             card = str(info.get("card", "") or "").strip()
                             nickname = str(info.get("nickname", "") or "").strip()
-                            display = card or nickname or display
+                            if nickname and card and nickname != card:
+                                display = f"{nickname}(群昵称为{card})"
+                            else:
+                                display = nickname or card or display
                         except Exception:
                             pass
                     mention_cache[target_uid] = display

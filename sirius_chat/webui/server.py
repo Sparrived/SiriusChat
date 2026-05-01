@@ -1173,6 +1173,8 @@ class WebUIServer:
 
             if group_id:
                 # Group-scoped query: only group-local users (no global fallback)
+                user_dir = store._users_dir / store._safe_name(group_id)
+                LOG.info("[用户画像查询] group_id=%s user_dir=%s exists=%s", group_id, user_dir, user_dir.exists())
                 for profile in store.list_group_user_profiles(group_id):
                     if profile.user_id and profile.user_id not in seen_user_ids:
                         seen_user_ids.add(profile.user_id)
