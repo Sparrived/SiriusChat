@@ -759,12 +759,20 @@ class EmotionalGroupChatEngine:
                     t0 = time.perf_counter()
                     raw = await self.provider_async.generate_async(request)
                     consolidate_duration_ms = round((time.perf_counter() - t0) * 1000, 2)
+
+                    from sirius_chat.token.utils import PromptTokenBreakdown, estimate_tokens
+                    sub_bd = PromptTokenBreakdown()
+                    sub_bd.output_format = estimate_tokens(system_prompt)
+                    sub_bd.user_message = estimate_tokens(user_content)
+                    sub_bd.total = sub_bd.output_format + sub_bd.user_message
+
                     self._record_subtask_tokens(
                         task_name="diary_consolidate",
                         model_name=cfg.model_name,
                         group_id=group_id,
                         request=request,
                         duration_ms=consolidate_duration_ms,
+                        token_breakdown=sub_bd.to_dict(),
                     )
                     entry = consolidator.parse_merge_result(raw, cluster)
                     if entry:
@@ -984,10 +992,18 @@ class EmotionalGroupChatEngine:
         messages = [{"role": "user", "content": "（你决定主动开口）"}]
         style = self.style_adapter.adapt(heat_level="warm", pace="steady", is_group_chat=False)
 
+        from sirius_chat.token.utils import PromptTokenBreakdown, estimate_tokens
+        sub_bd = PromptTokenBreakdown()
+        if identity:
+            sub_bd.persona = estimate_tokens(identity)
+        sub_bd.memory = estimate_tokens(system_prompt) - sub_bd.persona
+        sub_bd.total = estimate_tokens(system_prompt)
+
         user_comm_style = getattr(user_profile, "communication_style", "") if user_profile else ""
         raw_reply = await self._generate(
             system_prompt, messages, group_id, style,
             user_communication_style=user_comm_style,
+            token_breakdown=sub_bd.to_dict(),
         )
         reply = raw_reply.strip()
 
@@ -1194,10 +1210,19 @@ class EmotionalGroupChatEngine:
             messages = [{"role": "user", "content": "（提醒时间到了）"}]
             user_profile = self.semantic_memory.get_global_user_profile(user_id)
             user_comm_style = getattr(user_profile, "communication_style", "") if user_profile else ""
+
+            from sirius_chat.token.utils import PromptTokenBreakdown, estimate_tokens
+            sub_bd = PromptTokenBreakdown()
+            if identity:
+                sub_bd.persona = estimate_tokens(identity)
+            sub_bd.memory = estimate_tokens(system_prompt) - sub_bd.persona
+            sub_bd.total = estimate_tokens(system_prompt)
+
             raw_reply = await self._generate(
                 system_prompt, messages, group_id,
                 task_name="proactive_generate",
                 user_communication_style=user_comm_style,
+                token_breakdown=sub_bd.to_dict(),
             )
             reply = strip_skill_calls(raw_reply).strip()
             if reply:
@@ -2605,6 +2630,7 @@ class EmotionalGroupChatEngine:
         group_id: str,
         request: Any | None = None,
         duration_ms: float = 0.0,
+        token_breakdown: dict[str, int] | None = None,
     ) -> None:
         """Record token usage for a sub-task (cognition, diary, etc.)."""
         from sirius_chat.config import TokenUsageRecord
@@ -2631,7 +2657,10 @@ class EmotionalGroupChatEngine:
 
         # Build breakdown JSON from request if available
         breakdown_json = ""
-        if request is not None:
+        if token_breakdown:
+            bd = PromptTokenBreakdown(**token_breakdown)
+            breakdown_json = bd.to_json()
+        elif request is not None:
             system_prompt = getattr(request, "system_prompt", "") or ""
             messages = getattr(request, "messages", []) or []
             bd = PromptTokenBreakdown()
