@@ -19,12 +19,17 @@
 
   <!-- Filter -->
   <div class="card">
-    <h2 style="display:flex;justify-content:space-between;align-items:center">
-      日记列表
-      <select id="diaryGroupFilter" onchange="diaryLoadData()" style="background:var(--bg-2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:4px 8px;font-size:13px">
+    <h2 style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:nowrap">
+      <span style="white-space:nowrap">日记列表</span>
+      <select id="diaryGroupFilter" onchange="diaryLoadData()" style="flex-shrink:0;width:140px;background:var(--bg-2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:4px 8px;font-size:13px;appearance:none;-webkit-appearance:none;cursor:pointer">
         <option value="">全部群聊</option>
       </select>
     </h2>
+    <div id="diaryKeywordFilterBar" style="display:none;align-items:center;gap:8px;margin-bottom:12px">
+      <span style="font-size:12px;color:var(--text-2)">关键词筛选:</span>
+      <span id="diaryActiveKeyword" style="background:var(--accent);color:#fff;border-radius:12px;padding:3px 10px;font-size:12px"></span>
+      <button class="btn small" onclick="diaryClearKeyword()" style="font-size:11px">清除</button>
+    </div>
     <div id="diaryList" style="display:flex;flex-direction:column;gap:12px">
       <div style="color:var(--text-2);padding:12px">加载中...</div>
     </div>

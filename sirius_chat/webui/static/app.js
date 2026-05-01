@@ -1782,6 +1782,57 @@ async function loadCognition() {
   }
 }
 
+let _diaryKeywordFilter = '';
+
+function diarySetKeyword(kw) {
+  _diaryKeywordFilter = kw;
+  diaryRenderKeywordBar();
+  diaryRenderEntries(_diaryEntriesCache);
+}
+
+function diaryClearKeyword() {
+  _diaryKeywordFilter = '';
+  diaryRenderKeywordBar();
+  diaryRenderEntries(_diaryEntriesCache);
+}
+
+function diaryRenderKeywordBar() {
+  const bar = $('diaryKeywordFilterBar');
+  const active = $('diaryActiveKeyword');
+  if (bar) bar.style.display = _diaryKeywordFilter ? 'flex' : 'none';
+  if (active) active.textContent = _diaryKeywordFilter;
+}
+
+function diaryRenderEntries(entries) {
+  const listEl = $('diaryList');
+  if (!listEl) return;
+  let filtered = entries || [];
+  if (_diaryKeywordFilter) {
+    filtered = filtered.filter((e) => (e.keywords || []).includes(_diaryKeywordFilter));
+  }
+  if (!filtered.length) {
+    listEl.innerHTML = '<div style="color:var(--text-2);padding:12px">暂无日记</div>';
+    return;
+  }
+  listEl.innerHTML = filtered.map((e) => {
+    const ts = e.created_at ? new Date(e.created_at).toLocaleString('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—';
+    const kws = (e.keywords || []).slice(0, 8).map((k) => `<span style="background:var(--bg-2);border:1px solid var(--border);border-radius:8px;padding:2px 8px;font-size:11px;color:var(--text-2)">${k}</span>`).join('');
+    return `
+      <div style="background:var(--bg-2);border:1px solid var(--border);border-radius:8px;padding:12px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+          <span style="font-size:12px;color:var(--text-2)">${ts}</span>
+          <span style="font-size:11px;color:var(--text-2);background:var(--bg);padding:2px 8px;border-radius:4px">${e.group_id || '—'}</span>
+        </div>
+        <div style="font-size:14px;font-weight:600;margin-bottom:6px;color:var(--text)">${e.summary || '无摘要'}</div>
+        <div style="font-size:13px;color:var(--text);line-height:1.6;margin-bottom:8px;white-space:pre-wrap">${e.content || ''}</div>
+        <div style="display:flex;flex-wrap:wrap;gap:4px">${kws}</div>
+      </div>
+    `;
+  }).join('');
+}
+
+let _diaryEntriesCache = [];
+
 async function diaryLoadData() {
   renderPersonaSelect();
   if (!currentPersona && personas.length > 0) {
@@ -1808,9 +1859,13 @@ async function diaryLoadData() {
       if (!topKws.length) {
         kwContainer.innerHTML = '<span style="color:var(--text-2)">暂无关键词</span>';
       } else {
-        kwContainer.innerHTML = topKws.map(([kw, cnt]) => `
-          <span style="background:var(--bg-2);border:1px solid var(--border);border-radius:12px;padding:3px 10px;font-size:12px;color:var(--text)">${kw} <span style="color:var(--text-2)">${cnt}</span></span>
-        `).join('');
+        kwContainer.innerHTML = topKws.map(([kw, cnt]) => {
+          const active = kw === _diaryKeywordFilter;
+          return `
+            <span onclick="diarySetKeyword('${kw.replace(/'/g, "\\'")}')" style="cursor:pointer;background:${active ? 'var(--accent)' : 'var(--bg-2)'};border:1px solid var(--border);border-radius:12px;padding:3px 10px;font-size:12px;color:${active ? '#fff' : 'var(--text)'};transition:.15s"
+              onmouseenter="this.style.opacity='0.85'" onmouseleave="this.style.opacity='1'">${kw} <span style="opacity:0.7">${cnt}</span></span>
+          `;
+        }).join('');
       }
     }
 
@@ -1824,29 +1879,9 @@ async function diaryLoadData() {
     }
 
     // Entries
-    const listEl = $('diaryList');
-    const entries = res.entries || [];
-    if (listEl) {
-      if (!entries.length) {
-        listEl.innerHTML = '<div style="color:var(--text-2);padding:12px">暂无日记</div>';
-      } else {
-        listEl.innerHTML = entries.map((e) => {
-          const ts = e.created_at ? new Date(e.created_at).toLocaleString('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—';
-          const kws = (e.keywords || []).slice(0, 8).map((k) => `<span style="background:var(--bg-2);border:1px solid var(--border);border-radius:8px;padding:2px 8px;font-size:11px;color:var(--text-2)">${k}</span>`).join('');
-          return `
-            <div style="background:var(--bg-2);border:1px solid var(--border);border-radius:8px;padding:12px">
-              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-                <span style="font-size:12px;color:var(--text-2)">${ts}</span>
-                <span style="font-size:11px;color:var(--text-2);background:var(--bg);padding:2px 8px;border-radius:4px">${e.group_id || '—'}</span>
-              </div>
-              <div style="font-size:14px;font-weight:600;margin-bottom:6px;color:var(--text)">${e.summary || '无摘要'}</div>
-              <div style="font-size:13px;color:var(--text);line-height:1.6;margin-bottom:8px;white-space:pre-wrap">${e.content || ''}</div>
-              <div style="display:flex;flex-wrap:wrap;gap:4px">${kws}</div>
-            </div>
-          `;
-        }).join('');
-      }
-    }
+    _diaryEntriesCache = res.entries || [];
+    diaryRenderKeywordBar();
+    diaryRenderEntries(_diaryEntriesCache);
   } catch (e) {
     console.error('diaryLoadData', e);
     const listEl = $('diaryList');
