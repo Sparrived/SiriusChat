@@ -321,15 +321,13 @@ function renderPersonaCards(animate = true) {
 
 function renderSectionBars(container, breakdown) {
   if (!container) return;
-  const entries = Object.entries(breakdown)
-    .filter(([k]) => !['total', 'system_prompt_total', 'user_message'].includes(k))
-    .sort((a, b) => b[1] - a[1]);
-  if (!entries.length) {
+  const rawEntries = Object.entries(breakdown)
+    .filter(([k]) => !['total', 'system_prompt_total', 'user_message'].includes(k));
+  if (!rawEntries.length) {
     container.innerHTML = '<div style="color:var(--text-2);padding:12px">暂无模块分布数据</div>';
     return;
   }
-  const max = Math.max(...entries.map((e) => e[1]));
-  const total = entries.reduce((s, e) => s + e[1], 0);
+
   const labels = {
     persona: '人格设定', identity: '身份识别', output_constraint: '输出约束',
     emotion: '情感上下文', empathy: '共情策略', relationship: '关系上下文',
@@ -338,25 +336,65 @@ function renderSectionBars(container, breakdown) {
     glossary: '名词解释', output_format: '输出格式', diary: '日记记忆',
     history_xml: '对话历史', cross_group_xml: '跨群历史',
   };
-  const colors = [
-    '#58a6ff', '#3fb950', '#d29922', '#f85149', '#a371f7',
-    '#56d4dd', '#ff9bce', '#79c0ff', '#ffa657', '#7ee787',
+
+  const groups = [
+    { name: '人格与身份', keys: ['persona', 'identity'] },
+    { name: '情感与关系', keys: ['emotion', 'empathy', 'relationship'] },
+    { name: '记忆与历史', keys: ['memory', 'diary', 'history_xml', 'cross_group_xml'] },
+    { name: '环境与风格', keys: ['group_style', 'participants', 'cross_group', 'interests'] },
+    { name: '功能与格式', keys: ['skills', 'glossary', 'output_format', 'output_constraint'] },
   ];
-  container.innerHTML = entries.map(([key, val], i) => {
-    const pct = total ? Math.round((val / total) * 100) : 0;
-    const w = max ? Math.round((val / max) * 100) : 0;
-    const color = colors[i % colors.length];
+
+  const groupColors = [
+    '#58a6ff', '#3fb950', '#d29922', '#f85149', '#a371f7',
+  ];
+
+  // Build group totals and collect children
+  const groupData = groups.map((g, i) => {
+    const children = [];
+    let sum = 0;
+    for (const key of g.keys) {
+      const val = breakdown[key] || 0;
+      if (val) {
+        children.push([key, val]);
+        sum += val;
+      }
+    }
+    children.sort((a, b) => b[1] - a[1]);
+    return { ...g, children, sum, color: groupColors[i % groupColors.length] };
+  }).filter((g) => g.sum > 0);
+
+  const grandTotal = groupData.reduce((s, g) => s + g.sum, 0);
+  const maxGroup = Math.max(...groupData.map((g) => g.sum));
+
+  const pct = (val) => grandTotal ? Math.round((val / grandTotal) * 100) : 0;
+
+  const buildBar = (key, val, color, isChild) => {
+    const w = maxGroup ? Math.round((val / maxGroup) * 100) : 0;
     return `
-      <div class="section-bar-row">
+      <div class="section-bar-row ${isChild ? 'section-bar-child' : 'section-bar-group'}">
         <div class="section-bar-label">${labels[key] || key}</div>
         <div class="section-bar-track">
           <div class="section-bar-fill" style="width:${w}%;background:linear-gradient(90deg, ${color}, ${color}88)"></div>
         </div>
         <div class="section-bar-value">${val.toLocaleString()}</div>
-        <div class="section-bar-pct">${pct}%</div>
+        <div class="section-bar-pct">${pct(val)}%</div>
       </div>
     `;
-  }).join('');
+  };
+
+  let html = '';
+  groupData.forEach((g) => {
+    // Group summary bar
+    html += buildBar(g.name, g.sum, g.color, false);
+    // Child bars (indented)
+    g.children.forEach(([key, val]) => {
+      html += buildBar(key, val, g.color, true);
+    });
+    html += '<div style="height:8px"></div>';
+  });
+
+  container.innerHTML = html;
 }
 
 async function loadTokenStats() {

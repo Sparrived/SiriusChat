@@ -432,3 +432,12 @@ input:focus, select:focus, textarea:focus {
 
 .task-hierarchy .th-divider { height:1px; background:var(--border); margin:10px 0; }
 .task-hierarchy .th-group-title { font-size:12px; font-weight:600; color:var(--text-2); text-transform:uppercase; letter-spacing:0.5px; margin-bottom:8px; padding-left:4px; }
+
+/* Section bar grouping */
+.section-bar-group { font-weight:600; }
+.section-bar-group .section-bar-label { color:var(--text); }
+.section-bar-child { padding-left:16px; }
+.section-bar-child .section-bar-label { color:var(--text-2); font-size:11px; }
+.section-bar-child .section-bar-track { height:14px; }
+.section-bar-child .section-bar-value { font-size:11px; }
+.section-bar-child .section-bar-pct { font-size:10px; }
