@@ -323,7 +323,7 @@ function renderSectionBars(container, breakdown) {
   if (!container) return;
   const rawEntries = Object.entries(breakdown)
     .filter(([k]) => !['total', 'system_prompt_total', 'user_message'].includes(k));
-  if (!rawEntries.length) {
+  if (!rawEntries.length || typeof echarts === 'undefined') {
     container.innerHTML = '<div style="color:var(--text-2);padding:12px">暂无模块分布数据</div>';
     return;
   }
@@ -338,63 +338,80 @@ function renderSectionBars(container, breakdown) {
   };
 
   const groups = [
-    { name: '人格与身份', keys: ['persona', 'identity'] },
-    { name: '情感与关系', keys: ['emotion', 'empathy', 'relationship'] },
-    { name: '记忆与历史', keys: ['memory', 'diary', 'history_xml', 'cross_group_xml'] },
-    { name: '环境与风格', keys: ['group_style', 'participants', 'cross_group', 'interests'] },
-    { name: '功能与格式', keys: ['skills', 'glossary', 'output_format', 'output_constraint'] },
+    { name: '人格与身份', keys: ['persona', 'identity'], color: '#58a6ff' },
+    { name: '情感与关系', keys: ['emotion', 'empathy', 'relationship'], color: '#3fb950' },
+    { name: '记忆与历史', keys: ['memory', 'diary', 'history_xml', 'cross_group_xml'], color: '#d29922' },
+    { name: '环境与风格', keys: ['group_style', 'participants', 'cross_group', 'interests'], color: '#f85149' },
+    { name: '功能与格式', keys: ['skills', 'glossary', 'output_format', 'output_constraint'], color: '#a371f7' },
   ];
 
-  const groupColors = [
-    '#58a6ff', '#3fb950', '#d29922', '#f85149', '#a371f7',
-  ];
+  const nodes = [{ name: '总输入', itemStyle: { color: '#e8eaf0' } }];
+  const links = [];
 
-  // Build group totals and collect children
-  const groupData = groups.map((g, i) => {
-    const children = [];
-    let sum = 0;
-    for (const key of g.keys) {
+  groups.forEach((g) => {
+    let groupSum = 0;
+    g.keys.forEach((key) => {
       const val = breakdown[key] || 0;
       if (val) {
-        children.push([key, val]);
-        sum += val;
+        const label = labels[key] || key;
+        nodes.push({ name: label, itemStyle: { color: g.color } });
+        links.push({ source: g.name, target: label, value: val });
+        groupSum += val;
       }
-    }
-    children.sort((a, b) => b[1] - a[1]);
-    return { ...g, children, sum, color: groupColors[i % groupColors.length] };
-  }).filter((g) => g.sum > 0);
-
-  const grandTotal = groupData.reduce((s, g) => s + g.sum, 0);
-  const maxGroup = Math.max(...groupData.map((g) => g.sum));
-
-  const pct = (val) => grandTotal ? Math.round((val / grandTotal) * 100) : 0;
-
-  const buildBar = (key, val, color, isChild) => {
-    const w = maxGroup ? Math.round((val / maxGroup) * 100) : 0;
-    return `
-      <div class="section-bar-row ${isChild ? 'section-bar-child' : 'section-bar-group'}">
-        <div class="section-bar-label">${labels[key] || key}</div>
-        <div class="section-bar-track">
-          <div class="section-bar-fill" style="width:${w}%;background:linear-gradient(90deg, ${color}, ${color}88)"></div>
-        </div>
-        <div class="section-bar-value">${val.toLocaleString()}</div>
-        <div class="section-bar-pct">${pct(val)}%</div>
-      </div>
-    `;
-  };
-
-  let html = '';
-  groupData.forEach((g) => {
-    // Group summary bar
-    html += buildBar(g.name, g.sum, g.color, false);
-    // Child bars (indented)
-    g.children.forEach(([key, val]) => {
-      html += buildBar(key, val, g.color, true);
     });
-    html += '<div style="height:8px"></div>';
+    if (groupSum) {
+      nodes.push({ name: g.name, itemStyle: { color: g.color } });
+      links.push({ source: '总输入', target: g.name, value: groupSum });
+    }
   });
 
-  container.innerHTML = html;
+  if (!links.length) {
+    container.innerHTML = '<div style="color:var(--text-2);padding:12px">暂无模块分布数据</div>';
+    return;
+  }
+
+  let chart = echarts.getInstanceByDom(container);
+  if (chart) {
+    chart.dispose();
+  }
+  chart = echarts.init(container, 'dark');
+
+  chart.setOption({
+    backgroundColor: 'transparent',
+    tooltip: {
+      trigger: 'item',
+      formatter: (params) => {
+        if (params.dataType === 'edge') {
+          return `${params.data.source} → ${params.data.target}<br/><b>${params.data.value.toLocaleString()} tokens</b>`;
+        }
+        return `<b>${params.name}</b>`;
+      },
+    },
+    series: [{
+      type: 'sankey',
+      layout: 'none',
+      emphasis: { focus: 'adjacency' },
+      data: nodes,
+      links: links,
+      top: 10, bottom: 10, left: 10, right: 10,
+      nodeWidth: 16,
+      nodeGap: 12,
+      layoutIterations: 32,
+      lineStyle: { color: 'gradient', curveness: 0.5, opacity: 0.4 },
+      label: {
+        color: '#e8eaf0',
+        fontSize: 11,
+        formatter: (p) => p.name,
+      },
+      itemStyle: { borderWidth: 0 },
+    }],
+  });
+
+  // Responsive resize
+  const onResize = () => chart.resize();
+  window.removeEventListener('resize', container._sankeyResize);
+  window.addEventListener('resize', onResize);
+  container._sankeyResize = onResize;
 }
 
 async function loadTokenStats() {
