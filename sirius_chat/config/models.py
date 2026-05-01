@@ -338,21 +338,12 @@ class MultiModelConfig:
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "work_path": str(self.work_path),
-            "data_path": str(self.data_path),
-            "layout_version": self.layout_version,
-            "bootstrap_signature": self.bootstrap_signature,
-            "active_agent_key": self.active_agent_key,
-            "session_defaults": {
-                "history_max_messages": self.session_defaults.history_max_messages,
-                "history_max_chars": self.session_defaults.history_max_chars,
-                "max_recent_participant_messages": self.session_defaults.max_recent_participant_messages,
-                "enable_auto_compression": self.session_defaults.enable_auto_compression,
-            },
-            "orchestration_defaults": dict(self.orchestration_defaults),
-            "provider_policy": {
-                "prefer_workspace_registry": self.provider_policy.prefer_workspace_registry,
-            },
+            "task_models": dict(self.task_models),
+            "task_temperatures": dict(self.task_temperatures or {}),
+            "task_max_tokens": dict(self.task_max_tokens or {}),
+            "task_retries": dict(self.task_retries or {}),
+            "max_multimodal_inputs_per_turn": self.max_multimodal_inputs_per_turn,
+            "max_multimodal_value_length": self.max_multimodal_value_length,
         }
 
     @classmethod
