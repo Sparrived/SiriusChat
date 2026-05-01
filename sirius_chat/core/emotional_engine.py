@@ -814,10 +814,8 @@ class EmotionalGroupChatEngine:
         for key, val in ca_breakdown.items():
             if key == "diary":
                 token_breakdown["memory"] = token_breakdown.get("memory", 0) + val
-            elif key == "history_xml":
-                token_breakdown["history"] = token_breakdown.get("history", 0) + val
-            elif key == "cross_group_xml":
-                token_breakdown["cross_group"] = token_breakdown.get("cross_group", 0) + val
+            else:
+                token_breakdown[key] = token_breakdown.get(key, 0) + val
 
         raw_reply = await self._generate(
             system_prompt, messages, group_id, style,
@@ -1309,10 +1307,8 @@ class EmotionalGroupChatEngine:
         for key, val in ca_breakdown.items():
             if key == "diary":
                 token_breakdown["memory"] = token_breakdown.get("memory", 0) + val
-            elif key == "history_xml":
-                token_breakdown["history"] = token_breakdown.get("history", 0) + val
-            elif key == "cross_group_xml":
-                token_breakdown["cross_group"] = token_breakdown.get("cross_group", 0) + val
+            else:
+                token_breakdown[key] = token_breakdown.get(key, 0) + val
 
         # Collect multimodal inputs from all triggered items and inject into user message
         all_multimodal: list[dict[str, str]] = []
