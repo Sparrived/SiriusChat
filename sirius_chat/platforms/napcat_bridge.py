@@ -284,6 +284,7 @@ class NapCatBridge:
             role="user",
             content=prompt,
             speaker=speaker_name,
+            nickname=nickname,
             channel=memory_channel,
             channel_user_id=user_id,
             group_id=group_id,

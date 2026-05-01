@@ -15,6 +15,7 @@ class Message(JsonSerializable):
     role: str
     content: str
     speaker: str | None = None
+    nickname: str | None = None
     channel: str | None = None
     channel_user_id: str | None = None
     group_id: str | None = None

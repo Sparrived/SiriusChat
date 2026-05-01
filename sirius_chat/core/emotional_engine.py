@@ -2185,6 +2185,31 @@ class EmotionalGroupChatEngine:
         # 内心活动：决策后的思考
         self._log_decision_thought(intent, decision)
 
+        # 结构化日志：记录关键决策参数到后台
+        logger.info(
+            "[决策参数] group=%s user=%s strategy=%s score=%.3f threshold=%.3f "
+            "directed_score=%.3f directed=%s urgency=%.1f entitlement=%.3f sarcasm=%.3f "
+            "heat_level=%s msg_rate=%.2f cooldown=%.1fs since_reply=%.1fs "
+            "expressiveness=%.2f sensitivity=%.2f reason=%s",
+            group_id,
+            user_id,
+            decision.strategy.value if hasattr(decision.strategy, "value") else str(decision.strategy),
+            decision.score,
+            decision.threshold,
+            intent.directed_score,
+            intent.directed_at_current_ai,
+            intent.urgency_score,
+            intent.entitlement_score,
+            intent.sarcasm_score,
+            rhythm.heat_level,
+            msg_rate,
+            cooldown,
+            seconds_since_reply,
+            self.expressiveness.expressiveness if self.expressiveness else 0.5,
+            self.config.get("sensitivity", 0.5),
+            getattr(decision, "reason", ""),
+        )
+
         # Update assistant emotion
         self.assistant_emotion.update_from_interaction(emotion, user_id)
 
@@ -2383,12 +2408,23 @@ class EmotionalGroupChatEngine:
         # Update assistant emotion based on interaction
         self.assistant_emotion.update_from_interaction(emotion, user_id)
 
-        # Save display name and accumulate content for LLM-based profile analysis
+        # Save display name (QQ name + group nickname) and accumulate content
         speaker_name = getattr(message, "speaker", "") or ""
-        if user_id and speaker_name:
-            self.semantic_memory.set_user_profile_fields(
-                group_id, user_id, name=speaker_name
-            )
+        nickname = getattr(message, "nickname", "") or ""
+        if user_id:
+            if nickname:
+                self.semantic_memory.set_global_user_name(user_id, nickname)
+                display_name = nickname
+                if speaker_name and speaker_name != nickname:
+                    display_name = f"{nickname}({speaker_name})"
+                self.semantic_memory.set_user_profile_fields(
+                    group_id, user_id, name=display_name
+                )
+            elif speaker_name:
+                self.semantic_memory.set_global_user_name(user_id, speaker_name)
+                self.semantic_memory.set_user_profile_fields(
+                    group_id, user_id, name=speaker_name
+                )
         content = getattr(message, "content", "")
         if isinstance(content, str) and content.strip() and user_id:
             self.semantic_memory.enqueue_user_content(user_id, content.strip())
@@ -2764,7 +2800,8 @@ class EmotionalGroupChatEngine:
             estimation_method = "tiktoken" if estimated_output_tokens > 0 else "char_div4"
 
         persona_name = self.persona.name if self.persona else ""
-        provider_name = getattr(self.provider_async, "_provider_name", "unknown")
+        provider_name = getattr(self.provider_async, "_last_provider_name",
+            getattr(self.provider_async, "_provider_name", "unknown"))
 
         # Build breakdown JSON if available
         breakdown_json = ""

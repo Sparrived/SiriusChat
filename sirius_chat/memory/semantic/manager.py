@@ -164,6 +164,15 @@ class SemanticMemoryManager:
         """Get the cross-group shared semantic profile for a user."""
         return self._ensure_global_user(user_id)
 
+    def set_global_user_name(self, user_id: str, name: str) -> None:
+        """Set the display name on the global user profile (QQ name)."""
+        if not name:
+            return
+        profile = self._ensure_global_user(user_id)
+        if not profile.name:
+            profile.name = name
+            self._store.save_global_user_profile(user_id, profile)
+
     def list_group_user_profiles(self, group_id: str) -> list[UserSemanticProfile]:
         return self._store.list_group_user_profiles(group_id)
 
@@ -298,9 +307,11 @@ class SemanticMemoryManager:
         # Interaction frequency (simplified: +0.05 per interaction, cap at 1.0)
         rs.interaction_frequency_7d = round(min(1.0, rs.interaction_frequency_7d + 0.05), 4)
 
-        # Emotional intimacy from valence
+        # Emotional intimacy: every interaction builds it, strong emotion accelerates
+        base_increase = 0.01
+        emotion_bonus = abs(valence) * 0.04
         rs.emotional_intimacy = round(
-            rs.emotional_intimacy * 0.9 + abs(valence) * 0.1, 4
+            min(1.0, rs.emotional_intimacy + base_increase + emotion_bonus), 4
         )
 
         # Trust score: positive feedback
