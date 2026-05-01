@@ -1,0 +1,32 @@
+<div class="page active" id="page-diary">
+  <div class="persona-bar">
+    <label>当前人格</label>
+    <div class="persona-select-bar" id="diaryPersonaSelect">加载中...</div>
+  </div>
+
+  <!-- Stats -->
+  <div class="card">
+    <h2>日记统计</h2>
+    <div class="stat-grid" id="diaryStats">
+      <div class="stat-card"><div class="label">总条数</div><div class="value" id="diaryTotal">—</div></div>
+      <div class="stat-card"><div class="label">覆盖群数</div><div class="value" id="diaryGroups">—</div></div>
+    </div>
+    <div style="margin-top:12px">
+      <h3 style="font-size:13px;color:var(--text-2);margin-bottom:8px">热门关键词</h3>
+      <div id="diaryKeywords" style="display:flex;flex-wrap:wrap;gap:6px">暂无数据</div>
+    </div>
+  </div>
+
+  <!-- Filter -->
+  <div class="card">
+    <h2 style="display:flex;justify-content:space-between;align-items:center">
+      日记列表
+      <select id="diaryGroupFilter" onchange="diaryLoadData()" style="background:var(--bg-2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:4px 8px;font-size:13px">
+        <option value="">全部群聊</option>
+      </select>
+    </h2>
+    <div id="diaryList" style="display:flex;flex-direction:column;gap:12px">
+      <div style="color:var(--text-2);padding:12px">加载中...</div>
+    </div>
+  </div>
+</div>

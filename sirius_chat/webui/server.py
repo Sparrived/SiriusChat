@@ -135,6 +135,9 @@ class WebUIServer:
         # Cognition events (per persona)
         self.app.router.add_get("/api/personas/{name}/cognition", self.api_persona_cognition_get)
 
+        # Diary entries (per persona)
+        self.app.router.add_get("/api/personas/{name}/diary", self.api_persona_diary_get)
+
         # 桥接配置（写入 adapters.json）
         self.app.router.add_post("/api/personas/{name}/config", self.api_config_post)
 
@@ -1080,4 +1083,57 @@ class WebUIServer:
             return _json_response({"events": events, "emotion_distribution": dist})
         except Exception as exc:
             LOG.warning("读取 Cognition 事件失败 %s: %s", name, exc)
+            return _json_response({"error": str(exc)}, 500)
+
+    async def api_persona_diary_get(self, request: web.Request) -> web.Response:
+        """Return diary entries for a single persona."""
+        name = _get_name(request)
+        paths = self.persona_manager.get_persona_paths(name)
+        if paths is None:
+            return _json_response({"error": "人格不存在"}, 404)
+
+        diary_dir = paths.dir / "diary"
+        if not diary_dir.exists():
+            return _json_response({"entries": [], "stats": {}, "groups": []})
+
+        try:
+            limit = int(request.query.get("limit", "50"))
+            group_id = request.query.get("group_id", "")
+
+            entries: list[dict[str, Any]] = []
+            groups: set[str] = set()
+            keyword_counts: dict[str, int] = {}
+
+            for path in diary_dir.glob("*.json"):
+                try:
+                    data = json.loads(path.read_text(encoding="utf-8"))
+                    g_id = data.get("group_id", "")
+                    if g_id:
+                        groups.add(g_id)
+                    if group_id and g_id != group_id:
+                        continue
+                    for item in data.get("entries", []):
+                        if isinstance(item, dict):
+                            entries.append(item)
+                            for kw in item.get("keywords", []):
+                                keyword_counts[kw] = keyword_counts.get(kw, 0) + 1
+                except (OSError, json.JSONDecodeError):
+                    continue
+
+            entries.sort(key=lambda e: e.get("created_at", ""), reverse=True)
+            entries = entries[:limit]
+
+            stats = {
+                "total": len(entries),
+                "groups": len(groups),
+                "top_keywords": sorted(keyword_counts.items(), key=lambda x: x[1], reverse=True)[:20],
+            }
+
+            return _json_response({
+                "entries": entries,
+                "stats": stats,
+                "groups": sorted(groups),
+            })
+        except Exception as exc:
+            LOG.warning("读取日记失败 %s: %s", name, exc)
             return _json_response({"error": str(exc)}, 500)
