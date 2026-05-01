@@ -96,8 +96,7 @@ class BackgroundTaskManager:
         """设置记忆归纳回调函数（异步）。
 
         回调函数签名: async callback() -> None
-        该回调应负责调用 EventMemoryManager.consolidate_entries 和
-        UserMemoryManager.consolidate_summary_notes / consolidate_memory_facts。
+        该回调应负责调用 SemanticMemoryManager 或 DiaryManager 的归纳逻辑。
         """
         self._consolidation_callback = callback
 
