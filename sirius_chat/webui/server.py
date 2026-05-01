@@ -1151,13 +1151,14 @@ class WebUIServer:
         if paths is None:
             return _json_response({"error": "人格不存在"}, 404)
 
+        # SemanticProfileStore expects persona_dir and appends memory/semantic itself
         semantic_base = paths.dir / "memory" / "semantic"
         if not semantic_base.exists():
             return _json_response({"users": [], "groups": []})
 
         try:
             group_id = request.query.get("group_id", "")
-            store = SemanticProfileStore(semantic_base)
+            store = SemanticProfileStore(paths.dir)
 
             users: list[dict[str, Any]] = []
             groups: set[str] = set()
@@ -1171,28 +1172,27 @@ class WebUIServer:
                         groups.add(g_dir.name)
 
             if group_id:
-                # Group-scoped query
+                # Group-scoped query: group-local first, then global fallback
                 for profile in store.list_group_user_profiles(group_id):
                     if profile.user_id and profile.user_id not in seen_user_ids:
                         seen_user_ids.add(profile.user_id)
                         users.append(profile.to_dict())
-                # Also include global profiles that haven't been seen
                 for profile in store.list_global_user_profiles():
                     if profile.user_id and profile.user_id not in seen_user_ids:
                         seen_user_ids.add(profile.user_id)
                         users.append(profile.to_dict())
             else:
-                # Global query: start with global profiles
-                for profile in store.list_global_user_profiles():
-                    if profile.user_id and profile.user_id not in seen_user_ids:
-                        seen_user_ids.add(profile.user_id)
-                        users.append(profile.to_dict())
-                # Merge in group-local profiles
+                # Global query: group-local profiles first (they have real data),
+                # then global profiles as fallback for users not seen in any group
                 for g in groups:
                     for profile in store.list_group_user_profiles(g):
                         if profile.user_id and profile.user_id not in seen_user_ids:
                             seen_user_ids.add(profile.user_id)
                             users.append(profile.to_dict())
+                for profile in store.list_global_user_profiles():
+                    if profile.user_id and profile.user_id not in seen_user_ids:
+                        seen_user_ids.add(profile.user_id)
+                        users.append(profile.to_dict())
 
             return _json_response({"users": users, "groups": sorted(groups)})
         except Exception as exc:
@@ -1212,13 +1212,14 @@ class WebUIServer:
         if paths is None:
             return _json_response({"error": "人格不存在"}, 404)
 
+        # SemanticProfileStore expects persona_dir and appends memory/semantic itself
         semantic_base = paths.dir / "memory" / "semantic"
         if not semantic_base.exists():
             return _json_response({"error": "用户不存在"}, 404)
 
         try:
             group_id = request.query.get("group_id", "")
-            store = SemanticProfileStore(semantic_base)
+            store = SemanticProfileStore(paths.dir)
 
             # Prefer global profile
             profile = store.load_global_user_profile(user_id)
