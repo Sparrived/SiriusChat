@@ -20,7 +20,7 @@ from sirius_chat.skills.models import (
 )
 from sirius_chat.skills.security import validate_skill_access
 from sirius_chat.skills.telemetry import SkillExecutionRecord, SkillTelemetry
-from sirius_chat.workspace.layout import WorkspaceLayout
+from sirius_chat.utils.layout import WorkspaceLayout
 
 logger = logging.getLogger(__name__)
 

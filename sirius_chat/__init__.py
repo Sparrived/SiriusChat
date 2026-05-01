@@ -85,7 +85,7 @@ from sirius_chat.providers import (
 )
 # ── Session / Workspace ──
 from sirius_chat.session.store import JsonSessionStore, SessionStoreFactory, SqliteSessionStore
-from sirius_chat.workspace.layout import WorkspaceLayout
+from sirius_chat.utils.layout import WorkspaceLayout
 
 # ── Skills ──
 from sirius_chat.skills import (

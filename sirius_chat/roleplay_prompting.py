@@ -12,7 +12,7 @@ from typing import Awaitable, Callable, cast
 from sirius_chat.config import Agent, AgentPreset, OrchestrationPolicy, SessionConfig
 from sirius_chat.config.jsonc import load_json_document
 from sirius_chat.providers.base import AsyncLLMProvider, GenerationRequest, LLMProvider
-from sirius_chat.workspace.layout import WorkspaceLayout
+from sirius_chat.utils.layout import WorkspaceLayout
 
 GENERATED_AGENTS_FILE_NAME = "generated_agents.json"
 GENERATED_AGENT_TRACE_DIR_NAME = "generated_agent_traces"

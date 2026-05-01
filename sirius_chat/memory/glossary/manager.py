@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from sirius_chat.memory.glossary.models import GlossaryTerm
-from sirius_chat.workspace.layout import WorkspaceLayout
+from sirius_chat.utils.layout import WorkspaceLayout
 
 logger = logging.getLogger(__name__)
 

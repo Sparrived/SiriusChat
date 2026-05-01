@@ -13,7 +13,7 @@ from sirius_chat.providers.openai_compatible import OpenAICompatibleProvider
 from sirius_chat.providers.siliconflow import SiliconFlowProvider
 from sirius_chat.providers.volcengine_ark import VolcengineArkProvider
 from sirius_chat.providers.ytea import YTeaProvider
-from sirius_chat.workspace.layout import WorkspaceLayout
+from sirius_chat.utils.layout import WorkspaceLayout
 
 PROVIDER_KEYS_FILE = "provider_keys.json"
 

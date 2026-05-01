@@ -13,7 +13,7 @@ import pytest
 
 from sirius_chat.config import ConfigManager, SessionConfig
 from sirius_chat.config.jsonc import load_json_document, write_session_config_jsonc
-from sirius_chat.workspace.layout import WorkspaceLayout
+from sirius_chat.utils.layout import WorkspaceLayout
 
 
 class TestConfigManager:

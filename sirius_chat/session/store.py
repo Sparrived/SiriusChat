@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from sirius_chat.models import Transcript
-from sirius_chat.workspace.layout import WorkspaceLayout
+from sirius_chat.utils.layout import WorkspaceLayout
 
 
 _SESSION_STORE_SCHEMA_VERSION = 2

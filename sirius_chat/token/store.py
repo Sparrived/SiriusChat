@@ -11,7 +11,7 @@ import time
 from pathlib import Path
 
 from sirius_chat.config import TokenUsageRecord
-from sirius_chat.workspace.layout import WorkspaceLayout
+from sirius_chat.utils.layout import WorkspaceLayout
 
 _SCHEMA_VERSION = 2
 
