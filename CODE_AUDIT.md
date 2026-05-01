@@ -23,6 +23,7 @@
 **影响**：约 400 行代码，导出在 `sirius_chat/__init__.py` 中，文档中被引用为活跃组件。
 **评估**：v1.0 调用链直接使用 `tenacity` 处理重试，中间件层完全未接入且与当前架构脱节。长期保留会导致 API 表面膨胀、误导用户，维护成本（类型检查、文档同步）持续产生但零收益。
 **建议**：**直接删除**。框架设计合理，但"为未来准备"的代码在没有明确接入计划时只会腐烂。若后续需要，从 git 历史恢复比重维护死代码更简单。同步清理 `sirius_chat/__init__.py` 中的公开导出。
+> ✅ **已处理** — commit `50690a6` 删除 `providers/middleware/` 目录及所有导出。
 
 ---
 
@@ -38,6 +39,7 @@
 **影响**：约 200 行代码。
 **评估**：角色扮演引擎的上下文高度动态（时间戳、热度、用户状态、记忆检索结果每次均不同），缓存命中率趋近于零。该框架对当前架构无实际适用场景。
 **建议**：**直接删除**。`cache/` 目录与导出一并移除。
+> ✅ **已处理** — commit `50690a6` 删除 `cache/` 目录及所有导出。
 
 ---
 
@@ -53,6 +55,7 @@
 **影响**：约 300 行代码。
 **评估**：`psutil` 性能分析在开发初期有价值，但 v1.0 稳定后已完全被日志和 WebUI 状态监控替代。生产环境无需引入。
 **建议**：**直接删除**。`performance/` 目录与导出一并移除。
+> ✅ **已处理** — commit `50690a6` 删除 `performance/` 目录及所有导出。
 
 ---
 
@@ -79,6 +82,7 @@
 **建议**：
 - **立即删除**：`memory/episodic/`、`memory/event/`、`memory/activation_engine.py`、`memory/user/manager.py`（`UserMemoryManager`）。
 - **删除**：`memory/working/`（`WorkingMemoryManager`）。虽然代码完整，但 v1.0 已明确收敛到 `BasicMemoryManager`，不存在"未来回退"需求。
+> ✅ **已处理** — commit `cebb121` 删除 `memory/episodic/`、`memory/event/`、`memory/activation_engine.py`；commit `50690a6` 删除 `memory/working/`；commit `e281de8` 删除 `memory/user/manager.py`。
 
 ---
 
@@ -113,6 +117,7 @@
 - `detect_emotion_islands`、`_message_directed_at_other_ai`、`_build_cross_group_context`：**删除**。
 - `_log_inner_thought`：移除未使用的 `emotion` 参数。
 - `_task_models`：删除未使用的 `"persona_generate"`、`"silent_thought"`、`"polish"`、`"reflection"` 映射。
+> ✅ **已处理** — commit `fb47de8` 删除未使用代码；commit `69cfad5` 内联 `_dynamic_threshold` / `_decide_strategy` 存根逻辑。
 
 ---
 
@@ -142,6 +147,7 @@
 - `_monitor_task`：**删除字段声明**。当前 NapCat 进程管理策略是"由 OS/用户管理"，无需引擎内监控。
 - `reload_requested`：**删除 flag 的写入和读取逻辑**。当前通过"重启人格"替代，保留半实现代码只会误导用户。
 - `_ARCHETYPE_NAMES`：**删除**。
+> ✅ **已处理** — commit `4125048` 注册 Token API 路由；commit `28a1b5d` 删除 platform 死代码。
 
 ---
 
@@ -167,6 +173,7 @@
 **影响**：调用即抛 `AttributeError`。
 **评估**：`MultiModelConfig` 没有 `work_path`、`data_path` 等属性，方法体是从 `WorkspaceConfig.to_dict()` 复制粘贴后未修改。这是明确的运行时崩溃点。
 **建议**：**P0（立即修复）**。重写 `to_dict()`，仅序列化 `MultiModelConfig` 实际拥有的字段（`task_models`、`task_temperatures`、`task_max_tokens`、`task_retries`、`max_multimodal_inputs_per_turn`、`max_multimodal_value_length` 等），或**直接删除**该方法（若无调用方）。
+> ✅ **已处理** — commit `e18c832` 重写 `MultiModelConfig.to_dict()`。
 
 ---
 
@@ -188,7 +195,7 @@
 **现状**：假设该 provider 所有模型都接受这些参数，但实际上同一 provider 的不同模型可能使用不同参数名。
 
 **评估**：当前按 provider 粒度配置在 99% 场景下正确（同一平台的不同模型通常共享参数风格）。按模型粒度配置会大幅增加配置复杂度（每个模型都需要独立配置 thinking 参数）。
-**建议**：**P2（中期优化）**。保持 provider 粒度作为默认值，仅在 `OrchestrationPolicy` 中增加可选的 per-model override 字段，供高级用户覆盖。
+**建议**：**P2（中期优化）**。经实际评估，当前 provider 粒度在 99% 场景下正确，且实现 per-model override 需要修改 `GenerationRequest` → 所有 provider `generate()` → `build_chat_completion_payload()` 的完整调用链，改动面大、回归风险高、收益有限。**保持现状，暂不处理**。
 
 ---
 
@@ -200,6 +207,7 @@
 
 **评估**：`len(text)//4` 对中文严重低估（中文通常 1~2 字符/token），会导致 token 预算和日志显示不准确。`token/utils.py` 已实现 CJK-aware 估算（中文 ≈ 1 字符/token，英文 ≈ 4 字符/token，支持 tiktoken 精确回退），但未被调用。
 **建议**：**P1（近期修复）**。将 `estimate_generation_request_input_tokens` 替换为 `token/utils.py` 中的 `estimate_tokens()` 或同类函数。改动小、收益明确。
+> ✅ **已处理** — commit `e07e6b3` 使用 `estimate_tokens_heuristic` 替代 `len(text)//4`。
 
 ---
 
@@ -211,6 +219,7 @@
 
 **评估**：纯粹的复制粘贴错误，不影响功能但影响代码整洁度。
 **建议**：**P0（立即修复）**。删除 `SkillDataStore.set()` 中重复的 `self._dirty = True`。
+> ✅ **已处理** — commit `7d85ddd` 删除重复行。
 
 ---
 
@@ -222,6 +231,7 @@
 
 **评估**：每次调用都 `re.compile()` 确实不必要，但正则简单、调用频率低（仅在 SKILL 链执行时），性能影响可忽略。属于代码整洁度问题。
 **建议**：**P1（近期修复）**。将正则编译提升为模块级常量 ` _TEMPLATE_RE = re.compile(r"\$\{(.*?)\}")`。
+> ✅ **已处理** — commit `4e15394` 将模板正则提升为模块级常量。
 
 ---
 
@@ -233,6 +243,7 @@
 
 **评估**：测试中硬编码中文字符串判断场景，导致 prompt 微调后测试即失败，维护成本高。
 **建议**：**P1（近期修复）**。在 `MockProvider.generate` 中增加 `task_name` 或 `metadata` 参数识别场景，替代字符串包含判断；或按 request 对象中的特定字段（如 `task_name`）路由返回固定响应。
+> ✅ **已处理** — commit `3887d2d` 删除脆弱的中文字符串检测（事件验证功能已随 EventMemoryManager 移除）。
 
 ---
 
@@ -244,6 +255,7 @@
 
 **评估**：硬编码开发者测试群号 `728196560` 是安全隐患。若用户未配置 `allowed_group_ids`，机器人会默认加入该群，可能导致消息泄露或意外交互。
 **建议**：**P1（近期修复）**。移除 `_DEFAULT_ALLOWED_GROUP_ID`。当 `adapters.json` 未配置 `allowed_group_ids` 时，拒绝群聊消息处理并记录 **ERROR** 级别日志（"未配置 allowed_group_ids，群聊功能已禁用"），而非静默使用默认值。
+> ✅ **已处理** — commit `eb39197` 移除硬编码默认群号。
 
 ---
 
@@ -255,6 +267,7 @@
 
 **评估**：`socket.bind()` 检查后立即释放，在快速重启或多人格并发启动时确实存在竞态。但 NapCat 启动失败后会向上抛出异常，用户可见并可手动重试，当前未报告因此导致的实际问题。
 **建议**：**P2（中期优化）**。在 `data/adapter_port_registry.json` 中增加时间戳租约（分配后 60 秒内视为已占用），或在 `PersonaManager` 中使用文件锁（`portalocker` 或 `filelock`）保护端口分配。
+> ✅ **已处理** — commit `4f3e505` 在端口注册表中增加 60 秒租约，兼容旧格式。
 
 ---
 
@@ -266,6 +279,7 @@
 
 **评估**：QQ 图片 URL 通常带签名参数（如 `?sign=xxx`），签名过期后同一图片的 URL 会变化，导致重复缓存。但图片下载后内容不变，内容哈希可解决此问题。当前图片缓存目录可能因此膨胀。
 **建议**：**P1（近期修复）**。下载完成后计算文件内容的 MD5（或 SHA256）作为文件名，而非 URL 的 MD5。保留原 URL 作为元数据记录在扩展属性或同名 `.url` 文件中。
+> ✅ **已处理** — commit `d43ca0e` 改用内容 MD5 作为缓存键，并保存 `.url`  sidecar 文件。
 
 ---
 
@@ -301,6 +315,7 @@
 
 **结论**：中间件框架设计合理，但 v1.0 调用链直接使用 `tenacity` 处理重试，中间件层完全未接入且与当前架构脱节。RetryMiddleware 与 `tenacity` 功能重复；熔断器、限流器、成本监控在当前规模（单人格、低并发）下属于过度设计。
 **建议**：**直接删除** `providers/middleware/` 目录及所有相关导出。v1.0 架构不需要中间件层；若未来规模扩大需要熔断/限流，应基于 `httpx` 的 transport 层或专用库（如 `pybreaker`）重新设计，而非恢复 400 行未使用的旧代码。
+> ✅ **已处理** — commit `50690a6` 删除中间件、cache、performance、WorkingMemory。
 
 ---
 
@@ -313,6 +328,7 @@
 - 将 `WorkspaceRuntime` 和 `RoleplayWorkspaceManager` **移出 `sirius_chat/__init__.py` 的公开导出**（从 `__all__` 中移除），但保留源代码以兼容仍使用旧 API 的用户。
 - 在 `workspace/__init__.py` 和 `workspace/runtime.py` 模块顶部添加 `warnings.warn("deprecated", DeprecationWarning)`。
 - 明确 deprecation timeline：**v1.1 彻底删除 `workspace/` 目录**。
+> ✅ **已处理** — commit `0f8e770` 移除公开导出，并在 `workspace/__init__.py` 添加 `DeprecationWarning`。
 
 ---
 
@@ -322,6 +338,7 @@
 
 **评估**：`test_diary_injection_tiers` 和 `test_keyword_search` 对本地 sentence-transformers 缓存敏感，已在测试中用 `indexer._model = None` 绕过，但属于"打补丁"式修复。更深层问题是 `DiaryIndexer` 在导入时即尝试加载模型，而非惰性加载。
 **建议**：**P1（近期修复）**。修改 `DiaryIndexer` 为惰性加载模型（首次调用 `index()` 或 `search()` 时才初始化 `SentenceTransformer`），并在 `tests/conftest.py` 中统一 mock embedding 函数，彻底消除测试环境对本地模型缓存的依赖。
+> ✅ **已处理** — commit `86e8f9b` 实现惰性加载；测试中统一使用 `DiaryIndexer(enable_semantic=False)`。
 
 ---
 
