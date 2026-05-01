@@ -345,7 +345,7 @@ function renderSectionBars(container, breakdown) {
     { name: '功能与格式', keys: ['skills', 'glossary', 'output_format', 'output_constraint'], color: '#a371f7' },
   ];
 
-  const nodes = [{ name: '总输入', itemStyle: { color: '#e8eaf0' } }];
+  const nodes = [{ name: '总输入', itemStyle: { color: '#ffffff' } }];
   const links = [];
 
   groups.forEach((g) => {
@@ -393,17 +393,17 @@ function renderSectionBars(container, breakdown) {
       emphasis: { focus: 'adjacency' },
       data: nodes,
       links: links,
-      top: 10, bottom: 10, left: 10, right: 10,
-      nodeWidth: 16,
-      nodeGap: 12,
+      top: 10, bottom: 10, left: 10, right: 100,
+      nodeWidth: 18,
+      nodeGap: 14,
       layoutIterations: 32,
-      lineStyle: { color: 'gradient', curveness: 0.5, opacity: 0.4 },
+      lineStyle: { color: 'gradient', curveness: 0.5, opacity: 0.55 },
       label: {
         color: '#e8eaf0',
-        fontSize: 11,
+        fontSize: 12,
         formatter: (p) => p.name,
       },
-      itemStyle: { borderWidth: 0 },
+      itemStyle: { borderWidth: 1, borderColor: '#0d1117' },
     }],
   });
 
