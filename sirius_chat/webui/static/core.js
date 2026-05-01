@@ -622,6 +622,18 @@ function renderTimeSeries(container, hourly) {
   }, true);
 }
 
+const _EMOTION_CN = {
+  JOY: '喜悦', CONTENTMENT: '满足', RELIEF: '释然', EXCITEMENT: '兴奋',
+  SADNESS: '悲伤', GRIEF: '悲痛', ANGER: '愤怒', IRRITATION: '恼怒',
+  ANXIETY: '焦虑', LONELINESS: '孤独', FEAR: '恐惧', DISGUST: '厌恶',
+  SURPRISE: '惊讶', CURIOSITY: '好奇', CONFUSION: '困惑', NEUTRAL: '中性',
+  unknown: '未知', '': '未知',
+};
+
+function _emotionCn(name) {
+  return _EMOTION_CN[name] || name;
+}
+
 function renderEmotionDistribution(container, distribution) {
   if (!container) return;
   if (!Object.keys(distribution).length || typeof echarts === 'undefined') {
@@ -637,26 +649,52 @@ function renderEmotionDistribution(container, distribution) {
     container._edResize = onResize;
   }
 
-  const data = Object.entries(distribution).map(([name, value]) => ({ name: name || '未知', value }));
+  // Sort by count desc, translate labels
+  const sorted = Object.entries(distribution)
+    .map(([name, value]) => ({ name: _emotionCn(name) || '未知', value, raw: name }))
+    .sort((a, b) => b.value - a.value);
   const colors = ['#58a6ff', '#3fb950', '#d29922', '#f85149', '#a371f7', '#e3b341', '#8b949e'];
+
+  const total = sorted.reduce((s, d) => s + d.value, 0);
 
   chart.setOption({
     backgroundColor: 'transparent',
     tooltip: {
-      trigger: 'item',
-      formatter: (p) => `<b>${p.name}</b><br/>${p.value} 次 (${p.percent}%)`,
+      trigger: 'axis',
+      axisPointer: { type: 'shadow' },
+      formatter: (params) => {
+        const p = params[0];
+        const pct = total ? ((p.value / total) * 100).toFixed(1) : 0;
+        return `<b>${p.name}</b><br/>${p.value} 次（占比 ${pct}%）`;
+      },
+    },
+    grid: { left: 10, right: 24, bottom: 10, top: 10, containLabel: true },
+    xAxis: {
+      type: 'value',
+      axisLabel: { fontSize: 10, color: '#8b949e' },
+      splitLine: { lineStyle: { color: '#21262d' } },
+    },
+    yAxis: {
+      type: 'category',
+      data: sorted.map((d) => d.name),
+      axisLabel: { fontSize: 11, color: '#c9d1d9' },
+      axisLine: { lineStyle: { color: '#30363d' } },
+      axisTick: { show: false },
     },
     series: [{
-      type: 'pie',
-      radius: ['30%', '60%'],
-      center: ['40%', '50%'],
-      avoidLabelOverlap: true,
-      itemStyle: { borderRadius: 6, borderColor: '#0d1117', borderWidth: 2 },
-      label: { show: false },
-      emphasis: {
-        label: { show: true, fontSize: 13, fontWeight: 'bold', color: '#e8eaf0' },
+      type: 'bar',
+      data: sorted.map((d, i) => ({
+        value: d.value,
+        itemStyle: { color: colors[i % colors.length], borderRadius: [0, 4, 4, 0] },
+      })),
+      barWidth: '60%',
+      label: {
+        show: true,
+        position: 'right',
+        fontSize: 11,
+        color: '#c9d1d9',
+        formatter: (p) => `${p.value} 次`,
       },
-      data: data.map((d, i) => ({ ...d, itemStyle: { color: colors[i % colors.length] } })),
     }],
   }, true);
 }
@@ -687,9 +725,32 @@ function renderEmotionTimeline(container, events) {
     tooltip: {
       trigger: 'axis',
       axisPointer: { type: 'cross', label: { backgroundColor: '#6a7985' } },
+      formatter: (params) => {
+        const idx = params[0].dataIndex;
+        const ev = sorted[idx];
+        const emotionLabel = ev ? (_emotionCn(ev.basic_emotion) || '未知') : '';
+        let html = `<div style="font-size:12px;margin-bottom:4px">${params[0].axisValue}${emotionLabel ? ' · 情感: ' + emotionLabel : ''}</div>`;
+        const map = {
+          '愉悦度': { high: '积极/愉快', low: '消极/不快', unit: '' },
+          '唤醒度': { high: '兴奋/激动', low: '平静/低落', unit: '' },
+          '情感强度': { high: '情绪强烈', low: '情绪平淡', unit: '' },
+        };
+        for (const p of params) {
+          const info = map[p.seriesName] || {};
+          const v = p.value;
+          const desc = v > 0.3 ? info.high : (v < -0.3 ? info.low : '中性');
+          html += `<div style="display:flex;align-items:center;gap:6px;margin:2px 0">
+            <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${p.color}"></span>
+            <span style="min-width:56px">${p.seriesName}</span>
+            <strong>${v.toFixed(2)}</strong>
+            <span style="color:#8b949e;font-size:11px">(${desc})</span>
+          </div>`;
+        }
+        return html;
+      },
     },
-    legend: { data: ['Valence', 'Arousal', 'Intensity'], textStyle: { color: '#c9d1d9', fontSize: 11 }, top: 0 },
-    grid: { left: 10, right: 10, bottom: 10, top: 32, containLabel: true },
+    legend: { data: ['愉悦度', '唤醒度', '情感强度'], textStyle: { color: '#c9d1d9', fontSize: 11 }, top: 0 },
+    grid: { left: 10, right: 10, bottom: 10, top: 36, containLabel: true },
     xAxis: {
       type: 'category',
       data: dates,
@@ -699,13 +760,21 @@ function renderEmotionTimeline(container, events) {
     yAxis: {
       type: 'value',
       min: -1, max: 1,
-      axisLabel: { fontSize: 10, color: '#8b949e' },
+      axisLabel: {
+        fontSize: 10, color: '#8b949e',
+        formatter: (v) => {
+          if (v >= 0.8) return '高 +' + v.toFixed(1);
+          if (v <= -0.8) return '低 ' + v.toFixed(1);
+          if (Math.abs(v) < 0.1) return '中 0';
+          return v.toFixed(1);
+        },
+      },
       splitLine: { lineStyle: { color: '#21262d' } },
     },
     series: [
-      { name: 'Valence', type: 'line', smooth: true, showSymbol: false, lineStyle: { width: 2 }, itemStyle: { color: '#58a6ff' }, data: valenceData },
-      { name: 'Arousal', type: 'line', smooth: true, showSymbol: false, lineStyle: { width: 2 }, itemStyle: { color: '#f85149' }, data: arousalData },
-      { name: 'Intensity', type: 'line', smooth: true, showSymbol: false, lineStyle: { width: 2, type: 'dashed' }, itemStyle: { color: '#e3b341' }, data: intensityData },
+      { name: '愉悦度', type: 'line', smooth: true, showSymbol: false, lineStyle: { width: 2 }, itemStyle: { color: '#58a6ff' }, data: valenceData },
+      { name: '唤醒度', type: 'line', smooth: true, showSymbol: false, lineStyle: { width: 2 }, itemStyle: { color: '#f85149' }, data: arousalData },
+      { name: '情感强度', type: 'line', smooth: true, showSymbol: false, lineStyle: { width: 2, type: 'dashed' }, itemStyle: { color: '#e3b341' }, data: intensityData },
     ],
   }, true);
 }

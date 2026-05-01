@@ -134,6 +134,7 @@ class PersonaExperienceConfig:
     # 参与决策
     reply_mode: str = "auto"  # auto|always|never
     engagement_sensitivity: float = 0.5  # 0.0~1.0
+    expressiveness: float = 0.5  # 0.0~1.0 单旋钮活泼度
     heat_window_seconds: float = 60.0
 
     # 主动行为
@@ -169,6 +170,7 @@ class PersonaExperienceConfig:
         return {
             "reply_mode": self.reply_mode,
             "engagement_sensitivity": self.engagement_sensitivity,
+            "expressiveness": self.expressiveness,
             "heat_window_seconds": self.heat_window_seconds,
             "proactive_enabled": self.proactive_enabled,
             "proactive_interval_seconds": self.proactive_interval_seconds,
@@ -194,6 +196,7 @@ class PersonaExperienceConfig:
         return cls(
             reply_mode=str(data.get("reply_mode", "auto")),
             engagement_sensitivity=float(data.get("engagement_sensitivity", 0.5)),
+            expressiveness=float(data.get("expressiveness", 0.5)),
             heat_window_seconds=float(data.get("heat_window_seconds", 60.0)),
             proactive_enabled=bool(data.get("proactive_enabled", True)),
             proactive_interval_seconds=float(data.get("proactive_interval_seconds", 300.0)),

@@ -4,28 +4,34 @@ Tracks emotional and intent state over time for group atmosphere monitoring.
 """
 from __future__ import annotations
 
+import json
 import sqlite3
 import time
 from pathlib import Path
 from typing import Any
 
 
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 2
 
 _CREATE_TABLE = """\
 CREATE TABLE IF NOT EXISTS cognition_events (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    timestamp       REAL    NOT NULL,
-    group_id        TEXT    NOT NULL DEFAULT '',
-    user_id         TEXT    NOT NULL DEFAULT '',
-    valence         REAL    NOT NULL DEFAULT 0,
-    arousal         REAL    NOT NULL DEFAULT 0.3,
-    basic_emotion   TEXT    NOT NULL DEFAULT '',
-    intensity       REAL    NOT NULL DEFAULT 0.5,
-    social_intent   TEXT    NOT NULL DEFAULT '',
-    urgency_score   REAL    NOT NULL DEFAULT 0,
-    relevance_score REAL    NOT NULL DEFAULT 0.5,
-    confidence      REAL    NOT NULL DEFAULT 0.8
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp         REAL    NOT NULL,
+    group_id          TEXT    NOT NULL DEFAULT '',
+    user_id           TEXT    NOT NULL DEFAULT '',
+    valence           REAL    NOT NULL DEFAULT 0,
+    arousal           REAL    NOT NULL DEFAULT 0.3,
+    basic_emotion     TEXT    NOT NULL DEFAULT '',
+    intensity         REAL    NOT NULL DEFAULT 0.5,
+    social_intent     TEXT    NOT NULL DEFAULT '',
+    urgency_score     REAL    NOT NULL DEFAULT 0,
+    relevance_score   REAL    NOT NULL DEFAULT 0.5,
+    confidence        REAL    NOT NULL DEFAULT 0.8,
+    directed_score    REAL    NOT NULL DEFAULT 0,
+    sarcasm_score     REAL    NOT NULL DEFAULT 0,
+    entitlement_score REAL    NOT NULL DEFAULT 0,
+    turn_gap_readiness REAL   NOT NULL DEFAULT 0.5,
+    directed_signals  TEXT    NOT NULL DEFAULT '{}'
 );
 """
 
@@ -41,6 +47,21 @@ CREATE TABLE IF NOT EXISTS _meta (
     value TEXT NOT NULL
 );
 """
+
+# Columns added in schema v2
+_V2_COLUMNS = {
+    "directed_score": "REAL NOT NULL DEFAULT 0",
+    "sarcasm_score": "REAL NOT NULL DEFAULT 0",
+    "entitlement_score": "REAL NOT NULL DEFAULT 0",
+    "turn_gap_readiness": "REAL NOT NULL DEFAULT 0.5",
+    "directed_signals": "TEXT NOT NULL DEFAULT '{}'",
+}
+
+
+def _column_exists(conn: sqlite3.Connection, table: str, column: str) -> bool:
+    """Check whether a column already exists in a table."""
+    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    return any(row[1] == column for row in rows)
 
 
 class CognitionEventStore:
@@ -66,6 +87,12 @@ class CognitionEventStore:
         conn.execute(_CREATE_TABLE)
         for idx_sql in _CREATE_INDEXES:
             conn.execute(idx_sql)
+
+        # Migrate v1 -> v2
+        for col, dtype in _V2_COLUMNS.items():
+            if not _column_exists(conn, "cognition_events", col):
+                conn.execute(f"ALTER TABLE cognition_events ADD COLUMN {col} {dtype}")
+
         conn.execute(
             "INSERT OR REPLACE INTO _meta(key, value) VALUES(?, ?)",
             ("schema_version", str(_SCHEMA_VERSION)),
@@ -90,19 +117,29 @@ class CognitionEventStore:
         urgency_score: float = 0.0,
         relevance_score: float = 0.5,
         confidence: float = 0.8,
+        directed_score: float = 0.0,
+        sarcasm_score: float = 0.0,
+        entitlement_score: float = 0.0,
+        turn_gap_readiness: float = 0.5,
+        directed_signals: dict[str, Any] | None = None,
         timestamp: float | None = None,
     ) -> None:
         """Persist a single cognition event."""
         ts = timestamp if timestamp is not None else time.time()
+        signals_json = json.dumps(directed_signals or {}, ensure_ascii=False)
         conn = self._connect()
         conn.execute(
             """INSERT INTO cognition_events
                (timestamp, group_id, user_id, valence, arousal, basic_emotion,
-                intensity, social_intent, urgency_score, relevance_score, confidence)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                intensity, social_intent, urgency_score, relevance_score, confidence,
+                directed_score, sarcasm_score, entitlement_score, turn_gap_readiness,
+                directed_signals)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 ts, group_id, user_id, valence, arousal, basic_emotion,
                 intensity, social_intent, urgency_score, relevance_score, confidence,
+                directed_score, sarcasm_score, entitlement_score, turn_gap_readiness,
+                signals_json,
             ),
         )
         conn.commit()
@@ -116,7 +153,7 @@ class CognitionEventStore:
             LIMIT ?""",
             (limit,),
         ).fetchall()
-        return [dict(row) for row in rows]
+        return [_row_to_dict(row) for row in rows]
 
     def get_group_timeline(self, group_id: str, limit: int = 100) -> list[dict[str, Any]]:
         """Return cognition events for a specific group."""
@@ -128,7 +165,7 @@ class CognitionEventStore:
             LIMIT ?""",
             (group_id, limit),
         ).fetchall()
-        return [dict(row) for row in rows]
+        return [_row_to_dict(row) for row in rows]
 
     def get_emotion_distribution(self, group_id: str | None = None) -> dict[str, int]:
         """Return count of each basic_emotion label."""
@@ -148,3 +185,13 @@ class CognitionEventStore:
     @property
     def db_path(self) -> Path:
         return self._db_path
+
+
+def _row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
+    d: dict[str, Any] = dict(row)
+    raw = d.get("directed_signals", "{}")
+    try:
+        d["directed_signals"] = json.loads(raw) if isinstance(raw, str) else raw
+    except (json.JSONDecodeError, TypeError):
+        d["directed_signals"] = {}
+    return d

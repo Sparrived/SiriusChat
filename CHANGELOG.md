@@ -4,6 +4,28 @@
 
 ## [1.1.0] - 2026-05-01
 
+### Added
+
+- **单旋钮活泼度 `ExpressivenessConfig`**：`experience.json` 新增 `expressiveness: float = 0.5`（0~1），自动推导 8 个行为阈值（指向门槛、间隙门槛、资格感、冷却时间、去重检测、讽刺加分、主动间隙等）。WebUI Experience 页面提供四象限可视化 + 点击设值。
+- **12维指向性打分系统**：`IntentAnalysisV3` 新增 mention/reference/name_match/second_person/question/imperative/topic_relevance/emotional_disclosure/attention_seeking/recency/turn_taking 共 12 维原始信号，合成 `directed_score`（0~1）。规则引擎保底，LLM 语义增强。
+- **讽刺检测 `sarcasm_score`**：5 类启发式规则（正面词+负面标点、引号强调、过度笑声、反讽句式、emoji-文本矛盾），≥0.4 时 `directed_score` 额外 +15%。
+- **资格感判断 `entitlement_score`**：计算 AI persona 与消息话题的重叠度，`< threshold` 时决策阈值 ×1.5。
+- **话题间隙检测 `turn_gap_readiness`**：`RhythmAnalysis` 新增对话自然转折就绪度（问句+转换词+低稳定性+长沉默 vs 爆发-独白），用于 IMMEDIATE→DELAYED 降级和主动发言抑制。
+- **表达去重**：`_expression_similarity()` 字符二元组 Jaccard，>threshold 时追加提示要求 LLM 换说法重试一次。
+- **情绪基调同步（Tone Alignment）**：`_get_tone_alignment()` 从群氛围历史提取 valence/arousal，映射为 5 种基调提示注入 system prompt。
+- **other_ai 折扣**：`sender_type == "other_ai"` 时 `directed_score = min(score, score*0.5+0.1)`，避免 AI 互聊过度。
+- **用户画像 WebUI 页面**：后端 `/api/personas/{name}/users`，前端 `pages/users.html` + `analytics.js`，展示关系状态、兴趣图谱、群聊筛选。
+- **认知分析 WebUI 扩展**：`cognition.html` 新增 12维指向性雷达图、最近认知事件表格（含 sarcasm/entitlement/gap_readiness）、群筛选下拉框；情感分布饼图改为横向条形图 + 中文标签。
+- **Cognition Store Schema v2**：`cognition_events.db` 新增 `directed_score`、`sarcasm_score`、`entitlement_score`、`turn_gap_readiness`、`directed_signals` 列，支持旧库自动迁移（`ALTER TABLE ADD COLUMN`）。
+- **WebUI 用户画像 API**：补全缺失的 `api_persona_users_get` 和 `api_persona_user_get` 方法。
+- **Token 估算精度修复**：`(output_chars + 3) // 4` → `estimate_tokens()`（优先 tiktoken），`PromptTokenBreakdown` 新增 `output_total`，`total` 含输入+输出。
+
+### Changed
+
+- **WebUI Experience 页面重排**：按功能拆分为 5 个卡片——行为风格（含四象限图）、主动行为、回复控制、技能与资源、记忆与身份。
+- **情感标签中文化**：所有 WebUI 图表和表格中的英文基础情感（JOY→喜悦、SADNESS→悲伤等）统一映射为中文。
+- **情感时间线 tooltip**：显示中文情感标签 + 各维度中文状态描述（积极/愉快、兴奋/激动等）。
+
 ### Fixed
 
 - **`SkillDataStore.set()` 重复标记**：移除多余的 `self._dirty = True`。

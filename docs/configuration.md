@@ -97,6 +97,7 @@ Sirius Chat v1.0 使用 **EmotionalGroupChatEngine** 作为唯一引擎，支持
 {
   "reply_mode": "auto",
   "engagement_sensitivity": 0.5,
+  "expressiveness": 0.5,
   "heat_window_seconds": 60.0,
   "proactive_enabled": true,
   "proactive_interval_seconds": 300.0,
@@ -143,7 +144,8 @@ Sirius Chat v1.0 使用 **EmotionalGroupChatEngine** 作为唯一引擎，支持
 
 | 字段 | 类型 | 默认值 | 含义 |
 |------|------|--------|------|
-| `sensitivity` | float | 0.5 | 回复敏感度（0.0~1.0），越高越容易回复 |
+| `engagement_sensitivity` | float | 0.5 | 参与敏感度（0.0~1.0），越高越容易回复。调的是决策基线活跃度 |
+| `expressiveness` | float | 0.5 | 活泼度（0.0~1.0），控制行为边界宽松度。越高越敢抢话、冷却越短、门槛越低 |
 | `reply_cooldown_seconds` | int | 12 | 同群连续回复的最小冷却间隔 |
 | `max_skill_rounds` | int | 3 | 单次消息处理中最大 SKILL 调用轮数 |
 

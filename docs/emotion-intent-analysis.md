@@ -54,9 +54,55 @@
   "intent_subtype": "venting",
   "urgency_score": 65,
   "relevance_score": 0.7,
-  "confidence": 0.85
+  "confidence": 0.85,
+  "directed_score": 0.75,
+  "sarcasm_score": 0.1,
+  "entitlement_score": 0.6
 }
 ```
+
+**12维指向性信号**（`directed_signals`）：
+
+| 维度 | 说明 |
+|------|------|
+| `mention_score` | 是否 @ 了 AI |
+| `reference_score` | 是否回复了 AI 的消息 |
+| `name_match_score` | 消息中是否出现 AI 的名字/别名 |
+| `second_person_score` | 第二人称代词密度（"你"/"你们"）|
+| `question_score` | 问句特征 |
+| `imperative_score` | 祈使句特征（"帮我"/"告诉我"）|
+| `topic_relevance_score` | 与 AI persona 擅长话题的重叠度 |
+| `emotional_disclosure_score` | 情感表露强度（倾诉/吐槽）|
+| `attention_seeking_score` | 寻求关注的语言标记 |
+| `recency_score` | 与最近对话主题的关联度 |
+| `turn_taking_score` | 轮次交接信号（对话轮到 AI 的暗示）|
+
+12 维信号经加权合成 `directed_score`（0~1），≥0.6 视为"被指向"。规则引擎保底，LLM 语义增强覆盖。
+
+**讽刺检测（Sarcasm Detection）**：
+
+5 类启发式规则并行检测：
+1. 正面词 + 负面标点（"真好。" → 句号弱化热情）
+2. 引号强调（"太棒"了）
+3. 过度笑声（"哈哈哈哈"伴随负面内容）
+4. 反讽句式（"我可太喜欢了"用于抱怨场景）
+5. emoji-文本矛盾（😊 + "气死我了"）
+
+`sarcasm_score ≥ 0.4` 时，`directed_score` 额外上浮 15%（讽刺通常暗含对 AI 的期待）。
+
+**资格感判断（Entitlement）**：
+
+计算 AI persona 与消息话题的重叠度。若 `entitlement_score < threshold`，决策层会将 threshold ×1.5，使 AI 在不擅长的话题上更克制。
+
+**话题间隙检测（Turn Gap Readiness）**：
+
+`RhythmAnalyzer` 输出的 `turn_gap_readiness`（0~1）量化对话是否处于自然转折点：
+- **提高因素**：问句结尾、话题转换词、低稳定性、长沉默
+- **降低因素**：消息爆发、连续独白
+
+用于两个场景：
+1. 决策层：`< gap_readiness_threshold` 时 IMMEDIATE 降级为 DELAYED
+2. 主动层：`< proactive_gap_threshold` 时禁止主动发言
 
 **第三层：上下文融合**
 

@@ -273,6 +273,153 @@ function renderTaskHierarchy(containerId, items) {
   }, true);
 }
 
+function renderCognitionEvents(events) {
+  const el = $('cogEvents');
+  if (!el) return;
+  if (!events.length) {
+    el.innerHTML = '<div style="color:var(--text-2);padding:12px">暂无认知事件数据</div>';
+    return;
+  }
+  const rows = events.slice(0, 30).map((e) => {
+    const ts = e.timestamp ? new Date(e.timestamp * 1000).toLocaleString('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '-';
+    const emotionBadge = _emotionCn ? _emotionCn(e.basic_emotion) : (e.basic_emotion || '未知');
+    const dir = (e.directed_score || 0).toFixed(2);
+    const sar = (e.sarcasm_score || 0).toFixed(2);
+    const ent = (e.entitlement_score || 0).toFixed(2);
+    const gap = (e.turn_gap_readiness || 0).toFixed(2);
+    const intent = e.social_intent || '-';
+    const urgency = (e.urgency_score || 0).toFixed(0);
+    const relevance = (e.relevance_score || 0).toFixed(2);
+    const sig = e.directed_signals || {};
+    const sigHtml = Object.entries(sig).slice(0, 4).map(([k, v]) => `<span style="font-size:10px;color:var(--text-3);background:var(--bg-2);border-radius:4px;padding:1px 5px;margin-right:4px">${k.replace('_score','')} ${(v*100).toFixed(0)}%</span>`).join('');
+    return `
+      <tr style="border-bottom:1px solid var(--border)">
+        <td style="padding:8px 10px;font-size:12px;color:var(--text-2);white-space:nowrap">${ts}</td>
+        <td style="padding:8px 10px;font-size:12px;color:var(--text)">${e.user_id || '-'}</td>
+        <td style="padding:8px 10px;font-size:12px;color:var(--accent)">${emotionBadge}</td>
+        <td style="padding:8px 10px;font-size:12px;color:var(--text);text-align:center">${dir}</td>
+        <td style="padding:8px 10px;font-size:12px;color:var(--text);text-align:center">${sar}</td>
+        <td style="padding:8px 10px;font-size:12px;color:var(--text);text-align:center">${ent}</td>
+        <td style="padding:8px 10px;font-size:12px;color:var(--text);text-align:center">${gap}</td>
+        <td style="padding:8px 10px;font-size:12px;color:var(--text-2)">${intent}</td>
+        <td style="padding:8px 10px;font-size:12px;color:var(--text);text-align:center">${urgency}</td>
+        <td style="padding:8px 10px;font-size:12px;color:var(--text);text-align:center">${relevance}</td>
+        <td style="padding:8px 10px;font-size:12px">${sigHtml}</td>
+      </tr>
+    `;
+  }).join('');
+  el.innerHTML = `
+    <table style="width:100%;border-collapse:collapse;font-size:12px">
+      <thead>
+        <tr style="border-bottom:1px solid var(--border);text-align:left">
+          <th style="padding:8px 10px;font-size:11px;color:var(--text-3);font-weight:600;white-space:nowrap">时间</th>
+          <th style="padding:8px 10px;font-size:11px;color:var(--text-3);font-weight:600">用户</th>
+          <th style="padding:8px 10px;font-size:11px;color:var(--text-3);font-weight:600">情感</th>
+          <th style="padding:8px 10px;font-size:11px;color:var(--text-3);font-weight:600;text-align:center">指向</th>
+          <th style="padding:8px 10px;font-size:11px;color:var(--text-3);font-weight:600;text-align:center">讽刺</th>
+          <th style="padding:8px 10px;font-size:11px;color:var(--text-3);font-weight:600;text-align:center">资格</th>
+          <th style="padding:8px 10px;font-size:11px;color:var(--text-3);font-weight:600;text-align:center">间隙</th>
+          <th style="padding:8px 10px;font-size:11px;color:var(--text-3);font-weight:600">意图</th>
+          <th style="padding:8px 10px;font-size:11px;color:var(--text-3);font-weight:600;text-align:center">紧急</th>
+          <th style="padding:8px 10px;font-size:11px;color:var(--text-3);font-weight:600;text-align:center">相关</th>
+          <th style="padding:8px 10px;font-size:11px;color:var(--text-3);font-weight:600">信号</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+}
+
+function renderDirectedRadar(events) {
+  const el = $('cogDirectedRadar');
+  if (!el) return;
+  if (!events.length || typeof echarts === 'undefined') {
+    el.innerHTML = '<div style="color:var(--text-2);padding:12px">暂无指向性数据</div>';
+    return;
+  }
+  // Aggregate directed_signals from recent events
+  const keys = ['mention_score','reference_score','name_match_score','second_person_score','question_score','imperative_score','topic_relevance_score','emotional_disclosure_score','attention_seeking_score','recency_score','turn_taking_score'];
+  const labels = ['提及','引用','名称匹配','第二人称','问句','祈使','话题相关','情感表露','寻求关注','时效','轮次'];
+  const sums = {};
+  let count = 0;
+  for (const e of events) {
+    const sig = e.directed_signals || {};
+    if (!sig || Object.keys(sig).length === 0) continue;
+    for (const k of keys) {
+      sums[k] = (sums[k] || 0) + (sig[k] || 0);
+    }
+    count++;
+  }
+  if (count === 0) {
+    el.innerHTML = '<div style="color:var(--text-2);padding:12px">暂无指向性数据</div>';
+    return;
+  }
+  const data = keys.map((k) => Math.round((sums[k] / count) * 100) / 100);
+
+  let chart = echarts.getInstanceByDom(el);
+  if (!chart) {
+    chart = echarts.init(el, 'dark');
+    const onResize = () => chart.resize();
+    window.removeEventListener('resize', el._radarResize);
+    window.addEventListener('resize', onResize);
+    el._radarResize = onResize;
+  }
+  chart.setOption({
+    backgroundColor: 'transparent',
+    tooltip: { trigger: 'item' },
+    radar: {
+      indicator: labels.map((name, i) => ({ name, max: 1 })),
+      radius: '65%',
+      axisName: { color: '#8b949e', fontSize: 11 },
+      splitArea: { areaStyle: { color: ['rgba(88,166,255,0.02)', 'rgba(88,166,255,0.06)'] } },
+      axisLine: { lineStyle: { color: 'rgba(139,148,158,0.2)' } },
+      splitLine: { lineStyle: { color: 'rgba(139,148,158,0.15)' } },
+    },
+    series: [{
+      type: 'radar',
+      data: [{
+        value: data,
+        name: '平均指向性信号',
+        areaStyle: { color: 'rgba(88,166,255,0.2)' },
+        lineStyle: { color: '#58a6ff', width: 2 },
+        itemStyle: { color: '#58a6ff' },
+      }],
+    }],
+  }, true);
+}
+
+let _cogGroupFilter = '';
+
+function cogToggleDropdown() {
+  const list = $('cogDropdownList');
+  const arrow = $('cogDropdownArrow');
+  if (!list) return;
+  const show = list.style.display === 'none';
+  list.style.display = show ? 'block' : 'none';
+  if (arrow) arrow.style.transform = show ? 'rotate(180deg)' : 'rotate(0deg)';
+  if (show) {
+    const close = (e) => {
+      if (!e.target.closest('#cogGroupDropdown')) {
+        list.style.display = 'none';
+        if (arrow) arrow.style.transform = 'rotate(0deg)';
+        document.removeEventListener('click', close);
+      }
+    };
+    setTimeout(() => document.addEventListener('click', close), 0);
+  }
+}
+
+function cogSelectGroup(gid) {
+  _cogGroupFilter = gid;
+  const label = $('cogDropdownLabel');
+  if (label) label.textContent = gid || '全部群聊';
+  const list = $('cogDropdownList');
+  if (list) list.style.display = 'none';
+  const arrow = $('cogDropdownArrow');
+  if (arrow) arrow.style.transform = 'rotate(0deg)';
+  loadCognition();
+}
+
 async function loadCognition() {
   renderPersonaSelect();
   if (!currentPersona && personas.length > 0) {
@@ -280,12 +427,39 @@ async function loadCognition() {
   }
   if (!currentPersona) return;
   try {
-    const res = await get(`/personas/${currentPersona}/cognition?limit=100`);
+    const groupId = _cogGroupFilter;
+    const qs = groupId ? `?group_id=${encodeURIComponent(groupId)}&limit=100` : '?limit=100';
+    const res = await get(`/personas/${currentPersona}/cognition${qs}`);
+    const events = res.events || [];
+
+    // Build group dropdown from all events (use unfiltered request for group list)
+    let allEvents = events;
+    if (groupId) {
+      try {
+        const allRes = await get(`/personas/${currentPersona}/cognition?limit=200`);
+        allEvents = allRes.events || [];
+      } catch (e) { /* ignore */ }
+    }
+    const groups = Array.from(new Set(allEvents.map((e) => e.group_id).filter(Boolean))).sort();
+    const listEl = $('cogDropdownList');
+    const labelEl = $('cogDropdownLabel');
+    if (listEl) {
+      const items = [{ gid: '', label: '全部群聊' }].concat(groups.map((g) => ({ gid: g, label: g })));
+      listEl.innerHTML = items.map((it) => {
+        const active = it.gid === _cogGroupFilter;
+        return `<div onclick="cogSelectGroup('${it.gid.replace(/'/g, "\\'")}')" class="diary-dropdown-item" style="padding:8px 12px;font-size:13px;cursor:pointer;color:${active ? 'var(--accent)' : 'var(--text)'};background:${active ? 'var(--surface-2)' : 'transparent'};border-radius:6px;margin:2px 4px"
+          onmouseenter="this.style.background='var(--surface-2)'" onmouseleave="this.style.background='${active ? 'var(--surface-2)' : 'transparent'}'">${it.label}</div>`;
+      }).join('');
+    }
+    if (labelEl) labelEl.textContent = _cogGroupFilter || '全部群聊';
+
+    renderCognitionEvents(events);
+    renderDirectedRadar(events);
     renderEmotionDistribution($('cogEmotionDistribution'), res.emotion_distribution || {});
-    renderEmotionTimeline($('cogEmotionTimeline'), res.events || []);
+    renderEmotionTimeline($('cogEmotionTimeline'), events);
   } catch (e) {
     console.error('loadCognition', e);
-    const els = ['cogEmotionDistribution', 'cogEmotionTimeline'];
+    const els = ['cogEvents', 'cogDirectedRadar', 'cogEmotionDistribution', 'cogEmotionTimeline'];
     els.forEach((id) => { const el = $(id); if (el) el.textContent = '加载失败'; });
   }
 }

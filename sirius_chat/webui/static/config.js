@@ -618,6 +618,8 @@ async function loadExperience() {
     const e = res.experience || {};
     $('expReplyMode').value = e.reply_mode || 'auto';
     $('expSensitivity').value = e.engagement_sensitivity ?? 0.5;
+    $('expExpressiveness').value = e.expressiveness ?? 0.5;
+    updateExpressivenessLabel();
     $('expHeatWindow').value = e.heat_window_seconds ?? 60;
     $('expProactive').value = String(e.proactive_enabled !== false);
     $('expProactiveInterval').value = e.proactive_interval_seconds ?? 300;
@@ -639,12 +641,61 @@ async function loadExperience() {
   } catch (e) {}
 }
 
+function updateExpressivenessLabel() {
+  const s = Math.max(0, Math.min(1, parseFloat($('expSensitivity').value) || 0));
+  const e = Math.max(0, Math.min(1, parseFloat($('expExpressiveness').value) || 0));
+  const el = $('expStylePreview');
+  if (el) {
+    let label = '';
+    let desc = '';
+    if (s >= 0.7 && e >= 0.7) {
+      label = '积极主导型';
+      desc = '决策活跃度高，行为边界宽松。倾向于主动参与对话，抢话门槛较低。';
+    } else if (s >= 0.7 && e <= 0.3) {
+      label = '被动回应型';
+      desc = '决策活跃度高，但行为边界严格。内心倾向于参与，仅在被明确指向时回复，冷却时间较长。';
+    } else if (s <= 0.3 && e >= 0.7) {
+      label = '选择性参与型';
+      desc = '决策活跃度低，但行为边界宽松。多数消息不触发回复，一旦决定参与则表现积极。';
+    } else if (s <= 0.3 && e <= 0.3) {
+      label = '深度观察型';
+      desc = '决策活跃度低，行为边界严格。极少参与对话，仅在必要时回应。';
+    } else {
+      label = '均衡互动型';
+      desc = '决策活跃度与行为边界均处于中等水平，根据对话上下文自然参与。';
+    }
+    el.innerHTML = `<strong style="color:var(--text)">${label}</strong>：${desc}`;
+  }
+  // Update quadrant dot position
+  const dot = $('expQuadrantDot');
+  if (dot) {
+    // Map 0~1 to padding area inside the box (10% ~ 90%)
+    dot.style.left = (10 + s * 80) + '%';
+    dot.style.top = (90 - e * 80) + '%';
+  }
+}
+
+function onQuadrantClick(event) {
+  const rect = event.currentTarget.getBoundingClientRect();
+  const x = event.clientX - rect.left;
+  const y = event.clientY - rect.top;
+  const width = rect.width;
+  const height = rect.height;
+  // Map click position to 0~1 (with 10% padding on each side)
+  const s = Math.max(0, Math.min(1, (x / width - 0.1) / 0.8));
+  const e = Math.max(0, Math.min(1, (0.9 - y / height) / 0.8));
+  $('expSensitivity').value = s.toFixed(1);
+  $('expExpressiveness').value = e.toFixed(1);
+  updateExpressivenessLabel();
+}
+
 async function saveExperience() {
   if (!currentPersona) { toast('请先选择人格', 'error'); return; }
   const res = await post(pApi('/experience'), {
     experience: {
       reply_mode: $('expReplyMode').value,
       engagement_sensitivity: parseFloat($('expSensitivity').value),
+      expressiveness: parseFloat($('expExpressiveness').value),
       heat_window_seconds: parseFloat($('expHeatWindow').value),
       proactive_enabled: $('expProactive').value === 'true',
       proactive_interval_seconds: parseFloat($('expProactiveInterval').value),

@@ -1141,3 +1141,104 @@ class WebUIServer:
         except Exception as exc:
             LOG.warning("读取日记失败 %s: %s", name, exc)
             return _json_response({"error": str(exc)}, 500)
+
+    async def api_persona_users_get(self, request: web.Request) -> web.Response:
+        """Return user semantic profiles for a single persona."""
+        from sirius_chat.memory.semantic.store import SemanticProfileStore
+
+        name = _get_name(request)
+        paths = self.persona_manager.get_persona_paths(name)
+        if paths is None:
+            return _json_response({"error": "人格不存在"}, 404)
+
+        semantic_base = paths.dir / "memory" / "semantic"
+        if not semantic_base.exists():
+            return _json_response({"users": [], "groups": []})
+
+        try:
+            group_id = request.query.get("group_id", "")
+            store = SemanticProfileStore(semantic_base)
+
+            users: list[dict[str, Any]] = []
+            groups: set[str] = set()
+            seen_user_ids: set[str] = set()
+
+            # Collect available group IDs from directory structure
+            users_dir = semantic_base / "users"
+            if users_dir.exists():
+                for g_dir in users_dir.iterdir():
+                    if g_dir.is_dir():
+                        groups.add(g_dir.name)
+
+            if group_id:
+                # Group-scoped query
+                for profile in store.list_group_user_profiles(group_id):
+                    if profile.user_id and profile.user_id not in seen_user_ids:
+                        seen_user_ids.add(profile.user_id)
+                        users.append(profile.to_dict())
+                # Also include global profiles that haven't been seen
+                for profile in store.list_global_user_profiles():
+                    if profile.user_id and profile.user_id not in seen_user_ids:
+                        seen_user_ids.add(profile.user_id)
+                        users.append(profile.to_dict())
+            else:
+                # Global query: start with global profiles
+                for profile in store.list_global_user_profiles():
+                    if profile.user_id and profile.user_id not in seen_user_ids:
+                        seen_user_ids.add(profile.user_id)
+                        users.append(profile.to_dict())
+                # Merge in group-local profiles
+                for g in groups:
+                    for profile in store.list_group_user_profiles(g):
+                        if profile.user_id and profile.user_id not in seen_user_ids:
+                            seen_user_ids.add(profile.user_id)
+                            users.append(profile.to_dict())
+
+            return _json_response({"users": users, "groups": sorted(groups)})
+        except Exception as exc:
+            LOG.warning("读取用户画像失败 %s: %s", name, exc)
+            return _json_response({"error": str(exc)}, 500)
+
+    async def api_persona_user_get(self, request: web.Request) -> web.Response:
+        """Return a single user semantic profile for a persona."""
+        from sirius_chat.memory.semantic.store import SemanticProfileStore
+
+        name = _get_name(request)
+        user_id = str(request.match_info.get("user_id", "")).strip()
+        if not user_id:
+            return _json_response({"error": "缺少用户ID"}, 400)
+
+        paths = self.persona_manager.get_persona_paths(name)
+        if paths is None:
+            return _json_response({"error": "人格不存在"}, 404)
+
+        semantic_base = paths.dir / "memory" / "semantic"
+        if not semantic_base.exists():
+            return _json_response({"error": "用户不存在"}, 404)
+
+        try:
+            group_id = request.query.get("group_id", "")
+            store = SemanticProfileStore(semantic_base)
+
+            # Prefer global profile
+            profile = store.load_global_user_profile(user_id)
+            if profile is None and group_id:
+                profile = store.load_user_profile(group_id, user_id)
+            if profile is None:
+                # Fallback: scan all groups
+                users_dir = semantic_base / "users"
+                if users_dir.exists():
+                    for g_dir in users_dir.iterdir():
+                        if g_dir.is_dir():
+                            p = store.load_user_profile(g_dir.name, user_id)
+                            if p is not None:
+                                profile = p
+                                break
+
+            if profile is None:
+                return _json_response({"error": "用户不存在"}, 404)
+
+            return _json_response({"user": profile.to_dict()})
+        except Exception as exc:
+            LOG.warning("读取用户画像失败 %s/%s: %s", name, user_id, exc)
+            return _json_response({"error": str(exc)}, 500)

@@ -2025,6 +2025,28 @@ class EmotionalGroupChatEngine:
                 duration_ms=cognition_duration_ms,
             )
 
+        # Rhythm context for persistence
+        try:
+            rhythm = self.rhythm_analyzer.analyze(group_id or "", recent)
+            turn_gap_readiness = getattr(rhythm, "turn_gap_readiness", 0.5)
+        except Exception:
+            turn_gap_readiness = 0.5
+
+        # Build directed_signals JSON from 12-dimension scores
+        directed_signals = {
+            "mention_score": getattr(intent, "mention_score", 0.0),
+            "reference_score": getattr(intent, "reference_score", 0.0),
+            "name_match_score": getattr(intent, "name_match_score", 0.0),
+            "second_person_score": getattr(intent, "second_person_score", 0.0),
+            "question_score": getattr(intent, "question_score", 0.0),
+            "imperative_score": getattr(intent, "imperative_score", 0.0),
+            "topic_relevance_score": getattr(intent, "topic_relevance_score", 0.0),
+            "emotional_disclosure_score": getattr(intent, "emotional_disclosure_score", 0.0),
+            "attention_seeking_score": getattr(intent, "attention_seeking_score", 0.0),
+            "recency_score": getattr(intent, "recency_score", 0.0),
+            "turn_taking_score": getattr(intent, "turn_taking_score", 0.0),
+        }
+
         # Persist cognition event for emotional timeline analysis
         try:
             self.cognition_store.add(
@@ -2038,6 +2060,11 @@ class EmotionalGroupChatEngine:
                 urgency_score=getattr(intent, "urgency_score", 0.0),
                 relevance_score=getattr(intent, "relevance_score", 0.5),
                 confidence=getattr(intent, "confidence", 0.8),
+                directed_score=getattr(intent, "directed_score", 0.0),
+                sarcasm_score=getattr(intent, "sarcasm_score", 0.0),
+                entitlement_score=getattr(intent, "entitlement_score", 0.0),
+                turn_gap_readiness=turn_gap_readiness,
+                directed_signals=directed_signals,
             )
         except Exception:
             pass

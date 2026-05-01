@@ -3,8 +3,10 @@
     <label>当前人格</label>
     <div class="persona-select-bar"></div>
   </div>
+
+  <!-- 行为风格 -->
   <div class="card">
-    <h2>体验参数</h2>
+    <h2>行为风格</h2>
     <div class="row">
       <div class="col">
         <div class="form-group">
@@ -19,16 +21,48 @@
       <div class="col">
         <div class="form-group">
           <label>参与敏感度 (0~1)</label>
-          <input type="number" id="expSensitivity" min="0" max="1" step="0.1" value="0.5">
+          <input type="number" id="expSensitivity" min="0" max="1" step="0.1" value="0.5" oninput="updateExpressivenessLabel()">
         </div>
       </div>
       <div class="col">
         <div class="form-group">
-          <label>热度窗口 (秒)</label>
-          <input type="number" id="expHeatWindow" value="60">
+          <label>活泼度 (0~1)</label>
+          <input type="number" id="expExpressiveness" min="0" max="1" step="0.1" value="0.5" oninput="updateExpressivenessLabel()">
         </div>
       </div>
     </div>
+
+    <!-- 四象限图 -->
+    <div style="margin-top:8px;display:flex;justify-content:center">
+      <div style="position:relative;width:100%;max-width:360px;height:260px;border:1px solid var(--border);border-radius:10px;background:var(--bg-2);overflow:hidden;cursor:pointer" onclick="onQuadrantClick(event)">
+        <!-- 轴标题 -->
+        <div style="position:absolute;top:6px;left:50%;transform:translateX(-50%);font-size:10px;color:var(--text-3);letter-spacing:1px">活泼度 ↑</div>
+        <div style="position:absolute;bottom:6px;right:8px;font-size:10px;color:var(--text-3);letter-spacing:1px">参与敏感度 →</div>
+        <!-- 象限标签 -->
+        <div style="position:absolute;top:24%;left:26%;transform:translate(-50%,-50%);font-size:12px;color:var(--text-2);font-weight:600;opacity:0.6;white-space:nowrap">选择性参与</div>
+        <div style="position:absolute;top:24%;left:74%;transform:translate(-50%,-50%);font-size:12px;color:var(--text-2);font-weight:600;opacity:0.6;white-space:nowrap">积极主导</div>
+        <div style="position:absolute;top:74%;left:26%;transform:translate(-50%,-50%);font-size:12px;color:var(--text-2);font-weight:600;opacity:0.6;white-space:nowrap">深度观察</div>
+        <div style="position:absolute;top:74%;left:74%;transform:translate(-50%,-50%);font-size:12px;color:var(--text-2);font-weight:600;opacity:0.6;white-space:nowrap">被动回应</div>
+        <!-- 轴线 -->
+        <div style="position:absolute;top:50%;left:12px;right:12px;height:1px;background:var(--border);opacity:0.35"></div>
+        <div style="position:absolute;left:50%;top:12px;bottom:12px;width:1px;background:var(--border);opacity:0.35"></div>
+        <!-- 轴端标签 -->
+        <div style="position:absolute;bottom:4px;left:12px;font-size:10px;color:var(--text-3)">克制</div>
+        <div style="position:absolute;bottom:4px;right:12px;font-size:10px;color:var(--text-3)">活跃</div>
+        <div style="position:absolute;top:12px;left:6px;font-size:10px;color:var(--text-3)">开放</div>
+        <div style="position:absolute;bottom:22px;left:6px;font-size:10px;color:var(--text-3)">保守</div>
+        <!-- 当前位置点 -->
+        <div id="expQuadrantDot" style="position:absolute;width:14px;height:14px;border-radius:50%;background:var(--accent);border:3px solid var(--surface);box-shadow:0 2px 8px rgba(0,0,0,0.35);transform:translate(-50%,-50%);transition:left 0.18s ease,top 0.18s ease;left:50%;top:50%"></div>
+      </div>
+    </div>
+
+    <!-- 文字描述 -->
+    <div id="expStylePreview" style="margin-top:12px;font-size:13px;color:var(--text-2);padding:10px 14px;background:var(--bg-2);border-radius:6px;border:1px solid var(--border);text-align:center">均衡互动型：决策活跃度与行为边界均处于中等水平，根据对话上下文自然参与。</div>
+  </div>
+
+  <!-- 主动行为 -->
+  <div class="card">
+    <h2>主动行为</h2>
     <div class="row">
       <div class="col">
         <div class="form-group">
@@ -56,6 +90,11 @@
         </div>
       </div>
     </div>
+  </div>
+
+  <!-- 回复控制 -->
+  <div class="card">
+    <h2>回复控制</h2>
     <div class="row">
       <div class="col">
         <div class="form-group">
@@ -66,14 +105,20 @@
           </select>
         </div>
       </div>
-    </div>
-    <div class="row">
+      <div class="col">
+        <div class="form-group">
+          <label>热度窗口 (秒)</label>
+          <input type="number" id="expHeatWindow" value="60">
+        </div>
+      </div>
       <div class="col">
         <div class="form-group">
           <label>待处理消息阈值</label>
           <input type="number" id="expPendingThreshold" value="4">
         </div>
       </div>
+    </div>
+    <div class="row">
       <div class="col">
         <div class="form-group">
           <label>最小回复间隔 (秒)</label>
@@ -86,14 +131,14 @@
           <input type="number" id="expReplyFreqWindow" value="60">
         </div>
       </div>
-    </div>
-    <div class="row">
       <div class="col">
         <div class="form-group">
           <label>频率窗口最大回复数</label>
           <input type="number" id="expReplyFreqMax" value="8">
         </div>
       </div>
+    </div>
+    <div class="row">
       <div class="col">
         <div class="form-group">
           <label>提及豁免频率限制</label>
@@ -103,13 +148,12 @@
           </select>
         </div>
       </div>
-      <div class="col">
-        <div class="form-group">
-          <label>最大并发 LLM 调用</label>
-          <input type="number" id="expMaxConcurrent" value="1">
-        </div>
-      </div>
     </div>
+  </div>
+
+  <!-- 技能与资源 -->
+  <div class="card">
+    <h2>技能与资源</h2>
     <div class="row">
       <div class="col">
         <div class="form-group">
@@ -145,6 +189,19 @@
       </div>
       <div class="col">
         <div class="form-group">
+          <label>最大并发 LLM 调用</label>
+          <input type="number" id="expMaxConcurrent" value="1">
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 记忆与身份 -->
+  <div class="card">
+    <h2>记忆与身份</h2>
+    <div class="row">
+      <div class="col">
+        <div class="form-group">
           <label>记忆深度</label>
           <select id="expMemoryDepth">
             <option value="shallow">浅</option>
@@ -153,13 +210,16 @@
           </select>
         </div>
       </div>
-      <div class="col">
+      <div class="col" style="flex:2">
         <div class="form-group">
           <label>群里其他 AI/Bot 名字</label>
           <input type="text" id="expOtherAINames" placeholder="yuki, 小冰, 逗逗（逗号分隔）">
         </div>
       </div>
     </div>
-    <button class="btn success" onclick="saveExperience()">💾 保存体验参数</button>
+  </div>
+
+  <div style="display:flex;justify-content:flex-end;padding:0 4px 12px">
+    <button class="btn success" onclick="saveExperience()" style="font-size:15px;padding:10px 24px">💾 保存体验参数</button>
   </div>
 </div>

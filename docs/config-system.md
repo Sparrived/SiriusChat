@@ -46,7 +46,7 @@ JSON/JSONC 文件（磁盘）
 | `AgentPreset` | Agent + 全局系统提示词 | `agent`, `global_system_prompt` |
 | `SessionDefaults` | 会话级默认 | `max_history`, `enable_compression` |
 | `MemoryPolicy` | 记忆策略 | `fact_limit`, `confidence_threshold`, `decay_schedule` |
-| `OrchestrationPolicy` | **最重的配置类**：多模型编排 | `unified_model`, `task_models`, `task_temperatures`, `task_max_tokens`, `task_retries`, `task_enabled`, `engagement_sensitivity`, `reply_frequency`, `enable_skills`, `max_skill_rounds`, ... |
+| `OrchestrationPolicy` | **最重的配置类**：多模型编排 | `unified_model`, `task_models`, `task_temperatures`, `task_max_tokens`, `task_retries`, `task_enabled`, `engagement_sensitivity`, `expressiveness`, `reply_frequency`, `enable_skills`, `max_skill_rounds`, ... |
 | `TokenUsageRecord` | 单次 LLM 调用记录 | `prompt_tokens`, `completion_tokens`, `task_name`, `model`, `group_id`, ... |
 | `WorkspaceConfig` | Workspace 级清单 | `layout_version`, `active_agent_key`, `session_defaults`, `orchestration_defaults` |
 | `MultiModelConfig` | 便捷 DTO | 将 `task_models`/`task_temperatures`/`task_max_tokens`/`task_retries` 打包，可与 `OrchestrationPolicy` 互转 |

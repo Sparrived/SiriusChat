@@ -106,6 +106,19 @@ await server.stop()    # 清理站点和 runner
 | `/api/tokens` | GET | 全局 Token 用量汇总（跨所有人格） |
 | `/api/personas/{name}/tokens` | GET | 单个人格 Token 用量详情 |
 
+### 认知分析
+
+| 路由 | 方法 | 功能 |
+|------|------|------|
+| `/api/personas/{name}/cognition` | GET | 认知事件列表 + 情感分布。支持 `?group_id=` 按群筛选，`?limit=` 限制条数 |
+
+### 用户画像
+
+| 路由 | 方法 | 功能 |
+|------|------|------|
+| `/api/personas/{name}/users` | GET | 用户语义画像列表。支持 `?group_id=` 按群筛选 |
+| `/api/personas/{name}/users/{user_id}` | GET | 单用户画像详情。支持 `?group_id=` |
+
 ### 遥测
 
 | 路由 | 方法 | 功能 |
@@ -139,6 +152,11 @@ await server.stop()    # 清理站点和 runner
 - **Dashboard** — 系统状态总览（WebUI 运行状态、人格 worker 状态）
 - **Personas** — 人格列表、创建、启停、删除、日志查看
 - **Config** — 全局配置编辑、Provider 管理、模型选择
+- **Experience** — 行为风格配置（回复模式、敏感度、活泼度、四象限图预览）、主动行为、回复控制、技能与资源、记忆与身份
+- **Cognition** — 认知分析面板：12维指向性雷达图、情感状态时间线、情感分布（支持群筛选）、最近认知事件流水
+- **Users** — 用户画像：关系状态、兴趣图谱、群聊筛选
+- **Diary** — 日记记忆查看与关键词筛选
+- **Token Tracker** — Token 用量统计
 - **Logs** — 日志查看面板
 
 所有 API 调用使用原生 `fetch()`，无前端框架依赖。
