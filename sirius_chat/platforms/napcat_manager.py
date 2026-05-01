@@ -539,9 +539,8 @@ class NapCatManager:
         Returns:
             {"success": bool, "message": str}
         """
-        # 只检查本进程是否已跟踪同一实例；跨进程 QQ 检测只打日志，不阻止启动
-        # （用户的普通 QQ 也会显示为 QQ.exe，不能因此跳过启动）
-        if self._process is not None and self._process.poll() is None:
+        # 检查是否已运行（含跨进程 PID 文件检测）
+        if self.is_running:
             return {"success": True, "message": "NapCat 已在运行"}
 
         # 清理过期的 pid 文件（进程已死但文件残留）
