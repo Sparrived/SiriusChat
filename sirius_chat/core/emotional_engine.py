@@ -2564,7 +2564,9 @@ class EmotionalGroupChatEngine:
         # Record token usage
         from sirius_chat.config import TokenUsageRecord
         from sirius_chat.providers.base import get_last_generation_usage
+        from sirius_chat.token.utils import estimate_tokens
 
+        output_chars = len(reply)
         estimated_output_tokens = estimate_tokens(reply) if reply else 0
         real_usage = get_last_generation_usage()
         if real_usage and isinstance(real_usage, dict):
