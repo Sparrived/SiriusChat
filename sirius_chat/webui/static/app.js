@@ -393,9 +393,9 @@ function renderSectionBars(container, breakdown) {
       emphasis: { focus: 'adjacency' },
       data: nodes,
       links: links,
-      top: 10, bottom: 10, left: 10, right: 100,
-      nodeWidth: 18,
-      nodeGap: 14,
+      top: 10, bottom: 10, left: 10, right: 110,
+      nodeWidth: 28,
+      nodeGap: 10,
       layoutIterations: 32,
       lineStyle: { color: 'gradient', curveness: 0.5, opacity: 0.55 },
       label: {
