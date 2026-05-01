@@ -319,7 +319,7 @@ function renderPersonaCards(animate = true) {
   }
 }
 
-function renderSectionBars(container, breakdown) {
+function renderSectionBars(container, breakdown, breakdownByTask) {
   if (!container) return;
   const rawEntries = Object.entries(breakdown)
     .filter(([k]) => k !== 'total');
@@ -347,25 +347,73 @@ function renderSectionBars(container, breakdown) {
     { name: '输入组成', keys: ['system_prompt_total', 'user_message'], color: '#e3b341' },
   ];
 
+  const taskLabels = {
+    response_generate: '主模型调用',
+    cognition_analyze: '认知分析',
+    diary_generate: '日记生成',
+    diary_consolidate: '日记合并',
+    proactive_generate: '主动生成',
+    persona_generate: '人格生成',
+  };
+  const taskColors = ['#58a6ff', '#3fb950', '#d29922', '#f85149', '#a371f7', '#e3b341'];
+
   const nodes = [{ name: '总输入', itemStyle: { color: '#ffffff' } }];
   const links = [];
 
-  groups.forEach((g) => {
-    let groupSum = 0;
-    g.keys.forEach((key) => {
-      const val = breakdown[key] || 0;
-      if (val) {
-        const label = labels[key] || key;
-        nodes.push({ name: label, itemStyle: { color: g.color } });
-        links.push({ source: g.name, target: label, value: val });
-        groupSum += val;
+  const hasTaskBreakdown = breakdownByTask && Object.keys(breakdownByTask).length > 1;
+
+  if (hasTaskBreakdown) {
+    // 4-level sankey: 总输入 → 任务 → 大类 → 子模块
+    const taskNames = Object.keys(breakdownByTask);
+    taskNames.forEach((taskName, ti) => {
+      const taskLabel = taskLabels[taskName] || taskName;
+      const taskColor = taskColors[ti % taskColors.length];
+      const taskBreakdown = breakdownByTask[taskName];
+      let taskSum = 0;
+
+      groups.forEach((g) => {
+        let groupSum = 0;
+        g.keys.forEach((key) => {
+          const val = taskBreakdown[key] || 0;
+          if (val) {
+            const label = labels[key] || key;
+            const nodeName = `${label} (${taskLabel})`;
+            nodes.push({ name: nodeName, itemStyle: { color: g.color } });
+            links.push({ source: `${g.name} (${taskLabel})`, target: nodeName, value: val });
+            groupSum += val;
+          }
+        });
+        if (groupSum) {
+          nodes.push({ name: `${g.name} (${taskLabel})`, itemStyle: { color: g.color } });
+          links.push({ source: taskLabel, target: `${g.name} (${taskLabel})`, value: groupSum });
+          taskSum += groupSum;
+        }
+      });
+
+      if (taskSum) {
+        nodes.push({ name: taskLabel, itemStyle: { color: taskColor } });
+        links.push({ source: '总输入', target: taskLabel, value: taskSum });
       }
     });
-    if (groupSum) {
-      nodes.push({ name: g.name, itemStyle: { color: g.color } });
-      links.push({ source: '总输入', target: g.name, value: groupSum });
-    }
-  });
+  } else {
+    // 3-level sankey fallback (aggregate view)
+    groups.forEach((g) => {
+      let groupSum = 0;
+      g.keys.forEach((key) => {
+        const val = breakdown[key] || 0;
+        if (val) {
+          const label = labels[key] || key;
+          nodes.push({ name: label, itemStyle: { color: g.color } });
+          links.push({ source: g.name, target: label, value: val });
+          groupSum += val;
+        }
+      });
+      if (groupSum) {
+        nodes.push({ name: g.name, itemStyle: { color: g.color } });
+        links.push({ source: '总输入', target: g.name, value: groupSum });
+      }
+    });
+  }
 
   if (!links.length) {
     container.innerHTML = '<div style="color:var(--text-2);padding:12px">暂无模块分布数据</div>';
@@ -398,14 +446,14 @@ function renderSectionBars(container, breakdown) {
       emphasis: { focus: 'adjacency' },
       data: nodes,
       links: links,
-      top: 10, bottom: 10, left: 10, right: 110,
-      nodeWidth: 28,
+      top: 10, bottom: 10, left: 10, right: hasTaskBreakdown ? 140 : 110,
+      nodeWidth: hasTaskBreakdown ? 22 : 28,
       nodeGap: 10,
       layoutIterations: 32,
       lineStyle: { color: 'gradient', curveness: 0.5, opacity: 0.55 },
       label: {
         color: '#e8eaf0',
-        fontSize: 12,
+        fontSize: 11,
         formatter: (p) => p.name,
       },
       itemStyle: { borderWidth: 1, borderColor: '#0d1117' },
@@ -473,6 +521,94 @@ function renderTimeSeries(container, hourly) {
         itemStyle: { color: '#3fb950' },
         data: completionData,
       },
+    ],
+  }, true);
+}
+
+function renderEmotionDistribution(container, distribution) {
+  if (!container) return;
+  if (!Object.keys(distribution).length || typeof echarts === 'undefined') {
+    container.innerHTML = '<div style="color:var(--text-2);padding:12px">暂无情感分布数据</div>';
+    return;
+  }
+  let chart = echarts.getInstanceByDom(container);
+  if (!chart) {
+    chart = echarts.init(container, 'dark');
+    const onResize = () => chart.resize();
+    window.removeEventListener('resize', container._edResize);
+    window.addEventListener('resize', onResize);
+    container._edResize = onResize;
+  }
+
+  const data = Object.entries(distribution).map(([name, value]) => ({ name: name || '未知', value }));
+  const colors = ['#58a6ff', '#3fb950', '#d29922', '#f85149', '#a371f7', '#e3b341', '#8b949e'];
+
+  chart.setOption({
+    backgroundColor: 'transparent',
+    tooltip: {
+      trigger: 'item',
+      formatter: (p) => `<b>${p.name}</b><br/>${p.value} 次 (${p.percent}%)`,
+    },
+    series: [{
+      type: 'pie',
+      radius: ['30%', '60%'],
+      center: ['40%', '50%'],
+      avoidLabelOverlap: true,
+      itemStyle: { borderRadius: 6, borderColor: '#0d1117', borderWidth: 2 },
+      label: { show: false },
+      emphasis: {
+        label: { show: true, fontSize: 13, fontWeight: 'bold', color: '#e8eaf0' },
+      },
+      data: data.map((d, i) => ({ ...d, itemStyle: { color: colors[i % colors.length] } })),
+    }],
+  }, true);
+}
+
+function renderEmotionTimeline(container, events) {
+  if (!container) return;
+  if (!events.length || typeof echarts === 'undefined') {
+    container.innerHTML = '<div style="color:var(--text-2);padding:12px">暂无情感时间线数据</div>';
+    return;
+  }
+  let chart = echarts.getInstanceByDom(container);
+  if (!chart) {
+    chart = echarts.init(container, 'dark');
+    const onResize = () => chart.resize();
+    window.removeEventListener('resize', container._etResize);
+    window.addEventListener('resize', onResize);
+    container._etResize = onResize;
+  }
+
+  const sorted = [...events].sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+  const dates = sorted.map((e) => new Date((e.timestamp || 0) * 1000).toLocaleString('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }));
+  const valenceData = sorted.map((e) => e.valence || 0);
+  const arousalData = sorted.map((e) => e.arousal || 0);
+  const intensityData = sorted.map((e) => e.intensity || 0);
+
+  chart.setOption({
+    backgroundColor: 'transparent',
+    tooltip: {
+      trigger: 'axis',
+      axisPointer: { type: 'cross', label: { backgroundColor: '#6a7985' } },
+    },
+    legend: { data: ['Valence', 'Arousal', 'Intensity'], textStyle: { color: '#c9d1d9', fontSize: 11 }, top: 0 },
+    grid: { left: 10, right: 10, bottom: 10, top: 32, containLabel: true },
+    xAxis: {
+      type: 'category',
+      data: dates,
+      axisLabel: { fontSize: 10, color: '#8b949e', rotate: 30 },
+      axisLine: { lineStyle: { color: '#30363d' } },
+    },
+    yAxis: {
+      type: 'value',
+      min: -1, max: 1,
+      axisLabel: { fontSize: 10, color: '#8b949e' },
+      splitLine: { lineStyle: { color: '#21262d' } },
+    },
+    series: [
+      { name: 'Valence', type: 'line', smooth: true, showSymbol: false, lineStyle: { width: 2 }, itemStyle: { color: '#58a6ff' }, data: valenceData },
+      { name: 'Arousal', type: 'line', smooth: true, showSymbol: false, lineStyle: { width: 2 }, itemStyle: { color: '#f85149' }, data: arousalData },
+      { name: 'Intensity', type: 'line', smooth: true, showSymbol: false, lineStyle: { width: 2, type: 'dashed' }, itemStyle: { color: '#e3b341' }, data: intensityData },
     ],
   }, true);
 }
@@ -1493,7 +1629,7 @@ async function ttLoadData() {
     _renderExtraStats('tt', res);
 
     // Section breakdown
-    renderSectionBars($('ttSectionBreakdown'), res.section_breakdown || {});
+    renderSectionBars($('ttSectionBreakdown'), res.section_breakdown || {}, res.section_breakdown_by_task || {});
 
     // Task hierarchy (parent/child)
     renderTaskHierarchy('ttTaskHierarchy', res.by_task || []);
@@ -1507,6 +1643,9 @@ async function ttLoadData() {
 
     // Recent calls table
     ttRenderRecentTable();
+
+    // Cognition events (fetch separately)
+    ttLoadCognition(name);
   } catch (e) {
     console.error('ttLoadData', e);
     const els = ['ttSectionBreakdown', 'ttTaskHierarchy', 'ttByModel', 'ttByGroup', 'ttByProvider', 'ttActiveHours'];
@@ -1663,6 +1802,18 @@ function renderTaskHierarchy(containerId, items) {
       data,
     }],
   }, true);
+}
+
+async function ttLoadCognition(name) {
+  try {
+    const res = await get(`/personas/${name}/cognition?limit=100`);
+    renderEmotionDistribution($('ttEmotionDistribution'), res.emotion_distribution || {});
+    renderEmotionTimeline($('ttEmotionTimeline'), res.events || []);
+  } catch (e) {
+    console.error('ttLoadCognition', e);
+    const els = ['ttEmotionDistribution', 'ttEmotionTimeline'];
+    els.forEach((id) => { const el = $(id); if (el) el.textContent = '加载失败'; });
+  }
 }
 
 function ttRenderRecentTable() {

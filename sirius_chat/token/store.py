@@ -349,6 +349,50 @@ class TokenUsageStore:
                     agg[key] = agg.get(key, 0) + int(val)
         return agg
 
+    def get_section_breakdown_by_task(
+        self,
+        *,
+        start_ts: float | None = None,
+        end_ts: float | None = None,
+    ) -> dict[str, dict[str, int]]:
+        """Aggregate per-section token counts grouped by task_name.
+
+        Returns a dict mapping task_name -> {section: tokens}.
+        """
+        clauses: list[str] = ["breakdown_json != ''"]
+        params: list[object] = []
+        if start_ts is not None:
+            clauses.append("timestamp >= ?")
+            params.append(start_ts)
+        if end_ts is not None:
+            clauses.append("timestamp <= ?")
+            params.append(end_ts)
+
+        where = " WHERE " + " AND ".join(clauses)
+        conn = self._connect()
+        rows = conn.execute(
+            f"SELECT task_name, breakdown_json FROM token_usage{where}",
+            params,
+        ).fetchall()
+
+        agg: dict[str, dict[str, int]] = {}
+        for row in rows:
+            task_name = row[0] or "unknown"
+            raw = row[1]
+            if not raw:
+                continue
+            try:
+                bd = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(bd, dict):
+                continue
+            task_agg = agg.setdefault(task_name, {})
+            for key, val in bd.items():
+                if isinstance(val, (int, float)):
+                    task_agg[key] = task_agg.get(key, 0) + int(val)
+        return agg
+
     def get_recent_records_with_breakdown(
         self,
         *,

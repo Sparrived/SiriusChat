@@ -1031,6 +1031,9 @@ class WebUIServer:
                 "section_breakdown": store.get_section_breakdown(
                     start_ts=start_ts, end_ts=end_ts
                 ),
+                "section_breakdown_by_task": store.get_section_breakdown_by_task(
+                    start_ts=start_ts, end_ts=end_ts
+                ),
                 "recent_with_breakdown": store.get_recent_records_with_breakdown(
                     limit=30
                 ),
