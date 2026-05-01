@@ -2663,13 +2663,19 @@ class EmotionalGroupChatEngine:
         elif request is not None:
             system_prompt = getattr(request, "system_prompt", "") or ""
             messages = getattr(request, "messages", []) or []
-            bd = PromptTokenBreakdown()
-            bd.system_prompt_total = estimate_tokens(system_prompt)
-            bd.user_message = sum(
+            sp_total = estimate_tokens(system_prompt)
+            um_total = sum(
                 estimate_tokens(str(m.get("content", ""))) for m in messages
             )
-            bd.total = bd.system_prompt_total + bd.user_message
-            breakdown_json = bd.to_json()
+            breakdown_json = json.dumps(
+                {
+                    "system_prompt_total": sp_total,
+                    "user_message": um_total,
+                    "total": sp_total + um_total,
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
 
         record = TokenUsageRecord(
             actor_id="assistant",
