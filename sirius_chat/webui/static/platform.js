@@ -9,25 +9,54 @@ const THEMES = [
 
 function applyTheme(themeId) {
   const html = document.documentElement;
-  const btn = $('themeToggle');
   const t = THEMES.find((t) => t.id === themeId) || THEMES[0];
   if (themeId === 'dark') {
     html.removeAttribute('data-theme');
   } else {
     html.setAttribute('data-theme', themeId);
   }
-  if (btn) {
-    btn.textContent = t.icon;
-    btn.title = `主题: ${t.label} (点击切换)`;
+  const label = $('themeDropdownLabel');
+  if (label) label.textContent = `${t.icon} ${t.label}`;
+  themeSyncList();
+}
+
+function themeToggleDropdown() {
+  const list = $('themeDropdownList');
+  const arrow = $('themeDropdownArrow');
+  if (!list) return;
+  const open = list.style.display === 'block';
+  list.style.display = open ? 'none' : 'block';
+  if (arrow) arrow.style.transform = open ? 'rotate(0deg)' : 'rotate(180deg)';
+  if (!open) {
+    const close = (e) => {
+      if (!list.contains(e.target) && !$('themeDropdown').contains(e.target)) {
+        list.style.display = 'none';
+        if (arrow) arrow.style.transform = 'rotate(0deg)';
+        document.removeEventListener('click', close);
+      }
+    };
+    setTimeout(() => document.addEventListener('click', close), 0);
   }
 }
 
-function toggleTheme() {
+function themeSyncList() {
+  const list = $('themeDropdownList');
+  if (!list) return;
   const current = document.documentElement.getAttribute('data-theme') || 'dark';
-  const idx = THEMES.findIndex((t) => t.id === current);
-  const next = THEMES[(idx + 1) % THEMES.length].id;
-  applyTheme(next);
-  try { localStorage.setItem('sirius-theme', next); } catch (e) {}
+  list.innerHTML = THEMES.map((t) => {
+    const active = t.id === current;
+    return `<div onclick="themeSelect('${t.id}')" class="diary-dropdown-item" style="padding:8px 12px;font-size:13px;cursor:pointer;color:${active ? 'var(--accent)' : 'var(--text)'};background:${active ? 'var(--surface-2)' : 'transparent'};border-radius:6px;margin:2px 4px"
+      onmouseenter="this.style.background='var(--surface-2)'" onmouseleave="this.style.background='${active ? 'var(--surface-2)' : 'transparent'}'">${t.icon} ${t.label}</div>`;
+  }).join('');
+}
+
+function themeSelect(id) {
+  applyTheme(id);
+  try { localStorage.setItem('sirius-theme', id); } catch (e) {}
+  const list = $('themeDropdownList');
+  const arrow = $('themeDropdownArrow');
+  if (list) list.style.display = 'none';
+  if (arrow) arrow.style.transform = 'rotate(0deg)';
 }
 
 function initTheme() {
