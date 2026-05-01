@@ -10,7 +10,6 @@ from sirius_chat.token.utils import (
     estimate_tokens,
     estimate_tokens_heuristic,
     get_token_estimation_stats,
-    legacy_estimate_tokens,
 )
 
 
@@ -64,13 +63,6 @@ def test_get_token_estimation_stats() -> None:
     assert stats["characters"] == len(text)
     assert stats["chinese_count"] == 2  # 世界 (两个中文字）
     assert stats["english_count"] == 5  # Hello
-
-
-def test_legacy_estimate_tokens() -> None:
-    """向后兼容的旧估算方式"""
-    assert legacy_estimate_tokens("") == 0
-    assert legacy_estimate_tokens("Hello") == 2  # ceil(5/4) = 2
-    assert legacy_estimate_tokens("Hello world") == 3  # ceil(11/4) = 3
 
 
 def test_estimate_tokens_with_different_models() -> None:

@@ -25,9 +25,7 @@ from sirius_chat.token.utils import (
     ModelType,
     estimate_tokens,
     estimate_tokens_heuristic,
-    estimate_tokens_with_tiktoken,
     get_token_estimation_stats,
-    legacy_estimate_tokens,
 )
 
 __all__ = [
@@ -50,8 +48,6 @@ __all__ = [
     "time_series",
     "estimate_tokens",
     "estimate_tokens_heuristic",
-    "estimate_tokens_with_tiktoken",
     "get_token_estimation_stats",
-    "legacy_estimate_tokens",
     "ModelType",
 ]

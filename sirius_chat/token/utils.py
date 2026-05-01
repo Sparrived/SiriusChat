@@ -1,11 +1,8 @@
 """
-Token估算工具模块
+Token 估算工具模块
 
-提供精确的Token数量估算，支持多个模型与语言。
-相比简单的len(text)/4，本模块提供：
-- 中英文混合文本的精确估算
-- 不同模型的特性支持
-- 可选的tiktoken精确计算
+提供精确的 Token 数量估算，默认使用 tiktoken 获得精确值。
+若 tiktoken 因某种原因不可用，自动降级到 CJK-aware 启发式估算。
 """
 
 from __future__ import annotations
@@ -23,9 +20,9 @@ ModelType = Literal[
     "generic",
 ]
 
-# 不同模型的token化比率估算（基于OpenAI tokenizer）
+# 不同模型的 token 化比率估算（启发式 fallback 用）
 MODEL_TOKEN_RATIO = {
-    "gpt-4": {"english": 4, "chinese": 1.0},  # 英文约4字符/token, 中文约1字/token
+    "gpt-4": {"english": 4, "chinese": 1.0},
     "gpt-3.5-turbo": {"english": 4, "chinese": 1.0},
     "claude-3": {"english": 4, "chinese": 1.0},
     "doubao-seed": {"english": 4, "chinese": 1.0},
@@ -33,35 +30,54 @@ MODEL_TOKEN_RATIO = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+
+def estimate_tokens(text: str, *, model: ModelType = "generic") -> int:
+    """估算文本的 token 数量。
+
+    优先使用 tiktoken 获得精确值；若 tiktoken 不可用或模型无对应编码器，
+    自动降级到 ``estimate_tokens_heuristic()``。
+
+    Args:
+        text: 待估算的文本
+        model: 模型类型（用于 tiktoken 编码器选择及启发式 fallback）
+
+    Returns:
+        估算的 token 数量（空文本返回 0）
+    """
+    if not text:
+        return 0
+
+    text = text.strip()
+    if not text:
+        return 0
+
+    tiktoken_result = _estimate_with_tiktoken(text, model=model)
+    if tiktoken_result is not None:
+        return tiktoken_result
+
+    return estimate_tokens_heuristic(text, model=model)
+
+
 def estimate_tokens_heuristic(
     text: str,
     *,
     model: ModelType = "generic",
 ) -> int:
-    """
-    启发式估算文本的token数量
+    """启发式估算文本的 token 数量（无外部依赖）。
 
-    基于语言分析（中英文分离）进行估算，无需外部库。
-    相比简单的len(text)/4，此方法更准确。
+    基于语言分析（中英文分离）进行估算。相比简单的 len(text)/4，
+    此方法对 CJK 文本更准确。
 
     Args:
         text: 待估算的文本
         model: 模型类型，用于选择估算参数
 
     Returns:
-        估算的token数量
-
-    Example:
-        ```python
-        # 英文文本
-        estimate_tokens_heuristic("Hello world")  # ≈ 2-3
-
-        # 中文文本
-        estimate_tokens_heuristic("你好世界")  # ≈ 4
-
-        # 混合文本
-        estimate_tokens_heuristic("Hello 世界 world")  # ≈ 6-7
-        ```
+        估算的 token 数量
     """
     if not text:
         return 0
@@ -70,147 +86,44 @@ def estimate_tokens_heuristic(
     if not text:
         return 0
 
-    # 获取模型参数
     model_params = MODEL_TOKEN_RATIO.get(model, MODEL_TOKEN_RATIO["generic"])
     english_chars_per_token = model_params["english"]
     chinese_char_tokens = model_params["chinese"]
 
-    # 提取中文字符（包含CJK统一表意文字）
+    # CJK 统一表意文字 + 日文假名
     chinese_pattern = r"[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufa6f\u3040-\u309f\u30a0-\u30ff]"
     chinese_chars = re.findall(chinese_pattern, text)
     chinese_count = len(chinese_chars)
 
-    # 提取英文单词（字母序列）
-    english_pattern = r"[a-zA-Z]+"
-    english_words = re.findall(english_pattern, text)
+    english_words = re.findall(r"[a-zA-Z]+", text)
     english_char_count = sum(len(word) for word in english_words)
 
-    # 计算其他字符（数字、空格、标点等）
     other_count = len(text) - chinese_count - english_char_count
 
-    # 估算各部分token数
     chinese_tokens = int(chinese_count * chinese_char_tokens)
     english_tokens = max(1, (english_char_count + english_chars_per_token - 1) // english_chars_per_token)
-    other_tokens = max(0, (other_count + 3) // 4)  # 其他字符粗估为每4个1token
+    other_tokens = max(0, (other_count + 3) // 4)
 
-    total = max(1, chinese_tokens + english_tokens + other_tokens)
-    return total
-
-
-def estimate_tokens_with_tiktoken(text: str, *, model: str = "gpt-4") -> int | None:
-    """
-    使用tiktoken进行精确Token估算
-
-    如果已安装tiktoken库，使用官方tokenizer获得精确计算。
-    否则返回None，调用方应fallback到启发式估算。
-
-    Args:
-        text: 待估算的文本
-        model: tiktoken支持的模型名称
-
-    Returns:
-        精确的token数量，或None（若tiktoken不可用）
-
-    Example:
-        ```python
-        # 如果安装了tiktoken
-        tokens = estimate_tokens_with_tiktoken("Hello world", model="gpt-4")
-        if tokens is not None:
-            print(f"Estimated: {tokens} tokens")
-        else:
-            print("tiktoken not available")
-        ```
-    """
-    try:
-        import tiktoken
-
-        try:
-            encoding = tiktoken.encoding_for_model(model)
-        except KeyError:
-            # 模型不在预设列表，尝试使用基础编码
-            encoding = tiktoken.get_encoding("cl100k_base")
-
-        tokens = encoding.encode(text)
-        return len(tokens)
-    except ImportError:
-        return None
-
-
-def estimate_tokens(
-    text: str,
-    *,
-    model: ModelType = "generic",
-    use_tiktoken: bool = True,
-) -> int:
-    """
-    Smart token估算函数
-
-    优先使用tiktoken获得精确结果，fallback到启发式估算。
-
-    Args:
-        text: 待估算的文本
-        model: 模型类型
-        use_tiktoken: 是否尝试使用tiktoken
-
-    Returns:
-        估算的token数量
-
-    Example:
-        ```python
-        # 自动选择最佳估算方法
-        tokens = estimate_tokens("你好世界", model="gpt-4")
-        print(f"Estimated tokens: {tokens}")
-        ```
-    """
-    if not text:
-        return 0
-
-    text = text.strip()
-    if not text:
-        return 0
-
-    # 尝试使用tiktoken
-    if use_tiktoken:
-        tiktoken_result = estimate_tokens_with_tiktoken(text, model=model)
-        if tiktoken_result is not None:
-            return tiktoken_result
-
-    # Fallback到启发式估算
-    return estimate_tokens_heuristic(text, model=model)
+    return max(1, chinese_tokens + english_tokens + other_tokens)
 
 
 def get_token_estimation_stats(text: str) -> dict[str, int | None]:
-    """
-    获取文本的token估算统计信息
+    """获取文本的 token 估算统计信息（调试用）。
 
-    用于调试和性能分析，返回各部分的详细估算。
-
-    Args:
-        text: 待分析的文本
-
-    Returns:
-        包含以下key的字典：
-        - total: 总token数
-        - heuristic: 启发式估算结果
-        - characters: 总字符数
-        - chinese_count: 中文字符数
-        - english_count: 英文字符数
-        - other_count: 其他字符数
+    同时返回 tiktoken 精确值和启发式估算值，便于对比。
     """
     text = text.strip()
 
-    # 字符统计
     chinese_pattern = r"[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufa6f\u3040-\u309f\u30a0-\u30ff]"
     chinese_chars = re.findall(chinese_pattern, text)
-    english_pattern = r"[a-zA-Z]+"
-    english_words = re.findall(english_pattern, text)
+    english_words = re.findall(r"[a-zA-Z]+", text)
     english_char_count = sum(len(word) for word in english_words)
 
     chinese_count = len(chinese_chars)
     other_count = len(text) - chinese_count - english_char_count
 
     heuristic_tokens = estimate_tokens_heuristic(text)
-    tiktoken_tokens = estimate_tokens_with_tiktoken(text)
+    tiktoken_tokens = _estimate_with_tiktoken(text)
 
     return {
         "total": tiktoken_tokens if tiktoken_tokens is not None else heuristic_tokens,
@@ -223,24 +136,33 @@ def get_token_estimation_stats(text: str) -> dict[str, int | None]:
     }
 
 
-# 向后兼容：提供之前的_estimate_tokens接口
-def legacy_estimate_tokens(text: str) -> int:
-    """
-    旧的粗略估算方式（兼容性）
+# ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
 
-    仅用于兼容之前的代码，建议使用estimate_tokens()。
+
+def _estimate_with_tiktoken(text: str, *, model: str = "gpt-4") -> int | None:
+    """使用 tiktoken 进行精确 token 估算。
+
+    若 tiktoken 未安装或模型无对应编码器，返回 None。
     """
-    if not text:
-        return 0
-    return max(1, (len(text) + 3) // 4)
+    try:
+        import tiktoken
+
+        try:
+            encoding = tiktoken.encoding_for_model(model)
+        except KeyError:
+            encoding = tiktoken.get_encoding("cl100k_base")
+
+        return len(encoding.encode(text))
+    except ImportError:
+        return None
 
 
 __all__ = [
     "estimate_tokens",
     "estimate_tokens_heuristic",
-    "estimate_tokens_with_tiktoken",
     "get_token_estimation_stats",
-    "legacy_estimate_tokens",
     "MODEL_TOKEN_RATIO",
     "ModelType",
 ]

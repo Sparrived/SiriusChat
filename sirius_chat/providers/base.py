@@ -41,9 +41,9 @@ class GenerationRequest:
 def estimate_generation_request_input_tokens(request: GenerationRequest) -> int:
     """Estimate input tokens for logging and budget visibility.
 
-    Uses CJK-aware heuristic from token/utils for better accuracy.
+    Uses tiktoken (preferred) or CJK-aware heuristic fallback.
     """
-    from sirius_chat.token.utils import estimate_tokens_heuristic
+    from sirius_chat.token.utils import estimate_tokens
 
     text_parts = [request.system_prompt]
     for msg in request.messages:
@@ -59,7 +59,7 @@ def estimate_generation_request_input_tokens(request: GenerationRequest) -> int:
     merged = "\n".join(part for part in text_parts if part)
     if not merged:
         return 0
-    return estimate_tokens_heuristic(merged)
+    return estimate_tokens(merged)
 
 
 def build_generation_debug_context(
