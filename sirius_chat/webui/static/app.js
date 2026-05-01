@@ -708,27 +708,6 @@ async function savePersona(jsonStr) {
   loadPersonaStatus();
 }
 
-async function generatePersonaKeywords() {
-  if (!currentPersona) { toast('请先选择人格', 'error'); return; }
-  const btn = $('kwBtn');
-  if (!btn) return;
-  btn.disabled = true;
-  btn.innerHTML = '<span class="spinner"></span> 生成中...';
-  const res = await post(pApi('/persona/keywords'), {
-    name: $('kwName').value,
-    keywords: $('kwKeywords').value,
-    aliases: $('kwAliases').value.split(/\s+/).filter(Boolean),
-    model: $('kwModel').value,
-  });
-  btn.disabled = false;
-  btn.innerHTML = '✨ 生成人格';
-  if (res.success) {
-    $('kwResult').innerHTML = `<div class="preview-box">${JSON.stringify(res.persona, null, 2)}</div><button class="btn success" onclick="savePersona(${JSON.stringify(JSON.stringify(res.persona))})">💾 保存人格</button>`;
-  } else {
-    toast(res.error || '生成失败', 'error');
-  }
-}
-
 const interviewQuestions = [
   '如果把 TA 放进群聊，TA 更像哪类群体角色？是活跃气氛的人、冷幽默观察者、可靠收束者，还是偶尔出手的梗王？',
   'TA 在多人对话里的发言节奏如何？什么时候会抢话、接梗、补刀、收尾，什么时候会选择潜水？',
@@ -881,7 +860,6 @@ async function createBlankPersona() {
   const res = await post('/personas', {
     name: name,
     persona_name: $('cpPersonaName').value.trim() || name,
-    keywords: $('cpKeywords').value.trim() || undefined,
   });
   if (res.success) {
     toast('人格创建成功');
@@ -889,7 +867,6 @@ async function createBlankPersona() {
     selectPersona(name);
     $('cpName').value = '';
     $('cpPersonaName').value = '';
-    $('cpKeywords').value = '';
   } else {
     toast(res.error || '创建失败', 'error');
   }

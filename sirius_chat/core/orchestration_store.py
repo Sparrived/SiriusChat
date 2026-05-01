@@ -1,4 +1,4 @@
-"""Orchestration store: persists model/task configuration for engine and wizard.
+"""Orchestration store: persists model/task configuration for engine.
 
 Path: {work_path}/engine_state/orchestration.json
 """

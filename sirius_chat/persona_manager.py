@@ -228,7 +228,6 @@ class PersonaManager:
         name: str,
         *,
         persona_name: str | None = None,
-        keywords: list[str] | None = None,
         template: str = "default",
     ) -> Path:
         """创建新人格目录及默认配置。"""
@@ -241,9 +240,7 @@ class PersonaManager:
 
         # 1. 生成人格定义
         persona_name = persona_name or name
-        if keywords:
-            persona = PersonaGenerator.from_keywords(persona_name, keywords)
-        elif template == "default":
+        if template == "default":
             persona = PersonaProfile(name=persona_name)
         else:
             persona = PersonaProfile(name=persona_name)

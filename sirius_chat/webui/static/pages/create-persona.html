@@ -19,36 +19,8 @@
           <input type="text" id="cpPersonaName" placeholder="例如：茜">
         </div>
       </div>
-      <div class="col">
-        <div class="form-group">
-          <label>关键词（可选，空格分隔）</label>
-          <input type="text" id="cpKeywords" placeholder="例如：温柔 猫奴 二次元">
-        </div>
-      </div>
     </div>
     <button class="btn success" onclick="createBlankPersona()">➕ 创建空白人格</button>
-  </div>
-
-  <div class="card">
-    <h2>关键词生成</h2>
-    <div class="form-group">
-      <label>角色名称</label>
-      <input type="text" id="kwName" value="小星" placeholder="例如：小星">
-    </div>
-    <div class="form-group">
-      <label>关键词（空格分隔）</label>
-      <input type="text" id="kwKeywords" placeholder="例如：温柔 猫奴 二次元">
-    </div>
-    <div class="form-group">
-      <label>别名（可选，空格分隔）</label>
-      <input type="text" id="kwAliases" placeholder="例如：星酱 星星">
-    </div>
-    <div class="form-group">
-      <label>生成模型</label>
-      <select id="kwModel"></select>
-    </div>
-    <button class="btn" id="kwBtn" onclick="generatePersonaKeywords()">✨ 生成人格</button>
-    <div id="kwResult" style="margin-top:16px"></div>
   </div>
 
   <div class="card">

@@ -106,7 +106,7 @@ class EmotionalGroupChatEngine:
             else:
                 raise ValueError(
                     "No persona provided and no saved persona found. "
-                    "Please create a persona first (via setup wizard or PersonaStore.save)."
+                    "Please create a persona first (via PersonaStore.save)."
                 )
 
         # Load orchestration config (unified model configuration)

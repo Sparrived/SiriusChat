@@ -1,6 +1,6 @@
 """人格生成公共工具。
 
-供 SetupWizard 与 WebUI 复用，包含问卷问题、JSON Schema、以及基于 LLM 的生成函数。
+供 WebUI 复用，包含问卷问题、JSON Schema、以及基于 LLM 的生成函数。
 """
 
 from __future__ import annotations

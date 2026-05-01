@@ -110,7 +110,6 @@ class WebUIServer:
         # 人格配置
         self.app.router.add_get("/api/personas/{name}/persona", self.api_persona_get)
         self.app.router.add_post("/api/personas/{name}/persona/save", self.api_persona_save)
-        self.app.router.add_post("/api/personas/{name}/persona/keywords", self.api_persona_keywords)
         self.app.router.add_get("/api/personas/{name}/persona/interview", self.api_persona_interview_get)
         self.app.router.add_post("/api/personas/{name}/persona/interview", self.api_persona_interview)
 
@@ -195,7 +194,6 @@ class WebUIServer:
             allowed = {
                 "webui_host", "webui_port",
                 "napcat_install_dir", "napcat_base_port", "log_level",
-                "setup_completed", "setup_wizard_running",
             }
             for key in allowed:
                 if key in body:
@@ -260,14 +258,10 @@ class WebUIServer:
         if not name:
             return _json_response({"error": "name is required"}, 400)
         persona_name = str(body.get("persona_name", "") or name).strip()
-        keywords = body.get("keywords")
-        if isinstance(keywords, str):
-            keywords = [k.strip() for k in keywords.split() if k.strip()]
         try:
             pdir = self.persona_manager.create_persona(
                 name,
                 persona_name=persona_name,
-                keywords=keywords,
             )
             return _json_response({
                 "success": True,
@@ -455,37 +449,6 @@ class WebUIServer:
             return _json_response({"success": True, "message": f"人格「{persona.name}」已保存"})
         except Exception as exc:
             LOG.exception("保存人格失败")
-            return _json_response({"error": str(exc)}, 500)
-
-    async def api_persona_keywords(self, request: web.Request) -> web.Response:
-        name = _get_name(request)
-        try:
-            body = await request.json()
-        except Exception:
-            return _json_response({"error": "Invalid JSON"}, 400)
-        p_name = str(body.get("name", "小星")).strip()
-        keywords = [k.strip() for k in str(body.get("keywords", "")).split() if k.strip()]
-        aliases = [a.strip() for a in body.get("aliases", []) if isinstance(a, str) and a.strip()]
-        model = str(body.get("model", "gpt-4o-mini")).strip()
-        # 使用全局 provider 配置
-        provider_mgr = WorkspaceProviderManager(self.persona_manager.data_path)
-        providers = provider_mgr.load()
-        provider = None
-        if providers:
-            from sirius_chat.providers.routing import AutoRoutingProvider
-            provider = AutoRoutingProvider(providers)
-        try:
-            persona = PersonaGenerator.from_keywords(
-                p_name, keywords, provider_async=provider, model=model
-            )
-            persona.aliases = aliases
-            # 自动生成并保存到当前人格目录
-            pdir = self.persona_manager.get_persona_dir(name)
-            PersonaStore.save(pdir, persona)
-            self.persona_manager.reload_persona(name)
-            return _json_response({"success": True, "persona": asdict(persona)})
-        except Exception as exc:
-            LOG.exception("关键词人格生成失败")
             return _json_response({"error": str(exc)}, 500)
 
     async def api_persona_interview_get(self, request: web.Request) -> web.Response:

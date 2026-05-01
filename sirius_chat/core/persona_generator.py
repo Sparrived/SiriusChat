@@ -1,9 +1,8 @@
 """Persona generator: creates rich character profiles for EmotionalGroupChatEngine.
 
-Three creation paths:
+Two creation paths:
   1. Template-based (zero cost) — built-in archetypes
-  2. Keyword-driven (fast) — keyword mapping + optional LLM refinement
-  3. Interview-based (rich) — Q&A questionnaire → LLM generation
+  2. Interview-based (rich) — Q&A questionnaire → LLM generation
 
 Also provides a bridge to convert legacy roleplay `AgentPreset` → `PersonaProfile`.
 """
@@ -28,35 +27,6 @@ _ARCHETYPES: dict[str, dict[str, Any]] = {}
 
 
 # ============================================================================
-# Keyword mapping rules
-# ============================================================================
-
-_KEYWORD_RULES: dict[str, dict[str, Any]] = {
-    # Personality traits
-    "毒舌": {"personality_traits": ["毒舌"], "humor_style": "sarcastic", "communication_style": "concise"},
-    "温柔": {"personality_traits": ["温柔"], "empathy_style": "warm", "communication_style": "detailed"},
-    "活泼": {"personality_traits": ["活泼"], "emotional_baseline": {"valence": 0.6, "arousal": 0.5}, "humor_style": "witty"},
-    "沉稳": {"personality_traits": ["沉稳"], "emotional_baseline": {"valence": 0.0, "arousal": 0.2}, "communication_style": "concise"},
-    "机智": {"personality_traits": ["机智"], "humor_style": "witty", "communication_style": "concise"},
-    "话痨": {"personality_traits": ["话痨"], "reply_frequency": "high"},
-    "安静": {"personality_traits": ["安静"], "reply_frequency": "low", "emoji_preference": "none"},
-    # Roles
-    "程序员": {"social_role": "observer", "communication_style": "concise", "personality_traits": ["逻辑强"]},
-    "猫奴": {"personality_traits": ["温柔", "细腻"], "preferred_topics": ["猫", "宠物"]},
-    "社恐": {"personality_traits": ["内敛", "敏感"], "reply_frequency": "low", "social_role": "observer"},
-    "社牛": {"personality_traits": ["外向", "热情"], "reply_frequency": "high", "social_role": "jester"},
-    # Styles
-    "二次元": {"communication_style": "casual", "catchphrases": ["呐", "对吧对吧"], "emoji_preference": "heavy"},
-    "老干部": {"communication_style": "formal", "emoji_preference": "none", "social_role": "leader"},
-    # Emotional
-    "乐观": {"emotional_baseline": {"valence": 0.6, "arousal": 0.4}},
-    "悲观": {"emotional_baseline": {"valence": -0.3, "arousal": 0.3}},
-    "冷静": {"emotional_baseline": {"valence": 0.0, "arousal": 0.15}},
-    "暴躁": {"emotional_baseline": {"valence": -0.2, "arousal": 0.7}, "stress_response": "容易炸毛"},
-}
-
-
-# ============================================================================
 # Interview questionnaire
 # ============================================================================
 
@@ -77,7 +47,7 @@ _INTERVIEW_QUESTIONS: list[str] = [
 # ============================================================================
 
 class PersonaGenerator:
-    """Creates PersonaProfile via templates, keywords, or interview."""
+    """Creates PersonaProfile via templates or interview."""
 
     @staticmethod
     def from_template(archetype_name: str) -> PersonaProfile:
@@ -92,52 +62,6 @@ class PersonaGenerator:
             created_at=datetime.now(timezone.utc).isoformat(),
             **data,
         )
-        return profile
-
-    @staticmethod
-    def from_keywords(
-        name: str,
-        trait_keywords: list[str],
-        *,
-        provider_async: Any | None = None,
-        model: str = "gpt-4o-mini",
-    ) -> PersonaProfile:
-        """Create persona from keyword tags. Applies rule-based mapping,
-        optionally refines with LLM if provider is available."""
-        profile = PersonaProfile(
-            name=name,
-            source="keyword",
-            created_at=datetime.now(timezone.utc).isoformat(),
-        )
-
-        # Apply keyword rules
-        for kw in trait_keywords:
-            rule = _KEYWORD_RULES.get(kw)
-            if rule:
-                for key, value in rule.items():
-                    if key in ("personality_traits", "preferred_topics", "catchphrases"):
-                        existing = getattr(profile, key)
-                        if isinstance(value, list):
-                            setattr(profile, key, existing + [v for v in value if v not in existing])
-                        else:
-                            if value not in existing:
-                                existing.append(value)
-                    elif key == "emotional_baseline":
-                        profile.emotional_baseline.update(value)
-                    else:
-                        setattr(profile, key, value)
-
-        # Optional LLM refinement
-        if provider_async is not None:
-            try:
-                refined = PersonaGenerator._llm_refine_keywords(
-                    profile, trait_keywords, provider_async, model=model
-                )
-                if refined:
-                    profile = refined
-            except Exception as exc:
-                logger.warning("LLM persona refinement failed: %s", exc)
-
         return profile
 
     @staticmethod
@@ -163,49 +87,6 @@ class PersonaGenerator:
             raise RuntimeError(f"LLM persona generation failed: {exc}") from exc
 
         return PersonaGenerator._parse_llm_persona_output(name, raw)
-
-    # ------------------------------------------------------------------
-    # LLM refinement (keyword path)
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _llm_refine_keywords(
-        base: PersonaProfile,
-        keywords: list[str],
-        provider_async: Any,
-        model: str = "gpt-4o-mini",
-    ) -> PersonaProfile | None:
-        prompt = (
-            f"请基于以下关键词为一个群聊角色生成设定，输出JSON。\n"
-            f"关键词：{', '.join(keywords)}\n"
-            f"当前基础设定：{json.dumps(base.to_dict(), ensure_ascii=False, indent=None)}\n\n"
-            f"请输出一个JSON对象，包含以下字段（都是字符串或字符串数组）：\n"
-            f"persona_summary, personality_traits, backstory, communication_style, "
-            f"catchphrases, empathy_style, humor_style\n"
-            f"只输出JSON，不要其他内容。"
-        )
-        request = _build_llm_request(prompt, purpose="persona_generate", model=model)
-
-        if hasattr(provider_async, "generate_async"):
-            raw = _run_async(provider_async.generate_async, request)
-        else:
-            raw = _run_sync(provider_async.generate, request)
-
-        try:
-            data = json.loads(_extract_json(raw))
-            # Merge into base profile
-            for key in ("persona_summary", "backstory", "communication_style",
-                       "empathy_style", "humor_style"):
-                if data.get(key):
-                    setattr(base, key, data[key])
-            for key in ("personality_traits", "catchphrases"):
-                if data.get(key):
-                    existing = set(getattr(base, key))
-                    existing.update(data[key])
-                    setattr(base, key, list(existing))
-            return base
-        except Exception:
-            return None
 
     # ------------------------------------------------------------------
     # Interview prompt builder
@@ -279,17 +160,10 @@ class PersonaGenerator:
             max_tokens_preference=agent.max_tokens,
         )
 
-        # Parse persona keywords
+        # Parse persona traits
         if agent.persona:
             traits = [t.strip() for t in agent.persona.split("/") if t.strip()]
             profile.personality_traits = traits
-            # Try keyword mapping on each trait
-            for t in traits:
-                rule = _KEYWORD_RULES.get(t)
-                if rule:
-                    for key, value in rule.items():
-                        if not getattr(profile, key):
-                            setattr(profile, key, value)
 
         # Parse global_system_prompt for structured sections
         profile.full_system_prompt = prompt

@@ -22,7 +22,6 @@ from .napcat_adapter import NapCatAdapter
 from .napcat_bridge import ConfigStore, NapCatBridge
 from .napcat_manager import NapCatManager
 from .runtime import EngineRuntime
-from .setup_wizard import SetupWizard
 
 __all__ = [
     "NapCatAdapter",
@@ -30,5 +29,4 @@ __all__ = [
     "ConfigStore",
     "EngineRuntime",
     "NapCatManager",
-    "SetupWizard",
 ]

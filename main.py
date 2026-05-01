@@ -217,7 +217,6 @@ def _cmd_persona_create(args: argparse.Namespace) -> None:
         pdir = manager.create_persona(
             args.name,
             persona_name=args.name,
-            keywords=args.keywords or [],
         )
         print(f"人格已创建: {args.name}")
         print(f"  目录: {pdir}")
@@ -418,7 +417,6 @@ def main() -> int:
 
     create_parser = persona_sub.add_parser("create", help="创建人格")
     create_parser.add_argument("name", help="人格标识名（目录名）")
-    create_parser.add_argument("--keywords", nargs="*", default=[], help="关键词（空格分隔）")
 
     remove_parser = persona_sub.add_parser("remove", help="删除人格")
     remove_parser.add_argument("name", help="人格标识名")

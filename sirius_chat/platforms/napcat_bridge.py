@@ -5,7 +5,6 @@
     - 渲染 prompt、处理 multimodal（图片缓存）
     - 调用 EmotionalGroupChatEngine 生成回复
     - 后台 delayed / proactive / reminder 投递
-    - 处理 /ai-on /ai-off 等管理指令
 """
 
 from __future__ import annotations
@@ -27,8 +26,6 @@ from .napcat_adapter import NapCatAdapter
 from .runtime import EngineRuntime
 
 LOG = logging.getLogger("sirius.platforms.napcat_bridge")
-
-_COMMAND_NAMES = frozenset({"ai-on", "ai-off", "ai-status"})
 
 
 def _extract_text_from_segments(message: list[dict[str, Any]]) -> str:
@@ -113,7 +110,7 @@ class NapCatBridge:
         self._reply_locks: dict[str, asyncio.Lock] = {}
         self._image_cache_dir = self.work_path / "image_cache"
 
-        # Bridge 内部状态持久化（setup wizard 等）
+        # Bridge 内部状态持久化
         # 旧文件 qq_bridge_config.json 已废弃，adapter 配置统一走 adapters.json
         self._state_path = self.work_path / "engine_state" / "bridge_state.json"
         self._store = ConfigStore(self._state_path)
@@ -195,10 +192,6 @@ class NapCatBridge:
         if not prompt:
             return
 
-        head = prompt.strip().split()[0].lower().lstrip("/")
-        if head in _COMMAND_NAMES:
-            return
-
         if not self.runtime.is_ready():
             now = asyncio.get_event_loop().time()
             if now - self._last_not_ready_log >= self._NOT_READY_LOG_INTERVAL:
@@ -231,12 +224,6 @@ class NapCatBridge:
 
         prompt = await self._render_private_prompt(event)
         if not prompt:
-            return
-
-        head = prompt.strip().split()[0].lower().lstrip("/")
-        if head in _COMMAND_NAMES:
-            return
-        if prompt.strip().startswith("/"):
             return
 
         if not self.runtime.is_ready():
@@ -602,7 +589,7 @@ class NapCatBridge:
 
     @property
     def data(self) -> dict[str, Any]:
-        """暴露底层配置字典，兼容 setup_wizard 等外部模块。修改后需手动调用 save_data() 持久化。"""
+        """暴露底层配置字典。修改后需手动调用 save_data() 持久化。"""
         return self._store._config
 
     def save_data(self) -> None:

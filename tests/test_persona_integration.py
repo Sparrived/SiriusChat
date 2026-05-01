@@ -44,23 +44,6 @@ class TestTemplatePersonaCreation:
             PersonaGenerator.from_template("nonexistent")
 
 
-class TestKeywordPersonaGeneration:
-    def test_keyword_mapping_applies(self):
-        p = PersonaGenerator.from_keywords("测试", ["毒舌", "程序员", "乐观"])
-        assert p.name == "测试"
-        assert "毒舌" in p.personality_traits
-        assert "逻辑强" in p.personality_traits
-        assert p.humor_style == "sarcastic"
-        assert p.communication_style == "concise"
-        assert p.emotional_baseline["valence"] == 0.6
-
-    def test_unknown_keywords_ignored(self):
-        p = PersonaGenerator.from_keywords("测试", ["完全不存在的词"])
-        assert p.name == "测试"
-        # Should still produce a valid profile with defaults
-        assert p.source == "keyword"
-
-
 class TestEngineLoadsPersona:
     def test_engine_requires_persona(self, tmp_path):
         from sirius_chat.core.emotional_engine import EmotionalGroupChatEngine
