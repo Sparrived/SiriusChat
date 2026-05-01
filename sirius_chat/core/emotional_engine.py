@@ -14,6 +14,7 @@ import asyncio
 import json
 import logging
 import re
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -673,6 +674,7 @@ class EmotionalGroupChatEngine:
                         continue
 
                     cfg = self.model_router.resolve("memory_extract")
+                    t0 = time.perf_counter()
                     result = await self.diary_manager.generate_from_candidates(
                         group_id=group_id,
                         candidates=candidates,
@@ -683,6 +685,7 @@ class EmotionalGroupChatEngine:
                         provider_async=self.provider_async,
                         model_name=cfg.model_name,
                     )
+                    diary_duration_ms = round((time.perf_counter() - t0) * 1000, 2)
                     generator = getattr(self.diary_manager, "_generator", None)
                     if generator is not None:
                         self._record_subtask_tokens(
@@ -690,6 +693,7 @@ class EmotionalGroupChatEngine:
                             model_name=cfg.model_name,
                             group_id=group_id,
                             request=getattr(generator, "_last_request", None),
+                            duration_ms=diary_duration_ms,
                         )
                     if result:
                         promoted_total += 1
@@ -744,12 +748,15 @@ class EmotionalGroupChatEngine:
                         max_tokens=512,
                         purpose="diary_consolidate",
                     )
+                    t0 = time.perf_counter()
                     raw = await self.provider_async.generate_async(request)
+                    consolidate_duration_ms = round((time.perf_counter() - t0) * 1000, 2)
                     self._record_subtask_tokens(
                         task_name="diary_consolidate",
                         model_name=cfg.model_name,
                         group_id=group_id,
                         request=request,
+                        duration_ms=consolidate_duration_ms,
                     )
                     entry = consolidator.parse_merge_result(raw, cluster)
                     if entry:
@@ -1934,15 +1941,18 @@ class EmotionalGroupChatEngine:
             context_messages = recent
 
         # Joint cognition (emotion + intent + empathy in one pass)
+        t0 = time.perf_counter()
         emotion, intent, empathy = await self.cognition_analyzer.analyze(
             content, user_id, group_id, context_messages
         )
+        cognition_duration_ms = round((time.perf_counter() - t0) * 1000, 2)
         if self.cognition_analyzer._last_request is not None:
             self._record_subtask_tokens(
                 task_name="cognition_analyze",
                 model_name=self._task_models.get("cognition_analyze", self._default_model),
                 group_id=group_id or "",
                 request=self.cognition_analyzer._last_request,
+                duration_ms=cognition_duration_ms,
             )
 
         # Memory retrieval now happens in execution via ContextAssembler
@@ -2462,12 +2472,14 @@ class EmotionalGroupChatEngine:
             )
 
         # Call provider (async or sync via thread)
+        t0 = time.perf_counter()
         if hasattr(self.provider_async, "generate_async"):
             reply = await self.provider_async.generate_async(request)
         elif isinstance(self.provider_async, LLMProvider):
             reply = await asyncio.to_thread(self.provider_async.generate, request)
         else:
             raise RuntimeError("配置的提供商未实现 generate/generate_async 方法。")
+        duration_ms = round((time.perf_counter() - t0) * 1000, 2)
 
         # Sanitise: strip any echoed <conversation_history> XML blocks
         reply = self._strip_conversation_history_xml(reply)
@@ -2527,6 +2539,7 @@ class EmotionalGroupChatEngine:
             group_id=group_id,
             provider_name=provider_name,
             breakdown_json=breakdown_json,
+            duration_ms=duration_ms,
         )
         self.token_usage_records.append(record)
 
@@ -2544,6 +2557,7 @@ class EmotionalGroupChatEngine:
         model_name: str,
         group_id: str,
         request: Any | None = None,
+        duration_ms: float = 0.0,
     ) -> None:
         """Record token usage for a sub-task (cognition, diary, etc.)."""
         from sirius_chat.config import TokenUsageRecord
@@ -2593,6 +2607,7 @@ class EmotionalGroupChatEngine:
             group_id=group_id,
             provider_name=getattr(self.provider_async, "_provider_name", "unknown"),
             breakdown_json=breakdown_json,
+            duration_ms=duration_ms,
         )
         self.token_usage_records.append(record)
         if self.token_store is not None:

@@ -14,7 +14,7 @@ from pathlib import Path
 from sirius_chat.config import TokenUsageRecord
 from sirius_chat.utils.layout import WorkspaceLayout
 
-_SCHEMA_VERSION = 3
+_SCHEMA_VERSION = 4
 
 _CREATE_TABLE = """\
 CREATE TABLE IF NOT EXISTS token_usage (
@@ -34,7 +34,8 @@ CREATE TABLE IF NOT EXISTS token_usage (
     persona_name    TEXT    NOT NULL DEFAULT '',
     group_id        TEXT    NOT NULL DEFAULT '',
     provider_name   TEXT    NOT NULL DEFAULT '',
-    breakdown_json  TEXT    NOT NULL DEFAULT ''
+    breakdown_json  TEXT    NOT NULL DEFAULT '',
+    duration_ms     REAL    NOT NULL DEFAULT 0
 );
 """
 
@@ -111,7 +112,8 @@ class TokenUsageStore:
             ("persona_name", "ALTER TABLE token_usage ADD COLUMN persona_name TEXT NOT NULL DEFAULT ''"),
             ("group_id", "ALTER TABLE token_usage ADD COLUMN group_id TEXT NOT NULL DEFAULT ''"),
             ("provider_name", "ALTER TABLE token_usage ADD COLUMN provider_name TEXT NOT NULL DEFAULT ''"),
-    ("breakdown_json", "ALTER TABLE token_usage ADD COLUMN breakdown_json TEXT NOT NULL DEFAULT ''"),
+            ("breakdown_json", "ALTER TABLE token_usage ADD COLUMN breakdown_json TEXT NOT NULL DEFAULT ''"),
+            ("duration_ms", "ALTER TABLE token_usage ADD COLUMN duration_ms REAL NOT NULL DEFAULT 0"),
         ):
             if col not in existing_cols:
                 conn.execute(ddl)
@@ -139,8 +141,8 @@ class TokenUsageStore:
                (session_id, timestamp, actor_id, task_name, model,
                 prompt_tokens, completion_tokens, total_tokens,
                 input_chars, output_chars, estimation_method, retries_used,
-                persona_name, group_id, provider_name, breakdown_json)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                persona_name, group_id, provider_name, breakdown_json, duration_ms)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 self._session_id,
                 ts,
@@ -158,6 +160,7 @@ class TokenUsageStore:
                 record.group_id,
                 record.provider_name,
                 record.breakdown_json,
+                record.duration_ms,
             ),
         )
         conn.commit()
@@ -173,8 +176,8 @@ class TokenUsageStore:
                (session_id, timestamp, actor_id, task_name, model,
                 prompt_tokens, completion_tokens, total_tokens,
                 input_chars, output_chars, estimation_method, retries_used,
-                persona_name, group_id, provider_name, breakdown_json)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                persona_name, group_id, provider_name, breakdown_json, duration_ms)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             [
                 (
                     self._session_id,
@@ -193,6 +196,7 @@ class TokenUsageStore:
                     r.group_id,
                     r.provider_name,
                     r.breakdown_json,
+                    r.duration_ms,
                 )
                 for r in records
             ],
@@ -397,6 +401,106 @@ class TokenUsageStore:
             (limit,),
         ).fetchall()
         return [dict(row) for row in rows]
+
+    def get_hourly_summary(
+        self,
+        *,
+        start_ts: float | None = None,
+        end_ts: float | None = None,
+    ) -> list[dict[str, Any]]:
+        """Aggregate token usage by hour bucket.
+
+        Returns a list of dicts ordered chronologically, each containing:
+        ``hour_ts`` (unix timestamp floored to hour), ``calls``,
+        ``prompt_tokens``, ``completion_tokens``, ``total_tokens``.
+        """
+        clauses: list[str] = []
+        params: list[object] = []
+        if start_ts is not None:
+            clauses.append("timestamp >= ?")
+            params.append(start_ts)
+        if end_ts is not None:
+            clauses.append("timestamp <= ?")
+            params.append(end_ts)
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        conn = self._connect()
+        rows = conn.execute(
+            f"""SELECT
+                CAST(timestamp / 3600 AS INTEGER) * 3600 as hour_ts,
+                COUNT(*) as calls,
+                COALESCE(SUM(prompt_tokens), 0) as prompt_tokens,
+                COALESCE(SUM(completion_tokens), 0) as completion_tokens,
+                COALESCE(SUM(total_tokens), 0) as total_tokens
+            FROM token_usage{where}
+            GROUP BY hour_ts
+            ORDER BY hour_ts""",
+            params,
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def get_retry_stats(self) -> dict[str, Any]:
+        """Return retry rate and total retry count."""
+        conn = self._connect()
+        row = conn.execute(
+            """SELECT
+                COUNT(*) as total_calls,
+                COALESCE(SUM(retries_used), 0) as total_retries,
+                CASE WHEN COUNT(*) > 0
+                    THEN ROUND(SUM(CASE WHEN retries_used > 0 THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 2)
+                    ELSE 0.0
+                END as retry_rate_pct
+            FROM token_usage"""
+        ).fetchone()
+        return dict(row) if row else {"total_calls": 0, "total_retries": 0, "retry_rate_pct": 0.0}
+
+    def get_duration_stats(self) -> dict[str, Any]:
+        """Return average duration per task."""
+        conn = self._connect()
+        rows = conn.execute(
+            """SELECT
+                task_name,
+                COUNT(*) as calls,
+                ROUND(AVG(duration_ms), 2) as avg_ms,
+                ROUND(MIN(duration_ms), 2) as min_ms,
+                ROUND(MAX(duration_ms), 2) as max_ms
+            FROM token_usage
+            WHERE duration_ms > 0
+            GROUP BY task_name
+            ORDER BY avg_ms DESC"""
+        ).fetchall()
+        overall = conn.execute(
+            """SELECT
+                COUNT(*) as calls,
+                ROUND(AVG(duration_ms), 2) as avg_ms,
+                ROUND(MIN(duration_ms), 2) as min_ms,
+                ROUND(MAX(duration_ms), 2) as max_ms
+            FROM token_usage
+            WHERE duration_ms > 0"""
+        ).fetchone()
+        return {
+            "by_task": [dict(row) for row in rows],
+            "overall": dict(overall) if overall else {"calls": 0, "avg_ms": 0.0, "min_ms": 0.0, "max_ms": 0.0},
+        }
+
+    def get_efficiency_stats(self) -> dict[str, Any]:
+        """Return chars-per-token efficiency metrics."""
+        conn = self._connect()
+        row = conn.execute(
+            """SELECT
+                COUNT(*) as calls,
+                COALESCE(SUM(input_chars), 0) as total_input_chars,
+                COALESCE(SUM(prompt_tokens), 0) as total_prompt_tokens,
+                CASE WHEN SUM(prompt_tokens) > 0
+                    THEN ROUND(SUM(input_chars) * 1.0 / SUM(prompt_tokens), 2)
+                    ELSE 0.0
+                END as chars_per_token,
+                CASE WHEN SUM(prompt_tokens) > 0
+                    THEN ROUND(SUM(output_chars) * 1.0 / SUM(completion_tokens), 2)
+                    ELSE 0.0
+                END as output_chars_per_token
+            FROM token_usage"""
+        ).fetchone()
+        return dict(row) if row else {"calls": 0, "chars_per_token": 0.0, "output_chars_per_token": 0.0}
 
     @property
     def db_path(self) -> Path:

@@ -416,6 +416,90 @@ function renderSectionBars(container, breakdown) {
   container._sankeyResize = onResize;
 }
 
+function renderTimeSeries(container, hourly) {
+  if (!container) return;
+  if (!hourly.length || typeof echarts === 'undefined') {
+    container.innerHTML = '<div style="color:var(--text-2);padding:12px">暂无趋势数据</div>';
+    return;
+  }
+  let chart = echarts.getInstanceByDom(container);
+  if (chart) chart.dispose();
+  chart = echarts.init(container, 'dark');
+
+  const dates = hourly.map((h) => new Date(h.hour_ts * 1000).toLocaleString('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit' }));
+  const promptData = hourly.map((h) => h.prompt_tokens || 0);
+  const completionData = hourly.map((h) => h.completion_tokens || 0);
+
+  chart.setOption({
+    backgroundColor: 'transparent',
+    tooltip: {
+      trigger: 'axis',
+      axisPointer: { type: 'cross', label: { backgroundColor: '#6a7985' } },
+    },
+    legend: { data: ['Prompt', 'Completion'], textStyle: { color: '#c9d1d9', fontSize: 11 }, top: 0 },
+    grid: { left: 10, right: 10, bottom: 10, top: 32, containLabel: true },
+    xAxis: {
+      type: 'category',
+      boundaryGap: false,
+      data: dates,
+      axisLabel: { fontSize: 10, color: '#8b949e', rotate: 30 },
+      axisLine: { lineStyle: { color: '#30363d' } },
+    },
+    yAxis: {
+      type: 'value',
+      axisLabel: { fontSize: 10, color: '#8b949e' },
+      splitLine: { lineStyle: { color: '#21262d' } },
+    },
+    series: [
+      {
+        name: 'Prompt',
+        type: 'line',
+        smooth: true,
+        showSymbol: false,
+        areaStyle: { opacity: 0.15 },
+        lineStyle: { width: 2 },
+        itemStyle: { color: '#58a6ff' },
+        data: promptData,
+      },
+      {
+        name: 'Completion',
+        type: 'line',
+        smooth: true,
+        showSymbol: false,
+        areaStyle: { opacity: 0.15 },
+        lineStyle: { width: 2 },
+        itemStyle: { color: '#3fb950' },
+        data: completionData,
+      },
+    ],
+  });
+
+  const onResize = () => chart.resize();
+  window.removeEventListener('resize', container._tsResize);
+  window.addEventListener('resize', onResize);
+  container._tsResize = onResize;
+}
+
+function _renderExtraStats(prefix, res) {
+  const ratioEl = $(`${prefix}Ratio`);
+  const effEl = $(`${prefix}Efficiency`);
+  const retryEl = $(`${prefix}RetryRate`);
+  const durEl = $(`${prefix}AvgDuration`);
+
+  const ratio = res.ratio || {};
+  if (ratioEl) ratioEl.textContent = `${ratio.prompt_pct || 0}% / ${ratio.completion_pct || 0}%`;
+
+  const eff = res.efficiency_stats || {};
+  if (effEl) effEl.textContent = eff.chars_per_token ? `${eff.chars_per_token} 字/Token` : '—';
+
+  const retry = res.retry_stats || {};
+  if (retryEl) retryEl.textContent = retry.retry_rate_pct ? `${retry.retry_rate_pct}%` : '—';
+
+  const dur = res.duration_stats || {};
+  const overall = dur.overall || {};
+  if (durEl) durEl.textContent = overall.avg_ms ? `${overall.avg_ms} ms` : '—';
+}
+
 async function loadTokenStats() {
   const callsEl = $('dashTokenCalls');
   const promptEl = $('dashTokenPrompt');
@@ -425,6 +509,7 @@ async function loadTokenStats() {
   const avgDetailEl = $('dashTokenAvgRoundDetail');
   const personasEl = $('dashTokenPersonas');
   const sectionEl = $('dashSectionBreakdown');
+  const tsEl = $('dashTimeSeries');
   if (!callsEl || !totalEl) return;
   try {
     const res = await get('/tokens');
@@ -444,6 +529,8 @@ async function loadTokenStats() {
       const calls = avg.total_calls || 0;
       avgDetailEl.textContent = calls ? `${calls} 次回复 · ${(avg.avg_prompt_tokens || 0).toLocaleString()} + ${(avg.avg_completion_tokens || 0).toLocaleString()}` : '暂无回复记录';
     }
+    renderTimeSeries(tsEl, res.hourly || []);
+    _renderExtraStats('dash', res);
     if (personasEl) {
       if (!personaList.length) {
         personasEl.innerHTML = '<div style="color:var(--text-2);padding:12px">暂无 Token 消耗记录</div>';
@@ -1309,6 +1396,12 @@ async function ttLoadData() {
       const calls = avg.total_calls || 0;
       avgDetailEl.textContent = calls ? `${calls} 次回复 · ${(avg.avg_prompt_tokens || 0).toLocaleString()} + ${(avg.avg_completion_tokens || 0).toLocaleString()}` : '暂无回复记录';
     }
+
+    // Time series
+    renderTimeSeries($('ttTimeSeries'), res.hourly || []);
+
+    // Extra stats
+    _renderExtraStats('tt', res);
 
     // Section breakdown
     renderSectionBars($('ttSectionBreakdown'), res.section_breakdown || {});

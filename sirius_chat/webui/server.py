@@ -876,11 +876,61 @@ class WebUIServer:
             "total_calls": response_total_calls,
         }
 
+        # Aggregate retry, duration, efficiency across all personas
+        global_retry = {"total_calls": 0, "total_retries": 0, "retry_rate_pct": 0.0}
+        global_duration = {"calls": 0, "avg_ms": 0.0, "min_ms": 0.0, "max_ms": 0.0}
+        global_efficiency = {"calls": 0, "chars_per_token": 0.0, "output_chars_per_token": 0.0}
+        all_hourly: dict[int, dict[str, Any]] = {}
+        for persona_info in self.persona_manager.list_personas():
+            name = persona_info.get("name")
+            if not name:
+                continue
+            paths = self.persona_manager.get_persona_paths(name)
+            if paths is None:
+                continue
+            db_path = paths.dir / "token" / "token_usage.db"
+            if not db_path.exists():
+                continue
+            try:
+                store = TokenUsageStore(db_path, session_id="default")
+                rs = store.get_retry_stats()
+                global_retry["total_calls"] += rs.get("total_calls", 0)
+                global_retry["total_retries"] += rs.get("total_retries", 0)
+                ds = store.get_duration_stats()["overall"]
+                global_duration["calls"] += ds.get("calls", 0)
+                es = store.get_efficiency_stats()
+                global_efficiency["calls"] += es.get("calls", 0)
+                for hr in store.get_hourly_summary():
+                    hts = int(hr["hour_ts"])
+                    if hts not in all_hourly:
+                        all_hourly[hts] = {"hour_ts": hts, "calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+                    for k in ("calls", "prompt_tokens", "completion_tokens", "total_tokens"):
+                        all_hourly[hts][k] += hr.get(k, 0)
+                store.close()
+            except Exception:
+                continue
+        if global_retry["total_calls"]:
+            global_retry["retry_rate_pct"] = round(global_retry["total_retries"] * 100.0 / global_retry["total_calls"], 2)
+
+        # Prompt / Completion ratio
+        total_prompt = total_summary.get("total_prompt_tokens", 0)
+        total_completion = total_summary.get("total_completion_tokens", 0)
+        total_all = total_prompt + total_completion
+        ratio = {
+            "prompt_pct": round(total_prompt * 100.0 / total_all, 1) if total_all else 0,
+            "completion_pct": round(total_completion * 100.0 / total_all, 1) if total_all else 0,
+        }
+
         return _json_response({
             "summary": total_summary,
             "personas": persona_breakdown,
             "section_breakdown": global_section_breakdown,
             "response_avg": response_avg,
+            "hourly": sorted(all_hourly.values(), key=lambda x: x["hour_ts"]),
+            "retry_stats": global_retry,
+            "duration_stats": global_duration,
+            "efficiency_stats": global_efficiency,
+            "ratio": ratio,
         })
 
     async def api_persona_tokens_get(self, request: web.Request) -> web.Response:
@@ -924,8 +974,16 @@ class WebUIServer:
                 "avg_completion_tokens": round(response_row.get("completion_tokens", 0) / response_calls) if response_calls else 0,
                 "total_calls": response_calls,
             }
+            summary = store.get_summary()
+            total_prompt = summary.get("total_prompt_tokens", 0)
+            total_completion = summary.get("total_completion_tokens", 0)
+            total_all = total_prompt + total_completion
+            ratio = {
+                "prompt_pct": round(total_prompt * 100.0 / total_all, 1) if total_all else 0,
+                "completion_pct": round(total_completion * 100.0 / total_all, 1) if total_all else 0,
+            }
             result = {
-                "summary": store.get_summary(),
+                "summary": summary,
                 "by_task": by_task,
                 "by_model": store.get_breakdown_by("model"),
                 "by_group": store.get_breakdown_by("group_id"),
@@ -937,6 +995,11 @@ class WebUIServer:
                     limit=30
                 ),
                 "response_avg": response_avg,
+                "hourly": store.get_hourly_summary(start_ts=start_ts, end_ts=end_ts),
+                "retry_stats": store.get_retry_stats(),
+                "duration_stats": store.get_duration_stats(),
+                "efficiency_stats": store.get_efficiency_stats(),
+                "ratio": ratio,
             }
             store.close()
             return _json_response(result)

@@ -265,6 +265,7 @@ class TokenUsageRecord(JsonSerializable):
     group_id: str = ""
     provider_name: str = ""
     breakdown_json: str = ""
+    duration_ms: float = 0.0
 
 
 @dataclass(slots=True)
