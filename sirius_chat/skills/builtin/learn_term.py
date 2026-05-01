@@ -10,7 +10,7 @@ from typing import Any
 
 SKILL_META = {
     "name": "learn_term",
-    "description": "记录聊天中出现的专有名词、黑话、梗或模型可能不了解的新概念。当遇到陌生术语时调用，供后续对话自动引用。",
+    "description": "记录聊天中出现的专有名词、黑话、梗或模型可能不了解的新概念。当遇到陌生术语时调用，供后续对话自动引用。应当主动使用该技能去学习更多的词汇的意思和新梗，提升自己的理解能力。",
     "version": "1.0.0",
     "tags": ["memory", "learning"],
     "silent": True,

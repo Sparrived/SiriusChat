@@ -13,7 +13,7 @@ from pathlib import Path
 from sirius_chat.config import TokenUsageRecord
 from sirius_chat.utils.layout import WorkspaceLayout
 
-_SCHEMA_VERSION = 2
+_SCHEMA_VERSION = 3
 
 _CREATE_TABLE = """\
 CREATE TABLE IF NOT EXISTS token_usage (
@@ -32,7 +32,8 @@ CREATE TABLE IF NOT EXISTS token_usage (
     retries_used    INTEGER NOT NULL DEFAULT 0,
     persona_name    TEXT    NOT NULL DEFAULT '',
     group_id        TEXT    NOT NULL DEFAULT '',
-    provider_name   TEXT    NOT NULL DEFAULT ''
+    provider_name   TEXT    NOT NULL DEFAULT '',
+    breakdown_json  TEXT    NOT NULL DEFAULT ''
 );
 """
 
@@ -109,6 +110,7 @@ class TokenUsageStore:
             ("persona_name", "ALTER TABLE token_usage ADD COLUMN persona_name TEXT NOT NULL DEFAULT ''"),
             ("group_id", "ALTER TABLE token_usage ADD COLUMN group_id TEXT NOT NULL DEFAULT ''"),
             ("provider_name", "ALTER TABLE token_usage ADD COLUMN provider_name TEXT NOT NULL DEFAULT ''"),
+    ("breakdown_json", "ALTER TABLE token_usage ADD COLUMN breakdown_json TEXT NOT NULL DEFAULT ''"),
         ):
             if col not in existing_cols:
                 conn.execute(ddl)
@@ -136,8 +138,8 @@ class TokenUsageStore:
                (session_id, timestamp, actor_id, task_name, model,
                 prompt_tokens, completion_tokens, total_tokens,
                 input_chars, output_chars, estimation_method, retries_used,
-                persona_name, group_id, provider_name)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                persona_name, group_id, provider_name, breakdown_json)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 self._session_id,
                 ts,
@@ -154,6 +156,7 @@ class TokenUsageStore:
                 record.persona_name,
                 record.group_id,
                 record.provider_name,
+                record.breakdown_json,
             ),
         )
         conn.commit()
@@ -169,8 +172,8 @@ class TokenUsageStore:
                (session_id, timestamp, actor_id, task_name, model,
                 prompt_tokens, completion_tokens, total_tokens,
                 input_chars, output_chars, estimation_method, retries_used,
-                persona_name, group_id, provider_name)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                persona_name, group_id, provider_name, breakdown_json)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             [
                 (
                     self._session_id,
@@ -188,6 +191,7 @@ class TokenUsageStore:
                     r.persona_name,
                     r.group_id,
                     r.provider_name,
+                    r.breakdown_json,
                 )
                 for r in records
             ],

@@ -7,7 +7,9 @@ Token 估算工具模块
 
 from __future__ import annotations
 
+import json
 import re
+from dataclasses import dataclass, field
 from typing import Literal
 
 # 模型特性
@@ -159,10 +161,84 @@ def _estimate_with_tiktoken(text: str, *, model: str = "gpt-4") -> int | None:
         return None
 
 
+# ---------------------------------------------------------------------------
+# Prompt token breakdown
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class PromptTokenBreakdown:
+    """Per-module token count breakdown for a single prompt.
+
+    Captures how many tokens each section of the assembled prompt consumes,
+    enabling precise budget diagnosis and optimisation.
+    """
+
+    # ResponseAssembler sections
+    persona: int = 0
+    identity: int = 0
+    output_constraint: int = 0
+    emotion: int = 0
+    empathy: int = 0
+    relationship: int = 0
+    memory: int = 0
+    interests: int = 0
+    group_style: int = 0
+    participants: int = 0
+    cross_group: int = 0
+    skills: int = 0
+    glossary: int = 0
+    output_format: int = 0
+
+    # ContextAssembler sections
+    diary: int = 0
+    history_xml: int = 0
+    cross_group_xml: int = 0
+
+    # User message
+    user_message: int = 0
+
+    # Totals
+    system_prompt_total: int = 0
+    total: int = 0
+
+    def to_dict(self) -> dict[str, int]:
+        return {
+            "persona": self.persona,
+            "identity": self.identity,
+            "output_constraint": self.output_constraint,
+            "emotion": self.emotion,
+            "empathy": self.empathy,
+            "relationship": self.relationship,
+            "memory": self.memory,
+            "interests": self.interests,
+            "group_style": self.group_style,
+            "participants": self.participants,
+            "cross_group": self.cross_group,
+            "skills": self.skills,
+            "glossary": self.glossary,
+            "output_format": self.output_format,
+            "diary": self.diary,
+            "history_xml": self.history_xml,
+            "cross_group_xml": self.cross_group_xml,
+            "user_message": self.user_message,
+            "system_prompt_total": self.system_prompt_total,
+            "total": self.total,
+        }
+
+    def to_json(self) -> str:
+        return json.dumps(self.to_dict(), ensure_ascii=False, separators=(",", ":"))
+
+    @classmethod
+    def from_json(cls, raw: str) -> "PromptTokenBreakdown":
+        return cls(**json.loads(raw))
+
+
 __all__ = [
     "estimate_tokens",
     "estimate_tokens_heuristic",
     "get_token_estimation_stats",
+    "PromptTokenBreakdown",
     "MODEL_TOKEN_RATIO",
     "ModelType",
 ]

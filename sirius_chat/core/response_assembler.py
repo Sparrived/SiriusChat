@@ -17,6 +17,7 @@ from sirius_chat.models.intent_v3 import IntentAnalysisV3
 from sirius_chat.models.models import Message
 from sirius_chat.models.persona import PersonaProfile
 from sirius_chat.memory.semantic.models import GroupSemanticProfile, UserSemanticProfile
+from sirius_chat.token.utils import PromptTokenBreakdown, estimate_tokens
 
 
 # ---------------------------------------------------------------------------
@@ -33,6 +34,11 @@ class PromptBundle:
 
     system_prompt: str
     user_content: str
+    token_breakdown: PromptTokenBreakdown = None  # type: ignore[assignment]
+
+    def __post_init__(self) -> None:
+        if self.token_breakdown is None:
+            self.token_breakdown = PromptTokenBreakdown()
 
 
 # ---------------------------------------------------------------------------
@@ -297,15 +303,23 @@ class ResponseAssembler:
             )
 
         sections: list[str] = []
+        bd = PromptTokenBreakdown()
+
+        def _add(section_text: str, attr: str) -> None:
+            """Append section and record its token count."""
+            sections.append(section_text)
+            count = estimate_tokens(section_text)
+            setattr(bd, attr, getattr(bd, attr) + count)
 
         # 1. Role script (persona-driven narrative brief + scene anchor)
         if self.persona:
-            sections.append(self.persona.build_system_prompt())
+            _add(self.persona.build_system_prompt(), "persona")
         else:
-            sections.append(
+            _add(
                 "[场景定位]\n"
                 "你在一个多人聊天场景里。看到消息时，按自己的性格和情绪决定是否回应。\n"
-                "回应时请控制在 30 字以内，用自然口语，短句优先，不解释、不总结、不机械关怀，不要换行。"
+                "回应时请控制在 30 字以内，用自然口语，短句优先，不解释、不总结、不机械关怀，不要换行。",
+                "persona",
             )
 
         # 1b. Identity verification note (anti-spoofing)
@@ -315,46 +329,47 @@ class ResponseAssembler:
             if self.persona.aliases:
                 identity_bits.append(f"别名：{'、'.join(self.persona.aliases)}")
         identity_header = "，".join(identity_bits) + "。" if identity_bits else ""
-        sections.append(
+        _add(
             "[身份识别]\n"
             + identity_header
             + "每条消息都标注了发送者的「群名片」和「QQ号」。\n"
             "注意：群名片可以被用户随意修改，QQ号是固定不变的唯一标识。\n"
-            "如果有人改了群名片冒充别人，请以QQ号为准。"
+            "如果有人改了群名片冒充别人，请以QQ号为准。",
+            "identity",
         )
         if self.other_ai_names:
-            sections.append(
+            _add(
                 "[群成员区分]\n"
                 f"群里还有以下 AI/Bot（他们不是你）：{', '.join(self.other_ai_names)}。\n"
                 "你可以正常参与关于他们的话题讨论，但要分清身份——"
                 "当有人@他们或直呼他们名字时，那是在叫他们，不是你；"
-                "不要把自己的名字和他们的名字搞混，也不要替他们回答。"
+                "不要把自己的名字和他们的名字搞混，也不要替他们回答。",
+                "identity",
             )
 
         # 1c. Output constraint to prevent the model from imitating speaker prefixes
-        sections.append(
+        _add(
             "[输出约束]\n"
             "历史对话中会出现 ``[上下文] 下一条消息来自...`` 的系统标注，"
             "这只是为了帮你识别不同说话者，你的回复中绝对不要输出任何 ``[上下文]`` 开头的内容。\n"
-            "直接输出你要说的话即可，不要添加任何说话者前缀或系统标记。"
+            "直接输出你要说的话即可，不要添加任何说话者前缀或系统标记。",
+            "output_constraint",
         )
 
         # 2. Emotional context
-        sections.append(
-            self._build_emotion_context(emotion, assistant_emotion, group_profile)
-        )
+        _add(self._build_emotion_context(emotion, assistant_emotion, group_profile), "emotion")
 
         # 3. Empathy strategy (persona-aware)
-        sections.append(self._build_empathy_instruction(empathy_strategy))
+        _add(self._build_empathy_instruction(empathy_strategy), "empathy")
 
         # 3b. Relationship context (qualitative, no raw numbers)
         rel_ctx = self._build_relationship_context(user_profile, caller_is_developer)
         if rel_ctx:
-            sections.append(rel_ctx)
+            _add(rel_ctx, "relationship")
 
         # 4. Memory references
         if memories:
-            sections.append(self._build_memory_context(memories))
+            _add(self._build_memory_context(memories), "memory")
 
         # 4b. User interest graph (high-participation topics)
         if user_profile and user_profile.interest_graph:
@@ -363,21 +378,21 @@ class ResponseAssembler:
                 if getattr(node, "participation", 0) >= 0.3 and getattr(node, "topic", "")
             ]
             if interests:
-                sections.append(f"[用户兴趣] {'、'.join(interests[:3])}")
+                _add(f"[用户兴趣] {'、'.join(interests[:3])}", "interests")
 
         # 5. Group style + persona style
         if group_profile:
-            sections.append(self._build_group_style(group_profile, style_params))
+            _add(self._build_group_style(group_profile, style_params), "group_style")
         else:
-            sections.append(self._build_style_fallback(style_params))
+            _add(self._build_style_fallback(style_params), "group_style")
 
         # 6. Recent participants context (group members)
         if recent_participants:
-            sections.append(self._build_participants_context(recent_participants))
+            _add(self._build_participants_context(recent_participants), "participants")
 
         # 6b. Cross-group user awareness (if available)
         if cross_group_context:
-            sections.append(f"[跨群认知]\n{cross_group_context}")
+            _add(f"[跨群认知]\n{cross_group_context}", "cross_group")
 
         # 7. Available skills
         if self.skill_registry is not None:
@@ -386,24 +401,30 @@ class ResponseAssembler:
                 adapter_type=getattr(message, "adapter_type", None),
             )
             if skill_desc:
-                sections.append(skill_desc)
+                _add(skill_desc, "skills")
 
         # 7b. Glossary (terms mentioned in current message)
         if glossary_section:
-            sections.append(glossary_section)
+            _add(glossary_section, "glossary")
 
         # 8. Dual-output format (inner monologue + spoken reply)
         if self.enable_dual_output:
-            sections.append(self._build_output_format())
+            _add(self._build_output_format(), "output_format")
 
         system_prompt = "\n\n".join(sections)
+        bd.system_prompt_total = estimate_tokens(system_prompt)
 
         # Current user message content (will be appended as the last user
         # message in the standard OpenAI messages array by the engine).
         sender_info = self._build_sender_line(message)
         user_content = f"{sender_info}{message.content}"
+        bd.user_message = estimate_tokens(user_content)
 
-        return PromptBundle(system_prompt=system_prompt, user_content=user_content)
+        return PromptBundle(
+            system_prompt=system_prompt,
+            user_content=user_content,
+            token_breakdown=bd,
+        )
 
     # ------------------------------------------------------------------
     # Section builders
@@ -639,49 +660,65 @@ class ResponseAssembler:
                 heat_level=heat_level, pace=pace, persona=self.persona,
                 is_group_chat=is_group_chat,
             )
+        bd = PromptTokenBreakdown()
+        sections: list[str] = []
+
+        def _add(section_text: str, attr: str) -> None:
+            sections.append(section_text)
+            setattr(bd, attr, getattr(bd, attr) + estimate_tokens(section_text))
+
         identity = (
             self.persona.build_system_prompt() if self.persona
             else "[场景定位]\n你在一个多人聊天场景里。"
         )
-        sections = [
-            identity,
-            "[当前场景] 群里的话题有了自然间隙，你决定插一句。",
-        ]
+        _add(identity, "persona")
+        _add("[当前场景] 群里的话题有了自然间隙，你决定插一句。", "emotion")
         if is_first_interaction:
-            sections.append(
+            _add(
                 "[首次互动]\n"
                 "这是你第一次和当前说话者交流，请保持友好、礼貌，"
-                "可以适当自我介绍，让对方感受到你的热情和善意。"
+                "可以适当自我介绍，让对方感受到你的热情和善意。",
+                "emotion",
             )
         rel_ctx = self._build_relationship_contexts(user_profiles, caller_is_developer)
         if rel_ctx:
-            sections.append(rel_ctx)
+            _add(rel_ctx, "relationship")
         if self.other_ai_names:
-            sections.append(
+            _add(
                 "[群成员区分]\n"
                 f"群里还有以下 AI/Bot（他们不是你）：{', '.join(self.other_ai_names)}。\n"
                 "你可以正常参与关于他们的话题讨论，但要分清身份——"
                 "当有人@他们或直呼他们名字时，那是在叫他们，不是你；"
-                "不要把自己的名字和他们的名字搞混，也不要替他们回答。"
+                "不要把自己的名字和他们的名字搞混，也不要替他们回答。",
+                "identity",
             )
         if group_profile:
             style = group_profile.typical_interaction_style or "balanced"
             style_desc = {"humorous": "轻松幽默", "formal": "正式严谨", "balanced": "自然平衡"}.get(style, style)
-            sections.append(f"[群体风格] {style_desc}")
+            _add(f"[群体风格] {style_desc}", "group_style")
         # Available skills (before user message so it lands in system prompt)
         if self.skill_registry is not None:
             skill_desc = self._build_skill_descriptions(
                 caller_is_developer=caller_is_developer, adapter_type=adapter_type
             )
             if skill_desc:
-                sections.append(skill_desc)
-        sections.append(f"[长度要求] {style_params.length_instruction or '保持简洁，控制在 30 字以内，禁止换行'}")
+                _add(skill_desc, "skills")
+        _add(f"[长度要求] {style_params.length_instruction or '保持简洁，控制在 30 字以内，禁止换行'}", "output_constraint")
         # Dual-output format must land in system prompt
         if self.enable_dual_output:
-            sections.append(self._build_output_format())
+            _add(self._build_output_format(), "output_format")
+        if glossary_section:
+            _add(glossary_section, "glossary")
 
         system_prompt = "\n\n".join(sections)
-        return PromptBundle(system_prompt=system_prompt, user_content=message_content)
+        bd.system_prompt_total = estimate_tokens(system_prompt)
+        bd.user_message = estimate_tokens(message_content)
+
+        return PromptBundle(
+            system_prompt=system_prompt,
+            user_content=message_content,
+            token_breakdown=bd,
+        )
 
     def assemble_proactive(
         self,
@@ -695,41 +732,57 @@ class ResponseAssembler:
         adapter_type: str | None = None,
     ) -> PromptBundle:
         """Build prompt for proactive initiation."""
+        bd = PromptTokenBreakdown()
+        sections: list[str] = []
+
+        def _add(section_text: str, attr: str) -> None:
+            sections.append(section_text)
+            setattr(bd, attr, getattr(bd, attr) + estimate_tokens(section_text))
+
         identity = (
             self.persona.build_system_prompt() if self.persona
             else "[场景定位]\n你在一个多人聊天场景里。"
         )
-        sections = [
-            identity,
-            "[当前场景] 群里一段时间没人说话，你决定开口说点什么。",
-            f"[触发原因] {trigger_reason}",
-            f"[语气] {suggested_tone}",
+        _add(identity, "persona")
+        _add("[当前场景] 群里一段时间没人说话，你决定开口说点什么。", "emotion")
+        _add(f"[触发原因] {trigger_reason}", "emotion")
+        _add(f"[语气] {suggested_tone}", "group_style")
+        _add(
             "[提醒] 不要和之前主动发起过的话题或句式重复，尝试换个角度或新的切入点。",
-        ]
+            "output_constraint",
+        )
         if self.other_ai_names:
-            sections.append(
+            _add(
                 "[群成员区分]\n"
                 f"群里还有以下 AI/Bot（他们不是你）：{', '.join(self.other_ai_names)}。\n"
                 "你可以正常参与关于他们的话题讨论，但要分清身份——"
                 "当有人@他们或直呼他们名字时，那是在叫他们，不是你；"
-                "不要把自己的名字和他们的名字搞混，也不要替他们回答。"
+                "不要把自己的名字和他们的名字搞混，也不要替他们回答。",
+                "identity",
             )
         if topic_context:
-            sections.append(
-                f"[话题建议] 你可以基于这段群聊记忆自然地开启话题：{topic_context}"
-            )
+            _add(f"[话题建议] 你可以基于这段群聊记忆自然地开启话题：{topic_context}", "memory")
         if is_group_chat:
-            sections.append("[长度要求] 群聊请控制在 30 字以内，不要换行，像真实群友一样自然接话。")
+            _add(
+                "[长度要求] 群聊请控制在 30 字以内，不要换行，像真实群友一样自然接话。",
+                "output_constraint",
+            )
         if group_profile and group_profile.interest_topics:
             topics = ", ".join(group_profile.interest_topics[:3])
-            sections.append(f"[群体兴趣] {topics}")
+            _add(f"[群体兴趣] {topics}", "interests")
         if glossary_section:
-            sections.append(glossary_section)
+            _add(glossary_section, "glossary")
         # Dual-output format so the model follows the same think+say pattern
         if self.enable_dual_output:
-            sections.append(self._build_output_format())
+            _add(self._build_output_format(), "output_format")
 
         system_prompt = "\n\n".join(sections)
-        # Proactive has no explicit user message; the engine will append an
-        # empty user message if no history ends with a user turn.
-        return PromptBundle(system_prompt=system_prompt, user_content=topic_context or "...")
+        bd.system_prompt_total = estimate_tokens(system_prompt)
+        user_content = topic_context or "..."
+        bd.user_message = estimate_tokens(user_content)
+
+        return PromptBundle(
+            system_prompt=system_prompt,
+            user_content=user_content,
+            token_breakdown=bd,
+        )

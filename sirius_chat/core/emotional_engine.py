@@ -799,7 +799,7 @@ class EmotionalGroupChatEngine:
             is_group_chat=True,
         )
         # Use ContextAssembler to build full messages with diary RAG + XML history
-        msgs = self.context_assembler.build_messages(
+        msgs, ca_breakdown = self.context_assembler.build_messages_with_breakdown(
             group_id=group_id,
             current_query=bundle.user_content or "...",
             system_prompt=bundle.system_prompt,
@@ -808,7 +808,21 @@ class EmotionalGroupChatEngine:
         )
         system_prompt = msgs[0]["content"]
         messages = msgs[1:]
-        raw_reply = await self._generate(system_prompt, messages, group_id, style)
+
+        # Merge assembler breakdown into response-assembler breakdown
+        token_breakdown = bundle.token_breakdown.to_dict() if bundle.token_breakdown else {}
+        for key, val in ca_breakdown.items():
+            if key == "diary":
+                token_breakdown["memory"] = token_breakdown.get("memory", 0) + val
+            elif key == "history_xml":
+                token_breakdown["history"] = token_breakdown.get("history", 0) + val
+            elif key == "cross_group_xml":
+                token_breakdown["cross_group"] = token_breakdown.get("cross_group", 0) + val
+
+        raw_reply = await self._generate(
+            system_prompt, messages, group_id, style,
+            token_breakdown=token_breakdown,
+        )
         reply = raw_reply.strip()
 
         await self.event_bus.emit(
@@ -1280,7 +1294,7 @@ class EmotionalGroupChatEngine:
         )
 
         # Use ContextAssembler to build full messages with diary RAG + XML history
-        msgs = self.context_assembler.build_messages(
+        msgs, ca_breakdown = self.context_assembler.build_messages_with_breakdown(
             group_id=group_id,
             current_query=bundle.user_content,
             system_prompt=bundle.system_prompt,
@@ -1289,6 +1303,16 @@ class EmotionalGroupChatEngine:
         )
         system_prompt = msgs[0]["content"]
         messages = msgs[1:]
+
+        # Merge assembler breakdown into response-assembler breakdown
+        token_breakdown = bundle.token_breakdown.to_dict() if bundle.token_breakdown else {}
+        for key, val in ca_breakdown.items():
+            if key == "diary":
+                token_breakdown["memory"] = token_breakdown.get("memory", 0) + val
+            elif key == "history_xml":
+                token_breakdown["history"] = token_breakdown.get("history", 0) + val
+            elif key == "cross_group_xml":
+                token_breakdown["cross_group"] = token_breakdown.get("cross_group", 0) + val
 
         # Collect multimodal inputs from all triggered items and inject into user message
         all_multimodal: list[dict[str, str]] = []
@@ -1337,6 +1361,7 @@ class EmotionalGroupChatEngine:
             raw_reply = await self._generate(
                 system_prompt, messages, group_id,
                 user_communication_style=user_comm_style,
+                token_breakdown=token_breakdown,
             )
             reply = raw_reply.strip()
 
@@ -2356,6 +2381,7 @@ class EmotionalGroupChatEngine:
         task_name: str = "response_generate",
         urgency: int = 0,
         user_communication_style: str = "",
+        token_breakdown: dict[str, int] | None = None,
     ) -> str:
         """Call LLM provider to generate response.
 
@@ -2455,6 +2481,19 @@ class EmotionalGroupChatEngine:
         persona_name = self.persona.name if self.persona else ""
         provider_name = getattr(self.provider_async, "_provider_name", "unknown")
 
+        # Build breakdown JSON if available
+        breakdown_json = ""
+        if token_breakdown:
+            from sirius_chat.token.utils import PromptTokenBreakdown
+
+            bd = PromptTokenBreakdown(**token_breakdown)
+            bd.system_prompt_total = estimate_tokens(system_prompt)
+            bd.user_message = sum(
+                estimate_tokens(str(m.get("content", ""))) for m in messages
+            )
+            bd.total = bd.system_prompt_total + bd.user_message
+            breakdown_json = bd.to_json()
+
         record = TokenUsageRecord(
             actor_id="assistant",
             task_name=task_name,
@@ -2470,6 +2509,7 @@ class EmotionalGroupChatEngine:
             persona_name=persona_name,
             group_id=group_id,
             provider_name=provider_name,
+            breakdown_json=breakdown_json,
         )
         self.token_usage_records.append(record)
 

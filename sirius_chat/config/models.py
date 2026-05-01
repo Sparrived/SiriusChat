@@ -264,6 +264,7 @@ class TokenUsageRecord(JsonSerializable):
     persona_name: str = ""
     group_id: str = ""
     provider_name: str = ""
+    breakdown_json: str = ""
 
 
 @dataclass(slots=True)

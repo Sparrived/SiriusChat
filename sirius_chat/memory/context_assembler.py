@@ -101,6 +101,63 @@ class ContextAssembler:
             {"role": "user", "content": current_query},
         ]
 
+    def build_messages_with_breakdown(
+        self,
+        group_id: str,
+        current_query: str,
+        system_prompt: str,
+        *,
+        search_query: str = "",
+        recent_n: int = 5,
+        diary_top_k: int = 12,
+        diary_token_budget: int = 800,
+        cross_group_user_id: str = "",
+        cross_group_enabled: bool = False,
+    ) -> tuple[list[dict[str, str]], dict[str, int]]:
+        """Build OpenAI messages array and return per-module token breakdown.
+
+        Returns a tuple of (messages, breakdown) where breakdown contains
+        token counts for diary, history_xml, and cross_group_xml sections.
+        """
+        diary_entries = self._diary.retrieve(
+            query=search_query or current_query,
+            group_id=group_id,
+            top_k=diary_top_k,
+            max_tokens_budget=diary_token_budget,
+        )
+
+        history_xml = self._build_history_xml(group_id, n=recent_n)
+
+        cross_group_xml = ""
+        if cross_group_enabled and cross_group_user_id:
+            cross_group_xml = self._build_cross_group_history_xml(
+                cross_group_user_id, exclude_group_id=group_id, n=recent_n
+            )
+
+        enriched_system = self._enrich_system_prompt(
+            system_prompt, diary_entries, history_xml, cross_group_xml
+        )
+
+        # Compute per-module token counts
+        from sirius_chat.token.utils import estimate_tokens
+
+        breakdown: dict[str, int] = {}
+        if diary_entries:
+            diary_text = "\n".join(
+                f"{i}. {e.content if i <= 5 else e.summary}"
+                for i, e in enumerate(diary_entries[:12], 1)
+            )
+            breakdown["diary"] = estimate_tokens(diary_text)
+        if history_xml:
+            breakdown["history_xml"] = estimate_tokens(history_xml)
+        if cross_group_xml:
+            breakdown["cross_group_xml"] = estimate_tokens(cross_group_xml)
+
+        return [
+            {"role": "system", "content": enriched_system},
+            {"role": "user", "content": current_query},
+        ], breakdown
+
     def build_history_xml(self, group_id: str, n: int = 10) -> str:
         """Build XML representation of recent conversation history.
 
