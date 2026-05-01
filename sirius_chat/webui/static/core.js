@@ -626,7 +626,9 @@ const _EMOTION_CN = {
   JOY: '喜悦', CONTENTMENT: '满足', RELIEF: '释然', EXCITEMENT: '兴奋',
   SADNESS: '悲伤', GRIEF: '悲痛', ANGER: '愤怒', IRRITATION: '恼怒',
   ANXIETY: '焦虑', LONELINESS: '孤独', FEAR: '恐惧', DISGUST: '厌恶',
-  SURPRISE: '惊讶', CURIOSITY: '好奇', CONFUSION: '困惑', NEUTRAL: '中性',
+  SURPRISE: '惊讶', TRUST: '信任', ANTICIPATION: '期待', LOVE: '喜爱',
+  GRATITUDE: '感激', HOPE: '希望', NEUTRAL: '中性',
+  CURIOSITY: '好奇', CONFUSION: '困惑',
   unknown: '未知', '': '未知',
 };
 

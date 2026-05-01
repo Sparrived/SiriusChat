@@ -6,7 +6,13 @@
 
   <!-- 12维指向性 -->
   <div class="card">
-    <h2>12维指向性分析</h2>
+    <h2 style="display:flex;justify-content:space-between;align-items:center;gap:12px">
+      <span>12维指向性分析</span>
+      <div style="display:flex;gap:4px;flex-shrink:0">
+        <button class="btn small" id="radarBtnAvg" onclick="setRadarMode('avg')" style="padding:3px 10px;font-size:12px">平均</button>
+        <button class="btn small" id="radarBtnLast" onclick="setRadarMode('last')" style="padding:3px 10px;font-size:12px">最近一次</button>
+      </div>
+    </h2>
     <div id="cogDirectedRadar" style="width:100%;height:300px">加载中...</div>
   </div>
 

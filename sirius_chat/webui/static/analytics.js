@@ -158,45 +158,62 @@ function ttRenderDimensionList(containerId, items) {
     el._barResize = onResize;
   }
 
+  const names = data.map((d) => d.name).reverse();
+  const promptData = data.map((d) => d.prompt).reverse();
+  const completionData = data.map((d) => d.completion).reverse();
+
   chart.setOption({
     backgroundColor: 'transparent',
     tooltip: {
       trigger: 'axis',
       axisPointer: { type: 'shadow' },
       formatter: (params) => {
-        const p = params[0];
-        const d = p.data;
-        return `<b>${d.name}</b><br/>总 Tokens: <b>${d.value.toLocaleString()}</b><br/>调用: ${d.calls} 次<br/>Prompt: ${d.prompt.toLocaleString()}<br/>Completion: ${d.completion.toLocaleString()}`;
+        const d0 = params[0] && params[0].data;
+        const name = d0 ? d0.name : '';
+        const promptVal = params.find((p) => p.seriesName === 'Prompt')?.value || 0;
+        const completionVal = params.find((p) => p.seriesName === 'Completion')?.value || 0;
+        const total = promptVal + completionVal;
+        const calls = d0 ? d0.calls : 0;
+        return `<b>${name}</b><br/>总 Tokens: <b>${total.toLocaleString()}</b><br/>调用: ${calls} 次<br/>Prompt: ${promptVal.toLocaleString()}<br/>Completion: ${completionVal.toLocaleString()}`;
       },
     },
-    grid: { top: 8, bottom: 8, left: 8, right: 48, containLabel: true },
+    legend: { data: ['Prompt', 'Completion'], textStyle: { color: '#c9d1d9', fontSize: 11 }, top: 0 },
+    grid: { top: 28, bottom: 8, left: 8, right: 48, containLabel: true },
     xAxis: { type: 'value', axisLabel: { fontSize: 11, color: '#8b949e' }, splitLine: { lineStyle: { color: '#30363d' } } },
     yAxis: {
       type: 'category',
-      data: data.map((d) => d.name).reverse(),
+      data: names,
       axisLabel: { fontSize: 11, color: '#c9d1d9' },
       axisLine: { show: false },
       axisTick: { show: false },
     },
-    series: [{
-      type: 'bar',
-      data: data.reverse(),
-      barWidth: 14,
-      itemStyle: {
-        borderRadius: [0, 4, 4, 0],
-        color: new echarts.graphic.LinearGradient(0, 0, 1, 0, [
-          { offset: 0, color: '#58a6ff' },
-          { offset: 1, color: '#a371f7' },
-        ]),
+    series: [
+      {
+        name: 'Prompt',
+        type: 'bar',
+        data: promptData.map((v, i) => ({ value: v, name: names[i], calls: data[i].calls })),
+        barWidth: 10,
+        itemStyle: { color: '#58a6ff', borderRadius: [2, 2, 2, 2] },
       },
-      label: {
-        show: true,
-        position: 'right',
-        fontSize: 11,
-        color: '#c9d1d9',
-        formatter: (p) => p.value.toLocaleString(),
+      {
+        name: 'Completion',
+        type: 'bar',
+        data: completionData.map((v, i) => ({ value: v, name: names[i], calls: data[i].calls })),
+        barWidth: 10,
+        itemStyle: { color: '#3fb950', borderRadius: [2, 2, 2, 2] },
+        label: {
+          show: true,
+          position: 'right',
+          fontSize: 11,
+          color: '#c9d1d9',
+          formatter: (p) => {
+            const idx = p.dataIndex;
+            const total = (promptData[idx] || 0) + (completionData[idx] || 0);
+            return total.toLocaleString();
+          },
+        },
       },
-    }],
+    ],
   }, true);
 }
 
@@ -330,6 +347,20 @@ function renderCognitionEvents(events) {
   `;
 }
 
+let _radarMode = 'avg';
+
+function setRadarMode(mode) {
+  _radarMode = mode;
+  const avgBtn = $('radarBtnAvg');
+  const lastBtn = $('radarBtnLast');
+  if (avgBtn) avgBtn.classList.toggle('active', mode === 'avg');
+  if (lastBtn) lastBtn.classList.toggle('active', mode === 'last');
+  const res = _cogState && _cogState.data;
+  if (res && res.events) {
+    renderDirectedRadar(res.events);
+  }
+}
+
 function renderDirectedRadar(events) {
   const el = $('cogDirectedRadar');
   if (!el) return;
@@ -337,24 +368,48 @@ function renderDirectedRadar(events) {
     el.innerHTML = '<div style="color:var(--text-2);padding:12px">暂无指向性数据</div>';
     return;
   }
-  // Aggregate directed_signals from recent events
   const keys = ['mention_score','reference_score','name_match_score','second_person_score','question_score','imperative_score','topic_relevance_score','emotional_disclosure_score','attention_seeking_score','recency_score','turn_taking_score'];
   const labels = ['提及','引用','名称匹配','第二人称','问句','祈使','话题相关','情感表露','寻求关注','时效','轮次'];
-  const sums = {};
-  let count = 0;
-  for (const e of events) {
-    const sig = e.directed_signals || {};
-    if (!sig || Object.keys(sig).length === 0) continue;
-    for (const k of keys) {
-      sums[k] = (sums[k] || 0) + (sig[k] || 0);
+
+  let data = [];
+  let seriesName = '';
+
+  if (_radarMode === 'last') {
+    // 最近一次：从后往前找第一个有 directed_signals 的事件
+    let lastEvent = null;
+    for (let i = events.length - 1; i >= 0; i--) {
+      const sig = events[i].directed_signals || {};
+      if (sig && Object.keys(sig).length > 0) {
+        lastEvent = events[i];
+        break;
+      }
     }
-    count++;
+    if (!lastEvent) {
+      el.innerHTML = '<div style="color:var(--text-2);padding:12px">暂无指向性数据</div>';
+      return;
+    }
+    const sig = lastEvent.directed_signals || {};
+    data = keys.map((k) => Math.round((sig[k] || 0) * 100) / 100);
+    seriesName = '最近一次指向性';
+  } else {
+    // 平均值（默认）
+    const sums = {};
+    let count = 0;
+    for (const e of events) {
+      const sig = e.directed_signals || {};
+      if (!sig || Object.keys(sig).length === 0) continue;
+      for (const k of keys) {
+        sums[k] = (sums[k] || 0) + (sig[k] || 0);
+      }
+      count++;
+    }
+    if (count === 0) {
+      el.innerHTML = '<div style="color:var(--text-2);padding:12px">暂无指向性数据</div>';
+      return;
+    }
+    data = keys.map((k) => Math.round((sums[k] / count) * 100) / 100);
+    seriesName = '平均指向性信号';
   }
-  if (count === 0) {
-    el.innerHTML = '<div style="color:var(--text-2);padding:12px">暂无指向性数据</div>';
-    return;
-  }
-  const data = keys.map((k) => Math.round((sums[k] / count) * 100) / 100);
 
   let chart = echarts.getInstanceByDom(el);
   if (!chart) {
@@ -379,7 +434,7 @@ function renderDirectedRadar(events) {
       type: 'radar',
       data: [{
         value: data,
-        name: '平均指向性信号',
+        name: seriesName,
         areaStyle: { color: 'rgba(88,166,255,0.2)' },
         lineStyle: { color: '#58a6ff', width: 2 },
         itemStyle: { color: '#58a6ff' },
@@ -420,6 +475,8 @@ function cogSelectGroup(gid) {
   loadCognition();
 }
 
+let _cogState = { data: null };
+
 async function loadCognition() {
   renderPersonaSelect();
   if (!currentPersona && personas.length > 0) {
@@ -430,6 +487,7 @@ async function loadCognition() {
     const groupId = _cogGroupFilter;
     const qs = groupId ? `?group_id=${encodeURIComponent(groupId)}&limit=100` : '?limit=100';
     const res = await get(`/personas/${currentPersona}/cognition${qs}`);
+    _cogState.data = res;
     const events = res.events || [];
 
     // Build group dropdown from all events (use unfiltered request for group list)
@@ -454,7 +512,7 @@ async function loadCognition() {
     if (labelEl) labelEl.textContent = _cogGroupFilter || '全部群聊';
 
     renderCognitionEvents(events);
-    renderDirectedRadar(events);
+    setRadarMode(_radarMode);
     renderEmotionDistribution($('cogEmotionDistribution'), res.emotion_distribution || {});
     renderEmotionTimeline($('cogEmotionTimeline'), events);
   } catch (e) {
