@@ -452,9 +452,12 @@ function ttRenderRecentTable() {
 
   const top3 = (bd) => {
     if (!bd || typeof bd !== 'object') return '—';
-    return Object.entries(bd)
+    const entries = Object.entries(bd)
       .filter(([k]) => !['total', 'system_prompt_total', 'user_message'].includes(k))
-      .sort((a, b) => b[1] - a[1])
+      .sort((a, b) => b[1] - a[1]);
+    const nonzero = entries.filter(([, v]) => v > 0);
+    if (!nonzero.length) return '—';
+    return nonzero
       .slice(0, 3)
       .map(([k, v]) => `${k} ${v}`)
       .join(', ') || '—';
