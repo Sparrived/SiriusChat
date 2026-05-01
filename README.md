@@ -289,7 +289,7 @@ scripts/                          # 🔨 开发脚本
 
 ## 使用示例
 
-### 示例 1：旧版兼容入口 WorkspaceRuntime
+### 示例 1：旧版兼容入口 WorkspaceRuntime（已弃用，v1.1 将移除）
 
 ```python
 import asyncio

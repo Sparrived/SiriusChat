@@ -1,5 +1,7 @@
 # Workspace Runtime（工作空间运行时）
 
+> ⚠️ **此文档描述 v0.x 旧版架构。v1.0 推荐入口为 `PersonaManager` / `EngineRuntime`，详见 `architecture.md`。WorkspaceRuntime 将在 v1.1 彻底移除。**
+
 > **Sirius Chat 的入口层** — 管理目录、配置、会话、引擎生命周期。
 
 ## 一句话定位

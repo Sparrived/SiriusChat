@@ -92,7 +92,7 @@
 | 分组 | 包含内容 |
 |------|----------|
 | `test` | `pytest>=8.0.0`, `pytest-asyncio>=0.21.0`, `pytest-cov>=4.0.0`, `psutil>=5.9.0` |
-| `provider` | `httpx>=0.24.0`（异步 HTTP），`tenacity>=8.0.0`（重试） |
+| `provider` | `tenacity>=8.0.0`（重试）；`httpx>=0.24.0` 用于平台适配层（OneBot WS）和 WebUI，provider 层使用标准库 `urllib.request` |
 | `dev` | 以上全部 + `black`, `isort`, `flake8`, `pylint`, `mypy`, `bandit`, `pre-commit`, `build`, `twine` |
 | `quality` | `tiktoken>=0.5.0`（精确 token 估算） |
 
