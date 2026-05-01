@@ -75,7 +75,7 @@ _PROVIDER_SPECS: list[dict] = [
         "cls": DeepSeekProvider,
         "init": {"api_key": "test-key"},
         "model": "deepseek-chat",
-        "patch_target": "sirius_chat.providers.deepseek.urllib_request.urlopen",
+        "patch_target": "sirius_chat.providers.openai_compatible.urllib_request.urlopen",
         "expected_url": "https://api.deepseek.com/chat/completions",
         "has_reasoning": True,
         "thinking_defaults": {"thinking": {"type": "disabled"}},
@@ -85,7 +85,7 @@ _PROVIDER_SPECS: list[dict] = [
         "cls": BigModelProvider,
         "init": {"api_key": "test-key"},
         "model": "glm-4.6v",
-        "patch_target": "sirius_chat.providers.bigmodel.urllib_request.urlopen",
+        "patch_target": "sirius_chat.providers.openai_compatible.urllib_request.urlopen",
         "expected_url": "https://open.bigmodel.cn/api/paas/v4/chat/completions",
         "has_reasoning": True,
         "thinking_defaults": {"thinking": {"type": "disabled"}},
@@ -95,7 +95,7 @@ _PROVIDER_SPECS: list[dict] = [
         "cls": SiliconFlowProvider,
         "init": {"api_key": "test-key"},
         "model": "Pro/zai-org/GLM-4.7",
-        "patch_target": "sirius_chat.providers.siliconflow.urllib_request.urlopen",
+        "patch_target": "sirius_chat.providers.openai_compatible.urllib_request.urlopen",
         "expected_url": "https://api.siliconflow.cn/v1/chat/completions",
         "has_reasoning": True,
         "thinking_defaults": {"enable_thinking": False},
@@ -105,7 +105,7 @@ _PROVIDER_SPECS: list[dict] = [
         "cls": VolcengineArkProvider,
         "init": {"api_key": "test-key"},
         "model": "doubao-seed-2-0-lite-260215",
-        "patch_target": "sirius_chat.providers.volcengine_ark.urllib_request.urlopen",
+        "patch_target": "sirius_chat.providers.openai_compatible.urllib_request.urlopen",
         "expected_url": "https://ark.cn-beijing.volces.com/api/v3/chat/completions",
         "has_reasoning": True,
         "thinking_defaults": {"thinking": {"type": "disabled"}},
@@ -115,7 +115,7 @@ _PROVIDER_SPECS: list[dict] = [
         "cls": YTeaProvider,
         "init": {"api_key": "test-key"},
         "model": "gpt-4o-mini",
-        "patch_target": "sirius_chat.providers.ytea.urllib_request.urlopen",
+        "patch_target": "sirius_chat.providers.openai_compatible.urllib_request.urlopen",
         "expected_url": "https://api.ytea.top/v1/chat/completions",
         "has_reasoning": False,
         "thinking_defaults": {},
@@ -239,7 +239,7 @@ def test_provider_falls_back_to_provider_timeout(spec: dict) -> None:
 
 def test_bigmodel_provider_normalizes_root_base_url() -> None:
     provider = BigModelProvider(api_key="test-key", base_url="https://open.bigmodel.cn")
-    with patch("sirius_chat.providers.bigmodel.urllib_request.urlopen") as mocked:
+    with patch("sirius_chat.providers.openai_compatible.urllib_request.urlopen") as mocked:
         mocked.return_value = _FakeResponse({"choices": [{"message": {"content": "ok"}}]})
         provider.generate(_make_request("glm-4.6v"))
     called_request = mocked.call_args[0][0]

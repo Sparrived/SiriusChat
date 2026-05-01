@@ -29,9 +29,12 @@ class OpenAICompatibleProvider(LLMProvider):
         self._api_key = api_key
         self._timeout_seconds = timeout_seconds
 
+    def _build_url(self, request: GenerationRequest) -> str:
+        return f"{self._base_url}/v1/chat/completions"
+
     def generate(self, request: GenerationRequest) -> str:
         timeout_seconds = resolve_generation_timeout_seconds(request, self._timeout_seconds)
-        url = f"{self._base_url}/v1/chat/completions"
+        url = self._build_url(request)
         debug_context = build_generation_debug_context(
             request,
             provider_name=self._provider_name,

@@ -331,6 +331,7 @@ class AutoRoutingProvider(LLMProvider):
 
     def __init__(self, providers: dict[str, ProviderConfig]) -> None:
         self._providers = {key: value for key, value in providers.items() if value.enabled}
+        self._last_provider_name = "unknown"
 
     def _provider_matches_model(self, provider: ProviderConfig, model: str) -> bool:
         model_stripped = model.strip()
@@ -393,11 +394,23 @@ class AutoRoutingProvider(LLMProvider):
             selected.models,
         )
         provider = self._create_provider(selected)
+        self._last_provider_name = getattr(provider, "_provider_name", selected.provider_type)
         return provider.generate(request)
 
     async def generate_async(self, request: GenerationRequest) -> str:
         import asyncio
-        return await asyncio.to_thread(self.generate, request)
+        from sirius_chat.providers.base import get_last_generation_usage, set_last_generation_usage
+
+        result: dict[str, Any] = {}
+
+        def _generate() -> str:
+            reply = self.generate(request)
+            result["usage"] = get_last_generation_usage()
+            return reply
+
+        reply = await asyncio.to_thread(_generate)
+        set_last_generation_usage(result.get("usage"))
+        return reply
 
 
 def probe_provider_availability(
