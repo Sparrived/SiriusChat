@@ -355,10 +355,9 @@ class CognitionAnalyzer:
             urgency = llm_urgency
         if llm_relevance is not None and llm_relevance > 0:
             relevance = llm_relevance
-        threshold = self._dynamic_threshold(group_id or "", user_id)
-        strategy, priority, response_time = self._decide_strategy(
-            social_intent, urgency, relevance, threshold
-        )
+        threshold = 0.45
+        priority = 4
+        response_time = 45.0
 
         # Detect if message directly addresses the current AI
         directed = self._detect_directed_at_ai(message)
@@ -910,28 +909,6 @@ class CognitionAnalyzer:
         # Only help-seeking and emotional intents get a modest boost.
         role_match = 0.8 if social_intent in (SocialIntent.HELP_SEEKING, SocialIntent.EMOTIONAL) else 0.1
         return min(1.0, 0.22 + role_match * 0.4)
-
-    def _dynamic_threshold(self, group_id: str, user_id: str) -> float:
-        base = 0.60 - 0.5 * 0.30  # 0.45
-        activity = 1.0
-        relationship = 1.0
-        time_f = 1.0
-        return base * activity * relationship * time_f
-
-    def _decide_strategy(
-        self,
-        social_intent: SocialIntent,
-        urgency: float,
-        relevance: float,
-        threshold: float,
-    ) -> tuple[str, int, float]:
-        if urgency >= 80 and relevance >= 0.7:
-            return "immediate", 1, 0.0
-        if urgency >= 60 and relevance >= 0.55:
-            return "delayed", 2, 15.0
-        if urgency >= 35 and relevance >= 0.5:
-            return "delayed", 4, 45.0
-        return "silent", 8, 0.0
 
     @staticmethod
     def _intent_type_from_social(social_intent: SocialIntent, message: str) -> str:
