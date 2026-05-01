@@ -143,6 +143,85 @@ async function navTo(page) {
   if (page === 'token-tracker') loadTokenTracker();
   if (page === 'cognition') loadCognition();
   if (page === 'diary') diaryLoadData();
+
+  // Replace native <select> with custom dropdowns after page loads
+  setTimeout(() => mountCustomSelects(), 0);
+}
+
+// ── Custom Select ─────────────────────────────────────
+function mountCustomSelect(sel) {
+  if (sel._customMounted || sel.style.display === 'none') return;
+  sel._customMounted = true;
+  sel.style.display = 'none';
+
+  const wrapper = document.createElement('div');
+  wrapper.className = 'custom-select';
+  const btn = document.createElement('button');
+  btn.className = 'custom-select-btn';
+  btn.type = 'button';
+  const list = document.createElement('div');
+  list.className = 'custom-select-list';
+  wrapper.appendChild(btn);
+  wrapper.appendChild(list);
+  sel.parentNode.insertBefore(wrapper, sel.nextSibling);
+
+  function sync() {
+    const opts = Array.from(sel.options);
+    const current = sel.value;
+    const currentLabel = opts.find((o) => o.value === current)?.textContent || current;
+    btn.textContent = currentLabel;
+    list.innerHTML = opts.map((o) => {
+      const active = o.value === current;
+      return `<div class="custom-select-item${active ? ' active' : ''}" data-value="${o.value.replace(/"/g, '&quot;')}">${o.textContent}</div>`;
+    }).join('');
+  }
+
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const open = wrapper.classList.contains('open');
+    document.querySelectorAll('.custom-select').forEach((w) => w.classList.remove('open'));
+    wrapper.classList.toggle('open', !open);
+  });
+
+  list.addEventListener('click', (e) => {
+    const item = e.target.closest('.custom-select-item');
+    if (!item) return;
+    const val = item.dataset.value;
+    sel.value = val;
+    sel.dispatchEvent(new Event('change', { bubbles: true }));
+    wrapper.classList.remove('open');
+    sync();
+  });
+
+  // Intercept native value setter so .value = x updates UI automatically
+  const proto = Object.getPrototypeOf(sel);
+  const nativeDesc = Object.getOwnPropertyDescriptor(proto, 'value');
+  if (nativeDesc && nativeDesc.set) {
+    Object.defineProperty(sel, 'value', {
+      get() { return nativeDesc.get.call(sel); },
+      set(v) { nativeDesc.set.call(sel, v); sync(); },
+      configurable: true,
+    });
+  }
+
+  // Watch options changes (innerHTML / appendChild)
+  const observer = new MutationObserver(sync);
+  observer.observe(sel, { childList: true });
+
+  sync();
+}
+
+function mountCustomSelects(root) {
+  (root || document).querySelectorAll('select').forEach((sel) => mountCustomSelect(sel));
+}
+
+function syncCustomSelect(id) {
+  const sel = $(id);
+  if (sel && sel._customMounted) {
+    // Trigger sync by touching the value
+    const v = sel.value;
+    sel.value = v;
+  }
 }
 
 // ── Personas ──────────────────────────────────────────
@@ -1001,6 +1080,7 @@ function _renderProviderDraft() {
       </div>
     </div>`;
   }).join('');
+  mountCustomSelects(el);
 }
 
 function addProvider() {
@@ -1157,6 +1237,7 @@ function _fillSelect(id, value, choices) {
     if (val === value) opt.selected = true;
     el.appendChild(opt);
   });
+  syncCustomSelect(id);
 }
 
 async function loadAvailableModels() {
