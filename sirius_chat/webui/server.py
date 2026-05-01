@@ -96,6 +96,9 @@ class WebUIServer:
         # ─── Telemetry API ────────────────────────────────────
         self.app.router.add_get("/api/telemetry", self.api_telemetry_get)
 
+        # ─── Token usage API ──────────────────────────────────
+        self.app.router.add_get("/api/tokens", self.api_tokens_get)
+
         # ─── 多人格 API ───────────────────────────────────────
         self.app.router.add_get("/api/personas", self.api_personas_list)
         self.app.router.add_post("/api/personas", self.api_personas_create)
@@ -126,6 +129,9 @@ class WebUIServer:
         # 引擎操作
         self.app.router.add_post("/api/personas/{name}/engine/toggle", self.api_engine_toggle)
         self.app.router.add_post("/api/personas/{name}/engine/reload", self.api_engine_reload)
+
+        # Token usage (per persona)
+        self.app.router.add_get("/api/personas/{name}/tokens", self.api_persona_tokens_get)
 
         # 桥接配置（写入 adapters.json）
         self.app.router.add_post("/api/personas/{name}/config", self.api_config_post)
