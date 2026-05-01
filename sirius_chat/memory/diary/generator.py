@@ -65,6 +65,9 @@ def _build_diary_user_prompt(
 class DiaryGenerator:
     """Generates diary entries from archive candidate messages."""
 
+    def __init__(self) -> None:
+        self._last_request: Any | None = None
+
     async def generate(
         self,
         *,
@@ -99,6 +102,7 @@ class DiaryGenerator:
             max_tokens=max_tokens,
             purpose="diary_generate",
         )
+        self._last_request = request
 
         try:
             raw = await provider_async.generate_async(request)

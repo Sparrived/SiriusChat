@@ -278,6 +278,9 @@ class CognitionAnalyzer:
         self.ai_aliases = [a.lower() for a in (ai_aliases or []) if a]
         self.persona = persona
 
+        # Expose the last GenerationRequest for token recording
+        self._last_request: Any | None = None
+
         # Emotion state tracking
         self.trajectories: dict[str, list[tuple[str, EmotionState]]] = {}
         self.group_cache: dict[str, EmotionState] = {}
@@ -550,6 +553,7 @@ class CognitionAnalyzer:
             max_tokens=384,  # Slightly larger to fit both outputs
             purpose="cognition_analyze",
         )
+        self._last_request = request
 
         if hasattr(self.provider_async, "generate_async"):
             raw = await self.provider_async.generate_async(request)

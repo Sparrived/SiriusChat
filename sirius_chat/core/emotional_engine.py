@@ -683,6 +683,14 @@ class EmotionalGroupChatEngine:
                         provider_async=self.provider_async,
                         model_name=cfg.model_name,
                     )
+                    generator = getattr(self.diary_manager, "_generator", None)
+                    if generator is not None:
+                        self._record_subtask_tokens(
+                            task_name="diary_generate",
+                            model_name=cfg.model_name,
+                            group_id=group_id,
+                            request=getattr(generator, "_last_request", None),
+                        )
                     if result:
                         promoted_total += 1
                         # Update semantic memory with LLM-extracted topics
@@ -737,6 +745,12 @@ class EmotionalGroupChatEngine:
                         purpose="diary_consolidate",
                     )
                     raw = await self.provider_async.generate_async(request)
+                    self._record_subtask_tokens(
+                        task_name="diary_consolidate",
+                        model_name=cfg.model_name,
+                        group_id=group_id,
+                        request=request,
+                    )
                     entry = consolidator.parse_merge_result(raw, cluster)
                     if entry:
                         merged_entries.append(entry)
@@ -1923,6 +1937,13 @@ class EmotionalGroupChatEngine:
         emotion, intent, empathy = await self.cognition_analyzer.analyze(
             content, user_id, group_id, context_messages
         )
+        if self.cognition_analyzer._last_request is not None:
+            self._record_subtask_tokens(
+                task_name="cognition_analyze",
+                model_name=self._task_models.get("cognition_analyze", self._default_model),
+                group_id=group_id or "",
+                request=self.cognition_analyzer._last_request,
+            )
 
         # Memory retrieval now happens in execution via ContextAssembler
         memories = []
@@ -2516,6 +2537,54 @@ class EmotionalGroupChatEngine:
                 pass
 
         return reply
+
+    def _record_subtask_tokens(
+        self,
+        task_name: str,
+        model_name: str,
+        group_id: str,
+        request: Any | None = None,
+    ) -> None:
+        """Record token usage for a sub-task (cognition, diary, etc.)."""
+        from sirius_chat.config import TokenUsageRecord
+        from sirius_chat.providers.base import (
+            estimate_generation_request_input_tokens,
+            get_last_generation_usage,
+        )
+
+        real_usage = get_last_generation_usage()
+        if real_usage and isinstance(real_usage, dict):
+            prompt_tokens = int(real_usage.get("prompt_tokens", 0))
+            completion_tokens = int(real_usage.get("completion_tokens", 0))
+            total_tokens = int(real_usage.get("total_tokens", prompt_tokens + completion_tokens))
+            estimation_method = "provider_real"
+        else:
+            if request is not None:
+                prompt_tokens = estimate_generation_request_input_tokens(request)
+            else:
+                prompt_tokens = 0
+            completion_tokens = 0
+            total_tokens = prompt_tokens
+            estimation_method = "unknown_subtask"
+
+        record = TokenUsageRecord(
+            actor_id="assistant",
+            task_name=task_name,
+            model=model_name,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=total_tokens,
+            estimation_method=estimation_method,
+            persona_name=self.persona.name if self.persona else "",
+            group_id=group_id,
+            provider_name=getattr(self.provider_async, "_provider_name", "unknown"),
+        )
+        self.token_usage_records.append(record)
+        if self.token_store is not None:
+            try:
+                self.token_store.add(record)
+            except Exception:
+                pass
 
     # ==================================================================
     # Helpers
