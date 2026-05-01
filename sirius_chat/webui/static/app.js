@@ -1193,8 +1193,9 @@ async function ttLoadData() {
     // Section breakdown
     renderSectionBars($('ttSectionBreakdown'), res.section_breakdown || {});
 
+    // Task hierarchy (parent/child)
+    renderTaskHierarchy('ttTaskHierarchy', res.by_task || []);
     // Dimension breakdowns
-    ttRenderDimensionList('ttByTask', res.by_task || []);
     ttRenderDimensionList('ttByModel', res.by_model || []);
     ttRenderDimensionList('ttByGroup', res.by_group || []);
 
@@ -1202,7 +1203,7 @@ async function ttLoadData() {
     ttRenderRecentTable();
   } catch (e) {
     console.error('ttLoadData', e);
-    const els = ['ttSectionBreakdown', 'ttByTask', 'ttByModel', 'ttByGroup'];
+    const els = ['ttSectionBreakdown', 'ttTaskHierarchy', 'ttByModel', 'ttByGroup'];
     els.forEach((id) => { const el = $(id); if (el) el.textContent = '加载失败'; });
   }
 }
@@ -1220,6 +1221,72 @@ function ttRenderDimensionList(containerId, items) {
       <span style="color:var(--text-2);font-family:ui-monospace,monospace">${it.total_tokens || 0}</span>
     </div>
   `).join('');
+}
+
+function renderTaskHierarchy(containerId, items) {
+  const el = $(containerId);
+  if (!el) return;
+  if (!items.length) {
+    el.innerHTML = '<div style="color:var(--text-2)">暂无数据</div>';
+    return;
+  }
+
+  const labels = {
+    response_generate: '主模型调用',
+    cognition_analyze: '认知分析',
+    diary_generate: '日记生成',
+    diary_consolidate: '日记合并',
+    proactive_generate: '主动/提醒生成',
+    persona_generate: '人格生成',
+  };
+
+  const grandTotal = items.reduce((s, it) => s + (it.total_tokens || 0), 0);
+  const main = items.find((it) => it.name === 'response_generate');
+  const children = items.filter((it) => it.name !== 'response_generate');
+
+  const pct = (val) => {
+    if (!grandTotal) return '0%';
+    return Math.round((val / grandTotal) * 100) + '%';
+  };
+
+  const fmt = (n) => (n || 0).toLocaleString();
+
+  const buildStats = (it) => `
+    <div class="th-stat-row">
+      <span class="th-stat">调用: <b>${fmt(it.calls)}</b></span>
+      <span class="th-stat">Prompt: <b>${fmt(it.prompt_tokens)}</b></span>
+      <span class="th-stat">Completion: <b>${fmt(it.completion_tokens)}</b></span>
+      <span class="th-stat">Total: <b>${fmt(it.total_tokens)}</b><span class="th-pct">(${pct(it.total_tokens)})</span></span>
+    </div>
+  `;
+
+  let html = '<div class="task-hierarchy">';
+
+  if (main) {
+    html += `
+      <div class="th-parent">
+        <div class="th-parent-header"><span class="th-icon">📊</span> ${labels[main.name] || main.name}</div>
+        <div class="th-parent-body">${buildStats(main)}</div>
+      </div>
+    `;
+  }
+
+  if (children.length) {
+    html += '<div class="th-group-title">🔍 辅助任务</div>';
+    html += '<div class="th-children">';
+    children.forEach((it) => {
+      html += `
+        <div class="th-child">
+          <div class="th-child-header">${labels[it.name] || it.name}</div>
+          <div class="th-child-body">${buildStats(it)}</div>
+        </div>
+      `;
+    });
+    html += '</div>';
+  }
+
+  html += '</div>';
+  el.innerHTML = html;
 }
 
 function ttRenderRecentTable() {

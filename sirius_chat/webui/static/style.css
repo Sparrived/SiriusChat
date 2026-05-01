@@ -412,3 +412,23 @@ input:focus, select:focus, textarea:focus {
 
 /* Range button active state */
 .btn.active { background:var(--accent); color:#fff; border-color:var(--accent); }
+
+/* Task hierarchy tree */
+.task-hierarchy { font-size:13px; }
+.task-hierarchy .th-parent { padding:12px 14px; background:var(--bg); border-radius:8px; border:1px solid var(--border); margin-bottom:12px; }
+.task-hierarchy .th-parent-header { display:flex; align-items:center; gap:8px; font-weight:600; font-size:14px; color:var(--text); margin-bottom:8px; }
+.task-hierarchy .th-parent-header .th-icon { font-size:16px; }
+.task-hierarchy .th-parent-body { padding-left:24px; }
+.task-hierarchy .th-stat-row { display:flex; gap:16px; flex-wrap:wrap; margin-bottom:4px; }
+.task-hierarchy .th-stat { font-size:12px; color:var(--text-2); }
+.task-hierarchy .th-stat b { color:var(--text); font-weight:600; }
+.task-hierarchy .th-pct { font-size:11px; color:var(--accent); font-weight:500; margin-left:4px; }
+
+.task-hierarchy .th-children { padding-left:12px; border-left:2px solid var(--border); margin-left:6px; }
+.task-hierarchy .th-child { padding:8px 12px; margin-bottom:6px; background:var(--bg); border-radius:6px; }
+.task-hierarchy .th-child-header { display:flex; align-items:center; gap:6px; font-weight:500; color:var(--text); margin-bottom:4px; }
+.task-hierarchy .th-child-body { padding-left:20px; font-size:12px; color:var(--text-2); }
+.task-hierarchy .th-child-body .th-stat { margin-bottom:2px; }
+
+.task-hierarchy .th-divider { height:1px; background:var(--border); margin:10px 0; }
+.task-hierarchy .th-group-title { font-size:12px; font-weight:600; color:var(--text-2); text-transform:uppercase; letter-spacing:0.5px; margin-bottom:8px; padding-left:4px; }
