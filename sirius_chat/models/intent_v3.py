@@ -100,6 +100,10 @@ class IntentAnalysisV3:
     # === synthesized directed score ===
     directed_score: float = 0.0  # 0.0 ~ 1.0, synthesized from 12-dim + LLM
 
+    # === social signal decoding ===
+    sarcasm_score: float = 0.0  # 0.0 ~ 1.0, irony / sarcasm detection
+    entitlement_score: float = 0.5  # 0.0 ~ 1.0, how qualified AI is to reply
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "intent_type": self.intent_type,
@@ -133,6 +137,8 @@ class IntentAnalysisV3:
             "recency_score": self.recency_score,
             "turn_taking_score": self.turn_taking_score,
             "directed_score": self.directed_score,
+            "sarcasm_score": self.sarcasm_score,
+            "entitlement_score": self.entitlement_score,
         }
 
     @classmethod
@@ -174,4 +180,6 @@ class IntentAnalysisV3:
             recency_score=data.get("recency_score", 0.0),
             turn_taking_score=data.get("turn_taking_score", 0.0),
             directed_score=data.get("directed_score", 0.0),
+            sarcasm_score=data.get("sarcasm_score", 0.0),
+            entitlement_score=data.get("entitlement_score", 0.5),
         )

@@ -22,6 +22,7 @@ class ResponseStrategyEngine:
         intent: IntentAnalysisV3,
         *,
         is_mentioned: bool = False,
+        weak_directed_threshold: float = 0.4,
         is_developer: bool = False,
         heat_level: str = "warm",
         sender_type: str = "human",
@@ -162,10 +163,10 @@ class ResponseStrategyEngine:
                 strategy = ResponseStrategy.SILENT
                 reason = "below_threshold"
 
-        # 社交底线：没被强指向（<0.4）就没有抢话权，最高只能 delayed
-        # 弱指向（0.4~0.6）保留 IMMEDIATE 资格，强指向（>=0.6）已由 is_mentioned 处理
+        # 社交底线：没被弱指向（<weak_directed_threshold）就没有抢话权，最高只能 delayed
+        # 弱指向保留 IMMEDIATE 资格，强指向（>=directed_threshold）已由 is_mentioned 处理
         directed_score = getattr(intent, "directed_score", 0.0)
-        if not is_mentioned and directed_score < 0.4 and strategy == ResponseStrategy.IMMEDIATE:
+        if not is_mentioned and directed_score < weak_directed_threshold and strategy == ResponseStrategy.IMMEDIATE:
             strategy = ResponseStrategy.DELAYED
             reason = f"not_directed_{reason}"
 

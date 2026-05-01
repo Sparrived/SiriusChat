@@ -88,6 +88,14 @@ class EmotionalGroupChatEngine:
         self.provider_async = provider_async
         self.work_path = work_path
 
+        # Expressiveness regulator (single-knob)
+        from sirius_chat.config.models import ExpressivenessConfig
+
+        expr_cfg = self.config.get("expressiveness", {})
+        if isinstance(expr_cfg, (int, float)):
+            expr_cfg = {"expressiveness": float(expr_cfg)}
+        self.expressiveness = ExpressivenessConfig.from_dict(expr_cfg if isinstance(expr_cfg, dict) else {})
+
         # Persona loading
         from sirius_chat.core.persona_generator import PersonaGenerator
         from sirius_chat.core.persona_store import PersonaStore
@@ -828,7 +836,7 @@ class EmotionalGroupChatEngine:
         # Check conversation gap readiness before proactive insertion
         recent = self._get_recent_messages(group_id, n=6)
         rhythm = self.rhythm_analyzer.analyze(group_id, recent)
-        if rhythm.turn_gap_readiness < 0.4:
+        if rhythm.turn_gap_readiness < self.expressiveness.proactive_gap_threshold:
             # Conversation is in full flow, don't interrupt with proactive
             return None
 
@@ -2088,9 +2096,14 @@ class EmotionalGroupChatEngine:
         elif freq == "low":
             threshold *= 1.3
         elif freq == "selective":
-            # Only reply when strongly directed (>=0.6) or high urgency
-            if intent.directed_score < 0.6 and intent.urgency_score < 70:
+            # Only reply when strongly directed (>=threshold) or high urgency
+            if intent.directed_score < self.expressiveness.directed_threshold and intent.urgency_score < 70:
                 threshold *= 2.0
+
+        # Entitlement suppression: if AI is not qualified for this topic, raise threshold
+        if intent.entitlement_score < self.expressiveness.entitlement_threshold:
+            threshold *= 1.5
+            self._log_inner_thought("这个话题我好像不太擅长...先谨慎一点吧")
 
         intent.threshold = threshold
         intent.activity_factor = self.threshold_engine._activity_factor(rhythm.heat_level, msg_rate)
@@ -2101,11 +2114,12 @@ class EmotionalGroupChatEngine:
             )
 
         # Check if directly mentioned (using continuous directed_score)
-        is_mentioned = intent.directed_score >= 0.6
+        is_mentioned = intent.directed_score >= self.expressiveness.directed_threshold
 
         decision = self.strategy_engine.decide(
             intent,
             is_mentioned=is_mentioned,
+            weak_directed_threshold=self.expressiveness.weak_directed_threshold,
             heat_level=rhythm.heat_level,
             sender_type=sender_type,
         )
@@ -2117,7 +2131,7 @@ class EmotionalGroupChatEngine:
         now = datetime.now(timezone.utc).timestamp()
         last_reply = self._last_reply_at.get(group_id, 0)
         seconds_since_reply = now - last_reply
-        cooldown = self.config.get("reply_cooldown_seconds", 30)
+        cooldown = self.config.get("reply_cooldown_seconds", self.expressiveness.cooldown_seconds)
         if seconds_since_reply < cooldown and decision.strategy == ResponseStrategy.DELAYED:
             decision = StrategyDecision(
                 strategy=ResponseStrategy.SILENT,
@@ -2227,8 +2241,8 @@ class EmotionalGroupChatEngine:
 
         # Turn gap suppression: don't interrupt conversation in full flow
         if (
-            rhythm.turn_gap_readiness < 0.25
-            and intent.directed_score < 0.8
+            rhythm.turn_gap_readiness < self.expressiveness.gap_readiness_threshold
+            and intent.directed_score < self.expressiveness.directed_threshold + 0.2
             and decision.strategy == ResponseStrategy.IMMEDIATE
         ):
             decision = StrategyDecision(
@@ -2242,7 +2256,7 @@ class EmotionalGroupChatEngine:
             self._log_inner_thought("大家正聊得起劲呢，我先不插话了，等个合适的时机...")
 
         # overheated + burst + not directed → downgrade to SILENT
-        is_directed = intent.directed_score >= 0.6
+        is_directed = intent.directed_score >= self.expressiveness.directed_threshold
         if (
             rhythm.heat_level == "overheated"
             and rhythm.burst_detected
@@ -2891,7 +2905,7 @@ class EmotionalGroupChatEngine:
             if not past:
                 continue
             sim = self._expression_similarity(reply, past)
-            if sim > 0.55:
+            if sim > self.expressiveness.redundancy_threshold:
                 return True
         return False
 

@@ -10,6 +10,78 @@ from sirius_chat.mixins import JsonSerializable
 
 
 @dataclass(slots=True)
+class ExpressivenessConfig:
+    """Single-knob expressiveness / reply eagerness regulator.
+
+    只有一个主旋钮 ``expressiveness``（0.0~1.0）：
+        - 0.0 = 极度克制（几乎不主动说话，被@才回）
+        - 0.5 = 默认平衡
+        - 1.0 = 极度活泼（积极抢话、主动参与）
+
+    所有内部阈值都从这个值自动推导，用户无需理解每个参数含义。
+    高级用户可通过 ``overrides`` 字典单独覆盖任意阈值。
+    """
+
+    expressiveness: float = 0.5  # 0.0 ~ 1.0
+    overrides: dict[str, float] = field(default_factory=dict)
+
+    # === derived thresholds (do not set directly, use overrides instead) ===
+
+    @property
+    def directed_threshold(self) -> float:
+        """0.0→0.8, 0.5→0.6, 1.0→0.4"""
+        return self.overrides.get("directed_threshold", 0.8 - self.expressiveness * 0.4)
+
+    @property
+    def weak_directed_threshold(self) -> float:
+        """0.0→0.6, 0.5→0.4, 1.0→0.2"""
+        return self.overrides.get("weak_directed_threshold", 0.6 - self.expressiveness * 0.4)
+
+    @property
+    def gap_readiness_threshold(self) -> float:
+        """0.0→0.45, 0.5→0.25, 1.0→0.05"""
+        return self.overrides.get("gap_readiness_threshold", 0.45 - self.expressiveness * 0.4)
+
+    @property
+    def proactive_gap_threshold(self) -> float:
+        """0.0→0.7, 0.5→0.4, 1.0→0.15"""
+        return self.overrides.get("proactive_gap_threshold", 0.7 - self.expressiveness * 0.55)
+
+    @property
+    def entitlement_threshold(self) -> float:
+        """0.0→0.5, 0.5→0.3, 1.0→0.1"""
+        return self.overrides.get("entitlement_threshold", 0.5 - self.expressiveness * 0.4)
+
+    @property
+    def redundancy_threshold(self) -> float:
+        """0.0→0.75, 0.5→0.55, 1.0→0.35"""
+        return self.overrides.get("redundancy_threshold", 0.75 - self.expressiveness * 0.4)
+
+    @property
+    def sarcasm_boost(self) -> float:
+        """0.0→0.05, 0.5→0.15, 1.0→0.25"""
+        return self.overrides.get("sarcasm_boost", 0.05 + self.expressiveness * 0.2)
+
+    @property
+    def cooldown_seconds(self) -> float:
+        """0.0→90s, 0.5→30s, 1.0→5s"""
+        return self.overrides.get("cooldown_seconds", 90 - self.expressiveness * 85)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "expressiveness": self.expressiveness,
+            "overrides": dict(self.overrides),
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "ExpressivenessConfig":
+        return cls(
+            expressiveness=max(0.0, min(1.0, data.get("expressiveness", 0.5))),
+            overrides=dict(data.get("overrides", {})),
+        )
+
+
+@dataclass(slots=True)
 class Agent:
     """AI agent definition with model and parameters."""
     
