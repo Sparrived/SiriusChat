@@ -2480,7 +2480,7 @@ class EmotionalGroupChatEngine:
         # Build breakdown JSON if available
         breakdown_json = ""
         if token_breakdown:
-            from sirius_chat.token.utils import PromptTokenBreakdown
+            from sirius_chat.token.utils import PromptTokenBreakdown, estimate_tokens
 
             bd = PromptTokenBreakdown(**token_breakdown)
             bd.system_prompt_total = estimate_tokens(system_prompt)
