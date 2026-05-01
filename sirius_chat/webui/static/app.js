@@ -419,6 +419,8 @@ async function loadTokenStats() {
   const promptEl = $('dashTokenPrompt');
   const completionEl = $('dashTokenCompletion');
   const totalEl = $('dashTokenTotal');
+  const avgEl = $('dashTokenAvgRound');
+  const avgDetailEl = $('dashTokenAvgRoundDetail');
   const personasEl = $('dashTokenPersonas');
   const sectionEl = $('dashSectionBreakdown');
   if (!callsEl || !totalEl) return;
@@ -434,6 +436,12 @@ async function loadTokenStats() {
     animateNumber(promptEl, summary.total_prompt_tokens || 0, 500);
     animateNumber(completionEl, summary.total_completion_tokens || 0, 500);
     animateNumber(totalEl, summary.total_tokens || 0, 500);
+    const avg = res.response_avg || {};
+    if (avgEl) animateNumber(avgEl, avg.avg_total_tokens || 0, 500);
+    if (avgDetailEl) {
+      const calls = avg.total_calls || 0;
+      avgDetailEl.textContent = calls ? `${calls} 次回复 · ${(avg.avg_prompt_tokens || 0).toLocaleString()} + ${(avg.avg_completion_tokens || 0).toLocaleString()}` : '暂无回复记录';
+    }
     if (personasEl) {
       if (!personaList.length) {
         personasEl.innerHTML = '<div style="color:var(--text-2);padding:12px">暂无 Token 消耗记录</div>';
@@ -1290,6 +1298,14 @@ async function ttLoadData() {
       animateNumber(statEls[1], summary.total_prompt_tokens || 0, 500);
       animateNumber(statEls[2], summary.total_completion_tokens || 0, 500);
       animateNumber(statEls[3], summary.total_tokens || 0, 500);
+    }
+    const avg = res.response_avg || {};
+    const avgEl = $('ttAvgRound');
+    const avgDetailEl = $('ttAvgRoundDetail');
+    if (avgEl) animateNumber(avgEl, avg.avg_total_tokens || 0, 500);
+    if (avgDetailEl) {
+      const calls = avg.total_calls || 0;
+      avgDetailEl.textContent = calls ? `${calls} 次回复 · ${(avg.avg_prompt_tokens || 0).toLocaleString()} + ${(avg.avg_completion_tokens || 0).toLocaleString()}` : '暂无回复记录';
     }
 
     // Section breakdown

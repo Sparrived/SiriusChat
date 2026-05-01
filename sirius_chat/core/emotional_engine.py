@@ -2551,6 +2551,7 @@ class EmotionalGroupChatEngine:
             estimate_generation_request_input_tokens,
             get_last_generation_usage,
         )
+        from sirius_chat.token.utils import PromptTokenBreakdown, estimate_tokens
 
         real_usage = get_last_generation_usage()
         if real_usage and isinstance(real_usage, dict):
@@ -2567,6 +2568,19 @@ class EmotionalGroupChatEngine:
             total_tokens = prompt_tokens
             estimation_method = "unknown_subtask"
 
+        # Build breakdown JSON from request if available
+        breakdown_json = ""
+        if request is not None:
+            system_prompt = getattr(request, "system_prompt", "") or ""
+            messages = getattr(request, "messages", []) or []
+            bd = PromptTokenBreakdown()
+            bd.system_prompt_total = estimate_tokens(system_prompt)
+            bd.user_message = sum(
+                estimate_tokens(str(m.get("content", ""))) for m in messages
+            )
+            bd.total = bd.system_prompt_total + bd.user_message
+            breakdown_json = bd.to_json()
+
         record = TokenUsageRecord(
             actor_id="assistant",
             task_name=task_name,
@@ -2578,6 +2592,7 @@ class EmotionalGroupChatEngine:
             persona_name=self.persona.name if self.persona else "",
             group_id=group_id,
             provider_name=getattr(self.provider_async, "_provider_name", "unknown"),
+            breakdown_json=breakdown_json,
         )
         self.token_usage_records.append(record)
         if self.token_store is not None:

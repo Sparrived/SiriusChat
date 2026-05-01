@@ -842,10 +842,45 @@ class WebUIServer:
                 LOG.warning("Token 统计读取失败 %s: %s", name, exc)
                 continue
 
+        # Compute average tokens per response_generate round across all personas
+        response_total_calls = 0
+        response_total_tokens = 0
+        response_prompt_tokens = 0
+        response_completion_tokens = 0
+        for persona_info in self.persona_manager.list_personas():
+            name = persona_info.get("name")
+            if not name:
+                continue
+            paths = self.persona_manager.get_persona_paths(name)
+            if paths is None:
+                continue
+            db_path = paths.dir / "token" / "token_usage.db"
+            if not db_path.exists():
+                continue
+            try:
+                store = TokenUsageStore(db_path, session_id="default")
+                for row in store.get_breakdown_by("task_name"):
+                    if row.get("name") == "response_generate":
+                        response_total_calls += row.get("calls", 0)
+                        response_total_tokens += row.get("total_tokens", 0)
+                        response_prompt_tokens += row.get("prompt_tokens", 0)
+                        response_completion_tokens += row.get("completion_tokens", 0)
+                store.close()
+            except Exception:
+                continue
+
+        response_avg = {
+            "avg_total_tokens": round(response_total_tokens / response_total_calls) if response_total_calls else 0,
+            "avg_prompt_tokens": round(response_prompt_tokens / response_total_calls) if response_total_calls else 0,
+            "avg_completion_tokens": round(response_completion_tokens / response_total_calls) if response_total_calls else 0,
+            "total_calls": response_total_calls,
+        }
+
         return _json_response({
             "summary": total_summary,
             "personas": persona_breakdown,
             "section_breakdown": global_section_breakdown,
+            "response_avg": response_avg,
         })
 
     async def api_persona_tokens_get(self, request: web.Request) -> web.Response:
@@ -867,6 +902,7 @@ class WebUIServer:
                 "recent": [],
                 "section_breakdown": {},
                 "recent_with_breakdown": [],
+                "response_avg": {"avg_total_tokens": 0, "avg_prompt_tokens": 0, "avg_completion_tokens": 0, "total_calls": 0},
             })
 
         # Parse optional time range filters
@@ -879,9 +915,18 @@ class WebUIServer:
 
         try:
             store = TokenUsageStore(db_path, session_id="default")
+            by_task = store.get_breakdown_by("task_name")
+            response_row = next((r for r in by_task if r.get("name") == "response_generate"), None)
+            response_calls = response_row.get("calls", 0) if response_row else 0
+            response_avg = {
+                "avg_total_tokens": round(response_row.get("total_tokens", 0) / response_calls) if response_calls else 0,
+                "avg_prompt_tokens": round(response_row.get("prompt_tokens", 0) / response_calls) if response_calls else 0,
+                "avg_completion_tokens": round(response_row.get("completion_tokens", 0) / response_calls) if response_calls else 0,
+                "total_calls": response_calls,
+            }
             result = {
                 "summary": store.get_summary(),
-                "by_task": store.get_breakdown_by("task_name"),
+                "by_task": by_task,
                 "by_model": store.get_breakdown_by("model"),
                 "by_group": store.get_breakdown_by("group_id"),
                 "recent": store.get_recent_records(limit=30),
@@ -891,6 +936,7 @@ class WebUIServer:
                 "recent_with_breakdown": store.get_recent_records_with_breakdown(
                     limit=30
                 ),
+                "response_avg": response_avg,
             }
             store.close()
             return _json_response(result)
