@@ -138,6 +138,10 @@ class WebUIServer:
         # Diary entries (per persona)
         self.app.router.add_get("/api/personas/{name}/diary", self.api_persona_diary_get)
 
+        # User semantic profiles (per persona)
+        self.app.router.add_get("/api/personas/{name}/users", self.api_persona_users_get)
+        self.app.router.add_get("/api/personas/{name}/users/{user_id}", self.api_persona_user_get)
+
         # 桥接配置（写入 adapters.json）
         self.app.router.add_post("/api/personas/{name}/config", self.api_config_post)
 

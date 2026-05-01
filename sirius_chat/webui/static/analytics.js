@@ -488,3 +488,149 @@ function ttRenderRecentTable() {
   }
 }
 
+
+// ── Users ─────────────────────────────────────────────
+let _usersGroupFilter = '';
+
+function loadUsers() {
+  renderPersonaSelect();
+  if (!currentPersona && personas.length > 0) {
+    selectPersona(personas[0].name);
+  }
+  usersLoadData();
+}
+
+function usersToggleDropdown() {
+  const list = $('usersDropdownList');
+  const arrow = $('usersDropdownArrow');
+  if (!list) return;
+  const open = list.style.display === 'block';
+  list.style.display = open ? 'none' : 'block';
+  if (arrow) arrow.style.transform = open ? 'rotate(0deg)' : 'rotate(180deg)';
+  if (!open) {
+    const close = (e) => {
+      if (!list.contains(e.target) && !$('usersGroupDropdown').contains(e.target)) {
+        list.style.display = 'none';
+        if (arrow) arrow.style.transform = 'rotate(0deg)';
+        document.removeEventListener('click', close);
+      }
+    };
+    setTimeout(() => document.addEventListener('click', close), 0);
+  }
+}
+
+function usersSelectGroup(gid) {
+  _usersGroupFilter = gid;
+  const label = $('usersDropdownLabel');
+  if (label) label.textContent = gid || '全部群聊';
+  const list = $('usersDropdownList');
+  const arrow = $('usersDropdownArrow');
+  if (list) list.style.display = 'none';
+  if (arrow) arrow.style.transform = 'rotate(0deg)';
+  usersLoadData();
+}
+
+function usersBarColor(score) {
+  if (score >= 0.7) return 'var(--success)';
+  if (score >= 0.4) return 'var(--accent)';
+  return 'var(--danger)';
+}
+
+function usersRenderList(users) {
+  const listEl = $('usersList');
+  if (!listEl) return;
+  if (!users.length) {
+    listEl.innerHTML = '<div style="color:var(--text-2);padding:12px">暂无用户画像数据</div>';
+    return;
+  }
+  listEl.innerHTML = users.map((u) => {
+    const rs = u.relationship_state || {};
+    const familiarity = Math.min(1.0, 0.3 + (rs.interaction_frequency_7d || 0) * 0.5 + (rs.emotional_intimacy || 0) * 0.2);
+    const interests = (u.interest_graph || []).map((n) => `
+      <span style="background:var(--bg-2);border:1px solid var(--border);border-radius:8px;padding:2px 8px;font-size:11px;color:var(--text-2)">${n.topic || ''} <span style="opacity:0.7">${((n.participation || 0) * 100).toFixed(0)}%</span></span>
+    `).join('');
+
+    const bar = (label, score) => `
+      <div style="display:flex;align-items:center;gap:8px;margin-top:6px">
+        <span style="font-size:11px;color:var(--text-2);width:60px;flex-shrink:0">${label}</span>
+        <div style="flex:1;height:6px;background:var(--bg-2);border-radius:3px;overflow:hidden">
+          <div style="width:${(score * 100).toFixed(0)}%;height:100%;background:${usersBarColor(score)};border-radius:3px;transition:width .3s"></div>
+        </div>
+        <span style="font-size:11px;color:var(--text-2);width:36px;text-align:right">${(score * 100).toFixed(0)}%</span>
+      </div>
+    `;
+
+    const firstAt = rs.first_interaction_at ? new Date(rs.first_interaction_at).toLocaleDateString('zh-CN') : '—';
+    const lastAt = rs.last_interaction_at ? new Date(rs.last_interaction_at).toLocaleDateString('zh-CN') : '—';
+
+    return `
+      <div style="background:var(--bg-2);border:1px solid var(--border);border-radius:8px;padding:14px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+          <div style="display:flex;align-items:center;gap:10px">
+            <div style="width:36px;height:36px;border-radius:50%;background:var(--accent);display:flex;align-items:center;justify-content:center;font-size:16px;color:#fff;font-weight:700">${(u.user_id || '?')[0].toUpperCase()}</div>
+            <div>
+              <div style="font-size:14px;font-weight:600;color:var(--text)">${u.user_id || '未知用户'}</div>
+              <div style="font-size:12px;color:var(--text-2);margin-top:2px">沟通风格: ${u.communication_style || '未知'}</div>
+            </div>
+          </div>
+          <div style="text-align:right">
+            <div style="font-size:18px;font-weight:700;color:${usersBarColor(familiarity)}">${(familiarity * 100).toFixed(0)}%</div>
+            <div style="font-size:11px;color:var(--text-2)">熟悉度</div>
+          </div>
+        </div>
+        <div style="background:var(--bg);border-radius:6px;padding:10px 12px">
+          ${bar('信任度', rs.trust_score || 0)}
+          ${bar('亲密度', rs.emotional_intimacy || 0)}
+          ${bar('依赖度', rs.dependency_score || 0)}
+          ${bar('7天互动', Math.min(1, rs.interaction_frequency_7d || 0))}
+        </div>
+        ${interests ? `<div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:10px">${interests}</div>` : ''}
+        <div style="display:flex;gap:16px;margin-top:10px;font-size:11px;color:var(--text-2)">
+          <span>首次互动: ${firstAt}</span>
+          <span>最近互动: ${lastAt}</span>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+async function usersLoadData() {
+  renderPersonaSelect();
+  if (!currentPersona && personas.length > 0) {
+    selectPersona(personas[0].name);
+  }
+  if (!currentPersona) return;
+  try {
+    const groupId = _usersGroupFilter;
+    const qs = groupId ? `?group_id=${encodeURIComponent(groupId)}` : '';
+    const res = await get(`/personas/${currentPersona}/users${qs}`);
+
+    const users = res.users || [];
+    const groups = res.groups || [];
+
+    // Stats
+    const totalEl = $('usersTotal');
+    const groupsEl = $('usersGroups');
+    if (totalEl) totalEl.textContent = users.length.toLocaleString();
+    if (groupsEl) groupsEl.textContent = groups.length.toLocaleString();
+
+    // Dropdown
+    const listEl = $('usersDropdownList');
+    const labelEl = $('usersDropdownLabel');
+    if (listEl) {
+      const items = [{ gid: '', label: '全部群聊' }].concat(groups.map((g) => ({ gid: g, label: g })));
+      listEl.innerHTML = items.map((it) => {
+        const active = it.gid === _usersGroupFilter;
+        return `<div onclick="usersSelectGroup('${it.gid.replace(/'/g, "\\'")}')" class="diary-dropdown-item" style="padding:8px 12px;font-size:13px;cursor:pointer;color:${active ? 'var(--accent)' : 'var(--text)'};background:${active ? 'var(--surface-2)' : 'transparent'};border-radius:6px;margin:2px 4px"
+          onmouseenter="this.style.background='var(--surface-2)'" onmouseleave="this.style.background='${active ? 'var(--surface-2)' : 'transparent'}'">${it.label}</div>`;
+      }).join('');
+    }
+    if (labelEl) labelEl.textContent = _usersGroupFilter || '全部群聊';
+
+    usersRenderList(users);
+  } catch (e) {
+    console.error('usersLoadData', e);
+    const listEl = $('usersList');
+    if (listEl) listEl.innerHTML = '<div style="color:var(--text-2);padding:12px">加载失败</div>';
+  }
+}

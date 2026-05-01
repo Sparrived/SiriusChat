@@ -98,6 +98,7 @@ const pageTitles = {
   'token-tracker': ['Token 追踪', 'Analytics / Token Tracker'],
   'cognition': ['认知分析', 'Analytics / Cognition'],
   'diary': ['日记', 'Analytics / Diary'],
+  'users': ['用户画像', 'Analytics / Users'],
 };
 
 async function navTo(page) {
@@ -143,6 +144,7 @@ async function navTo(page) {
   if (page === 'token-tracker') loadTokenTracker();
   if (page === 'cognition') loadCognition();
   if (page === 'diary') diaryLoadData();
+  if (page === 'users') loadUsers();
 
   // Replace native <select> with custom dropdowns after page loads
   setTimeout(() => mountCustomSelects(), 0);
@@ -282,6 +284,7 @@ async function loadPersonaStatus() {
     if (currentPage === 'token-tracker') ttLoadData();
     if (currentPage === 'cognition') loadCognition();
     if (currentPage === 'diary') diaryLoadData();
+    if (currentPage === 'users') loadUsers();
   } catch (e) {
     console.error('loadPersonaStatus', e);
   }
