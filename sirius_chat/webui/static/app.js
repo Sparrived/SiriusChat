@@ -1833,6 +1833,38 @@ function diaryRenderEntries(entries) {
 
 let _diaryEntriesCache = [];
 
+let _diaryGroupFilter = '';
+
+function diaryToggleDropdown() {
+  const list = $('diaryDropdownList');
+  const arrow = $('diaryDropdownArrow');
+  if (!list) return;
+  const open = list.style.display === 'block';
+  list.style.display = open ? 'none' : 'block';
+  if (arrow) arrow.style.transform = open ? 'rotate(0deg)' : 'rotate(180deg)';
+  if (!open) {
+    const close = (e) => {
+      if (!list.contains(e.target) && !$('diaryGroupDropdown').contains(e.target)) {
+        list.style.display = 'none';
+        if (arrow) arrow.style.transform = 'rotate(0deg)';
+        document.removeEventListener('click', close);
+      }
+    };
+    setTimeout(() => document.addEventListener('click', close), 0);
+  }
+}
+
+function diarySelectGroup(gid) {
+  _diaryGroupFilter = gid;
+  const label = $('diaryDropdownLabel');
+  if (label) label.textContent = gid || '全部群聊';
+  const list = $('diaryDropdownList');
+  const arrow = $('diaryDropdownArrow');
+  if (list) list.style.display = 'none';
+  if (arrow) arrow.style.transform = 'rotate(0deg)';
+  diaryLoadData();
+}
+
 async function diaryLoadData() {
   renderPersonaSelect();
   if (!currentPersona && personas.length > 0) {
@@ -1840,8 +1872,7 @@ async function diaryLoadData() {
   }
   if (!currentPersona) return;
   try {
-    const filterEl = $('diaryGroupFilter');
-    const groupId = filterEl ? filterEl.value : '';
+    const groupId = _diaryGroupFilter;
     const qs = groupId ? `?group_id=${encodeURIComponent(groupId)}` : '';
     const res = await get(`/personas/${currentPersona}/diary${qs}`);
 
@@ -1869,14 +1900,19 @@ async function diaryLoadData() {
       }
     }
 
-    // Group filter options
-    if (filterEl) {
-      const currentVal = filterEl.value;
+    // Group filter dropdown list
+    const listEl = $('diaryDropdownList');
+    const labelEl = $('diaryDropdownLabel');
+    if (listEl) {
       const groups = res.groups || [];
-      filterEl.innerHTML = '<option value="">全部群聊</option>'
-        + groups.map((g) => `<option value="${g}">${g}</option>`).join('');
-      filterEl.value = currentVal;
+      const items = [{ gid: '', label: '全部群聊' }].concat(groups.map((g) => ({ gid: g, label: g })));
+      listEl.innerHTML = items.map((it) => {
+        const active = it.gid === _diaryGroupFilter;
+        return `<div onclick="diarySelectGroup('${it.gid.replace(/'/g, "\\'")}')" class="diary-dropdown-item" style="padding:8px 12px;font-size:13px;cursor:pointer;color:${active ? 'var(--accent)' : 'var(--text)'};background:${active ? 'var(--surface-2)' : 'transparent'};border-radius:6px;margin:2px 4px"
+          onmouseenter="this.style.background='var(--surface-2)'" onmouseleave="this.style.background='${active ? 'var(--surface-2)' : 'transparent'}'">${it.label}</div>`;
+      }).join('');
     }
+    if (labelEl) labelEl.textContent = _diaryGroupFilter || '全部群聊';
 
     // Entries
     _diaryEntriesCache = res.entries || [];
