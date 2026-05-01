@@ -2383,6 +2383,94 @@ class EmotionalGroupChatEngine:
         # Update assistant emotion based on interaction
         self.assistant_emotion.update_from_interaction(emotion, user_id)
 
+        # Save display name and accumulate content for LLM-based profile analysis
+        speaker_name = getattr(message, "speaker", "") or ""
+        if user_id and speaker_name:
+            self.semantic_memory.set_user_profile_fields(
+                group_id, user_id, name=speaker_name
+            )
+        content = getattr(message, "content", "")
+        if isinstance(content, str) and content.strip() and user_id:
+            self.semantic_memory.enqueue_user_content(user_id, content.strip())
+            pending = self.semantic_memory._pending_user_contents.get(user_id, [])
+            if len(pending) >= 8:
+                try:
+                    asyncio.create_task(
+                        self._analyze_user_profile_async(user_id, group_id)
+                    )
+                except Exception:
+                    pass
+
+    async def _analyze_user_profile_async(self, user_id: str, group_id: str) -> None:
+        """Use a lightweight LLM to infer communication_style and interest_graph
+        from the user's recent messages. Fire-and-forget from background_update."""
+        batch = self.semantic_memory.get_user_content_batch(user_id, max_n=10)
+        if not batch:
+            return
+
+        # Deduplicate near-identical messages to reduce noise
+        seen: set[str] = set()
+        unique: list[str] = []
+        for text in batch:
+            key = text[:40].strip()
+            if key not in seen:
+                seen.add(key)
+                unique.append(text)
+        if not unique:
+            return
+
+        user_messages = "\n".join(f"{i+1}. {t}" for i, t in enumerate(unique))
+        system_prompt = (
+            "你是一名用户行为分析师。根据用户的最近发言，"
+            "推断其沟通风格和兴趣话题。只输出JSON，不要解释。"
+        )
+        prompt = (
+            f"以下是一名用户的最近 {len(unique)} 条发言：\n\n{user_messages}\n\n"
+            "请输出如下格式的JSON（不要markdown代码块）：\n"
+            '{"communication_style": "concise|detailed|formal|casual|humorous|emotional|questioning|neutral", '
+            '"style_reason": "简短说明", '
+            '"interests": [{"topic": "话题名", "confidence": 0.0~1.0}, ...最多5个]}'
+        )
+
+        try:
+            raw = await self._generate(
+                system_prompt,
+                [{"role": "user", "content": prompt}],
+                group_id,
+                task_name="cognition_analyze",
+                urgency=0,
+            )
+            import json
+            # Extract JSON from possible markdown code block
+            text = raw.strip()
+            if "```json" in text:
+                text = text.split("```json")[-1].split("```")[0].strip()
+            elif "```" in text:
+                text = text.split("```")[-1].split("```")[0].strip()
+
+            result = json.loads(text)
+            style = str(result.get("communication_style", "")).strip()
+            interests_raw = result.get("interests", [])
+            interest_graph: list[dict[str, Any]] = []
+            for item in interests_raw:
+                if isinstance(item, dict):
+                    topic = str(item.get("topic", "")).strip()
+                    conf = float(item.get("confidence", 0.0))
+                    if topic:
+                        interest_graph.append({"topic": topic, "participation": round(min(1.0, max(0.0, conf)), 2)})
+
+            self.semantic_memory.set_user_profile_fields(
+                group_id,
+                user_id,
+                communication_style=style,
+                interest_graph=interest_graph,
+            )
+            self._log_inner_thought(
+                f"用户 {user_id} 画像更新: 风格={style or '未变'}, 兴趣={len(interest_graph)}个"
+            )
+        except Exception:
+            pass
+
     # ==================================================================
     # Prompt builders & generation
     # ==================================================================

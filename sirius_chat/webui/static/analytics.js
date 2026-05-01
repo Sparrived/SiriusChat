@@ -720,48 +720,45 @@ function usersRenderList(users) {
   listEl.innerHTML = users.map((u) => {
     const rs = u.relationship_state || {};
     const familiarity = Math.min(1.0, 0.3 + (rs.interaction_frequency_7d || 0) * 0.5 + (rs.emotional_intimacy || 0) * 0.2);
+    const displayName = (u.name || u.user_id || '未知用户');
+    const userId = u.user_id || '';
     const interests = (u.interest_graph || []).map((n) => `
-      <span style="background:var(--bg-2);border:1px solid var(--border);border-radius:8px;padding:2px 8px;font-size:11px;color:var(--text-2)">${n.topic || ''} <span style="opacity:0.7">${((n.participation || 0) * 100).toFixed(0)}%</span></span>
+      <span style="background:var(--bg-2);border:1px solid var(--border);border-radius:4px;padding:1px 6px;font-size:10px;color:var(--text-2)">${n.topic || ''}</span>
     `).join('');
 
     const bar = (label, score) => `
-      <div style="display:flex;align-items:center;gap:8px;margin-top:6px">
-        <span style="font-size:11px;color:var(--text-2);width:60px;flex-shrink:0">${label}</span>
-        <div style="flex:1;height:6px;background:var(--bg-2);border-radius:3px;overflow:hidden">
-          <div style="width:${(score * 100).toFixed(0)}%;height:100%;background:${usersBarColor(score)};border-radius:3px;transition:width .3s"></div>
+      <div style="display:flex;align-items:center;gap:6px">
+        <span style="font-size:10px;color:var(--text-3);width:44px;flex-shrink:0;text-align:right">${label}</span>
+        <div style="flex:1;height:4px;background:var(--bg-2);border-radius:2px;overflow:hidden">
+          <div style="width:${(score * 100).toFixed(0)}%;height:100%;background:${usersBarColor(score)};border-radius:2px;transition:width .3s"></div>
         </div>
-        <span style="font-size:11px;color:var(--text-2);width:36px;text-align:right">${(score * 100).toFixed(0)}%</span>
+        <span style="font-size:10px;color:var(--text-3);width:28px;text-align:right">${(score * 100).toFixed(0)}%</span>
       </div>
     `;
 
-    const firstAt = rs.first_interaction_at ? new Date(rs.first_interaction_at).toLocaleDateString('zh-CN') : '—';
-    const lastAt = rs.last_interaction_at ? new Date(rs.last_interaction_at).toLocaleDateString('zh-CN') : '—';
-
     return `
-      <div style="background:var(--bg-2);border:1px solid var(--border);border-radius:8px;padding:14px">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
-          <div style="display:flex;align-items:center;gap:10px">
-            <div style="width:36px;height:36px;border-radius:50%;background:var(--accent);display:flex;align-items:center;justify-content:center;font-size:16px;color:#fff;font-weight:700">${(u.user_id || '?')[0].toUpperCase()}</div>
-            <div>
-              <div style="font-size:14px;font-weight:600;color:var(--text)">${u.user_id || '未知用户'}</div>
-              <div style="font-size:12px;color:var(--text-2);margin-top:2px">沟通风格: ${u.communication_style || '未知'}</div>
+      <div style="background:var(--bg-2);border:1px solid var(--border);border-radius:8px;padding:10px 12px">
+        <div style="display:flex;gap:10px;align-items:flex-start">
+          <div style="width:32px;height:32px;border-radius:50%;background:var(--accent);display:flex;align-items:center;justify-content:center;font-size:14px;color:#fff;font-weight:700;flex-shrink:0;margin-top:2px">${(displayName[0] || '?').toUpperCase()}</div>
+          <div style="flex:1;min-width:0">
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+              <div style="min-width:0">
+                <div style="font-size:14px;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${displayName}</div>
+                <div style="font-size:10px;color:var(--text-3);margin-top:1px">${userId}${u.communication_style ? ' · ' + u.communication_style : ''}</div>
+              </div>
+              <div style="text-align:right;flex-shrink:0">
+                <div style="font-size:16px;font-weight:700;color:${usersBarColor(familiarity)}">${(familiarity * 100).toFixed(0)}%</div>
+                <div style="font-size:9px;color:var(--text-3)">熟悉度</div>
+              </div>
             </div>
+            <div style="margin-top:6px;display:flex;flex-direction:column;gap:3px">
+              ${bar('信任', rs.trust_score || 0)}
+              ${bar('亲密', rs.emotional_intimacy || 0)}
+              ${bar('依赖', rs.dependency_score || 0)}
+              ${bar('互动', rs.interaction_frequency_7d || 0)}
+            </div>
+            ${interests ? `<div style="display:flex;flex-wrap:wrap;gap:3px;margin-top:5px">${interests}</div>` : ''}
           </div>
-          <div style="text-align:right">
-            <div style="font-size:18px;font-weight:700;color:${usersBarColor(familiarity)}">${(familiarity * 100).toFixed(0)}%</div>
-            <div style="font-size:11px;color:var(--text-2)">熟悉度</div>
-          </div>
-        </div>
-        <div style="background:var(--bg);border-radius:6px;padding:10px 12px">
-          ${bar('信任度', rs.trust_score || 0)}
-          ${bar('亲密度', rs.emotional_intimacy || 0)}
-          ${bar('依赖度', rs.dependency_score || 0)}
-          ${bar('7天互动', Math.min(1, rs.interaction_frequency_7d || 0))}
-        </div>
-        ${interests ? `<div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:10px">${interests}</div>` : ''}
-        <div style="display:flex;gap:16px;margin-top:10px;font-size:11px;color:var(--text-2)">
-          <span>首次互动: ${firstAt}</span>
-          <span>最近互动: ${lastAt}</span>
         </div>
       </div>
     `;

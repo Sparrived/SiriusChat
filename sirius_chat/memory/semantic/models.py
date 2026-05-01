@@ -94,6 +94,7 @@ class InterestNode:
 @dataclass
 class UserSemanticProfile:
     user_id: str = ""
+    name: str = ""                    # display name / nickname
     communication_style: str = ""
     interest_graph: list[Any] = field(default_factory=list)
     relationship_state: RelationshipState = field(default_factory=RelationshipState)
@@ -101,6 +102,7 @@ class UserSemanticProfile:
     def to_dict(self) -> dict[str, Any]:
         return {
             "user_id": self.user_id,
+            "name": self.name,
             "communication_style": self.communication_style,
             "interest_graph": [
                 n.to_dict() if isinstance(n, InterestNode) else dict(n)
@@ -136,6 +138,7 @@ class UserSemanticProfile:
         )
         return cls(
             user_id=data.get("user_id", ""),
+            name=data.get("name", ""),
             communication_style=data.get("communication_style", ""),
             interest_graph=graph,
             relationship_state=rs,

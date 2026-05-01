@@ -45,6 +45,8 @@ class SemanticMemoryManager:
         self._groups: dict[str, GroupSemanticProfile] = {}
         self._users: dict[str, UserSemanticProfile] = {}
         self._global_users: dict[str, UserSemanticProfile] = {}
+        # Pending message contents for LLM-based user profile analysis
+        self._pending_user_contents: dict[str, list[str]] = {}
 
     # ------------------------------------------------------------------
     # Group profiles
@@ -124,6 +126,39 @@ class SemanticMemoryManager:
             self._store.save_user_profile(group_id, user_id, profile)
             self._sync_to_global(user_id, profile)
             self._store.save_global_user_profile(user_id, self._global_users[user_id])
+
+    def enqueue_user_content(self, user_id: str, content: str) -> None:
+        """Accumulate user message content for periodic LLM-based profile analysis."""
+        if not content or not user_id:
+            return
+        self._pending_user_contents.setdefault(user_id, []).append(content)
+
+    def get_user_content_batch(self, user_id: str, max_n: int = 10) -> list[str]:
+        """Retrieve and clear pending contents for a user."""
+        batch = self._pending_user_contents.get(user_id, [])[:max_n]
+        if batch:
+            remaining = self._pending_user_contents[user_id][max_n:]
+            self._pending_user_contents[user_id] = remaining
+        return batch
+
+    def set_user_profile_fields(
+        self,
+        group_id: str,
+        user_id: str,
+        *,
+        name: str = "",
+        communication_style: str = "",
+        interest_graph: list[Any] | None = None,
+    ) -> None:
+        """Update name, communication_style and interest_graph for a user."""
+        profile = self.get_user_profile(group_id, user_id)
+        if name:
+            profile.name = name
+        if communication_style:
+            profile.communication_style = communication_style
+        if interest_graph is not None:
+            profile.interest_graph = interest_graph
+        self.save_user_profile(group_id, user_id)
 
     def get_global_user_profile(self, user_id: str) -> UserSemanticProfile | None:
         """Get the cross-group shared semantic profile for a user."""
