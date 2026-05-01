@@ -863,7 +863,7 @@ class WebUIServer:
             try:
                 store = TokenUsageStore(db_path, session_id="default")
                 summary = store.get_summary()
-                LOG.info("Token 统计 %s: %s", name, summary)
+                LOG.debug("Token 统计 %s: %s", name, summary)
                 if summary.get("total_calls", 0):
                     persona_breakdown.append({
                         "persona_name": name,
