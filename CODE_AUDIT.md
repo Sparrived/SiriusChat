@@ -21,7 +21,8 @@
 **为何未使用**：v1.0 调用链直接从 `AutoRoutingProvider` → 具体 provider 类，跳过了中间件层。开发时先搭建了中间件框架，但引擎侧未接入调用。
 
 **影响**：约 400 行代码，导出在 `sirius_chat/__init__.py` 中，文档中被引用为活跃组件。
-**建议**：保留框架但文档标注为"未接入"；或移出公开导出，待需要时重新启用。
+**评估**：v1.0 调用链直接使用 `tenacity` 处理重试，中间件层完全未接入且与当前架构脱节。长期保留会导致 API 表面膨胀、误导用户，维护成本（类型检查、文档同步）持续产生但零收益。
+**建议**：**直接删除**。框架设计合理，但"为未来准备"的代码在没有明确接入计划时只会腐烂。若后续需要，从 git 历史恢复比重维护死代码更简单。同步清理 `sirius_chat/__init__.py` 中的公开导出。
 
 ---
 
@@ -35,7 +36,8 @@
 **为何未使用**：引擎流程中每次查询的上下文不同（时间戳、热度、用户状态变化），缓存命中率预期低，未接入调用链。
 
 **影响**：约 200 行代码。
-**建议**：同上，保留但移出公开导出。
+**评估**：角色扮演引擎的上下文高度动态（时间戳、热度、用户状态、记忆检索结果每次均不同），缓存命中率趋近于零。该框架对当前架构无实际适用场景。
+**建议**：**直接删除**。`cache/` 目录与导出一并移除。
 
 ---
 
@@ -49,7 +51,8 @@
 **为何未使用**：开发初期用于引擎性能调优，但 v1.0 稳定后不再需要；生产环境使用日志和 WebUI 状态监控替代。
 
 **影响**：约 300 行代码。
-**建议**：同上。
+**评估**：`psutil` 性能分析在开发初期有价值，但 v1.0 稳定后已完全被日志和 WebUI 状态监控替代。生产环境无需引入。
+**建议**：**直接删除**。`performance/` 目录与导出一并移除。
 
 ---
 
@@ -69,7 +72,13 @@
 - `UserMemoryManager` 功能被轻量的 `UserManager`（`user/simple.py`）取代，后者的 simple 模型足够满足当前需求。
 
 **影响**：约 1500 行代码，部分有运行时崩溃风险。
-**建议**：`EpisodicMemoryManager`、`EventMemoryManager`、`ActivationEngine` 可直接删除；`WorkingMemoryManager` 和 `UserMemoryManager` 可标记为 deprecated 后删除。
+**评估**：
+- `EpisodicMemoryManager`、`EventMemoryManager`、`ActivationEngine` 为纯存根/骨架，无任何实现价值。
+- `WorkingMemoryManager` 是完整实现，但功能已被更简单可靠的 `BasicMemoryManager` 完全覆盖；保留它只会增加维护负担和概念复杂度。
+- `UserMemoryManager`（~1200 行）已被 `UserManager`（simple）替代，且存在引用不存在的 `sirius_chat.memory.quality.models` 的崩溃路径。
+**建议**：
+- **立即删除**：`memory/episodic/`、`memory/event/`、`memory/activation_engine.py`、`memory/user/manager.py`（`UserMemoryManager`）。
+- **删除**：`memory/working/`（`WorkingMemoryManager`）。虽然代码完整，但 v1.0 已明确收敛到 `BasicMemoryManager`，不存在"未来回退"需求。
 
 ---
 
@@ -92,7 +101,18 @@
 - `_task_models` 中的预留任务当前由引擎内联处理（如人格生成由 `PersonaGenerator` 直接调用，润色由 `_generate()` 统一处理），没有走 `ModelRouter` 的任务分发。
 
 **影响**：约 300 行代码。
-**建议**：删除或标记为内部保留。
+**评估与修正**：
+- `_dynamic_threshold` 和 `_decide_strategy` **并非死代码**——它们在 `CognitionAnalyzer.analyze()` 的活跃路径中被调用（`cognition.py:358-359`）。但 `_dynamic_threshold` 的实现确实是存根（始终返回 `0.45`），`_decide_strategy` 的实现也过于简化（硬编码阈值），与专门的 `ThresholdEngine` / `ResponseStrategyEngine` 重复。
+- `detect_emotion_islands` 完整实现但确实从未被调用。
+- `_message_directed_at_other_ai` 完整实现但确实从未被调用；多 AI 场景当前由 `peer_ai_ids` 简单覆盖。
+- `_log_inner_thought` 的 `emotion` 参数确实未被方法体使用。
+- `_task_models` 中的预留任务映射确实从未被解析。
+- `_build_cross_group_context` 确实被调用，但仅做简单的换行拼接，完全可内联。
+**建议**：
+- `_dynamic_threshold` / `_decide_strategy`：**保留方法签名**（因为被调用），但将内部逻辑委托给 `ThresholdEngine` / `ResponseStrategyEngine`，删除 CognitionAnalyzer 内的重复存根。
+- `detect_emotion_islands`、`_message_directed_at_other_ai`、`_build_cross_group_context`：**删除**。
+- `_log_inner_thought`：移除未使用的 `emotion` 参数。
+- `_task_models`：删除未使用的 `"persona_generate"`、`"silent_thought"`、`"polish"`、`"reflection"` 映射。
 
 ---
 
@@ -111,6 +131,18 @@
 - 热重载需要 EngineRuntime 支持优雅重建（保存状态 → 停止任务 → 重新加载 → 恢复状态），实现难度较高，目前通过"重启人格"替代。
 - 人格原型模板在开发初期清空，未重新填充。
 
+**影响**：约 300 行代码。
+**评估**：
+- Token 统计 API 实现完整，且是合理的运营需求（WebUI 用户需要查看 token 消耗）。
+- `_monitor_task` 声明为字段但从未赋值，属于"画了一半的饼"。
+- `reload_requested` flag 只有 WebUI 写入端，worker 端从不读取，形成逻辑孤儿。
+- `_ARCHETYPE_NAMES` 为空列表，无意义占位符。
+**建议**：
+- `api_tokens_get()` / `api_persona_tokens_get()`：**注册路由**（`_setup_routes()` 中添加 `/api/tokens` 和 `/api/personas/{name}/tokens`），而非删除。功能对用户有价值，只是缺少最后一行注册代码。
+- `_monitor_task`：**删除字段声明**。当前 NapCat 进程管理策略是"由 OS/用户管理"，无需引擎内监控。
+- `reload_requested`：**删除 flag 的写入和读取逻辑**。当前通过"重启人格"替代，保留半实现代码只会误导用户。
+- `_ARCHETYPE_NAMES`：**删除**。
+
 ---
 
 ## 二、逻辑粗糙 / 代码异味
@@ -121,7 +153,8 @@
 
 **现状**：`DeepSeekProvider`、`SiliconFlowProvider`、`VolcengineArkProvider`、`YTeaProvider`、`BigModelProvider` 是 `OpenAICompatibleProvider` 的 **~120 行 copy-paste 克隆**，仅 `DEFAULT_*_BASE_URL` 不同。
 
-**建议**：统一为参数化基类，减少 ~500 行重复代码。
+**评估**：代码重复确实存在，但当前所有 provider 工作稳定，重构为参数化基类需要仔细处理各平台细微差异（如 thinking 参数、特殊 header、错误码映射），引入回归风险。收益（减少 ~500 行）与风险不成正比。
+**建议**：**P2（中期优化）**。当前可接受。若未来新增第 6 个 copy-paste provider，则必须重构；否则保持现状，添加代码注释说明"各子类仅 base_url 不同，可参数化"即可。
 
 ---
 
@@ -132,7 +165,8 @@
 **现状**：`config/models.py:339-356` 引用了 `self.work_path`、`self.data_path` 等 `MultiModelConfig` 不存在的属性。
 
 **影响**：调用即抛 `AttributeError`。
-**建议**：重写或删除该方法。
+**评估**：`MultiModelConfig` 没有 `work_path`、`data_path` 等属性，方法体是从 `WorkspaceConfig.to_dict()` 复制粘贴后未修改。这是明确的运行时崩溃点。
+**建议**：**P0（立即修复）**。重写 `to_dict()`，仅序列化 `MultiModelConfig` 实际拥有的字段（`task_models`、`task_temperatures`、`task_max_tokens`、`task_retries`、`max_multimodal_inputs_per_turn`、`max_multimodal_value_length` 等），或**直接删除**该方法（若无调用方）。
 
 ---
 
@@ -142,7 +176,8 @@
 
 **现状**：使用 `asyncio.to_thread(self.generate, request)` 将同步 `urllib.request` 丢入线程池，而非真正的异步 HTTP。
 
-**建议**：当前可接受，但 TODO 标注为"未来迁移到 aiohttp/httpx"。
+**评估**：虽然 `asyncio.to_thread` 不是"真正的"异步，但在当前架构下工作可靠。迁移到 `httpx` 需要重写所有 provider 的 HTTP 层，并处理 `urllib.request` 不涉及的连接池、SSL 配置、流式响应等差异，风险高、收益有限（该 bot 不是高并发 API 服务，单人格的并发请求量很低）。
+**建议**：**保持现状**。无需 TODO，因为当前架构下没有迁移的必要性。若未来需要流式输出（SSE）或连接池优化，再考虑迁移。
 
 ---
 
@@ -152,7 +187,8 @@
 
 **现状**：假设该 provider 所有模型都接受这些参数，但实际上同一 provider 的不同模型可能使用不同参数名。
 
-**建议**：按模型粒度配置，而非按 provider。
+**评估**：当前按 provider 粒度配置在 99% 场景下正确（同一平台的不同模型通常共享参数风格）。按模型粒度配置会大幅增加配置复杂度（每个模型都需要独立配置 thinking 参数）。
+**建议**：**P2（中期优化）**。保持 provider 粒度作为默认值，仅在 `OrchestrationPolicy` 中增加可选的 per-model override 字段，供高级用户覆盖。
 
 ---
 
@@ -162,7 +198,8 @@
 
 **现状**：始终用 `len(text)//4`，而 `token/utils.py` 已有更准确的 CJK-aware 估算器（中文 ≈ 1 字符/token，英文 ≈ 4 字符/token，支持 tiktoken 精确回退）。
 
-**建议**：统一使用 `token/utils.py` 的估算器。
+**评估**：`len(text)//4` 对中文严重低估（中文通常 1~2 字符/token），会导致 token 预算和日志显示不准确。`token/utils.py` 已实现 CJK-aware 估算（中文 ≈ 1 字符/token，英文 ≈ 4 字符/token，支持 tiktoken 精确回退），但未被调用。
+**建议**：**P1（近期修复）**。将 `estimate_generation_request_input_tokens` 替换为 `token/utils.py` 中的 `estimate_tokens()` 或同类函数。改动小、收益明确。
 
 ---
 
@@ -172,7 +209,8 @@
 
 **现状**：连续两行 `self._dirty = True`。
 
-**建议**：删除重复行。
+**评估**：纯粹的复制粘贴错误，不影响功能但影响代码整洁度。
+**建议**：**P0（立即修复）**。删除 `SkillDataStore.set()` 中重复的 `self._dirty = True`。
 
 ---
 
@@ -182,7 +220,8 @@
 
 **现状**：每次调用都重新 `re.compile()`。正则编译开销小，早期没有优化意识。
 
-**建议**：将正则提升为模块级常量。
+**评估**：每次调用都 `re.compile()` 确实不必要，但正则简单、调用频率低（仅在 SKILL 链执行时），性能影响可忽略。属于代码整洁度问题。
+**建议**：**P1（近期修复）**。将正则编译提升为模块级常量 ` _TEMPLATE_RE = re.compile(r"\$\{(.*?)\}")`。
 
 ---
 
@@ -192,7 +231,8 @@
 
 **现状**：硬编码中文字符串检查来决定返回固定 JSON，测试对 prompt 措辞变化极其敏感。
 
-**建议**：使用更明确的标记或参数化测试。
+**评估**：测试中硬编码中文字符串判断场景，导致 prompt 微调后测试即失败，维护成本高。
+**建议**：**P1（近期修复）**。在 `MockProvider.generate` 中增加 `task_name` 或 `metadata` 参数识别场景，替代字符串包含判断；或按 request 对象中的特定字段（如 `task_name`）路由返回固定响应。
 
 ---
 
@@ -202,7 +242,8 @@
 
 **现状**：`NapCatBridge._DEFAULT_ALLOWED_GROUP_ID = "728196560"`，若 `adapters.json` 无 `allowed_group_ids` 则静默使用。
 
-**建议**：移除默认值，强制配置或至少发出警告。
+**评估**：硬编码开发者测试群号 `728196560` 是安全隐患。若用户未配置 `allowed_group_ids`，机器人会默认加入该群，可能导致消息泄露或意外交互。
+**建议**：**P1（近期修复）**。移除 `_DEFAULT_ALLOWED_GROUP_ID`。当 `adapters.json` 未配置 `allowed_group_ids` 时，拒绝群聊消息处理并记录 **ERROR** 级别日志（"未配置 allowed_group_ids，群聊功能已禁用"），而非静默使用默认值。
 
 ---
 
@@ -212,7 +253,8 @@
 
 **现状**：`_allocate_port()` 用 `socket.bind()` 检查可用性后立即释放，检查与实际启动之间无原子预留。如果另一个进程在检查和启动之间抢占了该端口，会导致启动失败。
 
-**建议**：使用操作系统级别的端口预留机制，或引入租约锁。
+**评估**：`socket.bind()` 检查后立即释放，在快速重启或多人格并发启动时确实存在竞态。但 NapCat 启动失败后会向上抛出异常，用户可见并可手动重试，当前未报告因此导致的实际问题。
+**建议**：**P2（中期优化）**。在 `data/adapter_port_registry.json` 中增加时间戳租约（分配后 60 秒内视为已占用），或在 `PersonaManager` 中使用文件锁（`portalocker` 或 `filelock`）保护端口分配。
 
 ---
 
@@ -222,7 +264,8 @@
 
 **现状**：`_cache_image()` 用 URL 的 MD5 作为文件名。URL 参数变化（如签名过期后刷新）会导致重复缓存同一图片；纯 MD5 碰撞理论上极低但无处理。
 
-**建议**：使用内容哈希（下载后计算文件内容 MD5）而非 URL 哈希。
+**评估**：QQ 图片 URL 通常带签名参数（如 `?sign=xxx`），签名过期后同一图片的 URL 会变化，导致重复缓存。但图片下载后内容不变，内容哈希可解决此问题。当前图片缓存目录可能因此膨胀。
+**建议**：**P1（近期修复）**。下载完成后计算文件内容的 MD5（或 SHA256）作为文件名，而非 URL 的 MD5。保留原 URL 作为元数据记录在扩展属性或同名 `.url` 文件中。
 
 ---
 
@@ -244,7 +287,11 @@
 - `EventMemoryManager`（存根）
 - `ActivationEngine`（存根）
 
-**结论**：记忆模块目录结构反映了早期雄心勃勃的 5-6 层记忆架构（工作记忆 → 情景记忆 → 语义记忆 → 事件记忆 → 激活引擎），但实际运行时已收敛到 3 层 + 名词解释 + 简单用户管理。建议清理未使用的子系统，减少维护负担。
+**结论**：记忆模块目录结构反映了早期雄心勃勃的 5-6 层记忆架构（工作记忆 → 情景记忆 → 语义记忆 → 事件记忆 → 激活引擎），但实际运行时已收敛到 3 层 + 名词解释 + 简单用户管理。`WorkingMemoryManager` 虽然是完整实现，但 v1.0 已明确选择 `BasicMemoryManager` 作为唯一工作记忆；保留两套并行实现会增加概念复杂度和维护负担。
+**建议**：
+- 删除纯存根（`episodic/`、`event/`、`activation_engine.py`）。
+- 删除 `WorkingMemoryManager`（`memory/working/`）。v1.0 不会回退到旧架构。
+- 删除 `UserMemoryManager`（`memory/user/manager.py`），它已被 `UserManager`（simple）替代且存在崩溃路径。
 
 ---
 
@@ -252,7 +299,8 @@
 
 中间件链、熔断器、限流器、成本监控都是典型的生产级基础设施，但当前调用链直接从 `AutoRoutingProvider` → 具体 provider 类，跳过了整个中间件层。
 
-**结论**：中间件框架设计合理，但长期不使用会导致代码腐烂。建议要么接入（至少接入 RetryMiddleware），要么移出主仓库到独立包。
+**结论**：中间件框架设计合理，但 v1.0 调用链直接使用 `tenacity` 处理重试，中间件层完全未接入且与当前架构脱节。RetryMiddleware 与 `tenacity` 功能重复；熔断器、限流器、成本监控在当前规模（单人格、低并发）下属于过度设计。
+**建议**：**直接删除** `providers/middleware/` 目录及所有相关导出。v1.0 架构不需要中间件层；若未来规模扩大需要熔断/限流，应基于 `httpx` 的 transport 层或专用库（如 `pybreaker`）重新设计，而非恢复 400 行未使用的旧代码。
 
 ---
 
@@ -260,7 +308,11 @@
 
 `workspace/runtime.py` 和 `platforms/runtime.py` 都实例化 `SkillRegistry` + `SkillExecutor`，说明旧 workspace 系统和新 v1.0 platform 系统存在重叠。
 
-**结论**：`workspace/` 目录标记为"旧版兼容"，但仍有活跃代码路径。建议明确 deprecation timeline。
+**评估**：`workspace/runtime.py`（`WorkspaceRuntime`）和 `workspace/roleplay_manager.py`（`RoleplayWorkspaceManager`）仍在 `sirius_chat/__init__.py` 中公开导出，但 AGENTS.md 已明确 v1.0 推荐入口为 `PersonaManager` / `EngineRuntime`。`WorkspaceRuntime` 的代码路径与 `platforms/runtime.py`（`EngineRuntime`）功能重叠。
+**建议**：
+- 将 `WorkspaceRuntime` 和 `RoleplayWorkspaceManager` **移出 `sirius_chat/__init__.py` 的公开导出**（从 `__all__` 中移除），但保留源代码以兼容仍使用旧 API 的用户。
+- 在 `workspace/__init__.py` 和 `workspace/runtime.py` 模块顶部添加 `warnings.warn("deprecated", DeprecationWarning)`。
+- 明确 deprecation timeline：**v1.1 彻底删除 `workspace/` 目录**。
 
 ---
 
@@ -268,7 +320,8 @@
 
 `test_diary_injection_tiers` 和 `test_keyword_search` 在本地 sentence-transformers 模型缓存存在时会失败（语义搜索导致不可预测的排序）。已通过设置 `indexer._model = None` 修复，但反映出一个更深层问题：测试环境对本地模型缓存的状态敏感。
 
-**建议**：在测试 fixture 中统一禁用模型加载，或使用 mock embedding。
+**评估**：`test_diary_injection_tiers` 和 `test_keyword_search` 对本地 sentence-transformers 缓存敏感，已在测试中用 `indexer._model = None` 绕过，但属于"打补丁"式修复。更深层问题是 `DiaryIndexer` 在导入时即尝试加载模型，而非惰性加载。
+**建议**：**P1（近期修复）**。修改 `DiaryIndexer` 为惰性加载模型（首次调用 `index()` 或 `search()` 时才初始化 `SentenceTransformer`），并在 `tests/conftest.py` 中统一 mock embedding 函数，彻底消除测试环境对本地模型缓存的依赖。
 
 ---
 
@@ -290,34 +343,45 @@
 
 ### 仍存在的潜在不一致
 
-| 文档 | 问题 |
-|------|------|
-| `README.md` | 仍包含大量 `WorkspaceRuntime` 示例代码，与 v1.0 推荐入口不符 |
-| `docs/workspace-runtime.md` | 描述的是旧版 workspace 架构，与 v1.0 多人格架构不完全一致 |
-| `docs/api.md` | 自动生成的文档包含未使用的中间件类 |
-| `AGENTS.md` | 依赖表提到 `httpx>=0.24.0`，但 provider 实际使用 `urllib.request` |
+| 文档 | 问题 | 建议 |
+|------|------|------|
+| `README.md` | 仍包含大量 `WorkspaceRuntime` 示例代码，与 v1.0 推荐入口不符 | **P1**：将示例代码更新为 `PersonaManager` / `EngineRuntime` 入口，或在 `WorkspaceRuntime` 示例旁添加 deprecation 警告。 |
+| `docs/workspace-runtime.md` | 描述的是旧版 workspace 架构，与 v1.0 多人格架构不完全一致 | **P1**：在文档顶部添加"此文档描述 v0.x 旧版架构，v1.0 请参见 `architecture.md`"的横幅。 |
+| `docs/api.md` | 自动生成的文档包含未使用的中间件类 | 删除中间件代码后，重新运行 `scripts/generate_api_docs.py` 即可自动解决。 |
+| `AGENTS.md` | 依赖表提到 `httpx>=0.24.0`，但 provider 实际使用 `urllib.request` | **P1**：修正依赖说明。`httpx` 当前仅被 `NapCatAdapter`（OneBot v11 反向 WS）和 `webui/server.py` 使用，provider 层不使用。应更新为"`httpx` 用于平台适配层和 WebUI，provider 层使用标准库 `urllib.request`"。
 
 ---
 
 ## 五、建议的优先级
 
 ### P0（立即处理）
-1. 删除 `memory/user/manager.py` 中引用不存在的 `sirius_chat.memory.quality.models` 的代码（运行时崩溃风险）
-2. 修复 `MultiModelConfig.to_dict()`（调用即崩溃）
+1. **修复 `memory/user/manager.py` 崩溃路径**：删除引用不存在的 `sirius_chat.memory.quality.models` 的代码（或直接删除整个 `UserMemoryManager`）。
+2. **修复 `MultiModelConfig.to_dict()`**：重写为仅序列化 `MultiModelConfig` 实际拥有的字段，或确认无调用方后直接删除。
+3. **删除 `SkillDataStore.set()` 重复行**：删除多余的 `self._dirty = True`。
 
 ### P1（近期处理）
-3. 清理纯存根：`memory/episodic/`、`memory/event/`、`memory/activation_engine.py`
-4. 清理 Core 死代码：`_dynamic_threshold`、`_decide_strategy`、`detect_emotion_islands`、`_message_directed_at_other_ai`
-5. 删除 WebUI 未注册的死端点
-6. 删除 `platforms/napcat_manager.py` 中未使用的 `_monitor_task`
+4. **删除纯存根**：`memory/episodic/`、`memory/event/`、`memory/activation_engine.py`。
+5. **删除 Core 未使用代码**：`detect_emotion_islands`、`_message_directed_at_other_ai`、`_build_cross_group_context`、`_task_models` 中未使用的预留映射；清理 `_log_inner_thought` 未使用的 `emotion` 参数。
+6. **委托 CognitionAnalyzer 存根**：将 `_dynamic_threshold` / `_decide_strategy` 的内部逻辑委托给 `ThresholdEngine` / `ResponseStrategyEngine`，删除 CognitionAnalyzer 内的简化/存根实现。
+7. **注册 Token API 路由**：在 `_setup_routes()` 中注册 `/api/tokens` 和 `/api/personas/{name}/tokens`。
+8. **删除 Platform 死代码**：`napcat_manager.py` 的 `_monitor_task` 声明、`persona_manager.py` 的 `reload_requested` 写入逻辑、`setup_wizard.py` 的 `_ARCHETYPE_NAMES`。
+9. **统一 token 估算器**：使用 `token/utils.py` 的 CJK-aware 估算替代 `len(text)//4`。
+10. **移除 NapCat 默认群号硬编码**：无配置时拒绝服务并记录 ERROR，而非静默使用默认值。
+11. **图片缓存改为内容哈希**：下载后计算文件内容 MD5 作为文件名。
+12. **正则编译提升为模块常量**：`SkillChainContext.resolve_templates`。
+13. **改进 `MockProvider` 场景识别**：使用 `task_name` 参数替代硬编码中文字符串。
+14. **修复文档不一致**：`README.md` 示例更新、`docs/workspace-runtime.md` 添加 deprecation 横幅、`AGENTS.md` 依赖说明修正。
+15. **测试 fixture 统一禁用模型加载**：`DiaryIndexer` 惰性加载 + `conftest.py` mock embedding。
 
 ### P2（中期优化）
-7. 重构 Provider 重复代码（5 个 copy-paste 子类 → 1 个参数化基类）
-8. 统一 token 估算器（使用 `token/utils.py` 替代 `len(text)//4`）
-9. 移除 NapCat 默认群号硬编码
-10. 接入 RetryMiddleware 或移出中间件层
+16. **删除 provider 中间件层**：`providers/middleware/` 目录及 `sirius_chat/__init__.py` 导出。
+17. **删除 cache 系统**：`cache/` 目录及导出。
+18. **删除 performance 系统**：`performance/` 目录及导出。
+19. **删除 `WorkingMemoryManager`**：`memory/working/` 目录。
+20. **重构 Provider 重复代码**：若未来新增第 6 个 copy-paste provider，则统一为参数化基类。
+21. **端口分配竞态条件**：引入文件锁或时间戳租约机制。
+22. **`_build_thinking_disabled_defaults` 增加 per-model override**：在 `OrchestrationPolicy` 中增加可选的模型粒度覆盖字段。
 
 ### P3（长期规划）
-11. 明确 `workspace/` 目录的 deprecation timeline
-12. 评估是否保留 `WorkingMemoryManager` 和 `UserMemoryManager`
-13. 将 `urllib.request` 迁移到真正的异步 HTTP（aiohttp/httpx）
+23. **移除 `workspace/` 公开导出并设定 deprecation timeline**：v1.1 彻底删除 `workspace/` 目录。
+24. **评估真正的异步 HTTP 迁移**：当前 `urllib.request` + `asyncio.to_thread` 在单人格低并发场景下足够，仅当需要流式输出（SSE）或高并发连接池时迁移到 `httpx`。

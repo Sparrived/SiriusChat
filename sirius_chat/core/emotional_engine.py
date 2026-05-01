@@ -33,7 +33,6 @@ from sirius_chat.core.threshold_engine import ThresholdEngine
 from sirius_chat.memory.basic import BasicMemoryFileStore, BasicMemoryManager
 from sirius_chat.memory.context_assembler import ContextAssembler
 from sirius_chat.memory.diary import DiaryManager
-from sirius_chat.memory.event.manager import EventMemoryManager
 from sirius_chat.memory.glossary import GlossaryManager, GlossaryTerm
 from sirius_chat.memory.semantic.manager import SemanticMemoryManager
 from sirius_chat.memory.user.simple import UserManager
@@ -147,7 +146,6 @@ class EmotionalGroupChatEngine:
         self._task_models.update(self.config.get("task_models", {}))
 
         # Memory foundation
-        self.event_memory = EventMemoryManager()
         self.semantic_memory = SemanticMemoryManager(work_path)
 
         self.basic_memory = BasicMemoryManager(
@@ -1039,12 +1037,23 @@ class EmotionalGroupChatEngine:
         Called by the external delivery loop to retrieve and send due reminders.
         If *adapter_type* is provided, only reminders created for that adapter
         are returned; unmatched items remain in the queue.
+
+        Reminders with an empty ``adapter_type`` (e.g. created by older versions)
+        are treated as wildcards and matched against any *adapter_type*.
         """
         items = self._pending_reminders.pop(group_id, [])
         if adapter_type is None:
             return [item["text"] for item in items]
-        matched = [item for item in items if item.get("adapter_type") == adapter_type]
-        unmatched = [item for item in items if item.get("adapter_type") != adapter_type]
+        matched = [
+            item
+            for item in items
+            if not item.get("adapter_type") or item.get("adapter_type") == adapter_type
+        ]
+        unmatched = [
+            item
+            for item in items
+            if item.get("adapter_type") and item.get("adapter_type") != adapter_type
+        ]
         if unmatched:
             self._pending_reminders[group_id] = unmatched
         return [item["text"] for item in matched]
@@ -1635,7 +1644,6 @@ class EmotionalGroupChatEngine:
             delayed_queue=[],
             group_timestamps=dict(self._group_last_message_at),
             token_usage_records=[r.to_dict() for r in self.token_usage_records],
-            event_memory=self.event_memory.to_dict(),
             basic_memory=self.basic_memory.to_dict(),
             diary_state={
                 "diarized_sources": {
@@ -1700,15 +1708,6 @@ class EmotionalGroupChatEngine:
             now_iso = datetime.now(timezone.utc).isoformat()
             for gid in list(self._group_last_message_at.keys()):
                 self._group_last_message_at[gid] = now_iso
-
-            # Event memory v2
-            event_mem_data = state.get("event_memory")
-            if event_mem_data:
-                try:
-                    self.event_memory = EventMemoryManager.from_dict(event_mem_data)
-                except Exception as exc:
-                    logger.warning("事件记忆恢复失败，使用空实例: %s", exc)
-                    self.event_memory = EventMemoryManager()
 
             # Diary state
             diary_state = state.get("diary_state")
@@ -1882,14 +1881,6 @@ class EmotionalGroupChatEngine:
             ),
         )
         self.basic_store.append(entry)
-
-        # Old: Buffer raw message for structured observation extraction
-        if message.content and resolved_user_id:
-            self.event_memory.buffer_message(
-                user_id=resolved_user_id,
-                content=message.content,
-                group_id=group_id,
-            )
 
         # Update group last message time
         from sirius_chat.core.utils import now_iso
