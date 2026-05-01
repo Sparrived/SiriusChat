@@ -139,6 +139,7 @@ async function navTo(page) {
   if (page === 'providers') _renderProviderDraft();
   if (page === 'napcat') { ncLoadStatus(); ncLoadLogs(); }
   if (page === 'token-tracker') loadTokenTracker();
+}
 
 // ── Personas ──────────────────────────────────────────
 async function loadPersonas() {
