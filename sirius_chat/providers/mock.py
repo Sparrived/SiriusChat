@@ -47,24 +47,6 @@ class MockProvider(LLMProvider):
         )
         
         self.requests.append(request)
-        # 检测事件验证请求并返回有效的 JSON
-        is_event_verification = (
-            "对话分析专家" in request.system_prompt or 
-            "分析这段对话中的潜在事件" in str(request.messages)
-        )
-        if is_event_verification:
-            response = """{
-                "record": "是",
-                "reason": "测试事件",
-                "summary": "测试事件摘要",
-                "keywords": ["关键词"],
-                "role_slots": ["角色"],
-                "time_hints": ["时间"],
-                "emotion_tags": ["情绪"]
-            }"""
-            logger.info(f"模拟的 {request.model} 回复我了，写了 {len(response)} 个字～")
-            logger.debug(f"[模型输出] mock-{request.model} | 响应内容:\n{response}")
-            return response
         if self._queue:
             response = self._queue.popleft()
             logger.info(f"模拟的 {request.model} 回复我了，写了 {len(response)} 个字～")
