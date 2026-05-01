@@ -8,7 +8,7 @@
 - 提醒系统从创建到投递的完整链路
 - 数据隔离、Provider 共享、NapCat 多实例与日志归档
 
-> **v1.0 重大变更**：项目已从单 workspace 单会话模式演进为**多人格多进程异步架构**。`PersonaManager` 是生产环境唯一推荐入口；`WorkspaceRuntime` 等旧版兼容层仍保留在 `workspace/` 目录，但不再作为推荐调用方式。
+> **v1.0 重大变更**：项目已从单 workspace 单会话模式演进为**多人格多进程异步架构**。`PersonaManager` 是生产环境唯一推荐入口；`WorkspaceRuntime` 等旧版兼容层已在 v1.1 彻底移除，推荐入口为 `PersonaManager` / `EngineRuntime`。
 
 ---
 
@@ -263,11 +263,11 @@ flowchart TD
 | **平台桥接层** | `sirius_chat/platforms/napcat_bridge.py`、`napcat_adapter.py`、`napcat_manager.py` | NapCat OneBot v11 WebSocket 适配、QQ 群聊/私聊事件处理、后台投递循环、setup wizard |
 | **认知编排层** | `core/emotional_engine.py`、`core/cognition.py`、`core/response_strategy.py`、`core/threshold_engine.py`、`core/rhythm.py`、`core/response_assembler.py` | 四层认知架构、统一认知分析、响应策略、动态阈值、对话节奏、prompt 组装 |
 | **记忆层** | `memory/basic/`、`memory/diary/`、`memory/user/`、`memory/glossary/`、`memory/semantic/`、`memory/context_assembler.py` | 基础记忆（工作窗口+热度+归档）、日记记忆（LLM生成+检索）、用户管理、名词解释、语义记忆、上下文组装器 |
-| **Provider 层** | `providers/base.py`、`providers/routing.py`、各 provider 文件 | 统一请求协议、provider 注册表、自动路由、具体上游接入；`providers/middleware/` 框架已实现但当前未接入调用链 |
+| **Provider 层** | `providers/base.py`、`providers/routing.py`、各 provider 文件 | 统一请求协议、provider 注册表、自动路由、具体上游接入 |
 | **SKILL 层** | `skills/registry.py`、`skills/executor.py`、`skills/data_store.py`、`skills/builtin/` | SKILL 注册、依赖解析、执行与 data store；内置技能含 system_info、desktop_screenshot、learn_term、url_content_reader、bing_search、file_read、file_list、file_write、reminder |
 | **配置层** | `sirius_chat/persona_config.py` | 人格级配置模型：adapters、experience、paths |
 | **WebUI 层** | `webui/server.py`、`webui/static/` | aiohttp REST API + 管理面板（Dashboard + 配置面板） |
-| **工具层** | `token/` | token 统计与 SQLite 持久化；`cache/`、`performance/` 框架已实现但当前未接入调用链 |
+| **工具层** | `token/` | token 统计与 SQLite 持久化 |
 
 ---
 
@@ -378,11 +378,11 @@ flowchart TD
 
 1. 先更新 `docs/full-architecture-flow.md`。
 2. 再同步 `docs/architecture.md`。
-3. 若外部用法变化，再同步 `docs/external-usage.md` 和 `README.md`。
+3. 若外部用法变化，再同步 `README.md`。
 4. 最后同步受影响的模块文档（`engine-emotional.md`、`skill-system.md`、`persona-system.md` 等）。
 
 ---
 
-> **文档版本**：v1.0.1
-> **最后更新**：2026-04-30
+> **文档版本**：v1.1.0
+> **最后更新**：2026-05-01
 > **对应代码分支**：`master`

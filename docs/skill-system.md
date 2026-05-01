@@ -199,9 +199,9 @@ process_message() → _execution() → _generate() → 拿到回复
                                     解析标记 → 剥离 → 执行 → 追加结果
 ```
 
-### WorkspaceRuntime
+### EngineRuntime
 
-`WorkspaceRuntime` 在初始化时自动创建 `SkillRegistry` + `SkillExecutor`，从 `layout.skills_dir()` 加载 SKILL（包含内置），并在创建引擎时注入。配置热刷新时会重新加载 SKILL 目录。
+`EngineRuntime` 在初始化时自动创建 `SkillRegistry` + `SkillExecutor`，从人格目录加载 SKILL（包含内置），并在创建引擎时注入。
 
 ## 写一个 SKILL 的完整流程
 

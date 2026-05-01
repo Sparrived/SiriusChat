@@ -133,7 +133,7 @@ preset = load_your_preset()  # AgentPreset
 persona = PersonaGenerator.from_roleplay_preset(preset)
 ```
 
-`WorkspaceRuntime.create_emotional_engine()` 会自动尝试从当前 active agent preset 加载 persona（如果未显式传入）。
+`EngineRuntime` 会自动尝试从人格目录的 `persona.json` 加载 persona（如果未显式传入）。
 
 ## 与 EmotionalGroupChatEngine 集成
 

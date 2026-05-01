@@ -231,32 +231,31 @@ engine.start_background_tasks()
 
 ### 生成带注释的默认模板
 
-```bash
-python main.py --init-config session.jsonc
-```
+v1.1 后不再提供 `--init-config`，请直接创建人格目录与 JSON 配置文件。
 
 ## 5. workspace 产物位置
 
-双根模式下的默认产物：
+人格级产物位置（`data/personas/{name}/`）：
 
 | 路径 | 说明 |
 | --- | --- |
-| config_root/workspace.json | workspace 级清单 |
-| config_root/providers/provider_keys.json | provider 注册表 |
-| config_root/roleplay/generated_agents.json | 已生成人格资产 |
-| data_root/engine_state/ | 引擎运行态持久化 |
-| data_root/memory/basic/ | 基础记忆归档存储 |
-| data_root/memory/diary/ | 日记条目与索引 |
-| data_root/memory/glossary/ | AI 名词解释库 |
-| data_root/token/token_usage.db | token 计量 |
-| data_root/skill_data/ | SKILL 数据存储 |
+| `persona.json` | 人格定义 |
+| `orchestration.json` | 模型编排 |
+| `adapters.json` | 平台适配器配置 |
+| `experience.json` | 体验参数 |
+| `engine_state/` | 引擎运行态持久化 |
+| `memory/basic/` | 基础记忆归档存储 |
+| `memory/diary/` | 日记条目与索引 |
+| `memory/glossary/` | AI 名词解释库 |
+| `skill_data/` | SKILL 数据存储 |
+| `logs/` | 子进程日志 |
 
 ## 6. 最佳实践
 
 1. 直接使用 Emotional Engine 配置，无需关注 `orchestration` 等旧字段。
 2. 需要注释时直接使用 JSONC，不必更换扩展名。
 3. `persona` 字段优先使用模板名；复杂人格通过 roleplay 资产 + `"generated"` 加载。
-4. 使用独立的 config_root 和 data_root 时，修改热刷新的文件必须落在 config_root。
+4. 全局 provider 配置位于 `data/providers/provider_keys.json`，所有人格共用。
 5. 日记检索质量取决于 sentence-transformers（`pip install sentence-transformers` 可选安装）。未安装时自动回退到纯关键词匹配。
 
 ## 7. 故障排查
@@ -265,9 +264,6 @@ python main.py --init-config session.jsonc
 
 请检查：
 
-1. 修改的是 config_root 下的文件，而不是 data_root
-2. 文件内容仍是合法 JSON/JSONC
-3. 监听的路径是否属于以下之一：
-   - workspace.json
-   - providers/provider_keys.json
-   - roleplay/generated_agents.json
+1. 文件内容仍是合法 JSON
+2. Provider 配置位于 `data/providers/provider_keys.json`
+3. 人格级配置修改后需重启对应人格子进程

@@ -39,13 +39,13 @@ def run(
 
 | 约定 | 说明 |
 |------|------|
-| 存放位置 | `skills/` 目录下的 `.py` 文件；默认位于 `{work_path}`，双根布局时位于 `config_root`；目录与 `README.md` 会由框架自动创建 |
+| 存放位置 | `skills/` 目录下的 `.py` 文件；位于人格目录（`data/personas/{name}/skills/`）；目录与 `README.md` 会由框架自动创建 |
 | 必须导出 | `SKILL_META` 字典 + `run()` 函数 |
 | 命名规则 | 文件名建议与 `SKILL_META["name"]` 一致（如 `hello.py`） |
 | 编码 | UTF-8 |
 | 跳过规则 | 以 `_` 或 `.` 开头的文件会被自动跳过 |
 
-框架也会预加载包内置 SKILL（当前包含 `system_info` 与 developer-only 的 `desktop_screenshot`）。如果你在 workspace 的 `skills/` 中放置同名文件，例如 `skills/system_info.py`，则 workspace 文件会覆盖内置实现。
+框架也会预加载包内置 SKILL（当前包含 `system_info` 与 developer-only 的 `desktop_screenshot`）。如果你在人格目录的 `skills/` 中放置同名文件，例如 `skills/system_info.py`，则人格级文件会覆盖内置实现。
 
 ## SKILL_META 字段
 
@@ -203,7 +203,7 @@ def run(**kwargs: Any) -> dict[str, Any]:
 
 ## data_store 持久化存储
 
-每个 SKILL 拥有独立的 JSON 键值存储（路径：`{work_path}/skill_data/{skill_name}.json`）。
+每个 SKILL 拥有独立的 JSON 键值存储（路径：`data/personas/{name}/skill_data/{skill_name}.json`）。
 
 ```python
 def run(data_store: Any = None, **kwargs: Any) -> dict:
@@ -338,13 +338,13 @@ config = SessionConfig(
 )
 ```
 
-框架会先注册包内置 SKILL，再创建 workspace `skills/` 与 `README.md`，随后自动加载该目录中的 SKILL 文件；即使关闭 SKILL 执行，目录引导结构仍会保留。同名 workspace 文件会覆盖内置实现。内置与 workspace SKILL 共用同一条依赖自动安装路径。
+框架会先注册包内置 SKILL，再创建人格目录下的 `skills/` 与 `README.md`，随后自动加载该目录中的 SKILL 文件；即使关闭 SKILL 执行，目录引导结构仍会保留。同名人格级文件会覆盖内置实现。内置与人格级 SKILL 共用同一条依赖自动安装路径。
 
 ## 检查清单
 
 编写完成后，对照以下清单确认：
 
-- [ ] 文件放在 `{work_path}/skills/` 目录下
+- [ ] 文件放在人格目录的 `skills/` 目录下
 - [ ] `SKILL_META` 包含 `name` 和 `description`
 - [ ] `name` 仅包含字母、数字、下划线
 - [ ] `description` 足够清晰，AI 能根据它判断何时调用

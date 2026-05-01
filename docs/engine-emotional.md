@@ -137,7 +137,7 @@ threshold = base × activity_factor × relationship_factor × time_factor
 **PROACTIVE 流程**：
 - 后台 checker（每 60 秒）检查沉默过久的群聊
 - 当 `ProactiveTrigger` 判定条件满足（时间/记忆/情感三种触发类型），生成主动发言
-- 主动话题从 `SemanticMemoryManager` stub 的 `interest_topics`、`group_norms.dominant_topic` 中选取（保留兼容）
+- 主动话题从 `SemanticMemoryManager` 的 `interest_topics`、`group_norms.dominant_topic` 中选取
 
 ## 后台任务
 

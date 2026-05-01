@@ -204,7 +204,4 @@ print(empathy.strategy_type) # confirm_action
 
 # 手动更新群体氛围
 analyzer.update_group_sentiment("g1", emotion)
-
-# 检测情感孤岛
-islands = analyzer.detect_emotion_islands("g1", recent_emotions)
 ```
