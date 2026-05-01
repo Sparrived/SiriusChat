@@ -83,17 +83,6 @@ from sirius_chat.providers import (
     register_provider_with_validation,
     run_provider_detection_flow,
 )
-from sirius_chat.providers.middleware import (
-    CircuitBreakerMiddleware,
-    CostMetricsMiddleware,
-    Middleware,
-    MiddlewareChain,
-    MiddlewareContext,
-    RateLimiterMiddleware,
-    RetryMiddleware,
-    TokenBucketRateLimiter,
-)
-
 # ── Session / Workspace ──
 from sirius_chat.session.store import JsonSessionStore, SessionStoreFactory, SqliteSessionStore
 from sirius_chat.workspace.layout import WorkspaceLayout
@@ -264,15 +253,6 @@ __all__ = [
     "probe_provider_availability",
     "register_provider_with_validation",
     "run_provider_detection_flow",
-    # Middleware
-    "Middleware",
-    "MiddlewareChain",
-    "MiddlewareContext",
-    "RateLimiterMiddleware",
-    "TokenBucketRateLimiter",
-    "RetryMiddleware",
-    "CircuitBreakerMiddleware",
-    "CostMetricsMiddleware",
     # Session / Workspace
     "JsonSessionStore",
     "SessionStoreFactory",
@@ -358,9 +338,6 @@ __all__ = [
 AsyncLLMProvider.__doc__ = "Base class for LLM providers."
 JsonSessionStore.__doc__ = "JSON-based session store for persisting sessions."
 SqliteSessionStore.__doc__ = "SQLite-based session store for persisting sessions."
-Middleware.__doc__ = "Base class for middleware components."
-MiddlewareChain.__doc__ = "Chain of middleware components for request processing."
-MiddlewareContext.__doc__ = "Context information for middleware execution."
 abuild_roleplay_prompt_from_answers_and_apply.__doc__ = "Build roleplay prompt from user answers and apply it."
 agenerate_agent_prompts_from_answers.__doc__ = "Generate agent prompts from user answers."
 build_token_usage_baseline.__doc__ = "Build a baseline for token usage metrics."
