@@ -86,8 +86,6 @@ from sirius_chat.providers import (
 # ── Session / Workspace ──
 from sirius_chat.session.store import JsonSessionStore, SessionStoreFactory, SqliteSessionStore
 from sirius_chat.workspace.layout import WorkspaceLayout
-from sirius_chat.workspace.roleplay_manager import RoleplayWorkspaceManager
-from sirius_chat.workspace.runtime import WorkspaceRuntime
 
 # ── Skills ──
 from sirius_chat.skills import (
@@ -257,9 +255,7 @@ __all__ = [
     "JsonSessionStore",
     "SessionStoreFactory",
     "SqliteSessionStore",
-    "RoleplayWorkspaceManager",
     "WorkspaceLayout",
-    "WorkspaceRuntime",
     # Skills
     "SkillDataStore",
     "SkillDefinition",
