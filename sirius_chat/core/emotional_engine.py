@@ -218,7 +218,7 @@ class EmotionalGroupChatEngine:
         self.token_store: Any | None = None  # injected by EngineRuntime
 
         # Cognition event tracking
-        from sirius_chat.token.cognition_store import CognitionEventStore
+        from sirius_chat.memory.cognition_store import CognitionEventStore
 
         self.cognition_store = CognitionEventStore(
             Path(work_path) / "cognition_events.db"
