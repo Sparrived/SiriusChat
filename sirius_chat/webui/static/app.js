@@ -534,6 +534,9 @@ function _renderExtraStats(prefix, res) {
   const outRatioEl = $(`${prefix}OutputRatio`);
   const emptyEl = $(`${prefix}EmptyRate`);
   const bloatEl = $(`${prefix}BloatAlert`);
+  const failEl = $(`${prefix}FailureRate`);
+  const depthEl = $(`${prefix}AvgDepth`);
+  const maxDepthEl = $(`${prefix}MaxDepth`);
 
   const ratio = res.ratio || {};
   if (ratioEl) ratioEl.textContent = `${ratio.prompt_pct || 0}% / ${ratio.completion_pct || 0}%`;
@@ -552,6 +555,17 @@ function _renderExtraStats(prefix, res) {
 
   const empty = res.empty_reply_stats || {};
   if (emptyEl) emptyEl.textContent = empty.empty_rate_pct ? `${empty.empty_rate_pct}%` : '—';
+
+  const fail = res.failure_stats || {};
+  if (failEl) {
+    const fr = fail.failure_rate_pct || 0;
+    failEl.textContent = fr ? `${fr}%` : '—';
+    failEl.style.color = fr > 5 ? 'var(--danger)' : (fr > 1 ? 'var(--warning)' : '');
+  }
+
+  const depth = res.depth_stats || {};
+  if (depthEl) depthEl.textContent = depth.avg_depth ? `${depth.avg_depth}` : '—';
+  if (maxDepthEl) maxDepthEl.textContent = depth.max_depth ? `最大 ${depth.max_depth}` : '—';
 
   const comp = res.period_comparison || {};
   if (bloatEl) {

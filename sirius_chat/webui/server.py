@@ -132,6 +132,9 @@ class WebUIServer:
         # Token usage (per persona)
         self.app.router.add_get("/api/personas/{name}/tokens", self.api_persona_tokens_get)
 
+        # Cognition events (per persona)
+        self.app.router.add_get("/api/personas/{name}/cognition", self.api_persona_cognition_get)
+
         # 桥接配置（写入 adapters.json）
         self.app.router.add_post("/api/personas/{name}/config", self.api_config_post)
 
@@ -876,10 +879,12 @@ class WebUIServer:
             "total_calls": response_total_calls,
         }
 
-        # Aggregate retry, duration, efficiency across all personas
+        # Aggregate retry, duration, efficiency, failure, depth across all personas
         global_retry = {"total_calls": 0, "total_retries": 0, "retry_rate_pct": 0.0}
         global_duration = {"calls": 0, "avg_ms": 0.0, "min_ms": 0.0, "max_ms": 0.0}
         global_efficiency = {"calls": 0, "chars_per_token": 0.0, "output_chars_per_token": 0.0}
+        global_failure = {"total_calls": 0, "failure_calls": 0, "failure_rate_pct": 0.0}
+        global_depth = {"calls": 0, "total_depth": 0, "max_depth": 0}
         all_hourly: dict[int, dict[str, Any]] = {}
         provider_agg: dict[str, dict[str, Any]] = {}
         for persona_info in self.persona_manager.list_personas():
@@ -901,6 +906,13 @@ class WebUIServer:
                 global_duration["calls"] += ds.get("calls", 0)
                 es = store.get_efficiency_stats()
                 global_efficiency["calls"] += es.get("calls", 0)
+                fs = store.get_failure_stats()
+                global_failure["total_calls"] += fs.get("total_calls", 0)
+                global_failure["failure_calls"] += fs.get("failure_calls", 0)
+                ds = store.get_conversation_depth_stats()
+                global_depth["calls"] += ds.get("calls", 0)
+                global_depth["total_depth"] += ds.get("calls", 0) * (ds.get("avg_depth", 0) or 0)
+                global_depth["max_depth"] = max(global_depth["max_depth"], ds.get("max_depth", 0))
                 for hr in store.get_hourly_summary():
                     hts = int(hr["hour_ts"])
                     if hts not in all_hourly:
@@ -918,6 +930,9 @@ class WebUIServer:
                 continue
         if global_retry["total_calls"]:
             global_retry["retry_rate_pct"] = round(global_retry["total_retries"] * 100.0 / global_retry["total_calls"], 2)
+        if global_failure["total_calls"]:
+            global_failure["failure_rate_pct"] = round(global_failure["failure_calls"] * 100.0 / global_failure["total_calls"], 2)
+        global_depth["avg_depth"] = round(global_depth["total_depth"] / global_depth["calls"], 2) if global_depth["calls"] else 0.0
 
         # Prompt / Completion ratio
         total_prompt = total_summary.get("total_prompt_tokens", 0)
@@ -937,6 +952,8 @@ class WebUIServer:
             "retry_stats": global_retry,
             "duration_stats": global_duration,
             "efficiency_stats": global_efficiency,
+            "failure_stats": global_failure,
+            "depth_stats": global_depth,
             "ratio": ratio,
             "by_provider": sorted(provider_agg.values(), key=lambda x: x["total_tokens"], reverse=True),
         })
@@ -969,6 +986,8 @@ class WebUIServer:
                 "efficiency_stats": {"calls": 0, "chars_per_token": 0.0, "output_chars_per_token": 0.0, "output_ratio": 0.0},
                 "empty_reply_stats": {"total_calls": 0, "empty_calls": 0, "empty_rate_pct": 0.0},
                 "period_comparison": {"current": {}, "previous": {}, "change_calls": 0.0, "change_total_tokens": 0.0, "change_prompt_tokens": 0.0, "change_completion_tokens": 0.0},
+                "failure_stats": {"total_calls": 0, "failure_calls": 0, "failure_rate_pct": 0.0, "by_type": []},
+                "depth_stats": {"calls": 0, "avg_depth": 0.0, "max_depth": 0},
                 "ratio": {"prompt_pct": 0, "completion_pct": 0},
             })
 
@@ -1020,10 +1039,42 @@ class WebUIServer:
                 "retry_stats": store.get_retry_stats(),
                 "duration_stats": store.get_duration_stats(),
                 "efficiency_stats": store.get_efficiency_stats(),
+                "empty_reply_stats": store.get_empty_reply_stats(),
+                "period_comparison": store.get_period_comparison(),
+                "failure_stats": store.get_failure_stats(),
+                "depth_stats": store.get_conversation_depth_stats(),
                 "ratio": ratio,
             }
             store.close()
             return _json_response(result)
         except Exception as exc:
             LOG.warning("读取 Token 统计失败 %s: %s", name, exc)
+            return _json_response({"error": str(exc)}, 500)
+
+    async def api_persona_cognition_get(self, request: web.Request) -> web.Response:
+        """Return recent cognition events for a single persona."""
+        from sirius_chat.token.cognition_store import CognitionEventStore
+
+        name = _get_name(request)
+        paths = self.persona_manager.get_persona_paths(name)
+        if paths is None:
+            return _json_response({"error": "人格不存在"}, 404)
+
+        db_path = paths.dir / "cognition_events.db"
+        if not db_path.exists():
+            return _json_response({"events": [], "emotion_distribution": {}})
+
+        try:
+            store = CognitionEventStore(db_path)
+            limit = int(request.query.get("limit", "50"))
+            group_id = request.query.get("group_id", "")
+            if group_id:
+                events = store.get_group_timeline(group_id, limit=limit)
+            else:
+                events = store.get_recent(limit=limit)
+            dist = store.get_emotion_distribution(group_id if group_id else None)
+            store.close()
+            return _json_response({"events": events, "emotion_distribution": dist})
+        except Exception as exc:
+            LOG.warning("读取 Cognition 事件失败 %s: %s", name, exc)
             return _json_response({"error": str(exc)}, 500)

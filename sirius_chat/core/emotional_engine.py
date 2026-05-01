@@ -203,6 +203,7 @@ class EmotionalGroupChatEngine:
         self._group_last_message_at: dict[str, str] = {}
         self._transcripts: dict[str, Transcript] = {}
         self._last_reply_at: dict[str, float] = {}  # group_id -> unix timestamp
+        self._last_reply_depth: dict[str, int] = {}  # group_id -> consecutive reply depth
         self._proactive_enabled_groups: set[str] = set()  # empty = all enabled (backward compat)
         self._proactive_disabled_groups: set[str] = set()  # blacklist: groups explicitly disabled
         self._last_proactive_at: dict[str, str] = {}  # group_id -> ISO timestamp
@@ -215,6 +216,13 @@ class EmotionalGroupChatEngine:
 
         self.token_usage_records: list[TokenUsageRecord] = []
         self.token_store: Any | None = None  # injected by EngineRuntime
+
+        # Cognition event tracking
+        from sirius_chat.token.cognition_store import CognitionEventStore
+
+        self.cognition_store = CognitionEventStore(
+            Path(work_path) / "cognition_events.db"
+        )
 
         # SKILL system
         self._skill_registry: Any | None = None
@@ -1955,6 +1963,23 @@ class EmotionalGroupChatEngine:
                 duration_ms=cognition_duration_ms,
             )
 
+        # Persist cognition event for emotional timeline analysis
+        try:
+            self.cognition_store.add(
+                group_id=group_id or "",
+                user_id=user_id or "",
+                valence=getattr(emotion, "valence", 0.0),
+                arousal=getattr(emotion, "arousal", 0.3),
+                basic_emotion=getattr(getattr(emotion, "basic_emotion", None), "name", "") if getattr(emotion, "basic_emotion", None) else "",
+                intensity=getattr(emotion, "intensity", 0.5),
+                social_intent=getattr(getattr(intent, "social_intent", None), "value", "") if getattr(intent, "social_intent", None) else getattr(intent, "intent_type", ""),
+                urgency_score=getattr(intent, "urgency_score", 0.0),
+                relevance_score=getattr(intent, "relevance_score", 0.5),
+                confidence=getattr(intent, "confidence", 0.8),
+            )
+        except Exception:
+            pass
+
         # Memory retrieval now happens in execution via ContextAssembler
         memories = []
 
@@ -2472,14 +2497,25 @@ class EmotionalGroupChatEngine:
             )
 
         # Call provider (async or sync via thread)
-        t0 = time.perf_counter()
-        if hasattr(self.provider_async, "generate_async"):
-            reply = await self.provider_async.generate_async(request)
-        elif isinstance(self.provider_async, LLMProvider):
-            reply = await asyncio.to_thread(self.provider_async.generate, request)
-        else:
-            raise RuntimeError("配置的提供商未实现 generate/generate_async 方法。")
-        duration_ms = round((time.perf_counter() - t0) * 1000, 2)
+        reply = ""
+        error_type = ""
+        error_message = ""
+        duration_ms = 0.0
+        try:
+            t0 = time.perf_counter()
+            if hasattr(self.provider_async, "generate_async"):
+                reply = await self.provider_async.generate_async(request)
+            elif isinstance(self.provider_async, LLMProvider):
+                reply = await asyncio.to_thread(self.provider_async.generate, request)
+            else:
+                raise RuntimeError("配置的提供商未实现 generate/generate_async 方法。")
+            duration_ms = round((time.perf_counter() - t0) * 1000, 2)
+        except Exception as exc:
+            error_type = self._classify_exception(exc)
+            error_message = str(exc)[:200]
+            LOG.warning("[%s] 生成失败: %s | %s", task_name, error_type, error_message)
+            # Re-raise so caller can handle
+            raise
 
         # Sanitise: strip any echoed <conversation_history> XML blocks
         reply = self._strip_conversation_history_xml(reply)
@@ -2488,6 +2524,16 @@ class EmotionalGroupChatEngine:
         if re.search(r"<\s*skip\s*/?\s*>", reply, flags=re.IGNORECASE):
             LOG.info("[%s] LLM 主动选择跳过回复（输出 skip 标签）。", task_name)
             reply = ""
+
+        # Compute conversation depth
+        now_ts = time.time()
+        last_reply_ts = self._last_reply_at.get(group_id, 0)
+        conversation_depth = (
+            self._last_reply_depth.get(group_id, 0) + 1
+            if now_ts - last_reply_ts < 60
+            else 1
+        )
+        self._last_reply_depth[group_id] = conversation_depth
 
         # Record token usage
         output_chars = len(reply)
@@ -2540,6 +2586,7 @@ class EmotionalGroupChatEngine:
             provider_name=provider_name,
             breakdown_json=breakdown_json,
             duration_ms=duration_ms,
+            conversation_depth=conversation_depth,
         )
         self.token_usage_records.append(record)
 
@@ -2615,6 +2662,29 @@ class EmotionalGroupChatEngine:
                 self.token_store.add(record)
             except Exception:
                 pass
+
+    def _classify_exception(self, exc: Exception) -> str:
+        """Classify an LLM provider exception into a structured error type."""
+        msg = str(exc).lower()
+        exc_type = type(exc).__name__.lower()
+
+        if "timeout" in msg or "timed out" in msg or "socket" in msg:
+            return "network_timeout"
+        if "rate limit" in msg or "too many requests" in msg or "429" in msg:
+            return "rate_limit"
+        if "authentication" in msg or "api key" in msg or "unauthorized" in msg or "401" in msg or "403" in msg:
+            return "auth_error"
+        if "context length" in msg or "maximum context" in msg or "too long" in msg:
+            return "context_exceeded"
+        if "content filter" in msg or "moderation" in msg or "safety" in msg or "blocked" in msg:
+            return "content_filter"
+        if "500" in msg or "502" in msg or "503" in msg or "504" in msg or "server error" in msg:
+            return "server_error"
+        if "empty" in msg or "no choices" in msg or "no content" in msg:
+            return "empty_response"
+        if "connection" in msg or "refused" in msg or "reset" in msg:
+            return "network_timeout"
+        return "unknown"
 
     # ==================================================================
     # Helpers

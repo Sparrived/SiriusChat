@@ -14,7 +14,7 @@ from pathlib import Path
 from sirius_chat.config import TokenUsageRecord
 from sirius_chat.utils.layout import WorkspaceLayout
 
-_SCHEMA_VERSION = 4
+_SCHEMA_VERSION = 5
 
 _CREATE_TABLE = """\
 CREATE TABLE IF NOT EXISTS token_usage (
@@ -35,7 +35,10 @@ CREATE TABLE IF NOT EXISTS token_usage (
     group_id        TEXT    NOT NULL DEFAULT '',
     provider_name   TEXT    NOT NULL DEFAULT '',
     breakdown_json  TEXT    NOT NULL DEFAULT '',
-    duration_ms     REAL    NOT NULL DEFAULT 0
+    duration_ms     REAL    NOT NULL DEFAULT 0,
+    error_type      TEXT    NOT NULL DEFAULT '',
+    error_message   TEXT    NOT NULL DEFAULT '',
+    conversation_depth INTEGER NOT NULL DEFAULT 0
 );
 """
 
@@ -114,6 +117,9 @@ class TokenUsageStore:
             ("provider_name", "ALTER TABLE token_usage ADD COLUMN provider_name TEXT NOT NULL DEFAULT ''"),
             ("breakdown_json", "ALTER TABLE token_usage ADD COLUMN breakdown_json TEXT NOT NULL DEFAULT ''"),
             ("duration_ms", "ALTER TABLE token_usage ADD COLUMN duration_ms REAL NOT NULL DEFAULT 0"),
+            ("error_type", "ALTER TABLE token_usage ADD COLUMN error_type TEXT NOT NULL DEFAULT ''"),
+            ("error_message", "ALTER TABLE token_usage ADD COLUMN error_message TEXT NOT NULL DEFAULT ''"),
+            ("conversation_depth", "ALTER TABLE token_usage ADD COLUMN conversation_depth INTEGER NOT NULL DEFAULT 0"),
         ):
             if col not in existing_cols:
                 conn.execute(ddl)
@@ -141,8 +147,9 @@ class TokenUsageStore:
                (session_id, timestamp, actor_id, task_name, model,
                 prompt_tokens, completion_tokens, total_tokens,
                 input_chars, output_chars, estimation_method, retries_used,
-                persona_name, group_id, provider_name, breakdown_json, duration_ms)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                persona_name, group_id, provider_name, breakdown_json, duration_ms,
+                error_type, error_message, conversation_depth)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 self._session_id,
                 ts,
@@ -161,6 +168,9 @@ class TokenUsageStore:
                 record.provider_name,
                 record.breakdown_json,
                 record.duration_ms,
+                record.error_type,
+                record.error_message,
+                record.conversation_depth,
             ),
         )
         conn.commit()
@@ -176,8 +186,9 @@ class TokenUsageStore:
                (session_id, timestamp, actor_id, task_name, model,
                 prompt_tokens, completion_tokens, total_tokens,
                 input_chars, output_chars, estimation_method, retries_used,
-                persona_name, group_id, provider_name, breakdown_json, duration_ms)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                persona_name, group_id, provider_name, breakdown_json, duration_ms,
+                error_type, error_message, conversation_depth)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             [
                 (
                     self._session_id,
@@ -197,6 +208,9 @@ class TokenUsageStore:
                     r.provider_name,
                     r.breakdown_json,
                     r.duration_ms,
+                    r.error_type,
+                    r.error_message,
+                    r.conversation_depth,
                 )
                 for r in records
             ],
@@ -536,6 +550,42 @@ class TokenUsageStore:
             ORDER BY hour"""
         ).fetchall()
         return [dict(row) for row in rows]
+
+    def get_failure_stats(self) -> dict[str, Any]:
+        """Return failure rate and breakdown by error_type."""
+        conn = self._connect()
+        overall = conn.execute(
+            """SELECT
+                COUNT(*) as total_calls,
+                SUM(CASE WHEN error_type != '' THEN 1 ELSE 0 END) as failure_calls
+            FROM token_usage"""
+        ).fetchone()
+        by_type = conn.execute(
+            """SELECT error_type as name, COUNT(*) as calls
+            FROM token_usage
+            WHERE error_type != ''
+            GROUP BY error_type
+            ORDER BY calls DESC"""
+        ).fetchall()
+        return {
+            "total_calls": overall[0] if overall else 0,
+            "failure_calls": overall[1] if overall else 0,
+            "failure_rate_pct": round(overall[1] * 100.0 / overall[0], 2) if overall and overall[0] else 0.0,
+            "by_type": [dict(row) for row in by_type],
+        }
+
+    def get_conversation_depth_stats(self) -> dict[str, Any]:
+        """Return average and max conversation depth for response_generate."""
+        conn = self._connect()
+        row = conn.execute(
+            """SELECT
+                COUNT(*) as calls,
+                ROUND(AVG(conversation_depth), 2) as avg_depth,
+                MAX(conversation_depth) as max_depth
+            FROM token_usage
+            WHERE task_name = 'response_generate' AND conversation_depth > 0"""
+        ).fetchone()
+        return dict(row) if row else {"calls": 0, "avg_depth": 0.0, "max_depth": 0}
 
     def get_period_comparison(self, *, current_seconds: float = 86400, previous_seconds: float = 86400) -> dict[str, Any]:
         """Compare token usage between current and previous period.

@@ -266,6 +266,9 @@ class TokenUsageRecord(JsonSerializable):
     provider_name: str = ""
     breakdown_json: str = ""
     duration_ms: float = 0.0
+    error_type: str = ""
+    error_message: str = ""
+    conversation_depth: int = 0
 
 
 @dataclass(slots=True)
