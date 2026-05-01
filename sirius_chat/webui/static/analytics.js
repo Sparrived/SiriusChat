@@ -713,6 +713,9 @@ function usersBarColor(score) {
 function usersRenderList(users) {
   const listEl = $('usersList');
   if (!listEl) return;
+  listEl.style.display = 'grid';
+  listEl.style.gridTemplateColumns = 'repeat(auto-fill, minmax(300px, 1fr))';
+  listEl.style.gap = '12px';
   if (!users.length) {
     listEl.innerHTML = '<div style="color:var(--text-2);padding:12px">暂无用户画像数据</div>';
     return;
