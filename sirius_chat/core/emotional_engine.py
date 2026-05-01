@@ -764,7 +764,8 @@ class EmotionalGroupChatEngine:
                     sub_bd = PromptTokenBreakdown()
                     sub_bd.output_format = estimate_tokens(system_prompt)
                     sub_bd.user_message = estimate_tokens(user_content)
-                    sub_bd.total = sub_bd.output_format + sub_bd.user_message
+                    sub_bd.output_total = estimate_tokens(raw)
+                    sub_bd.total = sub_bd.output_format + sub_bd.user_message + sub_bd.output_total
 
                     self._record_subtask_tokens(
                         task_name="diary_consolidate",
@@ -2561,11 +2562,10 @@ class EmotionalGroupChatEngine:
         self._last_reply_depth[group_id] = conversation_depth
 
         # Record token usage
-        output_chars = len(reply)
-        estimated_output_tokens = max(1, (output_chars + 3) // 4)
         from sirius_chat.config import TokenUsageRecord
         from sirius_chat.providers.base import get_last_generation_usage
 
+        estimated_output_tokens = estimate_tokens(reply) if reply else 0
         real_usage = get_last_generation_usage()
         if real_usage and isinstance(real_usage, dict):
             prompt_tokens = int(real_usage.get("prompt_tokens", estimated_input_tokens))
@@ -2576,7 +2576,7 @@ class EmotionalGroupChatEngine:
             prompt_tokens = estimated_input_tokens
             completion_tokens = estimated_output_tokens
             total_tokens = estimated_input_tokens + estimated_output_tokens
-            estimation_method = "char_div4"
+            estimation_method = "tiktoken" if estimated_output_tokens > 0 else "char_div4"
 
         persona_name = self.persona.name if self.persona else ""
         provider_name = getattr(self.provider_async, "_provider_name", "unknown")
@@ -2591,7 +2591,8 @@ class EmotionalGroupChatEngine:
             bd.user_message = sum(
                 estimate_tokens(str(m.get("content", ""))) for m in messages
             )
-            bd.total = bd.system_prompt_total + bd.user_message
+            bd.output_total = completion_tokens
+            bd.total = bd.system_prompt_total + bd.user_message + bd.output_total
             breakdown_json = bd.to_json()
 
         record = TokenUsageRecord(
@@ -2667,11 +2668,14 @@ class EmotionalGroupChatEngine:
             um_total = sum(
                 estimate_tokens(str(m.get("content", ""))) for m in messages
             )
+            reply_text = getattr(request, "reply", "") or ""
+            out_total = estimate_tokens(reply_text) if reply_text else 0
             breakdown_json = json.dumps(
                 {
                     "system_prompt_total": sp_total,
                     "user_message": um_total,
-                    "total": sp_total + um_total,
+                    "output_total": out_total,
+                    "total": sp_total + um_total + out_total,
                 },
                 ensure_ascii=False,
                 separators=(",", ":"),

@@ -198,6 +198,9 @@ class PromptTokenBreakdown:
     # User message
     user_message: int = 0
 
+    # Output (completion)
+    output_total: int = 0
+
     # Totals
     system_prompt_total: int = 0
     total: int = 0
@@ -222,6 +225,7 @@ class PromptTokenBreakdown:
             "history_xml": self.history_xml,
             "cross_group_xml": self.cross_group_xml,
             "user_message": self.user_message,
+            "output_total": self.output_total,
             "system_prompt_total": self.system_prompt_total,
             "total": self.total,
         }
