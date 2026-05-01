@@ -373,10 +373,13 @@ function renderSectionBars(container, breakdown) {
   }
 
   let chart = echarts.getInstanceByDom(container);
-  if (chart) {
-    chart.dispose();
+  if (!chart) {
+    chart = echarts.init(container, 'dark');
+    const onResize = () => chart.resize();
+    window.removeEventListener('resize', container._sankeyResize);
+    window.addEventListener('resize', onResize);
+    container._sankeyResize = onResize;
   }
-  chart = echarts.init(container, 'dark');
 
   chart.setOption({
     backgroundColor: 'transparent',
@@ -407,13 +410,7 @@ function renderSectionBars(container, breakdown) {
       },
       itemStyle: { borderWidth: 1, borderColor: '#0d1117' },
     }],
-  });
-
-  // Responsive resize
-  const onResize = () => chart.resize();
-  window.removeEventListener('resize', container._sankeyResize);
-  window.addEventListener('resize', onResize);
-  container._sankeyResize = onResize;
+  }, true);
 }
 
 function renderTimeSeries(container, hourly) {
@@ -423,8 +420,13 @@ function renderTimeSeries(container, hourly) {
     return;
   }
   let chart = echarts.getInstanceByDom(container);
-  if (chart) chart.dispose();
-  chart = echarts.init(container, 'dark');
+  if (!chart) {
+    chart = echarts.init(container, 'dark');
+    const onResize = () => chart.resize();
+    window.removeEventListener('resize', container._tsResize);
+    window.addEventListener('resize', onResize);
+    container._tsResize = onResize;
+  }
 
   const dates = hourly.map((h) => new Date(h.hour_ts * 1000).toLocaleString('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit' }));
   const promptData = hourly.map((h) => h.prompt_tokens || 0);
@@ -472,12 +474,56 @@ function renderTimeSeries(container, hourly) {
         data: completionData,
       },
     ],
-  });
+  }, true);
+}
 
-  const onResize = () => chart.resize();
-  window.removeEventListener('resize', container._tsResize);
-  window.addEventListener('resize', onResize);
-  container._tsResize = onResize;
+function renderActiveHours(container, distribution) {
+  if (!container) return;
+  if (!distribution.length || typeof echarts === 'undefined') {
+    container.innerHTML = '<div style="color:var(--text-2);padding:12px">暂无活跃时段数据</div>';
+    return;
+  }
+  let chart = echarts.getInstanceByDom(container);
+  if (!chart) {
+    chart = echarts.init(container, 'dark');
+    const onResize = () => chart.resize();
+    window.removeEventListener('resize', container._ahResize);
+    window.addEventListener('resize', onResize);
+    container._ahResize = onResize;
+  }
+
+  const hours = Array.from({ length: 24 }, (_, i) => `${i}时`);
+  const callsMap = Object.fromEntries(distribution.map((d) => [d.hour, d.calls || 0]));
+  const data = hours.map((_, i) => callsMap[i] || 0);
+
+  chart.setOption({
+    backgroundColor: 'transparent',
+    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+    grid: { left: 10, right: 10, bottom: 10, top: 10, containLabel: true },
+    xAxis: {
+      type: 'category',
+      data: hours,
+      axisLabel: { fontSize: 10, color: '#8b949e', interval: 2 },
+      axisLine: { lineStyle: { color: '#30363d' } },
+    },
+    yAxis: {
+      type: 'value',
+      axisLabel: { fontSize: 10, color: '#8b949e' },
+      splitLine: { lineStyle: { color: '#21262d' } },
+    },
+    series: [{
+      type: 'bar',
+      data,
+      barWidth: '60%',
+      itemStyle: {
+        borderRadius: [3, 3, 0, 0],
+        color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+          { offset: 0, color: '#58a6ff' },
+          { offset: 1, color: '#1f6feb' },
+        ]),
+      },
+    }],
+  }, true);
 }
 
 function _renderExtraStats(prefix, res) {
@@ -485,6 +531,9 @@ function _renderExtraStats(prefix, res) {
   const effEl = $(`${prefix}Efficiency`);
   const retryEl = $(`${prefix}RetryRate`);
   const durEl = $(`${prefix}AvgDuration`);
+  const outRatioEl = $(`${prefix}OutputRatio`);
+  const emptyEl = $(`${prefix}EmptyRate`);
+  const bloatEl = $(`${prefix}BloatAlert`);
 
   const ratio = res.ratio || {};
   if (ratioEl) ratioEl.textContent = `${ratio.prompt_pct || 0}% / ${ratio.completion_pct || 0}%`;
@@ -498,6 +547,30 @@ function _renderExtraStats(prefix, res) {
   const dur = res.duration_stats || {};
   const overall = dur.overall || {};
   if (durEl) durEl.textContent = overall.avg_ms ? `${overall.avg_ms} ms` : '—';
+
+  if (outRatioEl) outRatioEl.textContent = eff.output_ratio ? `${eff.output_ratio}` : '—';
+
+  const empty = res.empty_reply_stats || {};
+  if (emptyEl) emptyEl.textContent = empty.empty_rate_pct ? `${empty.empty_rate_pct}%` : '—';
+
+  const comp = res.period_comparison || {};
+  if (bloatEl) {
+    const chg = comp.change_total_tokens || 0;
+    const calls = comp.current?.total_calls || 0;
+    if (!calls) {
+      bloatEl.textContent = '—';
+      bloatEl.style.color = '';
+    } else if (chg > 20) {
+      bloatEl.textContent = `↑ ${chg}%`;
+      bloatEl.style.color = 'var(--danger)';
+    } else if (chg < -20) {
+      bloatEl.textContent = `↓ ${Math.abs(chg)}%`;
+      bloatEl.style.color = 'var(--success)';
+    } else {
+      bloatEl.textContent = `${chg > 0 ? '+' : ''}${chg}%`;
+      bloatEl.style.color = 'var(--text-2)';
+    }
+  }
 }
 
 async function loadTokenStats() {
@@ -530,6 +603,7 @@ async function loadTokenStats() {
       avgDetailEl.textContent = calls ? `${calls} 次回复 · ${(avg.avg_prompt_tokens || 0).toLocaleString()} + ${(avg.avg_completion_tokens || 0).toLocaleString()}` : '暂无回复记录';
     }
     renderTimeSeries(tsEl, res.hourly || []);
+    renderActiveHours($('dashActiveHours'), res.hourly_distribution || []);
     _renderExtraStats('dash', res);
     if (personasEl) {
       if (!personaList.length) {
@@ -543,8 +617,13 @@ async function loadTokenStats() {
           completion: p.total_completion_tokens || 0,
         }));
         let chart = echarts.getInstanceByDom(personasEl);
-        if (chart) chart.dispose();
-        chart = echarts.init(personasEl, 'dark');
+        if (!chart) {
+          chart = echarts.init(personasEl, 'dark');
+          const onResize = () => chart.resize();
+          window.removeEventListener('resize', personasEl._pieResize);
+          window.addEventListener('resize', onResize);
+          personasEl._pieResize = onResize;
+        }
         chart.setOption({
           backgroundColor: 'transparent',
           tooltip: {
@@ -575,11 +654,7 @@ async function loadTokenStats() {
             },
             data: pieData,
           }],
-        });
-        const onResize = () => chart.resize();
-        window.removeEventListener('resize', personasEl._pieResize);
-        window.addEventListener('resize', onResize);
-        personasEl._pieResize = onResize;
+        }, true);
       } else {
         // Fallback to stat cards if ECharts not available
         personasEl.innerHTML = personaList.map((p) => `
@@ -1411,12 +1486,16 @@ async function ttLoadData() {
     // Dimension breakdowns
     ttRenderDimensionList('ttByModel', res.by_model || []);
     ttRenderDimensionList('ttByGroup', res.by_group || []);
+    ttRenderDimensionList('ttByProvider', res.by_provider || []);
+
+    // Active hours
+    renderActiveHours($('ttActiveHours'), res.hourly_distribution || []);
 
     // Recent calls table
     ttRenderRecentTable();
   } catch (e) {
     console.error('ttLoadData', e);
-    const els = ['ttSectionBreakdown', 'ttTaskHierarchy', 'ttByModel', 'ttByGroup'];
+    const els = ['ttSectionBreakdown', 'ttTaskHierarchy', 'ttByModel', 'ttByGroup', 'ttByProvider', 'ttActiveHours'];
     els.forEach((id) => { const el = $(id); if (el) el.textContent = '加载失败'; });
   }
 }
@@ -1449,8 +1528,13 @@ function ttRenderDimensionList(containerId, items) {
   }));
 
   let chart = echarts.getInstanceByDom(el);
-  if (chart) chart.dispose();
-  chart = echarts.init(el, 'dark');
+  if (!chart) {
+    chart = echarts.init(el, 'dark');
+    const onResize = () => chart.resize();
+    window.removeEventListener('resize', el._barResize);
+    window.addEventListener('resize', onResize);
+    el._barResize = onResize;
+  }
 
   chart.setOption({
     backgroundColor: 'transparent',
@@ -1491,12 +1575,7 @@ function ttRenderDimensionList(containerId, items) {
         formatter: (p) => p.value.toLocaleString(),
       },
     }],
-  });
-
-  const onResize = () => chart.resize();
-  window.removeEventListener('resize', el._barResize);
-  window.addEventListener('resize', onResize);
-  el._barResize = onResize;
+  }, true);
 }
 
 function renderTaskHierarchy(containerId, items) {
@@ -1531,8 +1610,13 @@ function renderTaskHierarchy(containerId, items) {
   }));
 
   let chart = echarts.getInstanceByDom(el);
-  if (chart) chart.dispose();
-  chart = echarts.init(el, 'dark');
+  if (!chart) {
+    chart = echarts.init(el, 'dark');
+    const onResize = () => chart.resize();
+    window.removeEventListener('resize', el._donutResize);
+    window.addEventListener('resize', onResize);
+    el._donutResize = onResize;
+  }
 
   chart.setOption({
     backgroundColor: 'transparent',
@@ -1564,12 +1648,7 @@ function renderTaskHierarchy(containerId, items) {
       },
       data,
     }],
-  });
-
-  const onResize = () => chart.resize();
-  window.removeEventListener('resize', el._donutResize);
-  window.addEventListener('resize', onResize);
-  el._donutResize = onResize;
+  }, true);
 }
 
 function ttRenderRecentTable() {

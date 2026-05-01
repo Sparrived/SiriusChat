@@ -881,6 +881,7 @@ class WebUIServer:
         global_duration = {"calls": 0, "avg_ms": 0.0, "min_ms": 0.0, "max_ms": 0.0}
         global_efficiency = {"calls": 0, "chars_per_token": 0.0, "output_chars_per_token": 0.0}
         all_hourly: dict[int, dict[str, Any]] = {}
+        provider_agg: dict[str, dict[str, Any]] = {}
         for persona_info in self.persona_manager.list_personas():
             name = persona_info.get("name")
             if not name:
@@ -906,6 +907,12 @@ class WebUIServer:
                         all_hourly[hts] = {"hour_ts": hts, "calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
                     for k in ("calls", "prompt_tokens", "completion_tokens", "total_tokens"):
                         all_hourly[hts][k] += hr.get(k, 0)
+                for prow in store.get_breakdown_by("provider_name"):
+                    pname = prow.get("name", "unknown")
+                    if pname not in provider_agg:
+                        provider_agg[pname] = {"name": pname, "calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+                    for k in ("calls", "prompt_tokens", "completion_tokens", "total_tokens"):
+                        provider_agg[pname][k] += prow.get(k, 0)
                 store.close()
             except Exception:
                 continue
@@ -931,6 +938,7 @@ class WebUIServer:
             "duration_stats": global_duration,
             "efficiency_stats": global_efficiency,
             "ratio": ratio,
+            "by_provider": sorted(provider_agg.values(), key=lambda x: x["total_tokens"], reverse=True),
         })
 
     async def api_persona_tokens_get(self, request: web.Request) -> web.Response:
@@ -949,10 +957,19 @@ class WebUIServer:
                 "by_task": [],
                 "by_model": [],
                 "by_group": [],
+                "by_provider": [],
                 "recent": [],
                 "section_breakdown": {},
                 "recent_with_breakdown": [],
                 "response_avg": {"avg_total_tokens": 0, "avg_prompt_tokens": 0, "avg_completion_tokens": 0, "total_calls": 0},
+                "hourly": [],
+                "hourly_distribution": [],
+                "retry_stats": {"total_calls": 0, "total_retries": 0, "retry_rate_pct": 0.0},
+                "duration_stats": {"by_task": [], "overall": {"calls": 0, "avg_ms": 0.0, "min_ms": 0.0, "max_ms": 0.0}},
+                "efficiency_stats": {"calls": 0, "chars_per_token": 0.0, "output_chars_per_token": 0.0, "output_ratio": 0.0},
+                "empty_reply_stats": {"total_calls": 0, "empty_calls": 0, "empty_rate_pct": 0.0},
+                "period_comparison": {"current": {}, "previous": {}, "change_calls": 0.0, "change_total_tokens": 0.0, "change_prompt_tokens": 0.0, "change_completion_tokens": 0.0},
+                "ratio": {"prompt_pct": 0, "completion_pct": 0},
             })
 
         # Parse optional time range filters
@@ -987,6 +1004,10 @@ class WebUIServer:
                 "by_task": by_task,
                 "by_model": store.get_breakdown_by("model"),
                 "by_group": store.get_breakdown_by("group_id"),
+                "by_provider": store.get_breakdown_by("provider_name"),
+                "hourly_distribution": store.get_hourly_distribution(),
+                "empty_reply_stats": store.get_empty_reply_stats(),
+                "period_comparison": store.get_period_comparison(),
                 "recent": store.get_recent_records(limit=30),
                 "section_breakdown": store.get_section_breakdown(
                     start_ts=start_ts, end_ts=end_ts

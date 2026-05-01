@@ -490,17 +490,93 @@ class TokenUsageStore:
                 COUNT(*) as calls,
                 COALESCE(SUM(input_chars), 0) as total_input_chars,
                 COALESCE(SUM(prompt_tokens), 0) as total_prompt_tokens,
+                COALESCE(SUM(completion_tokens), 0) as total_completion_tokens,
                 CASE WHEN SUM(prompt_tokens) > 0
                     THEN ROUND(SUM(input_chars) * 1.0 / SUM(prompt_tokens), 2)
                     ELSE 0.0
                 END as chars_per_token,
-                CASE WHEN SUM(prompt_tokens) > 0
+                CASE WHEN SUM(completion_tokens) > 0
                     THEN ROUND(SUM(output_chars) * 1.0 / SUM(completion_tokens), 2)
                     ELSE 0.0
-                END as output_chars_per_token
+                END as output_chars_per_token,
+                CASE WHEN SUM(prompt_tokens) > 0
+                    THEN ROUND(SUM(completion_tokens) * 1.0 / SUM(prompt_tokens), 2)
+                    ELSE 0.0
+                END as output_ratio
             FROM token_usage"""
         ).fetchone()
-        return dict(row) if row else {"calls": 0, "chars_per_token": 0.0, "output_chars_per_token": 0.0}
+        return dict(row) if row else {"calls": 0, "chars_per_token": 0.0, "output_chars_per_token": 0.0, "output_ratio": 0.0}
+
+    def get_empty_reply_stats(self) -> dict[str, Any]:
+        """Return empty reply rate for response_generate tasks."""
+        conn = self._connect()
+        row = conn.execute(
+            """SELECT
+                COUNT(*) as total_calls,
+                SUM(CASE WHEN completion_tokens = 0 THEN 1 ELSE 0 END) as empty_calls,
+                CASE WHEN COUNT(*) > 0
+                    THEN ROUND(SUM(CASE WHEN completion_tokens = 0 THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 2)
+                    ELSE 0.0
+                END as empty_rate_pct
+            FROM token_usage
+            WHERE task_name = 'response_generate'"""
+        ).fetchone()
+        return dict(row) if row else {"total_calls": 0, "empty_calls": 0, "empty_rate_pct": 0.0}
+
+    def get_hourly_distribution(self) -> list[dict[str, Any]]:
+        """Return token usage distribution by hour-of-day (0-23)."""
+        conn = self._connect()
+        rows = conn.execute(
+            """SELECT
+                CAST(strftime('%H', datetime(timestamp, 'unixepoch')) AS INTEGER) as hour,
+                COUNT(*) as calls,
+                COALESCE(SUM(total_tokens), 0) as total_tokens
+            FROM token_usage
+            GROUP BY hour
+            ORDER BY hour"""
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def get_period_comparison(self, *, current_seconds: float = 86400, previous_seconds: float = 86400) -> dict[str, Any]:
+        """Compare token usage between current and previous period.
+
+        Returns percentage change for key metrics.
+        """
+        conn = self._connect()
+        now = time.time()
+        current_start = now - current_seconds
+        previous_start = now - current_seconds - previous_seconds
+        previous_end = now - current_seconds
+
+        def _agg(start: float, end: float) -> dict[str, Any]:
+            row = conn.execute(
+                """SELECT
+                    COUNT(*) as calls,
+                    COALESCE(SUM(prompt_tokens), 0) as prompt_tokens,
+                    COALESCE(SUM(completion_tokens), 0) as completion_tokens,
+                    COALESCE(SUM(total_tokens), 0) as total_tokens
+                FROM token_usage
+                WHERE timestamp >= ? AND timestamp <= ?""",
+                (start, end),
+            ).fetchone()
+            return dict(row) if row else {"calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+
+        current = _agg(current_start, now)
+        previous = _agg(previous_start, previous_end)
+
+        def _pct(curr: int, prev: int) -> float:
+            if prev == 0:
+                return 100.0 if curr > 0 else 0.0
+            return round((curr - prev) * 100.0 / prev, 1)
+
+        return {
+            "current": current,
+            "previous": previous,
+            "change_calls": _pct(current["calls"], previous["calls"]),
+            "change_total_tokens": _pct(current["total_tokens"], previous["total_tokens"]),
+            "change_prompt_tokens": _pct(current["prompt_tokens"], previous["prompt_tokens"]),
+            "change_completion_tokens": _pct(current["completion_tokens"], previous["completion_tokens"]),
+        }
 
     @property
     def db_path(self) -> Path:
