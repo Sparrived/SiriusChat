@@ -825,6 +825,13 @@ class EmotionalGroupChatEngine:
             if last_proactive_dt and (last_msg_dt is None or last_proactive_dt > last_msg_dt):
                 return None
 
+        # Check conversation gap readiness before proactive insertion
+        recent = self._get_recent_messages(group_id, n=6)
+        rhythm = self.rhythm_analyzer.analyze(group_id, recent)
+        if rhythm.turn_gap_readiness < 0.4:
+            # Conversation is in full flow, don't interrupt with proactive
+            return None
+
         # Record proactive trigger timestamp
         now_iso = (_now if _now is not None else datetime.now(timezone.utc)).isoformat()
         self._last_proactive_at[group_id] = now_iso
@@ -1418,11 +1425,21 @@ class EmotionalGroupChatEngine:
             )
             reply = raw_reply.strip()
 
-            # Expression deduplication: skip if too similar to recent replies
+            # Expression deduplication: rephrase if too similar to recent replies
             if self._check_expression_redundancy(reply, group_id):
-                self._log_inner_thought("这话我好像刚说过...换个说法或者先不说了吧")
-                reply = ""
-                break
+                self._log_inner_thought("这话我好像刚说过...让我换个说法")
+                # Append rephrasing hint to system prompt and retry once
+                sp_rephrase = system_prompt + "\n\n【注意】请不要重复你之前说过的话，尝试换一种表达方式。"
+                raw_retry = await self._generate(
+                    sp_rephrase, messages, group_id,
+                    user_communication_style=user_comm_style,
+                    token_breakdown=token_breakdown,
+                )
+                reply = raw_retry.strip()
+                if self._check_expression_redundancy(reply, group_id):
+                    self._log_inner_thought("换说法还是像...先不说了吧")
+                    reply = ""
+                    break
 
             calls = parse_skill_calls(reply)
             if not calls or self._skill_registry is None or self._skill_executor is None:
@@ -2507,6 +2524,11 @@ class EmotionalGroupChatEngine:
         if self.provider_async is None:
             return "[未配置 provider]"
 
+        # Tone alignment: adapt to current group emotional tone
+        tone_hint = self._get_tone_alignment(group_id)
+        if tone_hint:
+            system_prompt = system_prompt + "\n\n" + tone_hint
+
         # Model routing
         recent = self._get_recent_messages(group_id, n=5)
         rhythm = self.rhythm_analyzer.analyze(group_id, recent)
@@ -2799,7 +2821,7 @@ class EmotionalGroupChatEngine:
         group_id: str,
         user_id: str,
     ) -> float:
-        """Enhance topic relevance using semantic memory."""
+        """Enhance topic relevance using semantic memory (group + user + global)."""
         text_lower = (message or "").lower()
         if not text_lower:
             return base_score
@@ -2814,7 +2836,7 @@ class EmotionalGroupChatEngine:
                 if topic and topic.lower() in text_lower:
                     boost += 0.08
 
-        # User-level interest signals
+        # User-level interest signals (group-local)
         if user_id:
             user_profile = self.semantic_memory.get_user_profile(group_id, user_id)
             if user_profile and user_profile.interest_graph:
@@ -2824,7 +2846,38 @@ class EmotionalGroupChatEngine:
                         participation = getattr(node, "participation", 0.5)
                         boost += 0.1 * participation
 
+            # Cross-group global profile interest signals
+            global_profile = self.semantic_memory.get_global_user_profile(user_id)
+            if global_profile and global_profile.interest_graph:
+                for node in global_profile.interest_graph:
+                    topic = getattr(node, "topic", "")
+                    if topic and topic.lower() in text_lower:
+                        participation = getattr(node, "participation", 0.5)
+                        boost += 0.08 * participation
+
         return min(1.0, base_score + boost)
+
+    def _get_tone_alignment(self, group_id: str) -> str:
+        """Detect current group tone from atmosphere history for style alignment."""
+        group_profile = self.semantic_memory.get_group_profile(group_id)
+        if not group_profile or not group_profile.atmosphere_history:
+            return ""
+
+        recent = group_profile.atmosphere_history[-3:]
+        avg_valence = sum(getattr(s, "group_valence", 0.0) for s in recent) / len(recent)
+        avg_arousal = sum(getattr(s, "group_arousal", 0.0) for s in recent) / len(recent)
+
+        if avg_valence < -0.3 and avg_arousal > 0.5:
+            return "当前群聊氛围偏激烈/吐槽，请保持冷静共情的态度，不要火上浇油或过于轻浮。"
+        elif avg_valence < -0.3 and avg_arousal <= 0.5:
+            return "当前群聊氛围偏低落，请温柔耐心地回应，给予安慰和支持。"
+        elif avg_valence > 0.4 and avg_arousal > 0.6:
+            return "当前群聊氛围很兴奋热闹，你可以积极参与，保持轻松愉快的语气。"
+        elif avg_valence > 0.4 and avg_arousal <= 0.6:
+            return "当前群聊氛围轻松愉快，保持友好自然的交流即可。"
+        elif avg_arousal < 0.3:
+            return "当前群聊比较平淡，保持简洁、不突兀的回应。"
+        return ""
 
     def _check_expression_redundancy(self, reply: str, group_id: str) -> bool:
         """Check if reply is too similar to recent AI expressions."""
