@@ -76,6 +76,30 @@ class IntentAnalysisV3:
     time_factor: float = 1.0
     threshold: float = 0.5
 
+    # === directedness multi-dimensional scoring (0.0 ~ 1.0) ===
+    # Layer 1: Structural (platform metadata)
+    mention_score: float = 0.0        # @mention exact match
+    reference_score: float = 0.0      # reply_to / quote reference
+    at_all_score: float = 0.0         # @all / @everyone
+
+    # Layer 2: Linguistic (surface text features)
+    name_match_score: float = 0.0     # nickname/name match
+    second_person_score: float = 0.0  # density of "你/您"
+    question_score: float = 0.0       # interrogative patterns
+    imperative_score: float = 0.0     # imperative/request patterns
+
+    # Layer 3: Semantic (content understanding)
+    topic_relevance_score: float = 0.0      # topic vs AI persona overlap
+    emotional_disclosure_score: float = 0.0 # emotional expression seeking support
+    attention_seeking_score: float = 0.0    # attention-seeking phrases
+
+    # Layer 4: Contextual (conversation dynamics)
+    recency_score: float = 0.0        # recent interaction with AI
+    turn_taking_score: float = 0.0    # turn-alternation pattern
+
+    # === synthesized directed score ===
+    directed_score: float = 0.0  # 0.0 ~ 1.0, synthesized from 12-dim + LLM
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "intent_type": self.intent_type,
@@ -95,6 +119,20 @@ class IntentAnalysisV3:
             "relationship_factor": self.relationship_factor,
             "time_factor": self.time_factor,
             "threshold": self.threshold,
+            # directedness dimensions
+            "mention_score": self.mention_score,
+            "reference_score": self.reference_score,
+            "at_all_score": self.at_all_score,
+            "name_match_score": self.name_match_score,
+            "second_person_score": self.second_person_score,
+            "question_score": self.question_score,
+            "imperative_score": self.imperative_score,
+            "topic_relevance_score": self.topic_relevance_score,
+            "emotional_disclosure_score": self.emotional_disclosure_score,
+            "attention_seeking_score": self.attention_seeking_score,
+            "recency_score": self.recency_score,
+            "turn_taking_score": self.turn_taking_score,
+            "directed_score": self.directed_score,
         }
 
     @classmethod
@@ -122,4 +160,18 @@ class IntentAnalysisV3:
             relationship_factor=data.get("relationship_factor", 1.0),
             time_factor=data.get("time_factor", 1.0),
             threshold=data.get("threshold", 0.5),
+            # directedness dimensions
+            mention_score=data.get("mention_score", 0.0),
+            reference_score=data.get("reference_score", 0.0),
+            at_all_score=data.get("at_all_score", 0.0),
+            name_match_score=data.get("name_match_score", 0.0),
+            second_person_score=data.get("second_person_score", 0.0),
+            question_score=data.get("question_score", 0.0),
+            imperative_score=data.get("imperative_score", 0.0),
+            topic_relevance_score=data.get("topic_relevance_score", 0.0),
+            emotional_disclosure_score=data.get("emotional_disclosure_score", 0.0),
+            attention_seeking_score=data.get("attention_seeking_score", 0.0),
+            recency_score=data.get("recency_score", 0.0),
+            turn_taking_score=data.get("turn_taking_score", 0.0),
+            directed_score=data.get("directed_score", 0.0),
         )

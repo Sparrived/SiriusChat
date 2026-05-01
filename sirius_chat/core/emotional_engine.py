@@ -2055,8 +2055,8 @@ class EmotionalGroupChatEngine:
         elif freq == "low":
             threshold *= 1.3
         elif freq == "selective":
-            # Only reply when mentioned or high urgency
-            if not intent.directed_at_current_ai and intent.urgency_score < 70:
+            # Only reply when strongly directed (>=0.6) or high urgency
+            if intent.directed_score < 0.6 and intent.urgency_score < 70:
                 threshold *= 2.0
 
         intent.threshold = threshold
@@ -2067,8 +2067,8 @@ class EmotionalGroupChatEngine:
                 relationship_state, is_developer=caller_is_developer
             )
 
-        # Check if directly mentioned
-        is_mentioned = intent.directed_at_current_ai
+        # Check if directly mentioned (using continuous directed_score)
+        is_mentioned = intent.directed_score >= 0.6
 
         decision = self.strategy_engine.decide(
             intent,
@@ -2193,7 +2193,7 @@ class EmotionalGroupChatEngine:
         caller_is_developer = bool(caller_profile and caller_profile.is_developer)
 
         # overheated + burst + not directed → downgrade to SILENT
-        is_directed = getattr(intent, "directed_at_current_ai", False)
+        is_directed = intent.directed_score >= 0.6
         if (
             rhythm.heat_level == "overheated"
             and rhythm.burst_detected

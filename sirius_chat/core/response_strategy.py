@@ -162,8 +162,10 @@ class ResponseStrategyEngine:
                 strategy = ResponseStrategy.SILENT
                 reason = "below_threshold"
 
-        # 社交底线：没被点名就没有抢话权，最高只能 delayed
-        if not is_mentioned and strategy == ResponseStrategy.IMMEDIATE:
+        # 社交底线：没被强指向（<0.4）就没有抢话权，最高只能 delayed
+        # 弱指向（0.4~0.6）保留 IMMEDIATE 资格，强指向（>=0.6）已由 is_mentioned 处理
+        directed_score = getattr(intent, "directed_score", 0.0)
+        if not is_mentioned and directed_score < 0.4 and strategy == ResponseStrategy.IMMEDIATE:
             strategy = ResponseStrategy.DELAYED
             reason = f"not_directed_{reason}"
 
