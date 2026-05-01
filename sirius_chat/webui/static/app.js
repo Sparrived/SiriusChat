@@ -364,6 +364,7 @@ function renderSectionBars(container, breakdown, breakdownByTask) {
 
   if (hasTaskBreakdown) {
     // 4-level sankey: 总输入 → 任务 → 大类 → 子模块
+    // 大类和子模块节点跨任务合并（不带后缀），任务层保留区分
     const taskNames = Object.keys(breakdownByTask);
     taskNames.forEach((taskName, ti) => {
       const taskLabel = taskLabels[taskName] || taskName;
@@ -377,15 +378,16 @@ function renderSectionBars(container, breakdown, breakdownByTask) {
           const val = taskBreakdown[key] || 0;
           if (val) {
             const label = labels[key] || key;
-            const nodeName = `${label} (${taskLabel})`;
-            nodes.push({ name: nodeName, itemStyle: { color: g.color } });
-            links.push({ source: `${g.name} (${taskLabel})`, target: nodeName, value: val });
+            // 子模块节点：跨任务合并（不带后缀）
+            nodes.push({ name: label, itemStyle: { color: g.color } });
+            links.push({ source: g.name, target: label, value: val });
             groupSum += val;
           }
         });
         if (groupSum) {
-          nodes.push({ name: `${g.name} (${taskLabel})`, itemStyle: { color: g.color } });
-          links.push({ source: taskLabel, target: `${g.name} (${taskLabel})`, value: groupSum });
+          // 大类节点：跨任务合并（不带后缀）
+          nodes.push({ name: g.name, itemStyle: { color: g.color } });
+          links.push({ source: taskLabel, target: g.name, value: groupSum });
           taskSum += groupSum;
         }
       });
