@@ -657,16 +657,9 @@ class PersonaManager:
         return info
 
     def reload_persona(self, name: str) -> bool:
-        """通知子进程重载配置（通过写入 reload 标志文件）。"""
-        pdir = self.personas_dir / name
-        flag = pdir / "engine_state" / "reload_requested"
-        try:
-            flag.parent.mkdir(parents=True, exist_ok=True)
-            flag.write_text(str(time.time()), encoding="utf-8")
-            return True
-        except Exception as exc:
-            LOG.warning("写入重载标志失败 %s: %s", name, exc)
-            return False
+        """热重载尚未实现，请使用重启人格功能使配置生效。"""
+        LOG.warning("人格 %s 的热重载尚未实现，请使用重启功能", name)
+        return False
 
     def get_logs(self, name: str, lines: int = 50) -> list[str]:
         """读取人格子进程日志文件。"""

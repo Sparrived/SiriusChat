@@ -685,10 +685,17 @@ class WebUIServer:
         return _json_response({"success": True, "enabled": enabled})
 
     async def api_engine_reload(self, request: web.Request) -> web.Response:
-        """通过写入 reload 标志文件，通知子进程重载。"""
+        """通知子进程重载配置（当前尚未实现，请使用重启功能）。"""
         name = _get_name(request)
         ok = self.persona_manager.reload_persona(name)
-        return _json_response({"success": ok, "message": "重载请求已发送" if ok else "发送失败"})
+        return _json_response(
+            {
+                "success": ok,
+                "message": (
+                    "重载请求已发送" if ok else "热重载尚未实现，请使用重启功能使配置生效"
+                ),
+            }
+        )
 
     # ─── 多人格 API: 桥接配置 ─────────────────────────────
 

@@ -46,7 +46,6 @@ class NapCatManager:
         self.logs_dir = self.instance_dir / "logs"
         self._pid_file = self.instance_dir / "napcat.pid"
         self._process: subprocess.Popen | None = None
-        self._monitor_task: asyncio.Task | None = None
 
     @classmethod
     def for_persona(

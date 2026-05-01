@@ -29,9 +29,6 @@ from .runtime import _resolve_api_key
 
 LOG = logging.getLogger("sirius.platforms.wizard")
 
-# 内置人格模板列表（已清空，要求用户必须通过关键词或问卷显式创建）
-_ARCHETYPE_NAMES: list[tuple[str, str, str]] = []
-
 _EXISTING_API_KEY_PLACEHOLDER = "(保留已保存的 API Key)"
 _WIZARD_TIMEOUT_SECONDS = 300.0
 
