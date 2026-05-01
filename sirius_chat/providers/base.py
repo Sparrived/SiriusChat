@@ -41,8 +41,10 @@ class GenerationRequest:
 def estimate_generation_request_input_tokens(request: GenerationRequest) -> int:
     """Estimate input tokens for logging and budget visibility.
 
-    Uses a coarse deterministic heuristic: ~1 token per 4 characters.
+    Uses CJK-aware heuristic from token/utils for better accuracy.
     """
+    from sirius_chat.token.utils import estimate_tokens_heuristic
+
     text_parts = [request.system_prompt]
     for msg in request.messages:
         content = msg.get("content", "")
@@ -57,7 +59,7 @@ def estimate_generation_request_input_tokens(request: GenerationRequest) -> int:
     merged = "\n".join(part for part in text_parts if part)
     if not merged:
         return 0
-    return max(1, (len(merged) + 3) // 4)
+    return estimate_tokens_heuristic(merged)
 
 
 def build_generation_debug_context(
