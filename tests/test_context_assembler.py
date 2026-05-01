@@ -13,7 +13,7 @@ class TestContextAssembler:
         basic.add_entry("g1", "alice", "human", "你好")
         basic.add_entry("g1", "assistant", "assistant", "你好呀")
 
-        indexer = DiaryIndexer()
+        indexer = DiaryIndexer(enable_semantic=False)
         indexer.add(DiaryEntry("d1", "g1", "2026-04-22T10:00:00+00:00", content="之前聊过问候", summary="问候日记"))
         retriever = DiaryRetriever(indexer)
 
@@ -42,7 +42,7 @@ class TestContextAssembler:
         basic = BasicMemoryManager()
         basic.add_entry("g1", "alice", "human", "hi")
 
-        indexer = DiaryIndexer()
+        indexer = DiaryIndexer(enable_semantic=False)
         retriever = DiaryRetriever(indexer)
 
         assembler = ContextAssembler(basic, retriever)
@@ -60,7 +60,7 @@ class TestContextAssembler:
         basic.add_entry("g1", "alice", "human", "你好", speaker_name="Alice")
         basic.add_entry("g1", "assistant", "assistant", "你好呀", speaker_name="小星")
 
-        indexer = DiaryIndexer()
+        indexer = DiaryIndexer(enable_semantic=False)
         retriever = DiaryRetriever(indexer)
 
         assembler = ContextAssembler(basic, retriever)
@@ -79,7 +79,7 @@ class TestContextAssembler:
         basic = BasicMemoryManager()
         basic.add_entry("g1", "alice", "human", "<script>alert('xss')</script>", speaker_name="Alice")
 
-        indexer = DiaryIndexer()
+        indexer = DiaryIndexer(enable_semantic=False)
         retriever = DiaryRetriever(indexer)
 
         assembler = ContextAssembler(basic, retriever)
@@ -94,8 +94,7 @@ class TestContextAssembler:
         basic = BasicMemoryManager()
         basic.add_entry("g1", "alice", "human", "你好")
 
-        indexer = DiaryIndexer()
-        indexer._model = None  # 禁用语义搜索，确保可预测的按序返回
+        indexer = DiaryIndexer(enable_semantic=False)
         for i in range(1, 16):
             indexer.add(
                 DiaryEntry(

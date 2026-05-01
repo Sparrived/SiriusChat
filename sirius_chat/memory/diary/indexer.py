@@ -37,40 +37,46 @@ class DiaryIndexer:
 
     MODEL_NAME: str = "BAAI/bge-small-zh"
 
-    def __init__(self) -> None:
+    def __init__(self, enable_semantic: bool = True) -> None:
         self._entries: list[DiaryEntry] = []
         self._model: Any | None = None
         self._embedding_dim: int | None = None
-        if _ST_AVAILABLE:
-            # Reuse module-level singleton if available
-            cached = _MODEL_SINGLETON.get(self.MODEL_NAME)
-            if cached is not None:
-                self._model = cached
-                self._embedding_dim = getattr(
-                    self._model, "get_embedding_dimension", lambda: None
-                )()
-                logger.info(
-                    "日记语义索引复用已缓存模型 %s (dim=%s)",
-                    self.MODEL_NAME,
-                    self._embedding_dim,
-                )
-            else:
-                self._model = self._load_model_local_first(self.MODEL_NAME)
-                if self._model is not None:
-                    _MODEL_SINGLETON[self.MODEL_NAME] = self._model
-                    self._embedding_dim = getattr(
-                        self._model, "get_embedding_dimension", lambda: None
-                    )()
-                    logger.info(
-                        "日记语义索引已加载模型 %s (dim=%s)",
-                        self.MODEL_NAME,
-                        self._embedding_dim,
-                    )
-        else:
+        self._enable_semantic = enable_semantic
+        if not enable_semantic:
+            logger.debug("日记语义索引已禁用（enable_semantic=False）")
+        elif not _ST_AVAILABLE:
             logger.warning(
                 "sentence-transformers 未安装，日记检索将退化为纯关键词匹配。"
                 "如需语义搜索请安装: pip install sentence-transformers"
             )
+
+    def _ensure_model_loaded(self) -> None:
+        """Lazy-load the embedding model on first use."""
+        if self._model is not None or not self._enable_semantic or not _ST_AVAILABLE:
+            return
+        cached = _MODEL_SINGLETON.get(self.MODEL_NAME)
+        if cached is not None:
+            self._model = cached
+            self._embedding_dim = getattr(
+                self._model, "get_embedding_dimension", lambda: None
+            )()
+            logger.info(
+                "日记语义索引复用已缓存模型 %s (dim=%s)",
+                self.MODEL_NAME,
+                self._embedding_dim,
+            )
+        else:
+            self._model = self._load_model_local_first(self.MODEL_NAME)
+            if self._model is not None:
+                _MODEL_SINGLETON[self.MODEL_NAME] = self._model
+                self._embedding_dim = getattr(
+                    self._model, "get_embedding_dimension", lambda: None
+                )()
+                logger.info(
+                    "日记语义索引已加载模型 %s (dim=%s)",
+                    self.MODEL_NAME,
+                    self._embedding_dim,
+                )
 
     @staticmethod
     def _load_model_local_first(model_name: str) -> Any | None:
@@ -101,6 +107,7 @@ class DiaryIndexer:
 
         Returns True if an embedding was computed or recomputed.
         """
+        self._ensure_model_loaded()
         recomputed = False
         if self._model is not None:
             # Detect stale embeddings from a previous model and force recompute
@@ -137,6 +144,7 @@ class DiaryIndexer:
         are considered. Returns list of (entry, score) sorted by score
         descending.
         """
+        self._ensure_model_loaded()
         entries = self._entries
         if group_id:
             entries = [e for e in entries if e.group_id == group_id]

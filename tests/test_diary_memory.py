@@ -87,8 +87,7 @@ class TestDiaryGenerator:
 
 class TestDiaryIndexer:
     def test_keyword_search(self) -> None:
-        idx = DiaryIndexer()
-        idx._model = None  # 禁用语义搜索，确保纯关键词匹配
+        idx = DiaryIndexer(enable_semantic=False)
         idx.add(DiaryEntry("d1", "g1", "2026-04-22T10:00:00+00:00", content="今天讨论了Python"))
         idx.add(DiaryEntry("d2", "g1", "2026-04-22T10:00:00+00:00", content="天气很好"))
         results = idx.search("Python", top_k=5)
@@ -97,7 +96,7 @@ class TestDiaryIndexer:
         assert results[0][1] > 0
 
     def test_keyword_search_with_keywords_field(self) -> None:
-        idx = DiaryIndexer()
+        idx = DiaryIndexer(enable_semantic=False)
         idx.add(DiaryEntry(
             "d1", "g1", "2026-04-22T10:00:00+00:00",
             content="内容", keywords=["编程", "Python"]
@@ -106,7 +105,7 @@ class TestDiaryIndexer:
         assert len(results) == 1
 
     def test_empty_search(self) -> None:
-        idx = DiaryIndexer()
+        idx = DiaryIndexer(enable_semantic=False)
         assert idx.search("anything") == []
 
     def test_cosine_sim(self) -> None:
