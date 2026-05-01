@@ -529,11 +529,7 @@ class NapCatBridge:
         if not url.startswith(("http://", "https://")):
             return url
         self._image_cache_dir.mkdir(parents=True, exist_ok=True)
-        url_hash = hashlib.md5(url.encode()).hexdigest()
         ext = Path(url.split("?")[0]).suffix or ".jpg"
-        cache_path = self._image_cache_dir / f"{url_hash}{ext}"
-        if cache_path.exists():
-            return str(cache_path)
         try:
             timeout = aiohttp.ClientTimeout(total=15)
             async with aiohttp.ClientSession(timeout=timeout) as session:
@@ -550,7 +546,15 @@ class NapCatBridge:
                         if len(data) > 10 * 1024 * 1024:
                             LOG.warning("图片过大(%d bytes)，跳过缓存: %s", len(data), url[:80])
                             return url
+                        content_hash = hashlib.md5(data).hexdigest()
+                        cache_path = self._image_cache_dir / f"{content_hash}{ext}"
+                        if cache_path.exists():
+                            return str(cache_path)
                         cache_path.write_bytes(data)
+                        # Preserve original URL metadata
+                        (self._image_cache_dir / f"{content_hash}{ext}.url").write_text(
+                            url, encoding="utf-8"
+                        )
                         await self._cleanup_image_cache(max_files=200)
                         return str(cache_path)
         except Exception as exc:
