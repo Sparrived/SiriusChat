@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
 from sirius_chat.memory import UserProfile
+
+# Pre-compiled regex for skill-chain template placeholders (${skill_name} / ${skill_name.field})
+_TEMPLATE_RE = re.compile(r"\$\{([^}]+)\}")
 
 
 @dataclass(slots=True)
@@ -250,12 +254,8 @@ class SkillChainContext:
 
         Placeholders that cannot be resolved are left unchanged.
         """
-        import re as _re
-
-        _PLACEHOLDER = _re.compile(r"\$\{([^}]+)\}")
-
         def _sub(value: str) -> str:
-            def _replace(m: _re.Match[str]) -> str:
+            def _replace(m: re.Match[str]) -> str:
                 expr = m.group(1)
                 if "." in expr:
                     skill_name, field = expr.split(".", 1)
@@ -269,7 +269,7 @@ class SkillChainContext:
                 v = result.get_field(field)
                 return str(v) if v is not None else m.group(0)
 
-            return _PLACEHOLDER.sub(_replace, value)
+            return _TEMPLATE_RE.sub(_replace, value)
 
         resolved: dict[str, Any] = {}
         for k, v in params.items():
