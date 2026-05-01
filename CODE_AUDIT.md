@@ -1,7 +1,7 @@
 # Sirius Chat 代码审计报告
 
 > 生成时间：2026-04-30
-> 基准版本：v1.0.1（HEAD）
+> 基准版本：v1.1.0（HEAD）
 > 范围：`sirius_chat/` 全量源码 + `docs/` + `tests/`
 
 ---
