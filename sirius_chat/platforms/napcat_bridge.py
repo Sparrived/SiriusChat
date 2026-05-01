@@ -28,7 +28,6 @@ from .runtime import EngineRuntime
 
 LOG = logging.getLogger("sirius.platforms.napcat_bridge")
 
-_DEFAULT_ALLOWED_GROUP_ID = "728196560"
 _COMMAND_NAMES = frozenset({"ai-on", "ai-off", "ai-status"})
 
 
@@ -624,7 +623,8 @@ class NapCatBridge:
         cfg = self._load_adapter_cfg()
         gids = getattr(cfg, "allowed_group_ids", None) if cfg is not None else None
         if gids is None:
-            gids = [_DEFAULT_ALLOWED_GROUP_ID]
+            LOG.error("adapters.json 未配置 allowed_group_ids，群聊功能已禁用")
+            return []
         if isinstance(gids, str):
             try:
                 parsed = json.loads(gids)
