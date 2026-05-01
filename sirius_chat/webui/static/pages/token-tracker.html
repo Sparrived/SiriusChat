@@ -1,0 +1,85 @@
+<div class="page active" id="page-token-tracker">
+  <!-- Controls -->
+  <div class="persona-bar">
+    <label>当前人格</label>
+    <div class="persona-select-bar" id="ttPersonaSelect">加载中...</div>
+  </div>
+
+  <div class="card">
+    <h2 style="display:flex;justify-content:space-between;align-items:center">
+      时间范围
+      <div style="display:flex;gap:6px">
+        <button class="btn small" data-range="today" onclick="ttSetRange('today')">今天</button>
+        <button class="btn small" data-range="7d" onclick="ttSetRange('7d')">最近7天</button>
+        <button class="btn small" data-range="30d" onclick="ttSetRange('30d')">最近30天</button>
+        <button class="btn small active" data-range="all" onclick="ttSetRange('all')">全部</button>
+      </div>
+    </h2>
+  </div>
+
+  <!-- Summary stats -->
+  <div class="card">
+    <h2>消耗汇总</h2>
+    <div class="stat-grid" id="ttSummaryStats">
+      <div class="stat-card"><div class="label">总调用次数</div><div class="value">—</div></div>
+      <div class="stat-card"><div class="label">Prompt Tokens</div><div class="value">—</div></div>
+      <div class="stat-card"><div class="label">Completion Tokens</div><div class="value">—</div></div>
+      <div class="stat-card"><div class="label">总 Tokens</div><div class="value">—</div></div>
+    </div>
+  </div>
+
+  <!-- Section breakdown -->
+  <div class="card">
+    <h2>Prompt 模块分布</h2>
+    <div id="ttSectionBreakdown" style="color:var(--text-2);padding:12px">加载中...</div>
+  </div>
+
+  <!-- Dimension breakdowns -->
+  <div class="card">
+    <h2>按维度分布</h2>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px">
+      <div>
+        <h3>按 Task</h3>
+        <div id="ttByTask" style="color:var(--text-2);font-size:13px">加载中...</div>
+      </div>
+      <div>
+        <h3>按 Model</h3>
+        <div id="ttByModel" style="color:var(--text-2);font-size:13px">加载中...</div>
+      </div>
+      <div>
+        <h3>按 Group</h3>
+        <div id="ttByGroup" style="color:var(--text-2);font-size:13px">加载中...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Recent calls -->
+  <div class="card">
+    <h2 style="display:flex;justify-content:space-between;align-items:center">
+      最近调用明细
+      <span style="font-size:12px;color:var(--text-2);font-weight:400">含模块级 Token 分布</span>
+    </h2>
+    <div style="overflow-x:auto">
+      <table class="tt-table" id="ttRecentTable">
+        <thead>
+          <tr>
+            <th>时间</th>
+            <th>Task</th>
+            <th>Model</th>
+            <th>Prompt</th>
+            <th>Completion</th>
+            <th>主要模块</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td colspan="6" style="text-align:center;color:var(--text-2)">加载中...</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="tt-pagination" id="ttPagination" style="display:none">
+      <button class="btn small" id="ttPrevPage" onclick="ttChangePage(-1)">← 上一页</button>
+      <span id="ttPageInfo">第 1 页</span>
+      <button class="btn small" id="ttNextPage" onclick="ttChangePage(1)">下一页 →</button>
+    </div>
+  </div>
+</div>

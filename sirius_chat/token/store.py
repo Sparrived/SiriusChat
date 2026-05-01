@@ -6,6 +6,7 @@ so that cross-session and multi-dimensional analytics become possible.
 """
 from __future__ import annotations
 
+import json
 import sqlite3
 import time
 from pathlib import Path
@@ -251,6 +252,102 @@ class TokenUsageStore:
             params,
         ).fetchall()
         return [dict(row) for row in rows]
+
+    def fetch_records_filtered(
+        self,
+        *,
+        persona_name: str | None = None,
+        group_id: str | None = None,
+        start_ts: float | None = None,
+        end_ts: float | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[dict[str, object]]:
+        """Return raw rows with advanced filters and pagination."""
+        clauses: list[str] = []
+        params: list[object] = []
+        if persona_name is not None:
+            clauses.append("persona_name = ?")
+            params.append(persona_name)
+        if group_id is not None:
+            clauses.append("group_id = ?")
+            params.append(group_id)
+        if start_ts is not None:
+            clauses.append("timestamp >= ?")
+            params.append(start_ts)
+        if end_ts is not None:
+            clauses.append("timestamp <= ?")
+            params.append(end_ts)
+
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        conn = self._connect()
+        rows = conn.execute(
+            f"""SELECT * FROM token_usage{where}
+            ORDER BY timestamp DESC
+            LIMIT ? OFFSET ?""",
+            params + [limit, offset],
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def get_section_breakdown(
+        self,
+        *,
+        start_ts: float | None = None,
+        end_ts: float | None = None,
+    ) -> dict[str, int]:
+        """Aggregate per-section token counts from breakdown_json.
+
+        Returns a dict mapping section name to total estimated tokens.
+        """
+        clauses: list[str] = []
+        params: list[object] = []
+        if start_ts is not None:
+            clauses.append("timestamp >= ?")
+            params.append(start_ts)
+        if end_ts is not None:
+            clauses.append("timestamp <= ?")
+            params.append(end_ts)
+
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        conn = self._connect()
+        rows = conn.execute(
+            f"SELECT breakdown_json FROM token_usage{where}",
+            params,
+        ).fetchall()
+
+        agg: dict[str, int] = {}
+        for row in rows:
+            raw = row[0]
+            if not raw:
+                continue
+            try:
+                bd = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(bd, dict):
+                continue
+            for key, val in bd.items():
+                if isinstance(val, (int, float)):
+                    agg[key] = agg.get(key, 0) + int(val)
+        return agg
+
+    def get_recent_records_with_breakdown(
+        self,
+        *,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[dict[str, object]]:
+        """Return recent records with parsed breakdown dict attached."""
+        records = self.fetch_records_filtered(limit=limit, offset=offset)
+        for rec in records:
+            raw = rec.get("breakdown_json", "")
+            rec["breakdown"] = {}
+            if raw:
+                try:
+                    rec["breakdown"] = json.loads(raw)
+                except json.JSONDecodeError:
+                    pass
+        return records
 
     # ------------------------------------------------------------------
     # Analytics helpers

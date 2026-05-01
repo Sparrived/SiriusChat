@@ -390,3 +390,25 @@ input:focus, select:focus, textarea:focus {
   color: #fff !important;
   border-color: var(--accent-2) !important;
 }
+
+/* ── Token Tracker ──────────────────────────────────── */
+.tt-table { width:100%; border-collapse:collapse; font-size:13px; }
+.tt-table th, .tt-table td { padding:10px 12px; text-align:left; border-bottom:1px solid var(--border); }
+.tt-table th { color:var(--text-2); font-weight:500; font-size:12px; background:var(--bg); }
+.tt-table td { color:var(--text); }
+.tt-table tr:hover td { background:var(--surface-2); }
+.tt-table .mono { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
+
+.tt-pagination { display:flex; align-items:center; justify-content:center; gap:12px; margin-top:14px; }
+.tt-pagination span { font-size:13px; color:var(--text-2); }
+
+/* Section breakdown horizontal bars */
+.section-bar-row { display:flex; align-items:center; gap:10px; margin-bottom:8px; }
+.section-bar-label { width:100px; font-size:12px; color:var(--text-2); text-align:right; white-space:nowrap; }
+.section-bar-track { flex:1; height:18px; background:var(--bg); border-radius:4px; overflow:hidden; position:relative; }
+.section-bar-fill { height:100%; border-radius:4px; background:linear-gradient(90deg, var(--accent), #7c3aed); transition:width .6s ease; }
+.section-bar-value { width:80px; font-size:12px; color:var(--text); text-align:right; white-space:nowrap; }
+.section-bar-pct { width:40px; font-size:11px; color:var(--text-2); text-align:right; }
+
+/* Range button active state */
+.btn.active { background:var(--accent); color:#fff; border-color:var(--accent); }

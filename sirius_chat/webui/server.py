@@ -847,6 +847,7 @@ class WebUIServer:
             "total_output_chars": 0,
         }
         persona_breakdown: list[dict[str, Any]] = []
+        global_section_breakdown: dict[str, int] = {}
 
         for persona_info in self.persona_manager.list_personas():
             name = persona_info.get("name")
@@ -870,6 +871,9 @@ class WebUIServer:
                     })
                     for key in total_summary:
                         total_summary[key] += summary.get(key, 0)
+                # Aggregate section breakdown across all personas
+                for section, tokens in store.get_section_breakdown().items():
+                    global_section_breakdown[section] = global_section_breakdown.get(section, 0) + tokens
                 store.close()
             except Exception as exc:
                 LOG.warning("Token 统计读取失败 %s: %s", name, exc)
@@ -878,6 +882,7 @@ class WebUIServer:
         return _json_response({
             "summary": total_summary,
             "personas": persona_breakdown,
+            "section_breakdown": global_section_breakdown,
         })
 
     async def api_persona_tokens_get(self, request: web.Request) -> web.Response:
@@ -897,7 +902,17 @@ class WebUIServer:
                 "by_model": [],
                 "by_group": [],
                 "recent": [],
+                "section_breakdown": {},
+                "recent_with_breakdown": [],
             })
+
+        # Parse optional time range filters
+        try:
+            start_ts = float(request.query.get("start", "0")) or None
+            end_ts = float(request.query.get("end", "0")) or None
+        except ValueError:
+            start_ts = None
+            end_ts = None
 
         try:
             store = TokenUsageStore(db_path, session_id="default")
@@ -907,6 +922,12 @@ class WebUIServer:
                 "by_model": store.get_breakdown_by("model"),
                 "by_group": store.get_breakdown_by("group_id"),
                 "recent": store.get_recent_records(limit=30),
+                "section_breakdown": store.get_section_breakdown(
+                    start_ts=start_ts, end_ts=end_ts
+                ),
+                "recent_with_breakdown": store.get_recent_records_with_breakdown(
+                    limit=30
+                ),
             }
             store.close()
             return _json_response(result)

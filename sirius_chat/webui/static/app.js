@@ -95,6 +95,7 @@ const pageTitles = {
   experience: ['体验参数', 'Configuration / Experience'],
   adapters: ['Adapter 配置', 'Configuration / Adapters'],
   napcat: ['NapCat 管理', 'Platform / NapCat'],
+  'token-tracker': ['Token 追踪', 'Analytics / Token Tracker'],
 };
 
 async function navTo(page) {
@@ -137,7 +138,7 @@ async function navTo(page) {
   if (page === 'adapters') loadAdapters();
   if (page === 'providers') _renderProviderDraft();
   if (page === 'napcat') { ncLoadStatus(); ncLoadLogs(); }
-}
+  if (page === 'token-tracker') loadTokenTracker();
 
 // ── Personas ──────────────────────────────────────────
 async function loadPersonas() {
@@ -194,6 +195,7 @@ async function loadPersonaStatus() {
     if (currentPage === 'orchestration') loadOrchestration();
     if (currentPage === 'experience') loadExperience();
     if (currentPage === 'adapters') loadAdapters();
+    if (currentPage === 'token-tracker') ttLoadData();
   } catch (e) {
     console.error('loadPersonaStatus', e);
   }
@@ -280,6 +282,7 @@ function renderPersonaCards(animate = true) {
           ? `<button class="btn danger" onclick="event.stopPropagation(); stopPersona('${p.name}')">⏹ 停止</button>`
           : `<button class="btn success" onclick="event.stopPropagation(); startPersona('${p.name}')">▶ 启动</button>`}
         <button class="btn" onclick="event.stopPropagation(); selectPersona('${p.name}'); navTo('persona')">⚙️ 配置</button>
+        <button class="btn" onclick="event.stopPropagation(); selectPersona('${p.name}'); navTo('token-tracker')">📈 Token</button>
       </div>
     </div>
   `;
@@ -315,12 +318,53 @@ function renderPersonaCards(animate = true) {
   }
 }
 
+function renderSectionBars(container, breakdown) {
+  if (!container) return;
+  const entries = Object.entries(breakdown)
+    .filter(([k]) => !['total', 'system_prompt_total', 'user_message'].includes(k))
+    .sort((a, b) => b[1] - a[1]);
+  if (!entries.length) {
+    container.innerHTML = '<div style="color:var(--text-2);padding:12px">暂无模块分布数据</div>';
+    return;
+  }
+  const max = Math.max(...entries.map((e) => e[1]));
+  const total = entries.reduce((s, e) => s + e[1], 0);
+  const labels = {
+    persona: '人格设定', identity: '身份识别', output_constraint: '输出约束',
+    emotion: '情感上下文', empathy: '共情策略', relationship: '关系上下文',
+    memory: '记忆引用', interests: '用户兴趣', group_style: '群体风格',
+    participants: '近期参与者', cross_group: '跨群认知', skills: '可用技能',
+    glossary: '名词解释', output_format: '输出格式', diary: '日记记忆',
+    history_xml: '对话历史', cross_group_xml: '跨群历史',
+  };
+  const colors = [
+    '#58a6ff', '#3fb950', '#d29922', '#f85149', '#a371f7',
+    '#56d4dd', '#ff9bce', '#79c0ff', '#ffa657', '#7ee787',
+  ];
+  container.innerHTML = entries.map(([key, val], i) => {
+    const pct = total ? Math.round((val / total) * 100) : 0;
+    const w = max ? Math.round((val / max) * 100) : 0;
+    const color = colors[i % colors.length];
+    return `
+      <div class="section-bar-row">
+        <div class="section-bar-label">${labels[key] || key}</div>
+        <div class="section-bar-track">
+          <div class="section-bar-fill" style="width:${w}%;background:linear-gradient(90deg, ${color}, ${color}88)"></div>
+        </div>
+        <div class="section-bar-value">${val.toLocaleString()}</div>
+        <div class="section-bar-pct">${pct}%</div>
+      </div>
+    `;
+  }).join('');
+}
+
 async function loadTokenStats() {
   const callsEl = $('dashTokenCalls');
   const promptEl = $('dashTokenPrompt');
   const completionEl = $('dashTokenCompletion');
   const totalEl = $('dashTokenTotal');
   const personasEl = $('dashTokenPersonas');
+  const sectionEl = $('dashSectionBreakdown');
   if (!callsEl || !totalEl) return;
   try {
     const res = await get('/tokens');
@@ -350,9 +394,13 @@ async function loadTokenStats() {
         applyStagger(personasEl, '.stat-card');
       }
     }
+    if (sectionEl) {
+      renderSectionBars(sectionEl, res.section_breakdown || {});
+    }
   } catch (e) {
     _lastTokenData = null;
     if (personasEl) personasEl.innerHTML = '<div style="color:var(--text-2);padding:12px">Token 统计加载失败</div>';
+    if (sectionEl) sectionEl.innerHTML = '<div style="color:var(--text-2);padding:12px">模块分布加载失败</div>';
   }
 }
 
@@ -1096,6 +1144,156 @@ async function saveExperience() {
   });
   toast(res.success ? '体验参数已保存' : res.error || '保存失败', res.success ? 'success' : 'error');
   if (res.success) flashSuccess(document.activeElement);
+}
+
+// ── Token Tracker ─────────────────────────────────────
+let _ttState = { range: 'all', page: 0, data: null };
+
+async function loadTokenTracker() {
+  renderPersonaSelect();
+  if (!currentPersona && personas.length > 0) {
+    selectPersona(personas[0].name);
+  }
+  // Highlight active range button
+  document.querySelectorAll('#page-token-tracker .btn[data-range]').forEach((b) => {
+    b.classList.toggle('active', b.dataset.range === _ttState.range);
+  });
+  await ttLoadData();
+}
+
+function ttSetRange(range) {
+  _ttState.range = range;
+  _ttState.page = 0;
+  document.querySelectorAll('#page-token-tracker .btn[data-range]').forEach((b) => {
+    b.classList.toggle('active', b.dataset.range === range);
+  });
+  ttLoadData();
+}
+
+function ttChangePage(delta) {
+  const records = (_ttState.data?.recent_with_breakdown || []);
+  const maxPage = Math.max(0, Math.ceil(records.length / 10) - 1);
+  _ttState.page = Math.max(0, Math.min(maxPage, _ttState.page + delta));
+  ttRenderRecentTable();
+}
+
+async function ttLoadData() {
+  if (!currentPersona) return;
+  const name = currentPersona;
+
+  // Compute time range
+  let start = null, end = null;
+  const now = Date.now() / 1000;
+  if (_ttState.range === 'today') {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    start = d.getTime() / 1000;
+    end = now;
+  } else if (_ttState.range === '7d') {
+    start = now - 7 * 86400;
+    end = now;
+  } else if (_ttState.range === '30d') {
+    start = now - 30 * 86400;
+    end = now;
+  }
+
+  const qs = start ? `?start=${Math.floor(start)}&end=${Math.floor(end)}` : '';
+  try {
+    const res = await get(`/personas/${name}/tokens${qs}`);
+    _ttState.data = res;
+
+    // Summary stats
+    const summary = res.summary || {};
+    const statEls = document.querySelectorAll('#ttSummaryStats .stat-card .value');
+    if (statEls.length >= 4) {
+      animateNumber(statEls[0], summary.total_calls || 0, 500);
+      animateNumber(statEls[1], summary.total_prompt_tokens || 0, 500);
+      animateNumber(statEls[2], summary.total_completion_tokens || 0, 500);
+      animateNumber(statEls[3], summary.total_tokens || 0, 500);
+    }
+
+    // Section breakdown
+    renderSectionBars($('ttSectionBreakdown'), res.section_breakdown || {});
+
+    // Dimension breakdowns
+    ttRenderDimensionList('ttByTask', res.by_task || []);
+    ttRenderDimensionList('ttByModel', res.by_model || []);
+    ttRenderDimensionList('ttByGroup', res.by_group || []);
+
+    // Recent calls table
+    ttRenderRecentTable();
+  } catch (e) {
+    console.error('ttLoadData', e);
+    const els = ['ttSectionBreakdown', 'ttByTask', 'ttByModel', 'ttByGroup'];
+    els.forEach((id) => { const el = $(id); if (el) el.textContent = '加载失败'; });
+  }
+}
+
+function ttRenderDimensionList(containerId, items) {
+  const el = $(containerId);
+  if (!el) return;
+  if (!items.length) {
+    el.innerHTML = '<div style="color:var(--text-2)">暂无数据</div>';
+    return;
+  }
+  el.innerHTML = items.slice(0, 8).map((it) => `
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--border);font-size:13px">
+      <span style="color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:140px" title="${it.name}">${it.name}</span>
+      <span style="color:var(--text-2);font-family:ui-monospace,monospace">${it.total_tokens || 0}</span>
+    </div>
+  `).join('');
+}
+
+function ttRenderRecentTable() {
+  const tbody = document.querySelector('#ttRecentTable tbody');
+  const pgEl = $('ttPagination');
+  if (!tbody) return;
+  const records = (_ttState.data?.recent_with_breakdown || []);
+  if (!records.length) {
+    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-2)">暂无记录</td></tr>';
+    if (pgEl) pgEl.style.display = 'none';
+    return;
+  }
+
+  const pageSize = 10;
+  const totalPages = Math.max(1, Math.ceil(records.length / pageSize));
+  const page = Math.min(_ttState.page, totalPages - 1);
+  _ttState.page = page;
+  const slice = records.slice(page * pageSize, (page + 1) * pageSize);
+
+  const top3 = (bd) => {
+    if (!bd || typeof bd !== 'object') return '—';
+    return Object.entries(bd)
+      .filter(([k]) => !['total', 'system_prompt_total', 'user_message'].includes(k))
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 3)
+      .map(([k, v]) => `${k} ${v}`)
+      .join(', ') || '—';
+  };
+
+  tbody.innerHTML = slice.map((r) => {
+    const ts = r.timestamp ? new Date(r.timestamp * 1000).toLocaleString('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—';
+    return `
+      <tr>
+        <td>${ts}</td>
+        <td>${r.task_name || '—'}</td>
+        <td>${r.model || '—'}</td>
+        <td class="mono">${r.prompt_tokens || 0}</td>
+        <td class="mono">${r.completion_tokens || 0}</td>
+        <td style="font-size:12px;color:var(--text-2);max-width:200px;overflow:hidden;text-overflow:ellipsis" title="${top3(r.breakdown).replace(/"/g, '&quot;')}">${top3(r.breakdown)}</td>
+      </tr>
+    `;
+  }).join('');
+
+  if (pgEl) {
+    pgEl.style.display = totalPages > 1 ? 'flex' : 'none';
+    const info = $('ttPageInfo');
+    if (info) info.textContent = `第 ${page + 1} / ${totalPages} 页`;
+    const prev = $('ttPrevPage');
+    const next = $('ttNextPage');
+    if (prev) prev.disabled = page <= 0;
+    if (next) next.disabled = page >= totalPages - 1;
+  }
 }
 
 // ── Init ──────────────────────────────────────────────
