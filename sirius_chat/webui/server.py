@@ -380,7 +380,7 @@ class WebUIServer:
         if paths is None:
             return _json_response({"error": "人格不存在"}, 404)
 
-        profile = PersonaStore.load(paths.persona)
+        profile = PersonaStore.load(paths.dir)
         if profile is None:
             profile = PersonaProfile(name=name)
         return _json_response({
@@ -427,7 +427,7 @@ class WebUIServer:
         if paths is None:
             return _json_response({"error": "人格不存在"}, 404)
 
-        profile = PersonaStore.load(paths.persona)
+        profile = PersonaStore.load(paths.dir)
         if profile is None:
             profile = PersonaProfile(name=name)
 
@@ -445,7 +445,7 @@ class WebUIServer:
             if key in body:
                 setattr(profile, key, body[key])
 
-        PersonaStore.save(paths.persona, profile)
+        PersonaStore.save(paths.dir, profile)
         return _json_response({"success": True})
 
     async def api_persona_interview_get(self, request: web.Request) -> web.Response:
@@ -506,7 +506,7 @@ class WebUIServer:
                 aliases=aliases,
                 model=model,
             )
-            PersonaStore.save(paths.persona, persona)
+            PersonaStore.save(paths.dir, persona)
             self.persona_manager.reload_persona(name)
             return _json_response({"success": True, "persona": persona.to_dict()})
         except Exception as exc:
@@ -557,7 +557,7 @@ class WebUIServer:
         if paths is None:
             return _json_response({"error": "人格不存在"}, 404)
 
-        data = OrchestrationStore.load(paths.orchestration)
+        data = OrchestrationStore.load(paths.dir)
         return _json_response(data)
 
     async def api_orchestration_post(self, request: web.Request) -> web.Response:
@@ -571,13 +571,13 @@ class WebUIServer:
         if paths is None:
             return _json_response({"error": "人格不存在"}, 404)
 
-        cfg = OrchestrationStore.load(paths.orchestration)
+        cfg = OrchestrationStore.load(paths.dir)
 
         for key in ("analysis_model", "chat_model", "vision_model", "summary_model"):
             if key in body:
                 cfg[key] = body[key]
 
-        OrchestrationStore.save(paths.orchestration, cfg)
+        OrchestrationStore.save(paths.dir, cfg)
         return _json_response({"success": True})
 
     # ─── 多人格 API: 体验配置 ─────────────────────────────
