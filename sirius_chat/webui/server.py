@@ -813,7 +813,7 @@ class WebUIServer:
         from sirius_chat.token.store import TokenUsageStore
         from sirius_chat.token import analytics as token_analytics
 
-        db_path = paths.dir / "token_usage.db"
+        db_path = paths.dir / "token" / "token_usage.db"
         if not db_path.exists():
             return _json_response({"total": 0, "daily": [], "models": []})
 
@@ -857,15 +857,17 @@ class WebUIServer:
         if paths is None:
             return _json_response({"error": "人格不存在"}, 404)
 
-        events_path = paths.engine_state / "cognition_events.json"
-        if not events_path.exists():
+        db_path = paths.dir / "cognition_events.db"
+        if not db_path.exists():
             return _json_response({"events": []})
 
         try:
-            data = json.loads(events_path.read_text(encoding="utf-8"))
-            events = data if isinstance(data, list) else []
+            from sirius_chat.memory.cognition_store import CognitionEventStore
+            store = CognitionEventStore(str(db_path))
             limit = int(request.query.get("limit", "50"))
-            return _json_response({"events": events[-limit:]})
+            events = store.get_recent(limit=limit)
+            store.close()
+            return _json_response({"events": events})
         except Exception as exc:
             LOG.warning("读取认知事件失败 %s: %s", name, exc)
             return _json_response({"error": str(exc)}, 500)
