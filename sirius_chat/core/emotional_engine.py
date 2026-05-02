@@ -1433,22 +1433,6 @@ class EmotionalGroupChatEngine:
             )
             reply = raw_reply.strip()
 
-            # Expression deduplication: rephrase if too similar to recent replies
-            if self._check_expression_redundancy(reply, group_id):
-                self._log_inner_thought("这话我好像刚说过...让我换个说法")
-                # Append rephrasing hint to system prompt and retry once
-                sp_rephrase = system_prompt + "\n\n【注意】请不要重复你之前说过的话，尝试换一种表达方式。"
-                raw_retry = await self._generate(
-                    sp_rephrase, messages, group_id,
-                    user_communication_style=user_comm_style,
-                    token_breakdown=token_breakdown,
-                )
-                reply = raw_retry.strip()
-                if self._check_expression_redundancy(reply, group_id):
-                    self._log_inner_thought("换说法还是像...先不说了吧")
-                    reply = ""
-                    break
-
             calls = parse_skill_calls(reply)
             if not calls or self._skill_registry is None or self._skill_executor is None:
                 break
@@ -1491,6 +1475,9 @@ class EmotionalGroupChatEngine:
             for profile in group_entries.values():
                 if profile.is_developer:
                     developer_profiles.append(profile)
+
+            if self._skill_executor is not None:
+                self._skill_executor.set_chat_context(group_id=group_id, user_id=caller_user_id or "")
 
             for idx, (skill_name, params) in enumerate(calls):
                 skill = self._skill_registry.get(skill_name)
@@ -2307,6 +2294,23 @@ class EmotionalGroupChatEngine:
             )
             self._log_inner_thought("大家正聊得起劲呢，我先不插话了，等个合适的时机...")
 
+        # Short filler suppression: pure punctuation / ultra-short messages
+        # should not trigger immediate replies even if LLM overestimates directedness
+        if (
+            len(message.content or "") <= 2
+            and not re.search(r"[\u4e00-\u9fff]", message.content or "")
+            and decision.strategy == ResponseStrategy.IMMEDIATE
+        ):
+            decision = StrategyDecision(
+                strategy=ResponseStrategy.DELAYED,
+                score=decision.score * 0.5,
+                threshold=decision.threshold,
+                urgency=decision.urgency * 0.3,
+                relevance=decision.relevance,
+                reason=f"short_filler:{decision.reason}",
+            )
+            self._log_inner_thought("就发个标点符号...先等等看有没有下文吧")
+
         # overheated + burst + not directed → downgrade to SILENT
         is_directed = intent.directed_score >= self.expressiveness.directed_threshold
         if (
@@ -2760,6 +2764,11 @@ class EmotionalGroupChatEngine:
         if tone_hint:
             system_prompt = system_prompt + "\n\n" + tone_hint
 
+        # Inject current time into system prompt (China timezone UTC+8)
+        china_tz = timezone(timedelta(hours=8))
+        now_str = datetime.now(china_tz).strftime("%Y-%m-%d %H:%M:%S")
+        system_prompt = f"【当前时间】{now_str}（北京时间）\n\n{system_prompt}"
+
         # Model routing
         recent = self._get_recent_messages(group_id, n=5)
         rhythm = self.rhythm_analyzer.analyze(group_id, recent)
@@ -3110,39 +3119,6 @@ class EmotionalGroupChatEngine:
         elif avg_arousal < 0.3:
             return "当前群聊比较平淡，保持简洁、不突兀的回应。"
         return ""
-
-    def _check_expression_redundancy(self, reply: str, group_id: str) -> bool:
-        """Check if reply is too similar to recent AI expressions."""
-        if not reply:
-            return False
-        recent = self._get_recent_messages(group_id, n=10)
-        own_recent = [m["content"] for m in recent if m.get("user_id") == "assistant"]
-        if not own_recent:
-            return False
-        for past in own_recent[-5:]:
-            if not past:
-                continue
-            sim = self._expression_similarity(reply, past)
-            if sim > self.expressiveness.redundancy_threshold:
-                return True
-        return False
-
-    @staticmethod
-    def _expression_similarity(a: str, b: str) -> float:
-        """Simple character bigram Jaccard similarity."""
-        if not a or not b:
-            return 0.0
-
-        def bigrams(s: str) -> set[str]:
-            return {s[i : i + 2] for i in range(len(s) - 1)}
-
-        bg_a = bigrams(a)
-        bg_b = bigrams(b)
-        if not bg_a or not bg_b:
-            return 0.0
-        inter = len(bg_a & bg_b)
-        union = len(bg_a | bg_b)
-        return inter / union if union else 0.0
 
     @staticmethod
     def _strip_conversation_history_xml(text: str) -> str:
