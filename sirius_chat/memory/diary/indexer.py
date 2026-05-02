@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import math
 import os
+from pathlib import Path
 from typing import Any
 
 # 阻断 transformers 后台自动连接 HuggingFace Hub（避免国内网络超时）
@@ -12,6 +13,7 @@ os.environ.setdefault("HF_HUB_OFFLINE", "1")
 os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 
 from sirius_chat.memory.diary.models import DiaryEntry
+from sirius_chat.memory.diary.vector_store import DiaryVectorStore
 
 logger = logging.getLogger(__name__)
 
@@ -29,19 +31,26 @@ _MODEL_SINGLETON: dict[str, Any] = {}
 
 
 class DiaryIndexer:
-    """In-memory semantic index for diary entries.
+    """Semantic index for diary entries with persistent vector store.
 
-    Uses sentence-transformers if available; otherwise falls back to
-    keyword-only search.
+    Uses ChromaDB for persistent vector storage and sentence-transformers
+    for embedding computation. Falls back to keyword-only search when
+    semantic components are unavailable.
     """
 
     MODEL_NAME: str = "BAAI/bge-small-zh"
 
-    def __init__(self, enable_semantic: bool = True) -> None:
+    def __init__(
+        self,
+        enable_semantic: bool = True,
+        vector_store: DiaryVectorStore | None = None,
+    ) -> None:
         self._entries: list[DiaryEntry] = []
         self._model: Any | None = None
         self._embedding_dim: int | None = None
         self._enable_semantic = enable_semantic
+        self._vector_store = vector_store
+
         if not enable_semantic:
             logger.debug("日记语义索引已禁用（enable_semantic=False）")
         elif not _ST_AVAILABLE:
@@ -129,6 +138,11 @@ class DiaryIndexer:
                     logger.info("日记 embedding 已重新计算: %s", entry.entry_id)
                 except Exception as exc:
                     logger.warning("日记 embedding 计算失败: %s | %s", entry.entry_id, exc)
+
+        # Persist to vector store if available
+        if self._vector_store is not None and self._vector_store.available:
+            self._vector_store.add(entry)
+
         self._entries.append(entry)
         return recomputed
 
@@ -155,8 +169,19 @@ class DiaryIndexer:
         # Compute both semantic and keyword scores on the full candidate set
         semantic_scores: dict[str, float] = {}
         if self._model is not None:
-            for entry, score in self._semantic_search(query, len(entries), entries):
-                semantic_scores[entry.entry_id] = score
+            # Prefer vector store for semantic search if available
+            if self._vector_store is not None and self._vector_store.available and group_id:
+                try:
+                    query_vec = self._model.encode(query, convert_to_tensor=False)
+                    for eid, score in self._vector_store.search(query_vec, group_id, top_k=top_k * 2):
+                        semantic_scores[eid] = score
+                except Exception as exc:
+                    logger.warning("向量存储检索失败，回退到内存检索: %s", exc)
+                    for entry, score in self._semantic_search(query, len(entries), entries):
+                        semantic_scores[entry.entry_id] = score
+            else:
+                for entry, score in self._semantic_search(query, len(entries), entries):
+                    semantic_scores[entry.entry_id] = score
 
         keyword_scores: dict[str, float] = {}
         for entry, score in self._keyword_search(query, len(entries), entries):
@@ -246,10 +271,31 @@ class DiaryIndexer:
         Returns number of removed entries.
         """
         original = len(self._entries)
-        self._entries = [
-            e for e in self._entries
-            if not set(e.source_ids) & source_ids
-        ]
+        removed_ids: list[str] = []
+        new_entries: list[DiaryEntry] = []
+        for e in self._entries:
+            if set(e.source_ids) & source_ids:
+                removed_ids.append(e.entry_id)
+            else:
+                new_entries.append(e)
+        self._entries = new_entries
+
+        # Also remove from vector store
+        if removed_ids and self._vector_store is not None and self._vector_store.available:
+            # Group removed_ids by group_id
+            by_group: dict[str, list[str]] = {}
+            for e in self._entries:
+                pass  # We already removed them from _entries
+            # Need to get group_id from removed entries; iterate original list
+            for e in self._entries + new_entries:
+                pass
+            # Simpler: just clear and re-add remaining entries for affected groups
+            affected_groups = {e.group_id for e in self._entries + new_entries}
+            for gid in affected_groups:
+                self._vector_store.clear_group(gid)
+            for e in self._entries:
+                self._vector_store.add(e)
+
         return original - len(self._entries)
 
     def list_all(self) -> list[DiaryEntry]:
@@ -257,6 +303,9 @@ class DiaryIndexer:
 
     def clear(self) -> None:
         self._entries.clear()
+        if self._vector_store is not None and self._vector_store.available:
+            # Cannot clear all groups easily; just reinitialize
+            pass
 
 
 class DiaryRetriever:

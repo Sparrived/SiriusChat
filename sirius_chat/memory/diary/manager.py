@@ -22,9 +22,9 @@ class DiaryManager:
     - Persists to disk.
     """
 
-    def __init__(self, work_path: Any) -> None:
+    def __init__(self, work_path: Any, vector_store: Any | None = None) -> None:
         self._store = DiaryFileStore(work_path)
-        self._indexer = DiaryIndexer()
+        self._indexer = DiaryIndexer(vector_store=vector_store)
         self._retriever = DiaryRetriever(self._indexer)
         self._generator = DiaryGenerator()
         # Track source_ids that have already been diary-ized per group
@@ -118,7 +118,34 @@ class DiaryManager:
         if any_recomputed:
             self._store.save(group_id, entries)
             logger.info("群 %s 的日记 embedding 已自动迁移并持久化", group_id)
+        # Bulk-migrate existing entries with embeddings to vector store
+        # (one-shot migration for old data created before Chroma backend).
+        self._maybe_migrate_to_vector_store(entries)
         logger.info("群 %s 日记加载完成: 索引条目=%d", group_id, len(entries))
+
+    def _maybe_migrate_to_vector_store(self, entries: list[DiaryEntry]) -> None:
+        """Migrate entries with embeddings to vector store if not already present."""
+        vs = self._indexer._vector_store
+        if vs is None or not vs.available or not entries:
+            return
+        # Only migrate entries that have embeddings
+        to_migrate = [e for e in entries if e.embedding]
+        if not to_migrate:
+            return
+        # Check current count for each group to avoid unnecessary work
+        by_group: dict[str, list[DiaryEntry]] = {}
+        for e in to_migrate:
+            by_group.setdefault(e.group_id, []).append(e)
+        migrated = 0
+        for gid, group_entries in by_group.items():
+            current_count = vs.count(gid)
+            # Simple heuristic: if vector store already has entries for this group,
+            # assume migration was done before. This avoids re-upserting on every load.
+            if current_count > 0:
+                continue
+            migrated += vs.add_many(group_entries)
+        if migrated > 0:
+            logger.info("日记向量存储迁移完成: %d 条旧数据已写入 Chroma", migrated)
 
     # ------------------------------------------------------------------
     # Retrieval
