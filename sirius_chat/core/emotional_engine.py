@@ -1179,7 +1179,7 @@ class EmotionalGroupChatEngine:
         store = self._skill_executor.get_data_store("reminder")
         reminders = list(store.get("reminders", []))
         now = datetime.now(timezone.utc)
-        triggered: list[tuple[str, str, str, str, str]] = []
+        triggered: list[tuple[str, str, str, str, str, str, list[dict[str, Any]]]] = []
         remaining: list[dict[str, Any]] = []
 
         for r in reminders:
@@ -1190,11 +1190,90 @@ class EmotionalGroupChatEngine:
                     user_id = r.get("user_id", "")
                     user_name = r.get("user_name", "")
                     adapter_type = r.get("adapter_type", "")
-                    triggered.append((gid, content, user_id, user_name, adapter_type))
+                    target = r.get("target", "user")
+                    skill_chain = r.get("skill_chain")
+                    skill_results: list[dict[str, Any]] = []
+                    if skill_chain and self.skill_executor:
+                        logger.info(
+                            "Reminder %s skill_chain start: %d items",
+                            r.get("id"),
+                            len(skill_chain),
+                        )
+                        for item in skill_chain:
+                            if not isinstance(item, dict):
+                                logger.warning(
+                                    "Reminder %s skill_chain skip non-dict item: %s",
+                                    r.get("id"),
+                                    item,
+                                )
+                                continue
+                            skill_name = item.get("skill", "")
+                            params = item.get("params", {}) or {}
+                            if not skill_name:
+                                logger.warning(
+                                    "Reminder %s skill_chain skip empty skill name",
+                                    r.get("id"),
+                                )
+                                continue
+                            try:
+                                logger.info(
+                                    "Reminder %s executing skill: %s(%s)",
+                                    r.get("id"),
+                                    skill_name,
+                                    params,
+                                )
+                                result = await self.skill_executor.execute(
+                                    skill_name=skill_name,
+                                    params=params,
+                                    group_id=gid,
+                                    user_id=user_id,
+                                    user_name=user_name,
+                                )
+                                logger.info(
+                                    "Reminder %s skill %s executed successfully",
+                                    r.get("id"),
+                                    skill_name,
+                                )
+                                skill_results.append(
+                                    {
+                                        "skill": skill_name,
+                                        "params": params,
+                                        "result": result,
+                                    }
+                                )
+                            except Exception as exc:
+                                logger.warning(
+                                    "Reminder %s skill_chain execute failed: %s(%s) -> %s",
+                                    r.get("id"),
+                                    skill_name,
+                                    params,
+                                    exc,
+                                )
+                                skill_results.append(
+                                    {
+                                        "skill": skill_name,
+                                        "params": params,
+                                        "error": str(exc),
+                                    }
+                                )
+                        logger.info(
+                            "Reminder %s skill_chain finished: %d/%d succeeded",
+                            r.get("id"),
+                            sum(1 for sr in skill_results if "error" not in sr),
+                            len(skill_results),
+                        )
+                    triggered.append(
+                        (gid, content, user_id, user_name, adapter_type, target, skill_results)
+                    )
                     r["last_fired_at"] = now.isoformat()
                     r["fire_count"] = r.get("fire_count", 0) + 1
-                    if r.get("mode") == "once":
+                    mode = r.get("mode", "once")
+                    if mode == "once":
                         continue  # Drop one-shot reminders after firing
+                    if mode == "interval":
+                        interval = r.get("minutes_after", 1)
+                        next_fire = now + timedelta(minutes=interval)
+                        r["fire_at"] = next_fire.isoformat()
                 else:
                     logger.warning("Reminder %s has no group_id, skipping", r.get("id"))
             remaining.append(r)
@@ -1203,8 +1282,10 @@ class EmotionalGroupChatEngine:
             store.set("reminders", remaining)
             store.save()
 
-        for gid, content, user_id, user_name, adapter_type in triggered:
-            reply = await self._generate_reminder_message(gid, content, user_id, user_name)
+        for gid, content, user_id, user_name, adapter_type, target, skill_results in triggered:
+            reply = await self._generate_reminder_message(
+                gid, content, user_id, user_name, target, skill_results
+            )
             if reply:
                 self._pending_reminders.setdefault(gid, []).append(
                     {"text": reply, "adapter_type": adapter_type}
@@ -1214,7 +1295,13 @@ class EmotionalGroupChatEngine:
                     self._active_private_groups.add(gid)
 
     async def _generate_reminder_message(
-        self, group_id: str, content: str, user_id: str, user_name: str
+        self,
+        group_id: str,
+        content: str,
+        user_id: str,
+        user_name: str,
+        target: str = "user",
+        skill_results: list[dict[str, Any]] | None = None,
     ) -> str | None:
         """Generate a persona-styled reminder message via LLM."""
         try:
@@ -1223,7 +1310,38 @@ class EmotionalGroupChatEngine:
             if identity:
                 sections.append(identity)
             who = user_name or user_id or "用户"
-            sections.append(f"之前你答应过 {who} 会提醒他，现在时间到了：{content}")
+            if target == "self":
+                sections.append(
+                    f"到时间了，该去做之前答应 {who} 的事了：{content}。"
+                    f"随便说两句就行，不用太正式，就像平时聊天一样。"
+                )
+            else:
+                sections.append(
+                    f"到时间了，该提醒 {who} 了：{content}。"
+                    f"随便说两句就行，不用太正式，就像平时聊天一样。"
+                )
+
+            if skill_results:
+                import json
+
+                results_text = "\n".join(
+                    f"- [{i+1}] {sr['skill']}({json.dumps(sr.get('params', {}), ensure_ascii=False)}): "
+                    f"{json.dumps(sr.get('result') or sr.get('error'), ensure_ascii=False, default=str)}"
+                    for i, sr in enumerate(skill_results)
+                )
+                sections.append(
+                    f"顺便一提，刚才已经执行了这些操作：\n{results_text}\n"
+                    f"有结果的话直接带进去说，不用刻意汇报。"
+                )
+
+            # Inject available skills so the model can chain-call during reminders
+            skill_desc = self.response_assembler._build_skill_descriptions(
+                caller_is_developer=False,
+                adapter_type=self._current_adapter_type or None,
+            )
+            if skill_desc:
+                sections.append(skill_desc)
+
             system_prompt = "\n\n".join(sections)
             messages = [{"role": "user", "content": "（提醒时间到了）"}]
             user_profile = self.semantic_memory.get_global_user_profile(user_id)
@@ -1505,9 +1623,21 @@ class EmotionalGroupChatEngine:
                     caller=skill_caller,
                     developer_profiles=developer_profiles,
                 )
+                logger.info(
+                    "Skill execute: %s(params=%s, caller=%s, group=%s)",
+                    skill_name,
+                    params,
+                    caller_user_id,
+                    group_id,
+                )
                 try:
                     result = await self._skill_executor.execute_async(
                         skill, params, invocation_context=ctx, max_retries=2
+                    )
+                    logger.info(
+                        "Skill execute success: %s -> %s",
+                        skill_name,
+                        "success" if result.success else "failed",
                     )
                     if result.success:
                         if not skill.silent:
@@ -1760,7 +1890,7 @@ class EmotionalGroupChatEngine:
         try:
             state = self._state_store.load_all()
 
-            # Basic memory (fallback: migrate from old working_memories snapshots)
+            # Basic memory
             basic_mem_data = state.get("basic_memory")
             if basic_mem_data:
                 try:
@@ -1771,17 +1901,6 @@ class EmotionalGroupChatEngine:
                         hard_limit=self.config.get("basic_memory_hard_limit", 30),
                         context_window=self.config.get("basic_memory_context_window", 5),
                     )
-            else:
-                # Migration fallback: load from legacy working_memories format
-                for group_id, entries in state.get("working_memories", {}).items():
-                    for e in entries:
-                        self.basic_memory.add_entry(
-                            group_id=group_id,
-                            user_id=e.get("user_id", "unknown"),
-                            role=e.get("role", "human"),
-                            content=e.get("content", ""),
-                            timestamp=e.get("timestamp"),
-                        )
 
             # Assistant emotion
             ae = state.get("assistant_emotion")
@@ -1845,7 +1964,7 @@ class EmotionalGroupChatEngine:
 
             logger.info(
                 "之前的记忆都找回来啦，一共 %d 个群的上下文我都记得。",
-                len(state.get("working_memories", {})),
+                len(self.basic_memory.list_groups()),
             )
         except Exception as exc:
             logger.warning("状态恢复部分出错，继续尝试加载 proactive 状态: %s", exc)
@@ -3217,6 +3336,27 @@ def _is_reminder_due(reminder: dict[str, Any], now: datetime) -> bool:
         except ValueError:
             return False
         return now >= fire_at
+
+    if mode == "interval":
+        fire_at_str = reminder.get("fire_at")
+        if not fire_at_str:
+            return False
+        try:
+            fire_at = datetime.fromisoformat(str(fire_at_str).replace("Z", "+00:00"))
+        except ValueError:
+            return False
+        if now < fire_at:
+            return False
+        # Avoid duplicate fire within the same minute
+        last_fired = reminder.get("last_fired_at")
+        if last_fired:
+            try:
+                last_dt = datetime.fromisoformat(str(last_fired).replace("Z", "+00:00"))
+                if (now - last_dt).total_seconds() < 60:
+                    return False
+            except ValueError:
+                pass
+        return True
 
     if mode in ("daily", "weekly"):
         time_str = reminder.get("time", "")
