@@ -196,9 +196,80 @@
     </div>
   </div>
 
-  <!-- 记忆与身份 -->
+  <!-- 基础记忆 -->
   <div class="card">
-    <h2>记忆与身份</h2>
+    <h2>基础记忆</h2>
+    <div class="row">
+      <div class="col">
+        <div class="form-group">
+          <label>硬限制（条）</label>
+          <input type="number" id="expBasicMemoryHardLimit" min="10" max="200" value="30">
+        </div>
+      </div>
+      <div class="col">
+        <div class="form-group">
+          <label>上下文窗口（条）</label>
+          <input type="number" id="expBasicMemoryContextWindow" min="1" max="50" value="5">
+        </div>
+      </div>
+      <div class="col">
+        <div class="form-group">
+          <label>日记检索条数</label>
+          <input type="number" id="expDiaryTopK" min="1" max="20" value="5">
+        </div>
+      </div>
+    </div>
+    <div class="row">
+      <div class="col">
+        <div class="form-group">
+          <label>日记 Token 预算</label>
+          <input type="number" id="expDiaryTokenBudget" min="200" max="2000" value="800">
+        </div>
+      </div>
+      <div class="col" style="flex:2">
+        <div class="form-group">
+          <label>群里其他 AI/Bot 名字</label>
+          <input type="text" id="expOtherAINames" placeholder="yuki, 小冰, 逗逗（逗号分隔）">
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 向量存储 -->
+  <div class="card">
+    <h2>向量存储</h2>
+    <div id="vectorStoreStatus" style="font-size:13px;color:var(--text-2)">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+        <span id="vsStatusDot" style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#999"></span>
+        <span id="vsStatusText">加载中...</span>
+      </div>
+      <div class="row" id="vsStatsRow" style="display:none">
+        <div class="col">
+          <div class="form-group">
+            <label>总条目数</label>
+            <div id="vsTotalEntries" style="font-size:18px;font-weight:700;color:var(--text)">—</div>
+          </div>
+        </div>
+        <div class="col">
+          <div class="form-group">
+            <label>模型</label>
+            <div id="vsModelName" style="font-size:14px;color:var(--text)">—</div>
+          </div>
+        </div>
+        <div class="col">
+          <div class="form-group">
+            <label>群组数</label>
+            <div id="vsGroupCount" style="font-size:18px;font-weight:700;color:var(--text)">—</div>
+          </div>
+        </div>
+      </div>
+      <div id="vsGroupList" style="margin-top:8px;display:none"></div>
+    </div>
+  </div>
+
+  <!-- 记忆深度 -->
+  <div class="card">
+    <h2>记忆深度</h2>
     <div class="row">
       <div class="col">
         <div class="form-group">
@@ -208,12 +279,6 @@
             <option value="moderate">中</option>
             <option value="deep">深</option>
           </select>
-        </div>
-      </div>
-      <div class="col" style="flex:2">
-        <div class="form-group">
-          <label>群里其他 AI/Bot 名字</label>
-          <input type="text" id="expOtherAINames" placeholder="yuki, 小冰, 逗逗（逗号分隔）">
         </div>
       </div>
     </div>

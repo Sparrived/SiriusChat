@@ -119,6 +119,7 @@ class WebUIServer:
 
         # Diary entries (per persona)
         self.app.router.add_get("/api/personas/{name}/diary", self.api_persona_diary_get)
+        self.app.router.add_get("/api/personas/{name}/vector-store-status", self.api_persona_vector_store_status_get)
 
         # User semantic profiles (per persona)
         self.app.router.add_get("/api/personas/{name}/users", self.api_persona_users_get)
@@ -457,13 +458,29 @@ class WebUIServer:
         return _json_response({
             "reply_mode": exp.reply_mode,
             "engagement_sensitivity": exp.engagement_sensitivity,
+            "expressiveness": exp.expressiveness,
+            "heat_window_seconds": exp.heat_window_seconds,
             "proactive_enabled": exp.proactive_enabled,
-            "proactive_interval_min": exp.proactive_interval_min,
+            "proactive_interval_seconds": exp.proactive_interval_seconds,
+            "proactive_active_start_hour": exp.proactive_active_start_hour,
+            "proactive_active_end_hour": exp.proactive_active_end_hour,
+            "delay_reply_enabled": exp.delay_reply_enabled,
+            "pending_message_threshold": exp.pending_message_threshold,
+            "min_reply_interval_seconds": exp.min_reply_interval_seconds,
+            "reply_frequency_window_seconds": exp.reply_frequency_window_seconds,
+            "reply_frequency_max_replies": exp.reply_frequency_max_replies,
+            "reply_frequency_exempt_on_mention": exp.reply_frequency_exempt_on_mention,
+            "max_concurrent_llm_calls": exp.max_concurrent_llm_calls,
             "memory_depth": exp.memory_depth,
+            "basic_memory_hard_limit": exp.basic_memory_hard_limit,
+            "basic_memory_context_window": exp.basic_memory_context_window,
+            "diary_top_k": exp.diary_top_k,
+            "diary_token_budget": exp.diary_token_budget,
             "enable_skills": exp.enable_skills,
             "max_skill_rounds": exp.max_skill_rounds,
             "skill_execution_timeout": exp.skill_execution_timeout,
             "auto_install_skill_deps": exp.auto_install_skill_deps,
+            "other_ai_names": exp.other_ai_names,
         })
 
     async def api_experience_post(self, request: web.Request) -> web.Response:
@@ -480,9 +497,15 @@ class WebUIServer:
         exp = PersonaExperienceConfig.load(paths.experience)
 
         for key in (
-            "reply_mode", "engagement_sensitivity", "proactive_enabled",
-            "proactive_interval_min", "memory_depth", "enable_skills",
-            "max_skill_rounds", "skill_execution_timeout", "auto_install_skill_deps",
+            "reply_mode", "engagement_sensitivity", "expressiveness", "heat_window_seconds",
+            "proactive_enabled", "proactive_interval_seconds", "proactive_active_start_hour",
+            "proactive_active_end_hour", "delay_reply_enabled", "pending_message_threshold",
+            "min_reply_interval_seconds", "reply_frequency_window_seconds",
+            "reply_frequency_max_replies", "reply_frequency_exempt_on_mention",
+            "max_concurrent_llm_calls", "memory_depth", "basic_memory_hard_limit",
+            "basic_memory_context_window", "diary_top_k", "diary_token_budget",
+            "enable_skills", "max_skill_rounds", "skill_execution_timeout",
+            "auto_install_skill_deps", "other_ai_names",
         ):
             if key in body:
                 setattr(exp, key, body[key])
@@ -635,6 +658,31 @@ class WebUIServer:
         except Exception as exc:
             LOG.warning("读取日记失败 %s: %s", name, exc)
             return _json_response({"error": str(exc)}, 500)
+
+    # ─── 多人格 API: 向量存储状态 ─────────────────────────
+
+    async def api_persona_vector_store_status_get(self, request: web.Request) -> web.Response:
+        name = _get_name(request)
+        paths = self.persona_manager.get_persona_paths(name)
+        if paths is None:
+            return _json_response({"error": "人格不存在"}, 404)
+
+        from sirius_chat.memory.diary.vector_store import DiaryVectorStore
+
+        vector_db_dir = paths.dir / "diary" / "vector_db"
+        try:
+            vs = DiaryVectorStore(vector_db_dir)
+            stats = vs.get_stats()
+            return _json_response(stats)
+        except Exception as exc:
+            LOG.warning("读取向量存储状态失败 %s: %s", name, exc)
+            return _json_response({
+                "available": False,
+                "total_entries": 0,
+                "groups": [],
+                "model": DiaryVectorStore.MODEL_NAME,
+                "error": str(exc),
+            })
 
     # ─── 多人格 API: 用户画像 ─────────────────────────────
 

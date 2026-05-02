@@ -597,6 +597,65 @@ input:focus, select:focus, textarea:focus {
 .task-hierarchy .th-divider { height:1px; background:var(--border); margin:10px 0; }
 .task-hierarchy .th-group-title { font-size:12px; font-weight:600; color:var(--text-2); text-transform:uppercase; letter-spacing:0.5px; margin-bottom:8px; padding-left:4px; }
 
+/* ── Skills ───────────────────────────────────────── */
+.skill-row {
+  background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+  padding: 14px 16px; margin-bottom: 10px;
+}
+.skill-header {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; margin-bottom: 10px;
+}
+.skill-header-left {
+  display: flex; align-items: center; gap: 10px;
+  flex-wrap: wrap;
+}
+.skill-status {
+  font-size: 11px; padding: 2px 8px; border-radius: 4px;
+  cursor: pointer; font-weight: 500; transition: .15s;
+  user-select: none;
+}
+.skill-status.on {
+  background: rgba(63,185,80,0.15); color: var(--accent-2);
+}
+.skill-status.off {
+  background: var(--surface-3); color: var(--text-2);
+}
+.skill-name {
+  font-size: 15px; font-weight: 600; color: var(--text);
+}
+.skill-version {
+  font-size: 12px; color: var(--text-2);
+}
+.skill-badge {
+  font-size: 11px; padding: 2px 8px; border-radius: 4px;
+  background: var(--surface-2); color: var(--text-2);
+}
+.skill-badge.dev {
+  background: rgba(242,148,35,0.15); color: var(--warn);
+}
+.skill-badge.silent {
+  background: rgba(88,166,255,0.12); color: var(--accent);
+}
+.skill-desc {
+  font-size: 13px; color: var(--text-2); margin-bottom: 10px;
+  line-height: 1.5;
+}
+.skill-meta {
+  display: flex; gap: 12px; flex-wrap: wrap;
+  font-size: 12px; color: var(--text-2);
+  align-items: center;
+}
+.skill-meta-item {
+  display: flex; align-items: center; gap: 5px;
+}
+.skill-tag {
+  font-size: 11px; padding: 2px 8px; border-radius: 4px;
+  background: var(--surface-2); color: var(--text-2);
+}
+.skill-actions { display: flex; gap: 6px; align-items: center; }
+.skill-actions .btn { padding: 5px 10px; font-size: 12px; }
+
 /* Section bar grouping */
 .section-bar-group { font-weight:600; }
 .section-bar-group .section-bar-label { color:var(--text); }

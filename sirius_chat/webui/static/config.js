@@ -635,9 +635,14 @@ async function loadExperience() {
     $('expMaxSkillRounds').value = e.max_skill_rounds ?? 3;
     $('expSkillTimeout').value = e.skill_execution_timeout ?? 30;
     $('expAutoInstallDeps').value = String(e.auto_install_skill_deps !== false);
+    $('expBasicMemoryHardLimit').value = e.basic_memory_hard_limit ?? 30;
+    $('expBasicMemoryContextWindow').value = e.basic_memory_context_window ?? 5;
+    $('expDiaryTopK').value = e.diary_top_k ?? 5;
+    $('expDiaryTokenBudget').value = e.diary_token_budget ?? 800;
     $('expMemoryDepth').value = e.memory_depth || 'deep';
     $('expOtherAINames').value = (e.other_ai_names || []).join(', ');
   } catch (e) {}
+  loadVectorStoreStatus();
 }
 
 function updateExpressivenessLabel() {
@@ -688,6 +693,44 @@ function onQuadrantClick(event) {
   updateExpressivenessLabel();
 }
 
+async function loadVectorStoreStatus() {
+  if (!currentPersona) return;
+  const dot = $('vsStatusDot');
+  const text = $('vsStatusText');
+  const statsRow = $('vsStatsRow');
+  const groupList = $('vsGroupList');
+  try {
+    const res = await get(pApi('/vector-store-status'));
+    if (res.available) {
+      dot.style.background = '#2ecc71';
+      text.textContent = 'Chroma 向量存储正常运行';
+      statsRow.style.display = '';
+      $('vsTotalEntries').textContent = String(res.total_entries ?? 0);
+      $('vsModelName').textContent = res.model || '—';
+      const groups = res.groups || [];
+      $('vsGroupCount').textContent = String(groups.length);
+      if (groups.length > 0) {
+        groupList.style.display = '';
+        groupList.innerHTML = groups.map(g =>
+          `<span class="tag">${g.group_id}: ${g.count} 条</span>`
+        ).join('');
+      } else {
+        groupList.style.display = 'none';
+      }
+    } else {
+      dot.style.background = '#e74c3c';
+      text.textContent = 'Chroma 向量存储不可用（未安装 chromadb）';
+      statsRow.style.display = 'none';
+      groupList.style.display = 'none';
+    }
+  } catch (e) {
+    dot.style.background = '#e74c3c';
+    text.textContent = '无法获取向量存储状态';
+    statsRow.style.display = 'none';
+    groupList.style.display = 'none';
+  }
+}
+
 async function saveExperience() {
   if (!currentPersona) { toast('请先选择人格', 'error'); return; }
   const res = await post(pApi('/experience'), {
@@ -712,6 +755,10 @@ async function saveExperience() {
       skill_execution_timeout: parseFloat($('expSkillTimeout').value),
       auto_install_skill_deps: $('expAutoInstallDeps').value === 'true',
       memory_depth: $('expMemoryDepth').value,
+      basic_memory_hard_limit: parseInt($('expBasicMemoryHardLimit').value, 10),
+      basic_memory_context_window: parseInt($('expBasicMemoryContextWindow').value, 10),
+      diary_top_k: parseInt($('expDiaryTopK').value, 10),
+      diary_token_budget: parseInt($('expDiaryTokenBudget').value, 10),
       other_ai_names: $('expOtherAINames').value.split(',').map(s => s.trim()).filter(Boolean),
     }
   });
@@ -799,6 +846,11 @@ async function openSkillConfig(name) {
     const enabled = res.enabled !== false;
     _currentSkillConfig = { name, meta, config, enabled };
 
+    const modal = $('skillConfigModal');
+    if (modal.parentElement !== document.body) {
+      document.body.appendChild(modal);
+    }
+
     $('skillConfigTitle').textContent = `${name} 配置`;
     const body = $('skillConfigBody');
 
@@ -817,7 +869,8 @@ async function openSkillConfig(name) {
     if (params.length) {
       html += '<div style="border-top:1px solid var(--border);padding-top:16px;margin-top:16px"><h4 style="margin:0 0 12px;font-size:14px">运行时参数</h4>';
       params.forEach((p) => {
-        const val = config[p.name] !== undefined ? config[p.name] : (p.default !== undefined ? p.default : '');
+        const raw = config[p.name] !== undefined ? config[p.name] : p.default;
+        const val = raw !== undefined && raw !== null ? raw : '';
         const required = p.required ? ' *' : '';
         html += `<div class="form-group" style="margin-bottom:12px">`;
         html += `<label>${p.name}${required} <span style="color:var(--text-2);font-size:12px">(${p.type})</span></label>`;
