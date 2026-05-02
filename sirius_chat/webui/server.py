@@ -371,8 +371,9 @@ class WebUIServer:
         if paths is None:
             return _json_response({"error": "人格不存在"}, 404)
 
-        store = PersonaStore(paths.persona)
-        profile = store.load()
+        profile = PersonaStore.load(paths.persona)
+        if profile is None:
+            profile = PersonaProfile(name=name)
         return _json_response({
             "name": profile.name,
             "display_name": profile.display_name,
@@ -400,8 +401,9 @@ class WebUIServer:
         if paths is None:
             return _json_response({"error": "人格不存在"}, 404)
 
-        store = PersonaStore(paths.persona)
-        profile = store.load()
+        profile = PersonaStore.load(paths.persona)
+        if profile is None:
+            profile = PersonaProfile(name=name)
 
         for key in (
             "display_name", "description", "system_prompt", "traits",
@@ -411,7 +413,7 @@ class WebUIServer:
             if key in body:
                 setattr(profile, key, body[key])
 
-        store.save(profile)
+        PersonaStore.save(paths.persona, profile)
         return _json_response({"success": True})
 
     # ─── 多人格 API: 模型编排 ─────────────────────────────
@@ -422,8 +424,8 @@ class WebUIServer:
         if paths is None:
             return _json_response({"error": "人格不存在"}, 404)
 
-        orch = OrchestrationStore(paths.orchestration)
-        return _json_response(orch.load().to_dict())
+        data = OrchestrationStore.load(paths.orchestration)
+        return _json_response(data)
 
     async def api_orchestration_post(self, request: web.Request) -> web.Response:
         name = _get_name(request)
@@ -436,14 +438,13 @@ class WebUIServer:
         if paths is None:
             return _json_response({"error": "人格不存在"}, 404)
 
-        orch = OrchestrationStore(paths.orchestration)
-        cfg = orch.load()
+        cfg = OrchestrationStore.load(paths.orchestration)
 
         for key in ("analysis_model", "chat_model", "vision_model", "summary_model"):
             if key in body:
-                setattr(cfg, key, body[key])
+                cfg[key] = body[key]
 
-        orch.save(cfg)
+        OrchestrationStore.save(paths.orchestration, cfg)
         return _json_response({"success": True})
 
     # ─── 多人格 API: 体验配置 ─────────────────────────────
@@ -564,19 +565,38 @@ class WebUIServer:
         if paths is None:
             return _json_response({"error": "人格不存在"}, 404)
 
-        from sirius_chat.token.analytics import TokenAnalytics
+        from sirius_chat.token.store import TokenUsageStore
+        from sirius_chat.token import analytics as token_analytics
 
         db_path = paths.dir / "token_usage.db"
         if not db_path.exists():
             return _json_response({"total": 0, "daily": [], "models": []})
 
         try:
-            analytics = TokenAnalytics(str(db_path))
-            total = analytics.get_total_tokens()
-            daily = analytics.get_daily_tokens(limit=30)
-            models = analytics.get_model_tokens()
+            store = TokenUsageStore(str(db_path))
+            baseline = token_analytics.compute_baseline(store)
+            by_model = token_analytics.group_by_model(store)
+            time_series = token_analytics.time_series(store, bucket_seconds=86400)
+
+            daily = [
+                {
+                    "date": ts["time_bucket"][:10],
+                    "calls": ts["calls"],
+                    "prompt_tokens": ts["prompt_tokens"],
+                    "completion_tokens": ts["completion_tokens"],
+                    "total_tokens": ts["total_tokens"],
+                }
+                for ts in time_series[-30:]
+            ]
+
+            models = [
+                {"model": m, **v}
+                for m, v in by_model.items()
+            ]
+
             return _json_response({
-                "total": total,
+                "total": baseline["total_tokens"],
+                "calls": baseline["total_calls"],
                 "daily": daily,
                 "models": models,
             })

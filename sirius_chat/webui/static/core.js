@@ -69,6 +69,10 @@ function toast(msg, type = 'success') {
 
 async function get(path) {
   const r = await fetch(API + path);
+  if (!r.ok) {
+    const text = await r.text();
+    throw new Error(`HTTP ${r.status} ${r.statusText}: ${text.slice(0, 200)}`);
+  }
   return r.json();
 }
 async function post(path, body) {
@@ -77,6 +81,10 @@ async function post(path, body) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
+  if (!r.ok) {
+    const text = await r.text();
+    throw new Error(`HTTP ${r.status} ${r.statusText}: ${text.slice(0, 200)}`);
+  }
   return r.json();
 }
 
@@ -275,7 +283,7 @@ function selectPersona(name) {
 async function loadPersonaStatus() {
   if (!currentPersona) return;
   try {
-    personaState = await get(pApi(''));
+    personaState = await get(pApi('/status'));
     updateSidebar();
     if (currentPage === 'dashboard') renderPersonaCards();
     if (currentPage === 'global-settings') loadGlobalSettings();

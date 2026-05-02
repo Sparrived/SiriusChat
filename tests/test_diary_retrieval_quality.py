@@ -156,9 +156,12 @@ class TestDiaryRetrievalQuality:
         ids = [r[0].entry_id for r in results]
         # d1 has both semantic similarity and keyword match
         assert "d1" in ids
-        # d1 should rank near-top (fusion boost); mock embeddings are not
-        # deterministic so we only assert it is ahead of the irrelevant d3.
-        assert ids.index("d1") < ids.index("d3")
+        # d3 is semantically irrelevant and has no keyword match,
+        # so it should not outrank d1.  Mock embeddings are not
+        # deterministic, so we only assert d1 is present and d3 is
+        # not ranked higher (or absent).
+        if "d3" in ids:
+            assert ids.index("d1") < ids.index("d3")
 
     def test_group_isolation(self) -> None:
         """Entries from other groups must not leak into search results."""
