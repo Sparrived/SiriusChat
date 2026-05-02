@@ -394,8 +394,9 @@ class CognitionAnalyzer:
         entitlement_score = self._compute_entitlement_score(message, social_intent)
 
         # 8. Synthesize directed score (rule-based 12-dim + LLM semantic)
+        llm_confidence = intent_confidence if llm_result is not None else 0.5
         directed_score = self._synthesize_directed_score(
-            directed_scores, llm_directed_score
+            directed_scores, llm_directed_score, llm_confidence
         )
         # Boost directed_score if sarcasm is detected (sarcasm often targets someone)
         if sarcasm_score >= 0.4:
@@ -1157,18 +1158,18 @@ class CognitionAnalyzer:
     def _synthesize_directed_score(
         rule_scores: dict[str, float],
         llm_score: float | None,
+        llm_confidence: float = 0.8,
     ) -> float:
         """Synthesize final directed_score from rule-based 12-dim + LLM semantic.
 
         Formula:
-            - Structural signals are hard indicators (mention, reply)
-            - Linguistic signals are medium indicators
-            - Semantic signals are soft indicators (need structural/linguistic to activate)
-            - Contextual signals are atmosphere boosters
-            - LLM score is a semantic override when no structural signals exist
+            - mention_score >= 0.5: explicit @AI → strong LLM trust (confidence-aware)
+            - structural < 0.3: implicit directedness → conservative LLM trust
+            - otherwise: weak signals → LLM as auxiliary, capped +0.15
         """
+        mention_score = rule_scores.get("mention_score", 0.0)
         structural = max(
-            rule_scores.get("mention_score", 0.0),
+            mention_score,
             rule_scores.get("reference_score", 0.0),
             rule_scores.get("at_all_score", 0.0) * 0.5,
         )
@@ -1191,23 +1192,26 @@ class CognitionAnalyzer:
         base = max(structural, linguistic)
 
         if base >= 0.5:
-            # Strong explicit signals: semantic/contextual are icing on the cake
             score = min(1.0, base + semantic * 0.15 + contextual)
         elif semantic >= 0.6:
-            # No explicit signal, but strong semantic relevance
             score = min(0.7, 0.4 + semantic * 0.3 + contextual)
         else:
             score = base + contextual
 
-        # LLM semantic override: if LLM is confident of directedness
-        # but rules missed it (e.g. implicit "你觉得呢"), trust LLM up to 0.7
+        # LLM semantic override with confidence-aware blending
         if llm_score is not None and llm_score > 0.0:
-            if structural < 0.3 and llm_score >= 0.6:
-                # LLM detected implicit directedness that rules missed
-                score = max(score, min(0.75, llm_score * 0.85))
+            if mention_score >= 0.5 and llm_score >= 0.5:
+                # Explicit @AI: strong trust, but confidence modulates coefficient
+                coef = 0.6 + 0.3 * llm_confidence
+                score = max(score, min(0.92, llm_score * coef))
+            elif structural < 0.3 and llm_score >= 0.6:
+                # Implicit directedness (e.g. "你觉得呢"): conservative trust
+                coef = 0.5 + 0.3 * llm_confidence
+                score = max(score, min(0.75, llm_score * coef))
             else:
-                # Structural signal exists: blend with LLM
-                score = max(score, llm_score * 0.95)
+                # Weak signals: LLM is auxiliary, capped at +0.15 above rule score
+                blend = score * 0.7 + llm_score * 0.3 * llm_confidence
+                score = max(score, min(score + 0.15, blend))
 
         return max(0.0, min(1.0, score))
 
