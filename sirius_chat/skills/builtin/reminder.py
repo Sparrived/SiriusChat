@@ -9,12 +9,12 @@ from typing import Any
 SKILL_META = {
     "name": "reminder",
     "description": (
-        "设置定时提醒，支持一次性、每日、每周重复提醒。"
+        "设置定时提醒，支持一次性、间隔重复、每日、每周重复提醒。"
         "到达指定时间后会通知对应的用户。"
-        "例如：'三分钟后叫我吃饭'、'每天早上8点叫我起床'、'每周一提醒开会'。"
+        "例如：'三分钟后叫我吃饭'、'每10分钟提醒我喝水'、'每天早上8点叫我起床'、'每周一提醒开会'。"
         "可以用 list 查看所有提醒，用 cancel 取消指定提醒。"
     ),
-    "version": "1.0.0",
+    "version": "1.1.0",
     "tags": ["utility", "time"],
     "developer_only": False,
     "dependencies": [],
@@ -31,13 +31,13 @@ SKILL_META = {
         },
         "mode": {
             "type": "str",
-            "description": "触发模式: once(一次性) / daily(每日重复) / weekly(每周重复)",
+            "description": "触发模式: once(一次性) / interval(每隔N分钟重复) / daily(每日重复) / weekly(每周重复)",
             "required": False,
             "default": "once",
         },
         "minutes_after": {
             "type": "int",
-            "description": "几分钟后触发（仅 once 模式，与 trigger_at 二选一）",
+            "description": "几分钟后触发（once/interval 模式必填；once 为一次性，interval 为重复间隔）",
             "required": False,
         },
         "trigger_at": {
@@ -60,6 +60,20 @@ SKILL_META = {
             "description": "提醒任务ID（cancel 时使用，可通过 list 查看）",
             "required": False,
         },
+        "target": {
+            "type": "str",
+            "description": "提醒对象: user(提醒用户去做，默认) / self(提醒你自己去做这件事并告知用户)",
+            "required": False,
+            "default": "user",
+        },
+        "skill_chain": {
+            "type": "list",
+            "description": (
+                "触发提醒时预先执行的 SKILL 调用链，每项为 {\"skill\":\"name\",\"params\":{...}}。"
+                "执行结果会作为上下文输入给模型，供生成提醒消息时参考。"
+            ),
+            "required": False,
+        },
         "adapter_type": {
             "type": "str",
             "description": "指定提醒消息通过哪个 adapter 发送，例如 'napcat'。留空则自动使用创建时的 adapter。",
@@ -79,6 +93,8 @@ def run(
     time: str = "",
     weekday: int = -1,
     reminder_id: str = "",
+    target: str = "user",
+    skill_chain: list[dict[str, Any]] | None = None,
     adapter_type: str = "",
     data_store: Any = None,
     invocation_context: Any = None,
@@ -101,6 +117,8 @@ def run(
             weekday=weekday,
             user_id=user_id,
             user_name=user_name,
+            target=target,
+            skill_chain=skill_chain,
             adapter_type=adapter_type,
             data_store=data_store,
         )
@@ -129,6 +147,8 @@ def _do_create(
     weekday: int,
     user_id: str,
     user_name: str,
+    target: str,
+    skill_chain: list[dict[str, Any]] | None,
     adapter_type: str,
     data_store: Any | None,
 ) -> dict[str, Any]:
@@ -140,33 +160,40 @@ def _do_create(
         }
 
     mode = mode.strip().lower()
-    if mode not in {"once", "daily", "weekly"}:
+    if mode not in {"once", "interval", "daily", "weekly"}:
         return {
             "success": False,
-            "error": f"不支持的触发模式: {mode}，支持 once/daily/weekly",
+            "error": f"不支持的触发模式: {mode}，支持 once/interval/daily/weekly",
             "summary": "创建提醒失败：模式不支持",
         }
+
+    target = target.strip().lower() if target else "user"
+    if target not in {"user", "self"}:
+        target = "user"
 
     now = datetime.now(timezone.utc)
     reminder: dict[str, Any] = {
         "id": f"rem_{uuid.uuid4().hex[:12]}",
         "content": content.strip(),
         "mode": mode,
+        "target": target,
         "user_id": user_id,
         "user_name": user_name,
         "created_at": now.isoformat(),
         "last_fired_at": None,
         "fire_count": 0,
     }
+    if skill_chain:
+        reminder["skill_chain"] = skill_chain
     if adapter_type.strip():
         reminder["adapter_type"] = adapter_type.strip().lower()
 
-    if mode == "once":
+    if mode in ("once", "interval"):
         if minutes_after and minutes_after > 0:
             fire_at = now + timedelta(minutes=minutes_after)
             reminder["fire_at"] = fire_at.isoformat()
             reminder["minutes_after"] = minutes_after
-        elif trigger_at:
+        elif mode == "once" and trigger_at:
             try:
                 dt = datetime.fromisoformat(trigger_at.replace("Z", "+00:00"))
                 reminder["fire_at"] = dt.isoformat()
@@ -177,9 +204,10 @@ def _do_create(
                     "summary": "创建提醒失败：时间格式错误",
                 }
         else:
+            mode_name = "一次性" if mode == "once" else "间隔"
             return {
                 "success": False,
-                "error": "一次性提醒需要指定 minutes_after 或 trigger_at",
+                "error": f"{mode_name}提醒需要指定 minutes_after（最小 1 分钟）",
                 "summary": "创建提醒失败：未指定触发时间",
             }
     elif mode == "daily":
@@ -208,20 +236,24 @@ def _do_create(
 
     _save_reminder(reminder, data_store)
 
-    mode_desc = {"once": "一次性", "daily": "每日", "weekly": "每周"}.get(mode, mode)
+    mode_desc = {"once": "一次性", "interval": "间隔", "daily": "每日", "weekly": "每周"}.get(mode, mode)
     fire_desc = ""
     if mode == "once" and reminder.get("fire_at"):
         fire_desc = f"，将在 {reminder['fire_at']} 触发"
+    elif mode == "interval":
+        fire_desc = f"，每隔 {minutes_after} 分钟提醒一次"
     elif mode in ("daily", "weekly"):
         fire_desc = f"，将在每天 {time} 触发" if mode == "daily" else f"，将在每周{_weekday_name(weekday)} {time} 触发"
 
     who = f"给 {user_name}" if user_name else ""
+    target_desc = "提醒用户" if target == "user" else "提醒自己"
     return {
         "success": True,
         "summary": f"已创建{mode_desc}提醒{who}{fire_desc}",
         "text_blocks": [
             f"✅ 已设置提醒（ID: {reminder['id']}）\n"
             f"对象: {user_name or '未指定'}\n"
+            f"目标: {target_desc}\n"
             f"内容: {reminder['content']}\n"
             f"模式: {mode_desc}{fire_desc}"
         ],

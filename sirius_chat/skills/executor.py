@@ -33,6 +33,38 @@ SKILL_CALL_PATTERN = re.compile(
 )
 
 
+def _extract_balanced_braces(text: str, start: int) -> str | None:
+    """从 text[start] 开始（假设是 '{'），找到匹配的 '}' 位置。"""
+    if start >= len(text) or text[start] != "{":
+        return None
+    depth = 0
+    in_string = False
+    escape = False
+    for i in range(start, len(text)):
+        ch = text[i]
+        if escape:
+            escape = False
+            continue
+        if ch == "\\":
+            escape = True
+            continue
+        if ch == '"' and not in_string:
+            in_string = True
+            continue
+        if ch == '"' and in_string:
+            in_string = False
+            continue
+        if in_string:
+            continue
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start : i + 1]
+    return None
+
+
 def parse_skill_calls(text: str) -> list[tuple[str, dict[str, Any]]]:
     """Extract all SKILL_CALL invocations from text.
 
@@ -49,7 +81,21 @@ def parse_skill_calls(text: str) -> list[tuple[str, dict[str, Any]]]:
                 if isinstance(parsed, dict):
                     params = parsed
             except json.JSONDecodeError:
-                logger.warning("SKILL_CALL参数解析失败: %s", params_raw)
+                # 非贪婪正则可能在嵌套 JSON 中提前截断，尝试用括号深度匹配修正
+                brace_start = text.find("{", match.start())
+                if brace_start != -1:
+                    balanced = _extract_balanced_braces(text, brace_start)
+                    if balanced:
+                        try:
+                            parsed = json.loads(balanced)
+                            if isinstance(parsed, dict):
+                                params = parsed
+                        except json.JSONDecodeError:
+                            logger.warning("SKILL_CALL参数解析失败: %s", balanced)
+                    else:
+                        logger.warning("SKILL_CALL参数解析失败: %s", params_raw)
+                else:
+                    logger.warning("SKILL_CALL参数解析失败: %s", params_raw)
         results.append((skill_name, params))
     return results
 
@@ -150,10 +196,17 @@ class SkillExecutor:
         """
         start_time = time.perf_counter()
         skill_result: SkillResult | None = None
+        logger.info(
+            "Skill execute start: %s(params=%s, caller=%s)",
+            skill.name,
+            params,
+            getattr(invocation_context, "caller", None) if invocation_context else None,
+        )
 
         try:
             if skill._run_func is None:
                 skill_result = SkillResult(success=False, error=f"SKILL '{skill.name}' 没有可执行的 run() 函数")
+                logger.warning("Skill execute failed: %s -> no run() function", skill.name)
                 return skill_result
 
             # Resolve chain-context template placeholders before validation
@@ -166,6 +219,11 @@ class SkillExecutor:
                     skill_result = SkillResult(
                         success=False,
                         error=f"缺少必填参数: {param_def.name}",
+                    )
+                    logger.warning(
+                        "Skill execute failed: %s -> missing required param '%s'",
+                        skill.name,
+                        param_def.name,
                     )
                     return skill_result
 
@@ -182,6 +240,7 @@ class SkillExecutor:
             access_error = validate_skill_access(skill=skill, invocation_context=invocation_context)
             if access_error:
                 skill_result = SkillResult(success=False, error=access_error)
+                logger.warning("Skill execute failed: %s -> access denied: %s", skill.name, access_error)
                 return skill_result
 
             data_store = self._get_data_store(skill.name)
@@ -195,6 +254,8 @@ class SkillExecutor:
                 call_params["bridge"] = bridge
             if injection_plan.accepts("chat_context") and self._chat_context:
                 call_params["chat_context"] = dict(self._chat_context)
+
+            logger.info("Skill execute calling: %s(final_params=%s)", skill.name, call_params)
 
             # Run with optional retry for transient failures
             last_error: Exception | None = None
@@ -210,14 +271,14 @@ class SkillExecutor:
                     data_store.save()
                     skill_result = SkillResult.from_raw_result(result)
                     skill_result.success = True if skill_result.error == "" else skill_result.success
-                    logger.debug(
-                        "SKILL '%s' 执行成功 | summary=%r | text_blocks=%d | "
-                        "multimodal_blocks=%d | internal_metadata=%r",
+                    logger.info(
+                        "Skill execute done: %s -> success=%s | summary=%r | text_blocks=%d | "
+                        "multimodal_blocks=%d",
                         skill.name,
+                        skill_result.success,
                         skill_result.to_display_text()[:200],
                         len(skill_result.text_blocks),
                         len(skill_result.multimodal_blocks),
-                        skill_result.internal_metadata,
                     )
                     break
                 except Exception as exc:
@@ -335,8 +396,15 @@ class SkillExecutor:
     ) -> SkillResult:
         """Execute an async skill directly in the event loop."""
         start_time = time.perf_counter()
+        logger.info(
+            "Skill async execute start: %s(params=%s, caller=%s)",
+            skill.name,
+            params,
+            getattr(invocation_context, "caller", None) if invocation_context else None,
+        )
         try:
             if skill._run_func is None:
+                logger.warning("Skill async execute failed: %s -> no run() function", skill.name)
                 return SkillResult(success=False, error=f"SKILL '{skill.name}' 没有可执行的 run() 函数")
 
             # Resolve chain-context template placeholders before validation
@@ -360,6 +428,8 @@ class SkillExecutor:
             if injection_plan.accepts("chat_context") and self._chat_context:
                 call_params["chat_context"] = dict(self._chat_context)
 
+            logger.info("Skill async execute calling: %s(final_params=%s)", skill.name, call_params)
+
             last_error: Exception | None = None
             skill_result: SkillResult | None = None
             for attempt in range(max_retries + 1):
@@ -368,14 +438,14 @@ class SkillExecutor:
                     data_store.save()
                     skill_result = SkillResult.from_raw_result(result)
                     skill_result.success = True if skill_result.error == "" else skill_result.success
-                    logger.debug(
-                        "SKILL '%s' 执行成功 | summary=%r | text_blocks=%d | "
-                        "multimodal_blocks=%d | internal_metadata=%r",
+                    logger.info(
+                        "Skill async execute done: %s -> success=%s | summary=%r | text_blocks=%d | "
+                        "multimodal_blocks=%d",
                         skill.name,
+                        skill_result.success,
                         skill_result.to_display_text()[:200],
                         len(skill_result.text_blocks),
                         len(skill_result.multimodal_blocks),
-                        skill_result.internal_metadata,
                     )
                     break
                 except Exception as exc:
@@ -410,7 +480,7 @@ class SkillExecutor:
 
             return skill_result if skill_result is not None else SkillResult(success=False, error="未知错误")
         except Exception as exc:
-            logger.error("SKILL '%s' 执行异常: %s", skill.name, exc)
+            logger.error("Skill async execute exception: %s -> %s", skill.name, exc)
             return SkillResult(success=False, error=str(exc))
 
     def save_all_stores(self) -> None:
