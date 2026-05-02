@@ -85,6 +85,7 @@ class WebUIServer:
         self.app.router.add_post("/api/global-config", self.api_global_config_post)
         self.app.router.add_get("/api/providers", self.api_providers_get)
         self.app.router.add_post("/api/providers", self.api_providers_post)
+        self.app.router.add_get("/api/models", self.api_available_models_get)
         self.app.router.add_get("/api/napcat/status", self.api_napcat_status)
         self.app.router.add_post("/api/napcat/install", self.api_napcat_install)
         self.app.router.add_post("/api/napcat/configure", self.api_napcat_configure)
@@ -105,6 +106,8 @@ class WebUIServer:
         self.app.router.add_get("/api/personas/{name}/persona", self.api_persona_get)
         self.app.router.add_post("/api/personas/{name}/persona", self.api_persona_post)
         self.app.router.add_post("/api/personas/{name}/persona/save", self.api_persona_post)
+        self.app.router.add_get("/api/personas/{name}/persona/interview", self.api_persona_interview_get)
+        self.app.router.add_post("/api/personas/{name}/persona/interview", self.api_persona_interview)
         self.app.router.add_get("/api/personas/{name}/orchestration", self.api_orchestration_get)
         self.app.router.add_post("/api/personas/{name}/orchestration", self.api_orchestration_post)
         self.app.router.add_get("/api/personas/{name}/experience", self.api_experience_get)
@@ -442,6 +445,107 @@ class WebUIServer:
 
         PersonaStore.save(paths.persona, profile)
         return _json_response({"success": True})
+
+    async def api_persona_interview_get(self, request: web.Request) -> web.Response:
+        """读取已保存的 interview 问卷答案。"""
+        name = _get_name(request)
+        paths = self.persona_manager.get_persona_paths(name)
+        if paths is None:
+            return _json_response({"error": "人格不存在"}, 404)
+        record_path = paths.dir / "engine_state" / "persona_interview_record.json"
+        pending_path = paths.dir / "engine_state" / "pending_persona_interview.json"
+        try:
+            if record_path.exists():
+                data = json.loads(record_path.read_text(encoding="utf-8"))
+                return _json_response({
+                    "answers": data.get("answers", {}),
+                    "name": data.get("name", ""),
+                    "aliases": data.get("aliases", []),
+                })
+            if pending_path.exists():
+                data = json.loads(pending_path.read_text(encoding="utf-8"))
+                return _json_response({
+                    "answers": data.get("answers", {}),
+                    "name": data.get("name", ""),
+                    "aliases": data.get("aliases", []),
+                })
+            return _json_response({"answers": {}, "name": "", "aliases": []})
+        except Exception as exc:
+            LOG.warning("读取 interview 记录失败: %s", exc)
+            return _json_response({"answers": {}, "name": "", "aliases": []})
+
+    async def api_persona_interview(self, request: web.Request) -> web.Response:
+        """根据问卷答案生成人格。"""
+        name = _get_name(request)
+        try:
+            body = await request.json()
+        except Exception:
+            return _json_response({"error": "Invalid JSON"}, 400)
+        p_name = str(body.get("name", "小星")).strip()
+        answers = body.get("answers", {})
+        aliases = [a.strip() for a in body.get("aliases", []) if isinstance(a, str) and a.strip()]
+        model = str(body.get("model", "gpt-4o-mini")).strip()
+        paths = self.persona_manager.get_persona_paths(name)
+        if paths is None:
+            return _json_response({"error": "人格不存在"}, 404)
+
+        from sirius_chat.providers.routing import AutoRoutingProvider
+        provider_mgr = WorkspaceProviderManager(self.persona_manager.data_path)
+        providers = provider_mgr.load()
+        provider = None
+        if providers:
+            provider = AutoRoutingProvider(providers)
+        try:
+            persona = await generate_persona_from_interview(
+                work_path=paths.dir,
+                provider=provider,
+                name=p_name,
+                answers=answers,
+                aliases=aliases,
+                model=model,
+            )
+            PersonaStore.save(paths.persona, persona)
+            self.persona_manager.reload_persona(name)
+            return _json_response({"success": True, "persona": persona.to_dict()})
+        except Exception as exc:
+            LOG.exception("问卷人格生成失败")
+            return _json_response({"error": str(exc)}, 500)
+
+    def _build_model_choices(self) -> tuple[list[str], list[dict[str, str]]]:
+        """返回 (available_models, model_choices)。"""
+        available_models: list[str] = []
+        model_choices: list[dict[str, str]] = []
+        try:
+            provider_mgr = WorkspaceProviderManager(self.persona_manager.data_path)
+            for cfg in provider_mgr.load().values():
+                if cfg.enabled:
+                    for m in cfg.models:
+                        available_models.append(m)
+                        model_choices.append({
+                            "label": f"{cfg.provider_type}/{m}",
+                            "value": m,
+                        })
+            seen: set[str] = set()
+            deduped_models: list[str] = []
+            deduped_choices: list[dict[str, str]] = []
+            for m, c in zip(available_models, model_choices):
+                if m not in seen:
+                    seen.add(m)
+                    deduped_models.append(m)
+                    deduped_choices.append(c)
+            available_models = deduped_models
+            model_choices = deduped_choices
+        except Exception:
+            pass
+        return available_models, model_choices
+
+    async def api_available_models_get(self, request: web.Request) -> web.Response:
+        """返回全局可用模型列表（含 provider 前缀显示名）。"""
+        available_models, model_choices = self._build_model_choices()
+        return _json_response({
+            "available_models": available_models,
+            "model_choices": model_choices,
+        })
 
     # ─── 多人格 API: 模型编排 ─────────────────────────────
 
