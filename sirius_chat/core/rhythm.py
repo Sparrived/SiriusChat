@@ -187,18 +187,18 @@ class RhythmAnalyzer:
 
     @staticmethod
     def _detect_burst(messages: list[dict[str, Any]]) -> bool:
-        """Detect if a user sent >=3 messages within 30 seconds."""
+        """Detect if a user sent >=4 messages within 15 seconds."""
         from collections import defaultdict
         user_msgs: dict[str, list[datetime]] = defaultdict(list)
-        for m in messages[-10:]:
+        for m in messages[-15:]:
             uid = m.get("user_id", "")
             dt = _parse_ts(m.get("timestamp", ""))
             if uid and dt:
                 user_msgs[uid].append(dt)
         for timestamps in user_msgs.values():
-            if len(timestamps) >= 3:
-                span = (timestamps[-1] - timestamps[-3]).total_seconds()
-                if span <= 30:
+            if len(timestamps) >= 4:
+                span = (timestamps[-1] - timestamps[-4]).total_seconds()
+                if span <= 15:
                     return True
         return False
 

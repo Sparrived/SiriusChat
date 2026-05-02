@@ -328,7 +328,7 @@ class SemanticMemoryManager:
         # Trust score: negative feedback
         # 1. Burst / spam behavior
         if burst_detected:
-            rs.trust_score = round(max(0.1, rs.trust_score - 0.05), 4)
+            rs.trust_score = round(max(0.1, rs.trust_score - 0.02), 4)
 
         # Trust score: long-term decay (inactive for >30 days)
         try:
