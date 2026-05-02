@@ -88,6 +88,9 @@ class WebUIServer:
         self.app.router.add_get("/api/napcat/status", self.api_napcat_status)
         self.app.router.add_post("/api/napcat/install", self.api_napcat_install)
         self.app.router.add_post("/api/napcat/configure", self.api_napcat_configure)
+        self.app.router.add_get("/api/napcat/logs", self.api_napcat_logs)
+        self.app.router.add_get("/api/tokens", self.api_tokens_get)
+        self.app.router.add_get("/api/telemetry", self.api_telemetry_get)
 
         # 多人格 API: 列表 / 创建 / 删除 / 状态
         self.app.router.add_get("/api/personas", self.api_personas_get)
@@ -101,6 +104,7 @@ class WebUIServer:
         # 多人格 API: 配置
         self.app.router.add_get("/api/personas/{name}/persona", self.api_persona_get)
         self.app.router.add_post("/api/personas/{name}/persona", self.api_persona_post)
+        self.app.router.add_post("/api/personas/{name}/persona/save", self.api_persona_post)
         self.app.router.add_get("/api/personas/{name}/orchestration", self.api_orchestration_get)
         self.app.router.add_post("/api/personas/{name}/orchestration", self.api_orchestration_post)
         self.app.router.add_get("/api/personas/{name}/experience", self.api_experience_get)
@@ -376,18 +380,35 @@ class WebUIServer:
             profile = PersonaProfile(name=name)
         return _json_response({
             "name": profile.name,
-            "display_name": profile.display_name,
-            "description": profile.description,
-            "system_prompt": profile.system_prompt,
-            "traits": profile.traits,
-            "speech_style": profile.speech_style,
-            "scenario": profile.scenario,
-            "relationship": profile.relationship,
-            "knowledge": profile.knowledge,
-            "emotions": profile.emotions,
-            "rules": profile.rules,
-            "avatar": profile.avatar,
+            "aliases": profile.aliases,
+            "persona_summary": profile.persona_summary,
+            "full_system_prompt": profile.full_system_prompt,
+            "personality_traits": profile.personality_traits,
+            "backstory": profile.backstory,
+            "core_values": profile.core_values,
+            "flaws": profile.flaws,
+            "motivations": profile.motivations,
+            "communication_style": profile.communication_style,
+            "speech_rhythm": profile.speech_rhythm,
+            "catchphrases": profile.catchphrases,
+            "emoji_preference": profile.emoji_preference,
+            "humor_style": profile.humor_style,
+            "typical_greetings": profile.typical_greetings,
+            "typical_signoffs": profile.typical_signoffs,
+            "emotional_baseline": profile.emotional_baseline,
+            "emotional_range": profile.emotional_range,
+            "empathy_style": profile.empathy_style,
+            "stress_response": profile.stress_response,
+            "boundaries": profile.boundaries,
+            "taboo_topics": profile.taboo_topics,
+            "preferred_topics": profile.preferred_topics,
+            "social_role": profile.social_role,
+            "max_tokens_preference": profile.max_tokens_preference,
+            "temperature_preference": profile.temperature_preference,
+            "reply_frequency": profile.reply_frequency,
             "version": profile.version,
+            "created_at": profile.created_at,
+            "source": profile.source,
         })
 
     async def api_persona_post(self, request: web.Request) -> web.Response:
@@ -406,9 +427,15 @@ class WebUIServer:
             profile = PersonaProfile(name=name)
 
         for key in (
-            "display_name", "description", "system_prompt", "traits",
-            "speech_style", "scenario", "relationship", "knowledge",
-            "emotions", "rules", "avatar",
+            "name", "aliases", "persona_summary", "full_system_prompt",
+            "personality_traits", "backstory", "core_values", "flaws",
+            "motivations", "communication_style", "speech_rhythm",
+            "catchphrases", "emoji_preference", "humor_style",
+            "typical_greetings", "typical_signoffs", "emotional_baseline",
+            "emotional_range", "empathy_style", "stress_response",
+            "boundaries", "taboo_topics", "preferred_topics", "social_role",
+            "max_tokens_preference", "temperature_preference", "reply_frequency",
+            "version", "created_at", "source",
         ):
             if key in body:
                 setattr(profile, key, body[key])
@@ -556,6 +583,118 @@ class WebUIServer:
         flag_path.parent.mkdir(parents=True, exist_ok=True)
         flag_path.write_text("1", encoding="utf-8")
         return _json_response({"success": True, "message": "重载信号已发送"})
+
+    # ─── 全局 API: Token 使用统计（聚合所有人格） ─────────
+
+    async def api_tokens_get(self, request: web.Request) -> web.Response:
+        """Return aggregated token usage across all personas."""
+        from sirius_chat.token.store import TokenUsageStore
+        from sirius_chat.token import analytics as token_analytics
+
+        total_summary = {
+            "total_calls": 0,
+            "total_prompt_tokens": 0,
+            "total_completion_tokens": 0,
+            "total_tokens": 0,
+        }
+        persona_breakdown: list[dict[str, Any]] = []
+
+        for persona_info in self.persona_manager.list_personas():
+            name = persona_info.get("name")
+            if not name:
+                continue
+            paths = self.persona_manager.get_persona_paths(name)
+            if paths is None:
+                continue
+            db_path = paths.dir / "token_usage.db"
+            if not db_path.exists():
+                continue
+            try:
+                store = TokenUsageStore(str(db_path))
+                baseline = token_analytics.compute_baseline(store)
+                total_summary["total_calls"] += baseline.get("total_calls", 0)
+                total_summary["total_prompt_tokens"] += baseline.get("total_prompt_tokens", 0)
+                total_summary["total_completion_tokens"] += baseline.get("total_completion_tokens", 0)
+                total_summary["total_tokens"] += baseline.get("total_tokens", 0)
+                persona_breakdown.append({
+                    "name": name,
+                    "calls": baseline.get("total_calls", 0),
+                    "prompt_tokens": baseline.get("total_prompt_tokens", 0),
+                    "completion_tokens": baseline.get("total_completion_tokens", 0),
+                    "total_tokens": baseline.get("total_tokens", 0),
+                })
+            except Exception as exc:
+                LOG.warning("读取 Token 统计失败 %s: %s", name, exc)
+
+        response_avg: dict[str, Any] = {"total_calls": 0, "avg_total_tokens": 0, "avg_prompt_tokens": 0, "avg_completion_tokens": 0}
+        if total_summary["total_calls"]:
+            response_avg = {
+                "total_calls": total_summary["total_calls"],
+                "avg_total_tokens": round(total_summary["total_tokens"] / total_summary["total_calls"], 1),
+                "avg_prompt_tokens": round(total_summary["total_prompt_tokens"] / total_summary["total_calls"], 1),
+                "avg_completion_tokens": round(total_summary["total_completion_tokens"] / total_summary["total_calls"], 1),
+            }
+
+        return _json_response({
+            "summary": total_summary,
+            "response_avg": response_avg,
+            "personas": persona_breakdown,
+        })
+
+    async def api_telemetry_get(self, request: web.Request) -> web.Response:
+        """Return global skill usage telemetry aggregated across all personas."""
+        all_summaries: dict[str, dict[str, Any]] = {}
+        total_calls = 0
+
+        for persona_info in self.persona_manager.list_personas():
+            name = persona_info.get("name")
+            if not name:
+                continue
+            paths = self.persona_manager.get_persona_paths(name)
+            if paths is None:
+                continue
+            telemetry_path = paths.dir / "skill_data" / ".telemetry.jsonl"
+            if not telemetry_path.exists():
+                continue
+            try:
+                with open(telemetry_path, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        record = json.loads(line)
+                        skill_name = record.get("skill_name", "unknown")
+                        if skill_name not in all_summaries:
+                            all_summaries[skill_name] = {
+                                "calls": 0,
+                                "successes": 0,
+                                "failures": 0,
+                                "total_ms": 0.0,
+                            }
+                        agg = all_summaries[skill_name]
+                        agg["calls"] += 1
+                        total_calls += 1
+                        if record.get("success"):
+                            agg["successes"] += 1
+                        else:
+                            agg["failures"] += 1
+                        agg["total_ms"] += record.get("duration_ms", 0)
+            except Exception as exc:
+                LOG.warning("读取 Telemetry 失败 %s: %s", name, exc)
+
+        skills: dict[str, Any] = {}
+        for skill_name, stats in all_summaries.items():
+            calls = stats["calls"]
+            skills[skill_name] = {
+                "calls": calls,
+                "success_rate": round(stats["successes"] / calls * 100, 1) if calls else 0,
+                "avg_ms": round(stats["total_ms"] / calls, 1) if calls else 0,
+            }
+
+        return _json_response({
+            "total_calls": total_calls,
+            "skills": skills,
+        })
 
     # ─── 多人格 API: Token 使用统计 ───────────────────────
 
@@ -864,6 +1003,19 @@ class WebUIServer:
         except Exception as exc:
             LOG.exception("NapCat 配置失败")
             return _json_response({"success": False, "message": str(exc)}, 500)
+
+    async def api_napcat_logs(self, request: web.Request) -> web.Response:
+        if self.napcat_manager is None:
+            return _json_response({"enabled": False, "logs": []})
+        lines = int(request.query.get("lines", "100"))
+        try:
+            return _json_response({
+                "enabled": True,
+                "logs": self.napcat_manager.get_logs(lines=lines),
+            })
+        except Exception as exc:
+            LOG.warning("读取 NapCat 日志失败: %s", exc)
+            return _json_response({"enabled": True, "logs": [], "error": str(exc)})
 
     # ─── Skill 管理 API 代理方法 ──────────────────────────
     # 这些方法将请求转发到 server_skill_api 模块，保持路由注册简洁
