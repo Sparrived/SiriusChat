@@ -114,7 +114,6 @@ class StyleAdapter:
             if persona.communication_style:
                 style = persona.communication_style.strip().lower()
                 if style == "concise":
-                    max_tokens = min(max_tokens, 80)
                     length_instruction = "请控制在 30 字以内，用1-2句话简洁回复，不要换行。"
                 elif style == "detailed":
                     length_instruction = "可以给出较详细的解释。"

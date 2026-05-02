@@ -171,13 +171,6 @@ class ModelRouter:
         elif heat_level == "hot":
             max_tokens = max(80, int(max_tokens * 0.7))
 
-        # User style adaptation
-        style = (user_communication_style or "").strip().lower()
-        if style == "concise":
-            max_tokens = min(max_tokens, 80)
-        elif style == "detailed":
-            max_tokens = max(max_tokens, min(8192, int(max_tokens * 1.2)))
-
         return TaskConfig(
             model_name=model,
             temperature=round(temperature, 2),

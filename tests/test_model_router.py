@@ -69,25 +69,22 @@ class TestHeatAdaptation:
 
 
 class TestUserStyleAdaptation:
-    def test_concise_caps_tokens(self):
-        router = ModelRouter()
-        cfg = router.resolve("response_generate", user_communication_style="concise")
-        assert cfg.max_tokens <= 80
-
-    def test_detailed_increases_tokens(self):
+    def test_style_does_not_affect_max_tokens(self):
         router = ModelRouter()
         normal = router.resolve("response_generate")
+        concise = router.resolve("response_generate", user_communication_style="concise")
         detailed = router.resolve("response_generate", user_communication_style="detailed")
-        assert detailed.max_tokens > normal.max_tokens
+        assert concise.max_tokens == normal.max_tokens
+        assert detailed.max_tokens == normal.max_tokens
 
-    def test_concise_overrides_heat(self):
+    def test_concise_with_heat_does_not_cap_tokens(self):
         router = ModelRouter()
         cfg = router.resolve(
             "response_generate",
             heat_level="cold",
             user_communication_style="concise",
         )
-        assert cfg.max_tokens <= 80
+        assert cfg.max_tokens == 4096  # base max_tokens, style does not affect it
 
 
 class TestOverrides:
