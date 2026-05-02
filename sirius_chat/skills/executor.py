@@ -78,6 +78,24 @@ class SkillExecutor:
         self._data_stores: dict[str, SkillDataStore] = {}
         self._telemetry = SkillTelemetry(self._layout.skill_data_dir() / ".telemetry.jsonl")
         self._bridges: dict[str, Any] = {}
+        self._chat_context: dict[str, Any] = {}
+
+    def set_chat_context(self, group_id: str = "", user_id: str = "") -> None:
+        """Set current chat context so skills know where they are being invoked from."""
+        is_private = group_id.startswith("private_")
+        if is_private:
+            chat_id = group_id.replace("private_", "").replace("qq_", "")
+            chat_type = "private"
+        else:
+            chat_id = group_id
+            chat_type = "group"
+        self._chat_context = {
+            "group_id": group_id,
+            "user_id": user_id,
+            "chat_type": chat_type,
+            "chat_id": chat_id,
+            "is_private": is_private,
+        }
 
     def set_bridge(self, adapter_type: str, bridge: Any) -> None:
         """Register a platform bridge for a given adapter type."""
@@ -175,6 +193,8 @@ class SkillExecutor:
             bridge = self.get_bridge_for_skill(skill)
             if bridge is not None and injection_plan.accepts("bridge"):
                 call_params["bridge"] = bridge
+            if injection_plan.accepts("chat_context") and self._chat_context:
+                call_params["chat_context"] = dict(self._chat_context)
 
             # Run with optional retry for transient failures
             last_error: Exception | None = None
@@ -337,6 +357,8 @@ class SkillExecutor:
             bridge = self.get_bridge_for_skill(skill)
             if bridge is not None and injection_plan.accepts("bridge"):
                 call_params["bridge"] = bridge
+            if injection_plan.accepts("chat_context") and self._chat_context:
+                call_params["chat_context"] = dict(self._chat_context)
 
             last_error: Exception | None = None
             skill_result: SkillResult | None = None
