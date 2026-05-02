@@ -1,6 +1,6 @@
 # Persona System（人格系统）
 
-> **v0.28+ 新增** — 为 EmotionalGroupChatEngine 提供可配置、可持久化的角色人格。
+> 为 EmotionalGroupChatEngine 提供可配置、可持久化的角色人格。
 
 ## 设计原则
 
@@ -244,6 +244,6 @@ python main.py --engine emotional --persona gentle_caregiver
 }
 ```
 
-## 向后兼容
+## 默认人格
 
-未配置 persona 的 workspace 自动获得 `warm_friend` 默认人格，行为与 v0.27 一致。`PersonaProfile` 的默认名从"助手"改为"小星"。
+未配置 persona 的 workspace 自动获得 `warm_friend` 默认人格。`PersonaProfile` 的默认名是"小星"。
