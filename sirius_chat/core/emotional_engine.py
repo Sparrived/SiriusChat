@@ -52,6 +52,7 @@ def create_emotional_engine(
     provider: Any | None = None,
     persona: Any | None = None,
     config: dict[str, Any] | None = None,
+    vector_store: Any | None = None,
 ) -> "EmotionalGroupChatEngine":
     """Factory for EmotionalGroupChatEngine (v0.28+).
 
@@ -60,6 +61,7 @@ def create_emotional_engine(
         provider: Optional LLM provider for async generation tasks.
         persona: Optional PersonaProfile or string archetype name.
         config: Optional engine configuration dict.
+        vector_store: Optional DiaryVectorStore for persistent embeddings.
 
     Returns:
         Configured EmotionalGroupChatEngine instance.
@@ -70,6 +72,7 @@ def create_emotional_engine(
         provider_async=provider_async,
         persona=persona,
         config=config,
+        vector_store=vector_store,
     )
 
 
@@ -83,10 +86,12 @@ class EmotionalGroupChatEngine:
         provider_async: Any | None = None,
         config: dict[str, Any] | None = None,
         persona: Any | None = None,
+        vector_store: Any | None = None,
     ) -> None:
         self.config = dict(config or {})
         self.provider_async = provider_async
         self.work_path = work_path
+        self._vector_store = vector_store
 
         # Expressiveness regulator (single-knob)
         from sirius_chat.config.models import ExpressivenessConfig
@@ -157,7 +162,7 @@ class EmotionalGroupChatEngine:
             context_window=self.config.get("basic_memory_context_window", 5),
         )
         self.basic_store = BasicMemoryFileStore(work_path)
-        self.diary_manager = DiaryManager(work_path)
+        self.diary_manager = DiaryManager(work_path, vector_store=self._vector_store)
         self.user_manager = UserManager()
         self.identity_resolver = IdentityResolver()
         self.context_assembler = ContextAssembler(

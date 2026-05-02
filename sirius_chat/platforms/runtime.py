@@ -21,6 +21,8 @@ from sirius_chat.core.persona_store import PersonaStore
 from sirius_chat.providers.routing import AutoRoutingProvider, ProviderConfig
 from sirius_chat.skills.registry import SkillRegistry
 from sirius_chat.skills.executor import SkillExecutor
+from sirius_chat.memory.diary.vector_store import DiaryVectorStore
+from sirius_chat.persona_config import PersonaConfigPaths, PersonaExperienceConfig
 from sirius_chat.token.store import TokenUsageStore
 
 LOG = logging.getLogger("sirius.platforms.runtime")
@@ -208,6 +210,15 @@ class EngineRuntime:
             executor.set_bridge(adapter_type, bridge)
             LOG.info("平台 bridge 已注入 skill executor: %s → %s", adapter_type, type(bridge).__name__)
 
+    def _load_experience_config(self) -> PersonaExperienceConfig:
+        """从人格目录加载 experience.json，回退到默认值。"""
+        paths = PersonaConfigPaths(self.work_path)
+        try:
+            return PersonaExperienceConfig.load(paths.experience)
+        except Exception as exc:
+            LOG.debug("加载 experience 配置失败，使用默认值: %s", exc)
+            return PersonaExperienceConfig()
+
     def _build_engine(self) -> EmotionalGroupChatEngine:
         provider = self._build_provider()
         if provider is None:
@@ -217,13 +228,16 @@ class EngineRuntime:
                 "2) 配置项 providers（列表格式）"
             )
 
+        # 优先从 experience.json 读取记忆配置，回退到 plugin_config
+        exp = self._load_experience_config()
+
         config = {
             # v1.0 基础记忆配置
-            "basic_memory_hard_limit": int(self.plugin_config.get("basic_memory_hard_limit", 30)),
-            "basic_memory_context_window": int(self.plugin_config.get("basic_memory_context_window", 5)),
+            "basic_memory_hard_limit": int(self.plugin_config.get("basic_memory_hard_limit", exp.basic_memory_hard_limit)),
+            "basic_memory_context_window": int(self.plugin_config.get("basic_memory_context_window", exp.basic_memory_context_window)),
             # v1.0 日记记忆配置
-            "diary_top_k": int(self.plugin_config.get("diary_top_k", 5)),
-            "diary_token_budget": int(self.plugin_config.get("diary_token_budget", 800)),
+            "diary_top_k": int(self.plugin_config.get("diary_top_k", exp.diary_top_k)),
+            "diary_token_budget": int(self.plugin_config.get("diary_token_budget", exp.diary_token_budget)),
             # 行为控制
             "sensitivity": float(self.plugin_config.get("sensitivity", 0.5)),
             "reply_cooldown_seconds": int(self.plugin_config.get("reply_cooldown_seconds", 12)),
@@ -241,10 +255,18 @@ class EngineRuntime:
             "proactive_developer_min_silence_seconds": int(self.plugin_config.get("proactive_developer_min_silence_seconds", 120)),
         }
 
+        # 创建向量存储（ChromaDB）
+        vector_store = DiaryVectorStore(self.work_path / "diary" / "vector_db")
+        if vector_store.available:
+            LOG.info("日记向量存储已启用: %s", vector_store._persist_dir)
+        else:
+            LOG.warning("日记向量存储未启用，将使用纯内存索引")
+
         engine = create_emotional_engine(
             work_path=self.work_path,
             provider=provider,
             config=config,
+            vector_store=vector_store,
         )
 
         # 尝试恢复状态
