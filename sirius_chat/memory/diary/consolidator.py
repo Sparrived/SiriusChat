@@ -15,12 +15,17 @@ from sirius_chat.memory.diary.models import DiaryEntry
 
 logger = logging.getLogger(__name__)
 
-_MERGE_SYSTEM_PROMPT = """你是群聊日记整理助手。请将以下几条相似日记合并为一条更精炼的日记。
-保留关键信息，去除重复内容，保持时间线清晰。不要编造不存在的信息。
+_MERGE_SYSTEM_PROMPT = """你是群聊日记整理助手。请将以下几条相似日记整合为一条完整的日记。
+
+要求：
+1. 保留所有关键事件、人物、时间点和具体细节，不要省略
+2. 按时间线组织，清晰展现事情的发展脉络
+3. 去除完全重复的内容，但不要过度精简
+4. 不要编造不存在的信息
 
 输出严格 JSON 格式（不要加 markdown 代码块）：
 {
-  "content": "合并后的日记正文",
+  "content": "整合后的日记正文",
   "summary": "一句话摘要",
   "keywords": ["关键词1", "关键词2"]
 }"""
@@ -32,9 +37,9 @@ class DiaryConsolidator:
     def __init__(self, manager: DiaryManager, config: dict[str, Any] | None = None) -> None:
         self.manager = manager
         self.config = dict(config or {})
-        self.threshold = float(self.config.get("diary_merge_similarity_threshold", 0.75))
+        self.threshold = float(self.config.get("diary_merge_similarity_threshold", 0.82))
         self.min_entries = int(self.config.get("diary_consolidation_min_entries", 3))
-        self.max_cluster_size = int(self.config.get("diary_consolidation_max_cluster_size", 5))
+        self.max_cluster_size = int(self.config.get("diary_consolidation_max_cluster_size", 8))
 
     def find_clusters(self, group_id: str) -> list[list[DiaryEntry]]:
         """Find groups of similar diary entries for *group_id*.
@@ -52,6 +57,18 @@ class DiaryConsolidator:
             return []
 
         n = len(indexed)
+
+        # Pre-compute similarity matrix for strict pair-wise clustering
+        sim_matrix: list[list[float]] = [[0.0] * n for _ in range(n)]
+        for i in range(n):
+            for j in range(i + 1, n):
+                sim = DiaryIndexer._cosine_sim(
+                    indexed[i][1].embedding or [],
+                    indexed[j][1].embedding or [],
+                )
+                sim_matrix[i][j] = sim
+                sim_matrix[j][i] = sim
+
         clusters: list[list[DiaryEntry]] = []
         used: set[int] = set()
 
@@ -62,21 +79,15 @@ class DiaryConsolidator:
             for b in range(a + 1, n):
                 if b in used:
                     continue
-                sim = DiaryIndexer._cosine_sim(
-                    indexed[a][1].embedding or [],
-                    indexed[b][1].embedding or [],
-                )
-                if sim >= self.threshold:
+                # Strict: b must be similar to ALL existing members in the cluster
+                if all(sim_matrix[b][c] >= self.threshold for c in cluster_indices):
                     cluster_indices.append(b)
             if len(cluster_indices) >= 2:
                 # Cap cluster size to avoid overly large prompts
                 if len(cluster_indices) > self.max_cluster_size:
                     # Keep the most similar ones to the first entry
                     scored = [
-                        (b, DiaryIndexer._cosine_sim(
-                            indexed[a][1].embedding or [],
-                            indexed[b][1].embedding or [],
-                        ))
+                        (b, sim_matrix[a][b])
                         for b in cluster_indices[1:]
                     ]
                     scored.sort(key=lambda x: x[1], reverse=True)
