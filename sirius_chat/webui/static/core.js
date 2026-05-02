@@ -94,6 +94,7 @@ const pageTitles = {
   orchestration: ['模型编排', 'Configuration / Orchestration'],
   experience: ['体验参数', 'Configuration / Experience'],
   adapters: ['Adapter 配置', 'Configuration / Adapters'],
+  skills: ['Skill 管理', 'Configuration / Skills'],
   napcat: ['NapCat 管理', 'Platform / NapCat'],
   'token-tracker': ['Token 追踪', 'Analytics / Token Tracker'],
   'cognition': ['认知分析', 'Analytics / Cognition'],
@@ -139,6 +140,7 @@ async function navTo(page) {
   if (page === 'orchestration') loadOrchestration();
   if (page === 'experience') loadExperience();
   if (page === 'adapters') loadAdapters();
+  if (page === 'skills') loadSkills();
   if (page === 'providers') _renderProviderDraft();
   if (page === 'napcat') { ncLoadStatus(); ncLoadLogs(); }
   if (page === 'token-tracker') loadTokenTracker();

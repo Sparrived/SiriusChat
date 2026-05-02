@@ -1,4 +1,3 @@
-
 // ── Providers ─────────────────────────────────────────
 const BUILTIN_PROVIDER_TYPES = ['deepseek','aliyun-bailian','bigmodel','siliconflow','volcengine-ark','ytea'];
 const PROVIDER_TYPE_OPTIONS = [
@@ -720,3 +719,190 @@ async function saveExperience() {
   if (res.success) flashSuccess(document.activeElement);
 }
 
+// ── Skills ────────────────────────────────────────────
+let _skillsCache = null;
+let _currentSkillConfig = null;
+
+async function loadSkills() {
+  if (!currentPersona) return;
+  try {
+    const res = await get(pApi('/skills'));
+    const skills = res.skills || [];
+    _skillsCache = skills;
+    renderSkillsList(skills);
+  } catch (e) {
+    console.error('loadSkills', e);
+    $('skillsList').innerHTML = '<div style="color:var(--text-2);padding:12px">加载 Skill 列表失败</div>';
+  }
+}
+
+function renderSkillsList(skills) {
+  const el = $('skillsList');
+  if (!skills.length) {
+    el.innerHTML = '<div style="color:var(--text-2);padding:12px">暂无可用 Skill</div>';
+    return;
+  }
+  el.innerHTML = skills.map((s) => {
+    const enabled = s.enabled !== false;
+    const statusClass = enabled ? 'on' : 'off';
+    const statusText = enabled ? '已启用' : '已禁用';
+    const paramCount = (s.parameters || []).length;
+    const hasConfig = Object.keys(s.config || {}).length > 0;
+    return `
+    <div class="skill-row" data-name="${s.name}">
+      <div class="skill-header">
+        <div class="skill-header-left">
+          <span class="skill-status ${statusClass}" onclick="toggleSkill('${s.name}', ${!enabled})">${statusText}</span>
+          <span class="skill-name">${s.name}</span>
+          ${s.version ? `<span class="skill-version">v${s.version}</span>` : ''}
+          ${s.developer_only ? '<span class="skill-badge dev">开发者</span>' : ''}
+          ${s.silent ? '<span class="skill-badge silent">静默</span>' : ''}
+        </div>
+        <div class="skill-actions">
+          <button class="btn small" onclick="openSkillConfig('${s.name}')">⚙️ 配置</button>
+        </div>
+      </div>
+      <div class="skill-desc">${s.description || '暂无描述'}</div>
+      <div class="skill-meta">
+        ${paramCount ? `<span class="skill-meta-item">📋 ${paramCount} 个参数</span>` : ''}
+        ${hasConfig ? '<span class="skill-meta-item" style="color:var(--accent)">⚙️ 已配置</span>' : ''}
+        ${(s.tags || []).map(t => `<span class="skill-tag">${t}</span>`).join('')}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function toggleSkill(name, enabled) {
+  if (!currentPersona) { toast('请先选择人格', 'error'); return; }
+  try {
+    const res = await post(pApi(`/skills/${name}/toggle`), { enabled });
+    if (res.success) {
+      toast(`${name} ${enabled ? '已启用' : '已禁用'}`, 'success');
+      // 更新缓存并重新渲染
+      const skill = (_skillsCache || []).find(s => s.name === name);
+      if (skill) skill.enabled = enabled;
+      renderSkillsList(_skillsCache || []);
+    } else {
+      toast(res.error || '操作失败', 'error');
+    }
+  } catch (e) {
+    toast('操作失败', 'error');
+  }
+}
+
+async function openSkillConfig(name) {
+  if (!currentPersona) return;
+  try {
+    const res = await get(pApi(`/skills/${name}/config`));
+    const meta = res.meta || {};
+    const config = res.config || {};
+    const enabled = res.enabled !== false;
+    _currentSkillConfig = { name, meta, config, enabled };
+
+    $('skillConfigTitle').textContent = `${name} 配置`;
+    const body = $('skillConfigBody');
+
+    // 启停开关
+    let html = `
+      <div class="form-group" style="margin-bottom:16px">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+          <input type="checkbox" id="skillCfgEnabled" ${enabled ? 'checked' : ''}>
+          <span>启用此 Skill</span>
+        </label>
+      </div>
+    `;
+
+    // 参数配置表单
+    const params = meta.parameters || [];
+    if (params.length) {
+      html += '<div style="border-top:1px solid var(--border);padding-top:16px;margin-top:16px"><h4 style="margin:0 0 12px;font-size:14px">运行时参数</h4>';
+      params.forEach((p) => {
+        const val = config[p.name] !== undefined ? config[p.name] : (p.default !== undefined ? p.default : '');
+        const required = p.required ? ' *' : '';
+        html += `<div class="form-group" style="margin-bottom:12px">`;
+        html += `<label>${p.name}${required} <span style="color:var(--text-2);font-size:12px">(${p.type})</span></label>`;
+        html += `<input type="text" id="skillParam_${p.name}" value="${val}" placeholder="${p.description || ''}">`;
+        if (p.description) {
+          html += `<div style="font-size:12px;color:var(--text-2);margin-top:4px">${p.description}</div>`;
+        }
+        html += `</div>`;
+      });
+      html += '</div>';
+    }
+
+    // 自由配置区域（用于 API Key 等额外配置）
+    html += `
+      <div style="border-top:1px solid var(--border);padding-top:16px;margin-top:16px">
+        <h4 style="margin:0 0 12px;font-size:14px">额外配置（JSON）</h4>
+        <div style="font-size:12px;color:var(--text-2);margin-bottom:8px">用于配置 API Key 等 Skill 专属参数，格式为 JSON 对象</div>
+        <textarea id="skillCfgExtra" rows="4" style="font-family:monospace;font-size:13px" placeholder='{"api_key": "xxx", "base_url": "https://..."}'>${JSON.stringify(config, null, 2)}</textarea>
+      </div>
+    `;
+
+    body.innerHTML = html;
+    $('skillConfigModal').style.display = 'flex';
+  } catch (e) {
+    toast('加载配置失败', 'error');
+  }
+}
+
+function closeSkillConfig() {
+  $('skillConfigModal').style.display = 'none';
+  _currentSkillConfig = null;
+}
+
+async function saveSkillConfig() {
+  if (!_currentSkillConfig || !currentPersona) return;
+  const { name, meta } = _currentSkillConfig;
+  const enabled = $('skillCfgEnabled').checked;
+
+  // 收集参数值
+  const config = {};
+  const params = meta.parameters || [];
+  params.forEach((p) => {
+    const el = $(`skillParam_${p.name}`);
+    if (el) {
+      const v = el.value.trim();
+      if (v !== '') {
+        // 尝试类型转换
+        if (p.type === 'int' || p.type === 'integer') {
+          const n = parseInt(v, 10);
+          if (!isNaN(n)) config[p.name] = n;
+        } else if (p.type === 'float' || p.type === 'number') {
+          const n = parseFloat(v);
+          if (!isNaN(n)) config[p.name] = n;
+        } else if (p.type === 'bool' || p.type === 'boolean') {
+          config[p.name] = v.toLowerCase() === 'true' || v === '1';
+        } else {
+          config[p.name] = v;
+        }
+      }
+    }
+  });
+
+  // 合并额外配置
+  try {
+    const extraText = $('skillCfgExtra').value.trim();
+    if (extraText) {
+      const extra = JSON.parse(extraText);
+      Object.assign(config, extra);
+    }
+  } catch (e) {
+    toast('额外配置 JSON 格式错误', 'error');
+    return;
+  }
+
+  try {
+    const res = await post(pApi(`/skills/${name}/config`), { enabled, config });
+    if (res.success) {
+      toast('配置已保存', 'success');
+      closeSkillConfig();
+      // 刷新列表
+      loadSkills();
+    } else {
+      toast(res.error || '保存失败', 'error');
+    }
+  } catch (e) {
+    toast('保存失败', 'error');
+  }
+}
