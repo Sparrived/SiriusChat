@@ -1,4 +1,4 @@
-"""Built-in NapCat-specific skill for sending images to groups or private chats."""
+"""Built-in NapCat-specific skill for sending images to the current chat."""
 
 from __future__ import annotations
 
@@ -7,22 +7,14 @@ from typing import Any
 
 SKILL_META = {
     "name": "send_image",
-    "description": "发送图片到指定的 QQ 群聊或私聊。仅支持 NapCat 平台。",
+    "description": (
+        "发送图片到当前对话（群聊或私聊）。"
+    ),
     "version": "1.0.0",
     "tags": ["napcat", "image", "messaging"],
     "adapter_types": ["napcat"],
     "dependencies": [],
     "parameters": {
-        "target_type": {
-            "type": "str",
-            "description": "目标类型：group（群聊）或 private（私聊）",
-            "required": True,
-        },
-        "target_id": {
-            "type": "str",
-            "description": "目标群号或 QQ 号",
-            "required": True,
-        },
         "image_path": {
             "type": "str",
             "description": "本地图片绝对路径或网络图片 URL",
@@ -39,18 +31,16 @@ SKILL_META = {
 
 async def run(
     bridge: Any,
-    target_type: str = "",
-    target_id: str = "",
+    chat_context: dict[str, Any] | None = None,
     image_path: str = "",
     caption: str = "",
     **kwargs: Any,
 ) -> dict[str, Any]:
-    """Send an image to a group or private chat via NapCat.
+    """Send an image to the current chat via NapCat.
 
     Args:
         bridge: The NapCatBridge instance injected by SkillExecutor.
-        target_type: "group" or "private".
-        target_id: Group ID or user QQ number.
+        chat_context: Current chat context injected by SkillExecutor.
         image_path: Absolute path to a local image or a remote URL.
         caption: Optional text caption to send before the image.
     """
@@ -69,22 +59,17 @@ async def run(
             "summary": "发送失败：NapCat 适配器未连接",
         }
 
-    target_type = (target_type or "").strip().lower()
-    target_id = (target_id or "").strip()
-    image_path = (image_path or "").strip()
+    chat_context = chat_context or {}
+    target_type = chat_context.get("chat_type", "")
+    target_id = chat_context.get("chat_id", "")
+    if not target_type or not target_id:
+        return {
+            "success": False,
+            "error": "当前对话上下文缺失，无法确定发送目标",
+            "summary": "发送失败：缺少对话上下文",
+        }
 
-    if target_type not in ("group", "private"):
-        return {
-            "success": False,
-            "error": f"无效的目标类型: {target_type}，必须为 group 或 private",
-            "summary": "发送失败：目标类型错误",
-        }
-    if not target_id:
-        return {
-            "success": False,
-            "error": "target_id 不能为空",
-            "summary": "发送失败：缺少目标 ID",
-        }
+    image_path = (image_path or "").strip()
     if not image_path:
         return {
             "success": False,

@@ -1,4 +1,4 @@
-"""Built-in NapCat-specific skill for uploading files to groups or private chats."""
+"""Built-in NapCat-specific skill for uploading files to the current chat."""
 
 from __future__ import annotations
 
@@ -7,22 +7,14 @@ from typing import Any
 
 SKILL_META = {
     "name": "upload_file",
-    "description": "上传本地文件到指定的 QQ 群聊或私聊。仅支持 NapCat 平台。",
+    "description": (
+        "上传本地文件到当前对话（群聊或私聊）"
+    ),
     "version": "1.0.0",
     "tags": ["napcat", "file", "messaging"],
     "adapter_types": ["napcat"],
     "dependencies": [],
     "parameters": {
-        "target_type": {
-            "type": "str",
-            "description": "目标类型：group（群聊）或 private（私聊）",
-            "required": True,
-        },
-        "target_id": {
-            "type": "str",
-            "description": "目标群号或 QQ 号",
-            "required": True,
-        },
         "file_path": {
             "type": "str",
             "description": "本地文件绝对路径",
@@ -39,18 +31,16 @@ SKILL_META = {
 
 async def run(
     bridge: Any,
-    target_type: str = "",
-    target_id: str = "",
+    chat_context: dict[str, Any] | None = None,
     file_path: str = "",
     file_name: str = "",
     **kwargs: Any,
 ) -> dict[str, Any]:
-    """Upload a file to a group or private chat via NapCat.
+    """Upload a file to the current chat via NapCat.
 
     Args:
         bridge: The NapCatBridge instance injected by SkillExecutor.
-        target_type: "group" or "private".
-        target_id: Group ID or user QQ number.
+        chat_context: Current chat context injected by SkillExecutor.
         file_path: Absolute path to a local file.
         file_name: Optional display name for the uploaded file.
     """
@@ -69,22 +59,17 @@ async def run(
             "summary": "上传失败：NapCat 适配器未连接",
         }
 
-    target_type = (target_type or "").strip().lower()
-    target_id = (target_id or "").strip()
-    file_path = (file_path or "").strip()
+    chat_context = chat_context or {}
+    target_type = chat_context.get("chat_type", "")
+    target_id = chat_context.get("chat_id", "")
+    if not target_type or not target_id:
+        return {
+            "success": False,
+            "error": "当前对话上下文缺失，无法确定发送目标",
+            "summary": "上传失败：缺少对话上下文",
+        }
 
-    if target_type not in ("group", "private"):
-        return {
-            "success": False,
-            "error": f"无效的目标类型: {target_type}，必须为 group 或 private",
-            "summary": "上传失败：目标类型错误",
-        }
-    if not target_id:
-        return {
-            "success": False,
-            "error": "target_id 不能为空",
-            "summary": "上传失败：缺少目标 ID",
-        }
+    file_path = (file_path or "").strip()
     if not file_path:
         return {
             "success": False,
