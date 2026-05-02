@@ -19,6 +19,7 @@ class DiaryEntry:
         keywords: Extracted keywords for quick filtering.
         summary: One-line summary (≤50 chars recommended).
         embedding: Semantic vector for RAG retrieval (optional).
+        merge_count: How many times this entry has been merged with others.
     """
 
     entry_id: str
@@ -29,6 +30,7 @@ class DiaryEntry:
     keywords: list[str] = field(default_factory=list)
     summary: str = ""
     embedding: list[float] | None = None
+    merge_count: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -40,6 +42,7 @@ class DiaryEntry:
             "keywords": list(self.keywords),
             "summary": self.summary,
             "embedding": list(self.embedding) if self.embedding else None,
+            "merge_count": self.merge_count,
         }
 
     @classmethod
@@ -54,6 +57,7 @@ class DiaryEntry:
             keywords=list(data.get("keywords", [])),
             summary=data.get("summary", ""),
             embedding=list(emb) if isinstance(emb, list) else None,
+            merge_count=int(data.get("merge_count", 0)),
         )
 
 

@@ -398,9 +398,11 @@ class TokenUsageStore:
         *,
         limit: int = 50,
         offset: int = 0,
+        start_ts: float | None = None,
+        end_ts: float | None = None,
     ) -> list[dict[str, object]]:
         """Return recent records with parsed breakdown dict attached."""
-        records = self.fetch_records_filtered(limit=limit, offset=offset)
+        records = self.fetch_records_filtered(limit=limit, offset=offset, start_ts=start_ts, end_ts=end_ts)
         for rec in records:
             raw = rec.get("breakdown_json", "")
             rec["breakdown"] = {}
@@ -430,10 +432,25 @@ class TokenUsageStore:
         ).fetchone()
         return dict(row) if row else {}
 
-    def get_breakdown_by(self, column: str) -> list[dict[str, Any]]:
+    def get_breakdown_by(
+        self,
+        column: str,
+        *,
+        start_ts: float | None = None,
+        end_ts: float | None = None,
+    ) -> list[dict[str, Any]]:
         """Return token usage grouped by a column (e.g. 'task_name', 'model', 'group_id')."""
         if column not in {"task_name", "model", "group_id", "provider_name", "persona_name"}:
             return []
+        clauses: list[str] = [f"{column} != ''"]
+        params: list[object] = []
+        if start_ts is not None:
+            clauses.append("timestamp >= ?")
+            params.append(start_ts)
+        if end_ts is not None:
+            clauses.append("timestamp <= ?")
+            params.append(end_ts)
+        where = " WHERE " + " AND ".join(clauses)
         conn = self._connect()
         rows = conn.execute(
             f"""SELECT
@@ -442,10 +459,10 @@ class TokenUsageStore:
                 COALESCE(SUM(prompt_tokens), 0) as prompt_tokens,
                 COALESCE(SUM(completion_tokens), 0) as completion_tokens,
                 COALESCE(SUM(total_tokens), 0) as total_tokens
-            FROM token_usage
-            WHERE {column} != ''
+            FROM token_usage{where}
             GROUP BY {column}
-            ORDER BY total_tokens DESC"""
+            ORDER BY total_tokens DESC""",
+            params,
         ).fetchall()
         return [dict(row) for row in rows]
 
@@ -496,55 +513,98 @@ class TokenUsageStore:
         ).fetchall()
         return [dict(row) for row in rows]
 
-    def get_retry_stats(self) -> dict[str, Any]:
+    def get_retry_stats(
+        self,
+        *,
+        start_ts: float | None = None,
+        end_ts: float | None = None,
+    ) -> dict[str, Any]:
         """Return retry rate and total retry count."""
+        clauses: list[str] = []
+        params: list[object] = []
+        if start_ts is not None:
+            clauses.append("timestamp >= ?")
+            params.append(start_ts)
+        if end_ts is not None:
+            clauses.append("timestamp <= ?")
+            params.append(end_ts)
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
         conn = self._connect()
         row = conn.execute(
-            """SELECT
+            f"""SELECT
                 COUNT(*) as total_calls,
                 COALESCE(SUM(retries_used), 0) as total_retries,
                 CASE WHEN COUNT(*) > 0
                     THEN ROUND(SUM(CASE WHEN retries_used > 0 THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 2)
                     ELSE 0.0
                 END as retry_rate_pct
-            FROM token_usage"""
+            FROM token_usage{where}""",
+            params,
         ).fetchone()
         return dict(row) if row else {"total_calls": 0, "total_retries": 0, "retry_rate_pct": 0.0}
 
-    def get_duration_stats(self) -> dict[str, Any]:
+    def get_duration_stats(
+        self,
+        *,
+        start_ts: float | None = None,
+        end_ts: float | None = None,
+    ) -> dict[str, Any]:
         """Return average duration per task."""
+        clauses: list[str] = ["duration_ms > 0"]
+        params: list[object] = []
+        if start_ts is not None:
+            clauses.append("timestamp >= ?")
+            params.append(start_ts)
+        if end_ts is not None:
+            clauses.append("timestamp <= ?")
+            params.append(end_ts)
+        where = " WHERE " + " AND ".join(clauses)
         conn = self._connect()
         rows = conn.execute(
-            """SELECT
+            f"""SELECT
                 task_name,
                 COUNT(*) as calls,
                 ROUND(AVG(duration_ms), 2) as avg_ms,
                 ROUND(MIN(duration_ms), 2) as min_ms,
                 ROUND(MAX(duration_ms), 2) as max_ms
-            FROM token_usage
-            WHERE duration_ms > 0
+            FROM token_usage{where}
             GROUP BY task_name
-            ORDER BY avg_ms DESC"""
+            ORDER BY avg_ms DESC""",
+            params,
         ).fetchall()
         overall = conn.execute(
-            """SELECT
+            f"""SELECT
                 COUNT(*) as calls,
                 ROUND(AVG(duration_ms), 2) as avg_ms,
                 ROUND(MIN(duration_ms), 2) as min_ms,
                 ROUND(MAX(duration_ms), 2) as max_ms
-            FROM token_usage
-            WHERE duration_ms > 0"""
+            FROM token_usage{where}""",
+            params,
         ).fetchone()
         return {
             "by_task": [dict(row) for row in rows],
             "overall": dict(overall) if overall else {"calls": 0, "avg_ms": 0.0, "min_ms": 0.0, "max_ms": 0.0},
         }
 
-    def get_efficiency_stats(self) -> dict[str, Any]:
+    def get_efficiency_stats(
+        self,
+        *,
+        start_ts: float | None = None,
+        end_ts: float | None = None,
+    ) -> dict[str, Any]:
         """Return chars-per-token efficiency metrics."""
+        clauses: list[str] = []
+        params: list[object] = []
+        if start_ts is not None:
+            clauses.append("timestamp >= ?")
+            params.append(start_ts)
+        if end_ts is not None:
+            clauses.append("timestamp <= ?")
+            params.append(end_ts)
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
         conn = self._connect()
         row = conn.execute(
-            """SELECT
+            f"""SELECT
                 COUNT(*) as calls,
                 COALESCE(SUM(input_chars), 0) as total_input_chars,
                 COALESCE(SUM(prompt_tokens), 0) as total_prompt_tokens,
@@ -561,23 +621,38 @@ class TokenUsageStore:
                     THEN ROUND(SUM(completion_tokens) * 1.0 / SUM(prompt_tokens), 2)
                     ELSE 0.0
                 END as output_ratio
-            FROM token_usage"""
+            FROM token_usage{where}""",
+            params,
         ).fetchone()
         return dict(row) if row else {"calls": 0, "chars_per_token": 0.0, "output_chars_per_token": 0.0, "output_ratio": 0.0}
 
-    def get_empty_reply_stats(self) -> dict[str, Any]:
+    def get_empty_reply_stats(
+        self,
+        *,
+        start_ts: float | None = None,
+        end_ts: float | None = None,
+    ) -> dict[str, Any]:
         """Return empty reply rate for response_generate tasks."""
+        clauses: list[str] = ["task_name = 'response_generate'"]
+        params: list[object] = []
+        if start_ts is not None:
+            clauses.append("timestamp >= ?")
+            params.append(start_ts)
+        if end_ts is not None:
+            clauses.append("timestamp <= ?")
+            params.append(end_ts)
+        where = " WHERE " + " AND ".join(clauses)
         conn = self._connect()
         row = conn.execute(
-            """SELECT
+            f"""SELECT
                 COUNT(*) as total_calls,
                 SUM(CASE WHEN completion_tokens = 0 THEN 1 ELSE 0 END) as empty_calls,
                 CASE WHEN COUNT(*) > 0
                     THEN ROUND(SUM(CASE WHEN completion_tokens = 0 THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 2)
                     ELSE 0.0
                 END as empty_rate_pct
-            FROM token_usage
-            WHERE task_name = 'response_generate'"""
+            FROM token_usage{where}""",
+            params,
         ).fetchone()
         return dict(row) if row else {"total_calls": 0, "empty_calls": 0, "empty_rate_pct": 0.0}
 
@@ -595,21 +670,42 @@ class TokenUsageStore:
         ).fetchall()
         return [dict(row) for row in rows]
 
-    def get_failure_stats(self) -> dict[str, Any]:
+    def get_failure_stats(
+        self,
+        *,
+        start_ts: float | None = None,
+        end_ts: float | None = None,
+    ) -> dict[str, Any]:
         """Return failure rate and breakdown by error_type."""
+        clauses: list[str] = []
+        params: list[object] = []
+        if start_ts is not None:
+            clauses.append("timestamp >= ?")
+            params.append(start_ts)
+        if end_ts is not None:
+            clauses.append("timestamp <= ?")
+            params.append(end_ts)
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
         conn = self._connect()
         overall = conn.execute(
-            """SELECT
+            f"""SELECT
                 COUNT(*) as total_calls,
                 SUM(CASE WHEN error_type != '' THEN 1 ELSE 0 END) as failure_calls
-            FROM token_usage"""
+            FROM token_usage{where}""",
+            params,
         ).fetchone()
+        by_type_where = ["error_type != ''"]
+        if start_ts is not None:
+            by_type_where.append("timestamp >= ?")
+        if end_ts is not None:
+            by_type_where.append("timestamp <= ?")
+        by_type_sql = " WHERE " + " AND ".join(by_type_where)
         by_type = conn.execute(
-            """SELECT error_type as name, COUNT(*) as calls
-            FROM token_usage
-            WHERE error_type != ''
+            f"""SELECT error_type as name, COUNT(*) as calls
+            FROM token_usage{by_type_sql}
             GROUP BY error_type
-            ORDER BY calls DESC"""
+            ORDER BY calls DESC""",
+            params,
         ).fetchall()
         return {
             "total_calls": overall[0] if overall else 0,
@@ -618,29 +714,59 @@ class TokenUsageStore:
             "by_type": [dict(row) for row in by_type],
         }
 
-    def get_conversation_depth_stats(self) -> dict[str, Any]:
+    def get_conversation_depth_stats(
+        self,
+        *,
+        start_ts: float | None = None,
+        end_ts: float | None = None,
+    ) -> dict[str, Any]:
         """Return average and max conversation depth for response_generate."""
+        clauses: list[str] = ["task_name = 'response_generate'", "conversation_depth > 0"]
+        params: list[object] = []
+        if start_ts is not None:
+            clauses.append("timestamp >= ?")
+            params.append(start_ts)
+        if end_ts is not None:
+            clauses.append("timestamp <= ?")
+            params.append(end_ts)
+        where = " WHERE " + " AND ".join(clauses)
         conn = self._connect()
         row = conn.execute(
-            """SELECT
+            f"""SELECT
                 COUNT(*) as calls,
                 ROUND(AVG(conversation_depth), 2) as avg_depth,
                 MAX(conversation_depth) as max_depth
-            FROM token_usage
-            WHERE task_name = 'response_generate' AND conversation_depth > 0"""
+            FROM token_usage{where}""",
+            params,
         ).fetchone()
         return dict(row) if row else {"calls": 0, "avg_depth": 0.0, "max_depth": 0}
 
-    def get_period_comparison(self, *, current_seconds: float = 86400, previous_seconds: float = 86400) -> dict[str, Any]:
+    def get_period_comparison(
+        self,
+        *,
+        current_seconds: float = 86400,
+        previous_seconds: float = 86400,
+        start_ts: float | None = None,
+        end_ts: float | None = None,
+    ) -> dict[str, Any]:
         """Compare token usage between current and previous period.
 
         Returns percentage change for key metrics.
         """
         conn = self._connect()
         now = time.time()
-        current_start = now - current_seconds
-        previous_start = now - current_seconds - previous_seconds
-        previous_end = now - current_seconds
+        # When explicit range is provided, compare that range vs previous equal-length range
+        if start_ts is not None and end_ts is not None:
+            current_start = start_ts
+            current_end = end_ts
+            period_len = current_end - current_start
+            previous_start = current_start - period_len
+            previous_end = current_start
+        else:
+            current_start = now - current_seconds
+            current_end = now
+            previous_start = now - current_seconds - previous_seconds
+            previous_end = now - current_seconds
 
         def _agg(start: float, end: float) -> dict[str, Any]:
             row = conn.execute(
@@ -655,7 +781,7 @@ class TokenUsageStore:
             ).fetchone()
             return dict(row) if row else {"calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
-        current = _agg(current_start, now)
+        current = _agg(current_start, current_end)
         previous = _agg(previous_start, previous_end)
 
         def _pct(curr: int, prev: int) -> float:

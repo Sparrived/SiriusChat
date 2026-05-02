@@ -151,7 +151,13 @@ class EmotionalGroupChatEngine:
             # 多模态覆盖
             "vision": vision_model,
         }
-        # 允许外部通过 config 直接覆盖具体任务模型
+        # 优先使用 orchestration.json 中的 task_models 细粒度覆盖
+        orch_task_models = orch.get("task_models")
+        if isinstance(orch_task_models, dict):
+            for task, model in orch_task_models.items():
+                if isinstance(model, str) and model.strip():
+                    self._task_models[task] = model.strip()
+        # 允许外部通过 config 直接覆盖具体任务模型（最高优先级）
         self._task_models.update(self.config.get("task_models", {}))
 
         # Memory foundation
@@ -195,9 +201,28 @@ class EmotionalGroupChatEngine:
             other_ai_names=self.config.get("other_ai_names", []),
         )
         self.style_adapter = StyleAdapter()
-        task_overrides = {task: {"model_name": model} for task, model in self._task_models.items()}
+        task_overrides: dict[str, dict[str, Any]] = {}
+        orch_task_temperatures = orch.get("task_temperatures")
+        orch_task_max_tokens = orch.get("task_max_tokens")
+        for task, model in self._task_models.items():
+            override: dict[str, Any] = {"model_name": model}
+            if isinstance(orch_task_temperatures, dict):
+                t = orch_task_temperatures.get(task)
+                if isinstance(t, (int, float)):
+                    override["temperature"] = float(t)
+            if isinstance(orch_task_max_tokens, dict):
+                m = orch_task_max_tokens.get(task)
+                if isinstance(m, int):
+                    override["max_tokens"] = m
+            task_overrides[task] = override
+        if self.config.get("task_model_overrides"):
+            for task, patch in self.config["task_model_overrides"].items():
+                if task in task_overrides:
+                    task_overrides[task].update(patch)
+                else:
+                    task_overrides[task] = dict(patch)
         self.model_router = ModelRouter(
-            overrides=task_overrides or self.config.get("task_model_overrides"),
+            overrides=task_overrides,
         )
 
         # Persistence
@@ -768,7 +793,7 @@ class EmotionalGroupChatEngine:
                         system_prompt=system_prompt,
                         messages=[{"role": "user", "content": user_content}],
                         temperature=0.4,
-                        max_tokens=512,
+                        max_tokens=2048,
                         purpose="diary_consolidate",
                     )
                     t0 = time.perf_counter()

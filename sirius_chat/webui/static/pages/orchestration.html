@@ -3,28 +3,39 @@
     <label>当前人格</label>
     <div class="persona-select-bar"></div>
   </div>
+
+  <!-- 通用模型 -->
   <div class="card">
-    <h2>模型编排</h2>
+    <h2>通用模型</h2>
     <div class="row">
       <div class="col">
         <div class="form-group">
           <label>分析模型</label>
-          <select id="orchAnalysis"></select>
+          <select id="orchAnalysis" onchange="onOrchGeneralChanged()"></select>
         </div>
       </div>
       <div class="col">
         <div class="form-group">
           <label>对话生成模型</label>
-          <select id="orchChat"></select>
+          <select id="orchChat" onchange="onOrchGeneralChanged()"></select>
         </div>
       </div>
       <div class="col">
         <div class="form-group">
           <label>多模态模型</label>
-          <select id="orchVision"></select>
+          <select id="orchVision" onchange="onOrchGeneralChanged()"></select>
         </div>
       </div>
     </div>
+  </div>
+
+  <!-- 任务级编排 -->
+  <div class="card">
+    <h2>任务级编排</h2>
+    <div id="orchTaskList"></div>
+  </div>
+
+  <div class="card">
     <button class="btn success" onclick="saveOrchestration()">💾 保存模型编排</button>
   </div>
 </div>

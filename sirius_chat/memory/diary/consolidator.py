@@ -46,6 +46,8 @@ class DiaryConsolidator:
 
         Returns a list of clusters, where each cluster contains 2+ entries
         with pairwise cosine similarity >= threshold.
+        Higher merge_count raises the effective threshold so heavily-merged
+        entries are harder to absorb again.
         """
         entries = self.manager.get_entries_for_group(group_id)
         if len(entries) < self.min_entries:
@@ -79,8 +81,17 @@ class DiaryConsolidator:
             for b in range(a + 1, n):
                 if b in used:
                     continue
+                # Effective threshold rises with the merge_count of existing members
+                # so heavily-merged entries require higher similarity to merge again.
+                effective_threshold = max(
+                    self.threshold,
+                    max(
+                        self.threshold + 0.03 * indexed[c][1].merge_count
+                        for c in cluster_indices
+                    ),
+                )
                 # Strict: b must be similar to ALL existing members in the cluster
-                if all(sim_matrix[b][c] >= self.threshold for c in cluster_indices):
+                if all(sim_matrix[b][c] >= effective_threshold for c in cluster_indices):
                     cluster_indices.append(b)
             if len(cluster_indices) >= 2:
                 # Cap cluster size to avoid overly large prompts
@@ -130,6 +141,9 @@ class DiaryConsolidator:
         for e in cluster:
             all_source_ids.extend(e.source_ids)
 
+        # Merge count = max merge_count in cluster + 1
+        merged_count = max(e.merge_count for e in cluster) + 1
+
         return DiaryEntry(
             entry_id=f"merged_{uuid.uuid4().hex[:12]}",
             group_id=cluster[0].group_id,
@@ -142,6 +156,7 @@ class DiaryConsolidator:
             keywords=keywords,
             summary=summary,
             embedding=None,  # Will be computed on add() if model available
+            merge_count=merged_count,
         )
 
     def rebuild_entries(

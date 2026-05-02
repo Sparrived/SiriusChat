@@ -67,8 +67,8 @@ function toast(msg, type = 'success') {
   setTimeout(() => t.classList.remove('show'), 3000);
 }
 
-async function get(path) {
-  const r = await fetch(API + path);
+async function get(path, signal) {
+  const r = await fetch(API + path, signal ? { signal } : undefined);
   if (!r.ok) {
     const text = await r.text();
     throw new Error(`HTTP ${r.status} ${r.statusText}: ${text.slice(0, 200)}`);
@@ -288,11 +288,12 @@ async function loadPersonaStatus() {
     if (currentPage === 'dashboard') renderPersonaCards();
     if (currentPage === 'global-settings') loadGlobalSettings();
     if (currentPage === 'persona') loadPersonaPreview();
+    if (currentPage === 'create-persona') renderInterviewQuestions();
     if (currentPage === 'orchestration') loadOrchestration();
     if (currentPage === 'experience') loadExperience();
     if (currentPage === 'adapters') loadAdapters();
-    if (currentPage === 'token-tracker') ttLoadData();
-    if (currentPage === 'cognition') loadCognition();
+    if (currentPage === 'token-tracker') await ttLoadData();
+    if (currentPage === 'cognition') await loadCognition();
     if (currentPage === 'diary') diaryLoadData();
     if (currentPage === 'users') loadUsers();
   } catch (e) {
@@ -421,7 +422,9 @@ function renderSectionBars(container, breakdown, breakdownByTask) {
   if (!container) return;
   const rawEntries = Object.entries(breakdown)
     .filter(([k]) => k !== 'total');
+  let chart = echarts.getInstanceByDom(container);
   if (!rawEntries.length || typeof echarts === 'undefined') {
+    if (chart) { chart.dispose(); window.removeEventListener('resize', container._sankeyResize); }
     container.innerHTML = '<div style="color:var(--text-2);padding:12px">暂无模块分布数据</div>';
     return;
   }
@@ -526,7 +529,6 @@ function renderSectionBars(container, breakdown, breakdownByTask) {
   const uniqueNodes = Array.from(nodeMap.values());
 
   // Sankey 数据结构变化大，每次重建实例避免增量更新内部状态错乱
-  let chart = echarts.getInstanceByDom(container);
   if (chart) {
     chart.dispose();
     window.removeEventListener('resize', container._sankeyResize);
@@ -570,11 +572,12 @@ function renderSectionBars(container, breakdown, breakdownByTask) {
 
 function renderTimeSeries(container, hourly) {
   if (!container) return;
+  let chart = echarts.getInstanceByDom(container);
   if (!hourly.length || typeof echarts === 'undefined') {
+    if (chart) { chart.dispose(); window.removeEventListener('resize', container._tsResize); }
     container.innerHTML = '<div style="color:var(--text-2);padding:12px">暂无趋势数据</div>';
     return;
   }
-  let chart = echarts.getInstanceByDom(container);
   if (!chart) {
     chart = echarts.init(container, 'dark');
     const onResize = () => chart.resize();
@@ -648,11 +651,12 @@ function _emotionCn(name) {
 
 function renderEmotionDistribution(container, distribution) {
   if (!container) return;
+  let chart = echarts.getInstanceByDom(container);
   if (!Object.keys(distribution).length || typeof echarts === 'undefined') {
+    if (chart) { chart.dispose(); window.removeEventListener('resize', container._edResize); }
     container.innerHTML = '<div style="color:var(--text-2);padding:12px">暂无情感分布数据</div>';
     return;
   }
-  let chart = echarts.getInstanceByDom(container);
   if (!chart) {
     chart = echarts.init(container, 'dark');
     const onResize = () => chart.resize();
@@ -713,11 +717,12 @@ function renderEmotionDistribution(container, distribution) {
 
 function renderEmotionTimeline(container, events) {
   if (!container) return;
+  let chart = echarts.getInstanceByDom(container);
   if (!events.length || typeof echarts === 'undefined') {
+    if (chart) { chart.dispose(); window.removeEventListener('resize', container._etResize); }
     container.innerHTML = '<div style="color:var(--text-2);padding:12px">暂无情感时间线数据</div>';
     return;
   }
-  let chart = echarts.getInstanceByDom(container);
   if (!chart) {
     chart = echarts.init(container, 'dark');
     const onResize = () => chart.resize();
@@ -793,11 +798,12 @@ function renderEmotionTimeline(container, events) {
 
 function renderActiveHours(container, distribution) {
   if (!container) return;
+  let chart = echarts.getInstanceByDom(container);
   if (!distribution.length || typeof echarts === 'undefined') {
+    if (chart) { chart.dispose(); window.removeEventListener('resize', container._ahResize); }
     container.innerHTML = '<div style="color:var(--text-2);padding:12px">暂无活跃时段数据</div>';
     return;
   }
-  let chart = echarts.getInstanceByDom(container);
   if (!chart) {
     chart = echarts.init(container, 'dark');
     const onResize = () => chart.resize();

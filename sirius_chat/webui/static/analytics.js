@@ -1,5 +1,6 @@
 // ── Token Tracker ─────────────────────────────────────
 let _ttState = { range: 'all', page: 0, data: null };
+let _ttAbort = null;
 
 async function loadTokenTracker() {
   renderPersonaSelect();
@@ -35,6 +36,14 @@ async function ttLoadData() {
   if (!currentPersona) return;
   const name = currentPersona;
 
+  // Cancel previous pending request
+  if (_ttAbort) {
+    _ttAbort.abort();
+    _ttAbort = null;
+  }
+  const controller = new AbortController();
+  _ttAbort = controller;
+
   // Compute time range
   let start = null, end = null;
   const now = Date.now() / 1000;
@@ -53,7 +62,8 @@ async function ttLoadData() {
 
   const qs = start ? `?start=${Math.floor(start)}&end=${Math.floor(end)}` : '';
   try {
-    const res = await get(`/personas/${name}/tokens${qs}`);
+    const res = await get(`/personas/${name}/tokens${qs}`, controller.signal);
+    if (_ttAbort !== controller) return; // stale request
     _ttState.data = res;
 
     // Summary stats
@@ -77,9 +87,12 @@ async function ttLoadData() {
     // Render charts for the currently active tab only
     ttRenderActiveTab();
   } catch (e) {
+    if (e.name === 'AbortError') return;
     console.error('ttLoadData', e);
-    const els = ['ttTimeSeries', 'ttActiveHours', 'ttSectionBreakdown', 'ttTaskHierarchy', 'ttByModel', 'ttByGroup', 'ttByProvider'];
+    const els = ['ttTimeSeries', 'ttActiveHours', 'ttSectionBreakdown', 'ttTaskHierarchy', 'ttByModel', 'ttByGroup', 'ttByProvider', 'ttByTask'];
     els.forEach((id) => { const el = $(id); if (el) el.textContent = '加载失败'; });
+  } finally {
+    if (_ttAbort === controller) _ttAbort = null;
   }
 }
 
@@ -115,6 +128,7 @@ function ttRenderActiveTab() {
       ttRenderDimensionList('ttByModel', res.by_model || []);
       ttRenderDimensionList('ttByGroup', res.by_group || []);
       ttRenderDimensionList('ttByProvider', res.by_provider || []);
+      ttRenderDimensionList('ttByTask', res.by_task || []);
       break;
     case 'detail':
       ttRenderRecentTable();
@@ -125,18 +139,20 @@ function ttRenderActiveTab() {
 function ttRenderDimensionList(containerId, items) {
   const el = $(containerId);
   if (!el) return;
-  if (!items.length) {
-    el.innerHTML = '<div style="color:var(--text-2)">暂无数据</div>';
-    return;
-  }
-  if (typeof echarts === 'undefined') {
-    // Fallback to text list if ECharts not loaded
-    el.innerHTML = items.slice(0, 8).map((it) => `
-      <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--border);font-size:13px">
-        <span style="color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:140px" title="${it.name}">${it.name}</span>
-        <span style="color:var(--text-2);font-family:ui-monospace,monospace">${it.total_tokens || 0}</span>
-      </div>
-    `).join('');
+  let chart = echarts.getInstanceByDom(el);
+  if (!items.length || typeof echarts === 'undefined') {
+    if (chart) { chart.dispose(); window.removeEventListener('resize', el._barResize); }
+    if (!items.length) {
+      el.innerHTML = '<div style="color:var(--text-2)">暂无数据</div>';
+    } else {
+      // Fallback to text list if ECharts not loaded
+      el.innerHTML = items.slice(0, 8).map((it) => `
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--border);font-size:13px">
+          <span style="color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:140px" title="${it.name}">${it.name}</span>
+          <span style="color:var(--text-2);font-family:ui-monospace,monospace">${it.total_tokens || 0}</span>
+        </div>
+      `).join('');
+    }
     return;
   }
 
@@ -149,7 +165,6 @@ function ttRenderDimensionList(containerId, items) {
     completion: it.completion_tokens || 0,
   }));
 
-  let chart = echarts.getInstanceByDom(el);
   if (!chart) {
     chart = echarts.init(el, 'dark');
     const onResize = () => chart.resize();
@@ -220,12 +235,10 @@ function ttRenderDimensionList(containerId, items) {
 function renderTaskHierarchy(containerId, items) {
   const el = $(containerId);
   if (!el) return;
-  if (!items.length) {
+  let chart = echarts.getInstanceByDom(el);
+  if (!items.length || typeof echarts === 'undefined') {
+    if (chart) { chart.dispose(); window.removeEventListener('resize', el._donutResize); }
     el.innerHTML = '<div style="color:var(--text-2)">暂无数据</div>';
-    return;
-  }
-  if (typeof echarts === 'undefined') {
-    el.innerHTML = '<div style="color:var(--text-2)">图表库未加载</div>';
     return;
   }
 
@@ -248,7 +261,6 @@ function renderTaskHierarchy(containerId, items) {
     itemStyle: { color: colors[i % colors.length] },
   }));
 
-  let chart = echarts.getInstanceByDom(el);
   if (!chart) {
     chart = echarts.init(el, 'dark');
     const onResize = () => chart.resize();
@@ -364,7 +376,9 @@ function setRadarMode(mode) {
 function renderDirectedRadar(events) {
   const el = $('cogDirectedRadar');
   if (!el) return;
+  let chart = echarts.getInstanceByDom(el);
   if (!events.length || typeof echarts === 'undefined') {
+    if (chart) { chart.dispose(); window.removeEventListener('resize', el._radarResize); }
     el.innerHTML = '<div style="color:var(--text-2);padding:12px">暂无指向性数据</div>';
     return;
   }
@@ -411,7 +425,6 @@ function renderDirectedRadar(events) {
     seriesName = '平均指向性信号';
   }
 
-  let chart = echarts.getInstanceByDom(el);
   if (!chart) {
     chart = echarts.init(el, 'dark');
     const onResize = () => chart.resize();
@@ -476,6 +489,7 @@ function cogSelectGroup(gid) {
 }
 
 let _cogState = { data: null };
+let _cogAbort = null;
 
 async function loadCognition() {
   renderPersonaSelect();
@@ -483,10 +497,20 @@ async function loadCognition() {
     selectPersona(personas[0].name);
   }
   if (!currentPersona) return;
+
+  // Cancel previous pending request
+  if (_cogAbort) {
+    _cogAbort.abort();
+    _cogAbort = null;
+  }
+  const controller = new AbortController();
+  _cogAbort = controller;
+
   try {
     const groupId = _cogGroupFilter;
     const qs = groupId ? `?group_id=${encodeURIComponent(groupId)}&limit=100` : '?limit=100';
-    const res = await get(`/personas/${currentPersona}/cognition${qs}`);
+    const res = await get(`/personas/${currentPersona}/cognition${qs}`, controller.signal);
+    if (_cogAbort !== controller) return; // stale request
     _cogState.data = res;
     const events = res.events || [];
 
@@ -516,9 +540,12 @@ async function loadCognition() {
     renderEmotionDistribution($('cogEmotionDistribution'), res.emotion_distribution || {});
     renderEmotionTimeline($('cogEmotionTimeline'), events);
   } catch (e) {
+    if (e.name === 'AbortError') return;
     console.error('loadCognition', e);
     const els = ['cogEvents', 'cogDirectedRadar', 'cogEmotionDistribution', 'cogEmotionTimeline'];
     els.forEach((id) => { const el = $(id); if (el) el.textContent = '加载失败'; });
+  } finally {
+    if (_cogAbort === controller) _cogAbort = null;
   }
 }
 

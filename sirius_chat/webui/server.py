@@ -99,6 +99,7 @@ class WebUIServer:
         self.app.router.add_get("/api/personas", self.api_personas_get)
         self.app.router.add_post("/api/personas", self.api_personas_post)
         self.app.router.add_delete("/api/personas/{name}", self.api_personas_delete)
+        self.app.router.add_get("/api/personas/{name}", self.api_persona_get_single)
         self.app.router.add_get("/api/personas/{name}/status", self.api_persona_status_get)
         self.app.router.add_post("/api/personas/{name}/start", self.api_persona_start)
         self.app.router.add_post("/api/personas/{name}/stop", self.api_persona_stop)
@@ -222,20 +223,20 @@ class WebUIServer:
             try:
                 data = json.loads(path.read_text(encoding="utf-8"))
                 # 脱敏：隐藏真实 key，只保留前 4 位
-                masked: dict[str, Any] = {}
-                for k, v in data.items():
-                    if isinstance(v, dict) and "api_key" in v:
-                        key = v["api_key"]
-                        masked[k] = {
+                providers: list[dict[str, Any]] = []
+                raw_providers = data.get("providers", {}) if isinstance(data, dict) else {}
+                for k, v in raw_providers.items():
+                    if isinstance(v, dict):
+                        key = v.get("api_key", "")
+                        providers.append({
                             **v,
+                            "name": k,
                             "api_key": key[:4] + "****" if len(key) > 4 else "****",
-                        }
-                    else:
-                        masked[k] = v
-                return _json_response(masked)
+                        })
+                return _json_response({"providers": providers})
             except Exception:
                 pass
-        return _json_response({})
+        return _json_response({"providers": []})
 
     async def api_providers_post(self, request: web.Request) -> web.Response:
         try:
@@ -251,15 +252,27 @@ class WebUIServer:
             except Exception:
                 pass
 
-        for provider, cfg in body.items():
-            if isinstance(cfg, dict):
-                if provider not in data:
-                    data[provider] = {}
-                for k, v in cfg.items():
-                    # 如果前端传的是脱敏值，不覆盖原值
-                    if k == "api_key" and isinstance(v, str) and "****" in v:
-                        continue
-                    data[provider][k] = v
+        providers_data = body.get("providers", {})
+        if isinstance(providers_data, list):
+            # 前端传的是数组格式，转换为 name -> config 的字典
+            new_providers: dict[str, Any] = {}
+            for cfg in providers_data:
+                if isinstance(cfg, dict) and "name" in cfg:
+                    name = cfg["name"]
+                    new_providers[name] = {k: v for k, v in cfg.items() if k != "name"}
+            providers_data = new_providers
+        if isinstance(providers_data, dict):
+            for provider, cfg in providers_data.items():
+                if isinstance(cfg, dict):
+                    if "providers" not in data:
+                        data["providers"] = {}
+                    if provider not in data["providers"]:
+                        data["providers"][provider] = {}
+                    for k, v in cfg.items():
+                        # 如果前端传的是脱敏值，不覆盖原值
+                        if k == "api_key" and isinstance(v, str) and "****" in v:
+                            continue
+                        data["providers"][provider][k] = v
 
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(path.suffix + ".tmp")
@@ -321,6 +334,35 @@ class WebUIServer:
             return _json_response({"error": str(exc)}, 500)
 
     # ─── 多人格 API: 状态 / 启停 ──────────────────────────
+
+    async def api_persona_get_single(self, request: web.Request) -> web.Response:
+        name = _get_name(request)
+        paths = self.persona_manager.get_persona_paths(name)
+        if paths is None:
+            return _json_response({"error": "人格不存在"}, 404)
+
+        profile = PersonaStore.load(paths.dir)
+        if profile is None:
+            profile = PersonaProfile(name=name)
+
+        status = {"running": False, "pid": None}
+        status_path = paths.engine_state / "worker_status.json"
+        if status_path.exists():
+            try:
+                st = json.loads(status_path.read_text(encoding="utf-8"))
+                status = {
+                    "running": st.get("running", False),
+                    "pid": st.get("pid"),
+                    "started_at": st.get("started_at"),
+                    "last_heartbeat": st.get("last_heartbeat"),
+                }
+            except Exception:
+                pass
+        return _json_response({
+            "name": name,
+            "persona_name": profile.name,
+            "status": status,
+        })
 
     async def api_persona_status_get(self, request: web.Request) -> web.Response:
         name = _get_name(request)
@@ -384,36 +426,38 @@ class WebUIServer:
         if profile is None:
             profile = PersonaProfile(name=name)
         return _json_response({
-            "name": profile.name,
-            "aliases": profile.aliases,
-            "persona_summary": profile.persona_summary,
-            "full_system_prompt": profile.full_system_prompt,
-            "personality_traits": profile.personality_traits,
-            "backstory": profile.backstory,
-            "core_values": profile.core_values,
-            "flaws": profile.flaws,
-            "motivations": profile.motivations,
-            "communication_style": profile.communication_style,
-            "speech_rhythm": profile.speech_rhythm,
-            "catchphrases": profile.catchphrases,
-            "emoji_preference": profile.emoji_preference,
-            "humor_style": profile.humor_style,
-            "typical_greetings": profile.typical_greetings,
-            "typical_signoffs": profile.typical_signoffs,
-            "emotional_baseline": profile.emotional_baseline,
-            "emotional_range": profile.emotional_range,
-            "empathy_style": profile.empathy_style,
-            "stress_response": profile.stress_response,
-            "boundaries": profile.boundaries,
-            "taboo_topics": profile.taboo_topics,
-            "preferred_topics": profile.preferred_topics,
-            "social_role": profile.social_role,
-            "max_tokens_preference": profile.max_tokens_preference,
-            "temperature_preference": profile.temperature_preference,
-            "reply_frequency": profile.reply_frequency,
-            "version": profile.version,
-            "created_at": profile.created_at,
-            "source": profile.source,
+            "persona": {
+                "name": profile.name,
+                "aliases": profile.aliases,
+                "persona_summary": profile.persona_summary,
+                "full_system_prompt": profile.full_system_prompt,
+                "personality_traits": profile.personality_traits,
+                "backstory": profile.backstory,
+                "core_values": profile.core_values,
+                "flaws": profile.flaws,
+                "motivations": profile.motivations,
+                "communication_style": profile.communication_style,
+                "speech_rhythm": profile.speech_rhythm,
+                "catchphrases": profile.catchphrases,
+                "emoji_preference": profile.emoji_preference,
+                "humor_style": profile.humor_style,
+                "typical_greetings": profile.typical_greetings,
+                "typical_signoffs": profile.typical_signoffs,
+                "emotional_baseline": profile.emotional_baseline,
+                "emotional_range": profile.emotional_range,
+                "empathy_style": profile.empathy_style,
+                "stress_response": profile.stress_response,
+                "boundaries": profile.boundaries,
+                "taboo_topics": profile.taboo_topics,
+                "preferred_topics": profile.preferred_topics,
+                "social_role": profile.social_role,
+                "max_tokens_preference": profile.max_tokens_preference,
+                "temperature_preference": profile.temperature_preference,
+                "reply_frequency": profile.reply_frequency,
+                "version": profile.version,
+                "created_at": profile.created_at,
+                "source": profile.source,
+            }
         })
 
     async def api_persona_post(self, request: web.Request) -> web.Response:
@@ -431,6 +475,7 @@ class WebUIServer:
         if profile is None:
             profile = PersonaProfile(name=name)
 
+        persona_data = body.get("persona", body)
         for key in (
             "name", "aliases", "persona_summary", "full_system_prompt",
             "personality_traits", "backstory", "core_values", "flaws",
@@ -442,8 +487,8 @@ class WebUIServer:
             "max_tokens_preference", "temperature_preference", "reply_frequency",
             "version", "created_at", "source",
         ):
-            if key in body:
-                setattr(profile, key, body[key])
+            if key in persona_data:
+                setattr(profile, key, persona_data[key])
 
         PersonaStore.save(paths.dir, profile)
         return _json_response({"success": True})
@@ -558,6 +603,8 @@ class WebUIServer:
             return _json_response({"error": "人格不存在"}, 404)
 
         data = OrchestrationStore.load(paths.dir)
+        _, model_choices = self._build_model_choices()
+        data["model_choices"] = model_choices
         return _json_response(data)
 
     async def api_orchestration_post(self, request: web.Request) -> web.Response:
@@ -577,6 +624,10 @@ class WebUIServer:
             if key in body:
                 cfg[key] = body[key]
 
+        for key in ("task_models", "task_temperatures", "task_max_tokens", "task_enabled"):
+            if key in body and isinstance(body[key], dict):
+                cfg[key] = body[key]
+
         OrchestrationStore.save(paths.dir, cfg)
         return _json_response({"success": True})
 
@@ -590,31 +641,33 @@ class WebUIServer:
 
         exp = PersonaExperienceConfig.load(paths.experience)
         return _json_response({
-            "reply_mode": exp.reply_mode,
-            "engagement_sensitivity": exp.engagement_sensitivity,
-            "expressiveness": exp.expressiveness,
-            "heat_window_seconds": exp.heat_window_seconds,
-            "proactive_enabled": exp.proactive_enabled,
-            "proactive_interval_seconds": exp.proactive_interval_seconds,
-            "proactive_active_start_hour": exp.proactive_active_start_hour,
-            "proactive_active_end_hour": exp.proactive_active_end_hour,
-            "delay_reply_enabled": exp.delay_reply_enabled,
-            "pending_message_threshold": exp.pending_message_threshold,
-            "min_reply_interval_seconds": exp.min_reply_interval_seconds,
-            "reply_frequency_window_seconds": exp.reply_frequency_window_seconds,
-            "reply_frequency_max_replies": exp.reply_frequency_max_replies,
-            "reply_frequency_exempt_on_mention": exp.reply_frequency_exempt_on_mention,
-            "max_concurrent_llm_calls": exp.max_concurrent_llm_calls,
-            "memory_depth": exp.memory_depth,
-            "basic_memory_hard_limit": exp.basic_memory_hard_limit,
-            "basic_memory_context_window": exp.basic_memory_context_window,
-            "diary_top_k": exp.diary_top_k,
-            "diary_token_budget": exp.diary_token_budget,
-            "enable_skills": exp.enable_skills,
-            "max_skill_rounds": exp.max_skill_rounds,
-            "skill_execution_timeout": exp.skill_execution_timeout,
-            "auto_install_skill_deps": exp.auto_install_skill_deps,
-            "other_ai_names": exp.other_ai_names,
+            "experience": {
+                "reply_mode": exp.reply_mode,
+                "engagement_sensitivity": exp.engagement_sensitivity,
+                "expressiveness": exp.expressiveness,
+                "heat_window_seconds": exp.heat_window_seconds,
+                "proactive_enabled": exp.proactive_enabled,
+                "proactive_interval_seconds": exp.proactive_interval_seconds,
+                "proactive_active_start_hour": exp.proactive_active_start_hour,
+                "proactive_active_end_hour": exp.proactive_active_end_hour,
+                "delay_reply_enabled": exp.delay_reply_enabled,
+                "pending_message_threshold": exp.pending_message_threshold,
+                "min_reply_interval_seconds": exp.min_reply_interval_seconds,
+                "reply_frequency_window_seconds": exp.reply_frequency_window_seconds,
+                "reply_frequency_max_replies": exp.reply_frequency_max_replies,
+                "reply_frequency_exempt_on_mention": exp.reply_frequency_exempt_on_mention,
+                "max_concurrent_llm_calls": exp.max_concurrent_llm_calls,
+                "memory_depth": exp.memory_depth,
+                "basic_memory_hard_limit": exp.basic_memory_hard_limit,
+                "basic_memory_context_window": exp.basic_memory_context_window,
+                "diary_top_k": exp.diary_top_k,
+                "diary_token_budget": exp.diary_token_budget,
+                "enable_skills": exp.enable_skills,
+                "max_skill_rounds": exp.max_skill_rounds,
+                "skill_execution_timeout": exp.skill_execution_timeout,
+                "auto_install_skill_deps": exp.auto_install_skill_deps,
+                "other_ai_names": exp.other_ai_names,
+            }
         })
 
     async def api_experience_post(self, request: web.Request) -> web.Response:
@@ -629,6 +682,7 @@ class WebUIServer:
             return _json_response({"error": "人格不存在"}, 404)
 
         exp = PersonaExperienceConfig.load(paths.experience)
+        experience_data = body.get("experience", body)
 
         for key in (
             "reply_mode", "engagement_sensitivity", "expressiveness", "heat_window_seconds",
@@ -641,8 +695,8 @@ class WebUIServer:
             "enable_skills", "max_skill_rounds", "skill_execution_timeout",
             "auto_install_skill_deps", "other_ai_names",
         ):
-            if key in body:
-                setattr(exp, key, body[key])
+            if key in experience_data:
+                setattr(exp, key, experience_data[key])
 
         exp.save(paths.experience)
         return _json_response({"success": True})
@@ -817,11 +871,22 @@ class WebUIServer:
         if not db_path.exists():
             return _json_response({"total": 0, "daily": [], "models": []})
 
+        # Parse optional time range from query params
+        start_ts: float | None = None
+        end_ts: float | None = None
+        try:
+            if request.query.get("start"):
+                start_ts = float(request.query["start"])
+            if request.query.get("end"):
+                end_ts = float(request.query["end"])
+        except ValueError:
+            pass
+
         try:
             store = TokenUsageStore(str(db_path))
-            baseline = token_analytics.compute_baseline(store)
-            by_model = token_analytics.group_by_model(store)
-            time_series = token_analytics.time_series(store, bucket_seconds=86400)
+            baseline = token_analytics.compute_baseline(store, start_ts=start_ts, end_ts=end_ts)
+            by_model = token_analytics.group_by_model(store, start_ts=start_ts, end_ts=end_ts)
+            time_series = token_analytics.time_series(store, bucket_seconds=3600, start_ts=start_ts, end_ts=end_ts)
 
             daily = [
                 {
@@ -839,11 +904,101 @@ class WebUIServer:
                 for m, v in by_model.items()
             ]
 
+            # 转换为前端期望的格式
+            summary = {
+                "total_calls": baseline.get("total_calls", 0),
+                "total_prompt_tokens": baseline.get("total_prompt_tokens", 0),
+                "total_completion_tokens": baseline.get("total_completion_tokens", 0),
+                "total_tokens": baseline.get("total_tokens", 0),
+            }
+            response_avg = {}
+            if summary["total_calls"]:
+                response_avg = {
+                    "total_calls": summary["total_calls"],
+                    "avg_total_tokens": round(summary["total_tokens"] / summary["total_calls"], 1),
+                    "avg_prompt_tokens": round(summary["total_prompt_tokens"] / summary["total_calls"], 1),
+                    "avg_completion_tokens": round(summary["total_completion_tokens"] / summary["total_calls"], 1),
+                }
+
+            # hourly 数据（按小时聚合，用于时间序列图）
+            from datetime import datetime
+            hourly = []
+            for ts in time_series:
+                try:
+                    dt = datetime.fromisoformat(ts["time_bucket"])
+                    hour_ts = int(dt.timestamp())
+                except Exception:
+                    continue
+                hourly.append({
+                    "hour_ts": hour_ts,
+                    "hour": dt.hour,
+                    "calls": ts.get("calls", 0),
+                    "prompt_tokens": ts.get("prompt_tokens", 0),
+                    "completion_tokens": ts.get("completion_tokens", 0),
+                    "total_tokens": ts.get("total_tokens", 0),
+                })
+
+            # hourly_distribution: 按小时聚合的调用分布
+            hourly_distribution: dict[int, int] = {}
+            for h in hourly:
+                hour = h["hour"]
+                hourly_distribution[hour] = hourly_distribution.get(hour, 0) + h["calls"]
+            hourly_distribution_list = [
+                {"hour": h, "calls": c}
+                for h, c in sorted(hourly_distribution.items())
+            ]
+
+            # by_model 转换为前端期望的格式
+            by_model_list = [
+                {
+                    "name": m,
+                    "calls": v.get("calls", 0),
+                    "prompt_tokens": v.get("prompt_tokens", 0),
+                    "completion_tokens": v.get("completion_tokens", 0),
+                    "total_tokens": v.get("total_tokens", 0),
+                }
+                for m, v in by_model.items()
+            ]
+
+            # 查询各维度 breakdown 数据
+            by_group = store.get_breakdown_by("group_id", start_ts=start_ts, end_ts=end_ts)
+            by_provider = store.get_breakdown_by("provider_name", start_ts=start_ts, end_ts=end_ts)
+            by_task = store.get_breakdown_by("task_name", start_ts=start_ts, end_ts=end_ts)
+            section_breakdown = store.get_section_breakdown(start_ts=start_ts, end_ts=end_ts)
+            section_breakdown_by_task = store.get_section_breakdown_by_task(start_ts=start_ts, end_ts=end_ts)
+            recent_with_breakdown = store.get_recent_records_with_breakdown(limit=100, start_ts=start_ts, end_ts=end_ts)
+
+            # 统计指标
+            total_tokens = summary["total_tokens"]
+            prompt_tokens = summary["total_prompt_tokens"]
+            completion_tokens = summary["total_completion_tokens"]
+            ratio = {}
+            if total_tokens:
+                ratio = {
+                    "prompt_pct": round(prompt_tokens * 100.0 / total_tokens, 1),
+                    "completion_pct": round(completion_tokens * 100.0 / total_tokens, 1),
+                }
+
             return _json_response({
-                "total": baseline["total_tokens"],
-                "calls": baseline["total_calls"],
-                "daily": daily,
-                "models": models,
+                "summary": summary,
+                "response_avg": response_avg,
+                "hourly": hourly,
+                "hourly_distribution": hourly_distribution_list,
+                "by_model": by_model_list,
+                "by_group": by_group,
+                "by_provider": by_provider,
+                "by_task": by_task,
+                "section_breakdown": section_breakdown,
+                "section_breakdown_by_task": section_breakdown_by_task,
+                "recent_with_breakdown": recent_with_breakdown,
+                "ratio": ratio,
+                "efficiency_stats": store.get_efficiency_stats(start_ts=start_ts, end_ts=end_ts),
+                "retry_stats": store.get_retry_stats(start_ts=start_ts, end_ts=end_ts),
+                "duration_stats": store.get_duration_stats(start_ts=start_ts, end_ts=end_ts),
+                "empty_reply_stats": store.get_empty_reply_stats(start_ts=start_ts, end_ts=end_ts),
+                "failure_stats": store.get_failure_stats(start_ts=start_ts, end_ts=end_ts),
+                "depth_stats": store.get_conversation_depth_stats(start_ts=start_ts, end_ts=end_ts),
+                "period_comparison": store.get_period_comparison(start_ts=start_ts, end_ts=end_ts),
             })
         except Exception as exc:
             LOG.warning("读取 Token 统计失败 %s: %s", name, exc)
@@ -859,15 +1014,17 @@ class WebUIServer:
 
         db_path = paths.dir / "cognition_events.db"
         if not db_path.exists():
-            return _json_response({"events": []})
+            return _json_response({"events": [], "emotion_distribution": {}})
 
         try:
             from sirius_chat.memory.cognition_store import CognitionEventStore
             store = CognitionEventStore(str(db_path))
             limit = int(request.query.get("limit", "50"))
             events = store.get_recent(limit=limit)
+            group_id = request.query.get("group_id", None)
+            emotion_distribution = store.get_emotion_distribution(group_id=group_id if group_id else None)
             store.close()
-            return _json_response({"events": events})
+            return _json_response({"events": events, "emotion_distribution": emotion_distribution})
         except Exception as exc:
             LOG.warning("读取认知事件失败 %s: %s", name, exc)
             return _json_response({"error": str(exc)}, 500)

@@ -86,6 +86,8 @@ def _build_where(
     actor_id: str | None,
     task_name: str | None,
     model: str | None,
+    start_ts: float | None = None,
+    end_ts: float | None = None,
 ) -> tuple[str, list[object]]:
     clauses: list[str] = []
     params: list[object] = []
@@ -101,6 +103,12 @@ def _build_where(
     if model is not None:
         clauses.append("model = ?")
         params.append(model)
+    if start_ts is not None:
+        clauses.append("timestamp >= ?")
+        params.append(start_ts)
+    if end_ts is not None:
+        clauses.append("timestamp <= ?")
+        params.append(end_ts)
     where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
     return where, params
 
@@ -116,9 +124,11 @@ def compute_baseline(
     actor_id: str | None = None,
     task_name: str | None = None,
     model: str | None = None,
+    start_ts: float | None = None,
+    end_ts: float | None = None,
 ) -> BaselineDict:
     """Compute aggregate baseline statistics with optional filters."""
-    where, params = _build_where(session_id, actor_id, task_name, model)
+    where, params = _build_where(session_id, actor_id, task_name, model, start_ts, end_ts)
     conn = store._connect()
     row = conn.execute(
         f"SELECT {_AGG_COLS} FROM token_usage{where}",
@@ -199,9 +209,11 @@ def group_by_model(
     session_id: str | None = None,
     actor_id: str | None = None,
     task_name: str | None = None,
+    start_ts: float | None = None,
+    end_ts: float | None = None,
 ) -> dict[str, BucketDict]:
     """Aggregate token usage grouped by model."""
-    where, params = _build_where(session_id, actor_id, task_name, None)
+    where, params = _build_where(session_id, actor_id, task_name, None, start_ts, end_ts)
     conn = store._connect()
     rows = conn.execute(
         f"SELECT model, {_AGG_COLS} FROM token_usage{where} GROUP BY model ORDER BY model",
@@ -218,6 +230,8 @@ def time_series(
     actor_id: str | None = None,
     task_name: str | None = None,
     model: str | None = None,
+    start_ts: float | None = None,
+    end_ts: float | None = None,
 ) -> list[TimeSliceDict]:
     """Aggregate token usage into fixed-width time buckets.
 
@@ -226,7 +240,7 @@ def time_series(
     bucket_seconds:
         Width in seconds of each time bucket (default 3600 = 1 hour).
     """
-    where, params = _build_where(session_id, actor_id, task_name, model)
+    where, params = _build_where(session_id, actor_id, task_name, model, start_ts, end_ts)
     conn = store._connect()
     rows = conn.execute(
         f"""SELECT

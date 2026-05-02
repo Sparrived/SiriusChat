@@ -127,6 +127,9 @@ body {
 .sidebar-nav {
   flex: 1; overflow-y: auto; padding: 12px 10px;
 }
+.sidebar-nav::-webkit-scrollbar { width: 6px; }
+.sidebar-nav::-webkit-scrollbar-track { background: transparent; }
+.sidebar-nav::-webkit-scrollbar-thumb { background: var(--surface-3); border-radius: 3px; }
 .nav-group { margin-bottom: 16px; }
 .nav-group-title {
   padding: 6px 14px; font-size: 11px; text-transform: uppercase;
@@ -655,6 +658,16 @@ input:focus, select:focus, textarea:focus {
 }
 .skill-actions { display: flex; gap: 6px; align-items: center; }
 .skill-actions .btn { padding: 5px 10px; font-size: 12px; }
+
+/* ── Orchestration ─────────────────────────────────── */
+.task-row { display:flex; align-items:center; gap:12px; padding:10px 12px; background:var(--bg); border:1px solid var(--border); border-radius:8px; margin-bottom:8px; flex-wrap:wrap; }
+.task-row.disabled { opacity:.5; }
+.task-name { width:160px; font-size:13px; font-weight:500; color:var(--text); white-space:nowrap; display:flex; align-items:center; gap:6px; }
+.task-custom-mark { font-size:10px; padding:1px 6px; border-radius:4px; background:rgba(88,166,255,0.12); color:var(--accent); font-weight:400; }
+.task-model { flex:1; min-width:220px; }
+.task-toggle { width:60px; text-align:center; }
+.task-toggle input[type="checkbox"] { width:18px; height:18px; cursor:pointer; accent-color:var(--accent); }
+.task-group-title { font-size:12px; font-weight:600; color:var(--text-2); text-transform:uppercase; letter-spacing:.5px; margin:16px 0 8px 4px; }
 
 /* Section bar grouping */
 .section-bar-group { font-weight:600; }

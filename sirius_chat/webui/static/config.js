@@ -347,25 +347,151 @@ async function loadAvailableModels() {
   } catch (e) {}
 }
 
+const ORCH_GENERAL_MAP = {
+  analysis_model: ['emotion_analyze', 'intent_analyze', 'cognition_analyze', 'memory_extract'],
+  chat_model: ['response_generate', 'proactive_generate', 'empathy_generate'],
+  vision_model: ['vision', 'memory_manager', 'event_extract'],
+};
+
+const ORCH_TASK_GROUPS = [
+  {
+    title: '分析类',
+    generalKey: 'analysis_model',
+    tasks: [
+      { key: 'emotion_analyze', label: '情感分析' },
+      { key: 'intent_analyze', label: '意图分析' },
+      { key: 'cognition_analyze', label: '认知分析' },
+      { key: 'memory_extract', label: '记忆提取' },
+    ],
+  },
+  {
+    title: '生成类',
+    generalKey: 'chat_model',
+    tasks: [
+      { key: 'response_generate', label: '回复生成' },
+      { key: 'proactive_generate', label: '主动发言' },
+      { key: 'empathy_generate', label: '共情回复' },
+    ],
+  },
+  {
+    title: '其他',
+    generalKey: 'vision_model',
+    tasks: [
+      { key: 'vision', label: '多模态' },
+      { key: 'memory_manager', label: '记忆管理' },
+      { key: 'event_extract', label: '事件提取' },
+    ],
+  },
+];
+
+let _orchChoices = [];
+let _orchData = {};
+
+function _getGeneralModel(generalKey) {
+  const sel = $({
+    analysis_model: 'orchAnalysis',
+    chat_model: 'orchChat',
+    vision_model: 'orchVision',
+  }[generalKey]);
+  return sel ? sel.value : '';
+}
+
+function _buildTaskRow(task, choices, data) {
+  const tm = data.task_models || {};
+  const te = data.task_enabled || {};
+  const model = tm[task.key] || '';
+  const enabled = te[task.key] !== false;
+  const modelSelect = `<select id="orchTaskModel_${task.key}" class="task-model">` +
+    `<option value="">继承通用</option>` +
+    choices.map(c => {
+      const val = typeof c === 'string' ? c : c.value;
+      const label = typeof c === 'string' ? c : c.label;
+      return `<option value="${val}"${val === model ? ' selected' : ''}>${label}</option>`;
+    }).join('') +
+    `</select>`;
+  const customMark = model ? '<span class="task-custom-mark">自定义</span>' : '';
+  return `<div class="task-row${enabled ? '' : ' disabled'}" id="orchTaskRow_${task.key}">` +
+    `<div class="task-name">${task.label}${customMark}</div>` +
+    `<div class="task-model">${modelSelect}</div>` +
+    `<div class="task-toggle"><input type="checkbox" id="orchTaskEnabled_${task.key}"${enabled ? ' checked' : ''} onchange="onOrchTaskToggle('${task.key}')"></div>` +
+    `</div>`;
+}
+
+function renderOrchestration() {
+  const container = $('orchTaskList');
+  if (!container) return;
+  const choices = _orchChoices;
+  const data = _orchData;
+  container.innerHTML = ORCH_TASK_GROUPS.map(g => {
+    const rows = g.tasks.map(t => _buildTaskRow(t, choices, data)).join('');
+    return `<div class="task-group-title">${g.title}</div>${rows}`;
+  }).join('');
+  setTimeout(() => {
+    ORCH_TASK_GROUPS.forEach(g => {
+      g.tasks.forEach(t => {
+        const sel = $(`orchTaskModel_${t.key}`);
+        if (sel && !sel._customMounted) mountCustomSelect(sel);
+      });
+    });
+  }, 0);
+}
+
+function onOrchGeneralChanged() {
+  // 通用模型变更后，未自定义的任务行视觉上继承新值
+  ORCH_TASK_GROUPS.forEach(g => {
+    const generalModel = _getGeneralModel(g.generalKey);
+    g.tasks.forEach(t => {
+      const sel = $(`orchTaskModel_${t.key}`);
+      if (sel && !sel.value) {
+        // 继承通用：更新 custom select 的显示文本
+        syncCustomSelect(`orchTaskModel_${t.key}`);
+      }
+    });
+  });
+}
+
+function onOrchTaskToggle(taskKey) {
+  const cb = $(`orchTaskEnabled_${taskKey}`);
+  const row = $(`orchTaskRow_${taskKey}`);
+  if (cb && row) row.classList.toggle('disabled', !cb.checked);
+}
+
 async function loadOrchestration() {
   if (!currentPersona) return;
   try {
     const res = await get(pApi('/orchestration'));
     const orch = res || {};
     const choices = orch.model_choices || [];
+    _orchChoices = choices;
+    _orchData = orch;
     _fillSelect('orchAnalysis', orch.analysis_model || 'gpt-4o-mini', choices);
     _fillSelect('orchChat', orch.chat_model || 'gpt-4o', choices);
     _fillSelect('orchVision', orch.vision_model || 'gpt-4o', choices);
+    renderOrchestration();
   } catch (e) {}
 }
 
 async function saveOrchestration() {
   if (!currentPersona) { toast('请先选择人格', 'error'); return; }
-  const res = await post(pApi('/orchestration'), {
+  const payload = {
     analysis_model: $('orchAnalysis').value,
     chat_model: $('orchChat').value,
     vision_model: $('orchVision').value,
+  };
+  const taskModels = {};
+  const taskEnabled = {};
+  ORCH_TASK_GROUPS.forEach(g => {
+    g.tasks.forEach(t => {
+      const modelEl = $(`orchTaskModel_${t.key}`);
+      const enabledEl = $(`orchTaskEnabled_${t.key}`);
+      if (modelEl && modelEl.value) taskModels[t.key] = modelEl.value;
+      if (enabledEl) taskEnabled[t.key] = enabledEl.checked;
+    });
   });
+  if (Object.keys(taskModels).length) payload.task_models = taskModels;
+  if (Object.keys(taskEnabled).length) payload.task_enabled = taskEnabled;
+
+  const res = await post(pApi('/orchestration'), payload);
   toast(res.success ? '模型编排已保存' : res.error || '失败', res.success ? 'success' : 'error');
   if (res.success) flashSuccess(document.activeElement);
 }
