@@ -17,70 +17,6 @@
 
 ---
 
-## 核心编码宗旨
-
-> 以下原则用于减少 LLM 编码时的常见失误。在执行任何代码变更前必读。
-
-**权衡：** 这些准则偏向谨慎而非速度。对于琐碎任务，可自行判断。
-
-### 1. 编码前思考（Think Before Coding）
-
-**不要假设。不要隐藏困惑。暴露权衡。**
-
-在动手实现前：
-- 明确陈述你的假设。如果不确定，请发问。
-- 如果存在多种理解方式，把它们列出来——不要沉默地自行选择。
-- 如果存在更简单的方案，说出来。必要时提出反对意见。
-- 如果有不清楚的地方，停下来。指出哪里令人困惑。请发问。
-
-### 2. 简约优先（Simplicity First）
-
-**最少代码解决问题。不做任何臆测。**
-
-- 不添加超出需求的功能。
-- 不为仅使用一次的代码做抽象。
-- 不添加未被要求的"灵活性"或"可配置性"。
-- 不处理不可能场景的错误。
-- 如果你写了 200 行而其实可以 50 行搞定，重写它。
-
-问自己："资深工程师会觉得这过度设计了吗？" 如果是，简化。
-
-### 3. 精准变更（Surgical Changes）
-
-**只碰必须碰的地方。只清理自己制造的混乱。**
-
-编辑现有代码时：
-- 不要"改进"相邻的代码、注释或格式。
-- 不要重构没有坏掉的东西。
-- 匹配现有风格，即使你本人做法不同。
-- 如果你注意到无关的死代码，提及它即可——不要删除它。
-
-当你的变更产生孤儿代码时：
-- 删除**你的**变更导致不再使用的 import / 变量 / 函数。
-- 不要删除预先存在的死代码，除非被要求。
-
-检验标准：每一行变更都应能直接追溯到用户的请求。
-
-### 4. 目标驱动执行（Goal-Driven Execution）
-
-**定义成功标准。循环直到验证通过。**
-
-将任务转化为可验证的目标：
-- "添加验证" → "先为无效输入写测试，再让它们通过"
-- "修复 bug" → "先写能复现它的测试，再让它通过"
-- "重构 X" → "确保重构前后测试都能通过"
-
-对于多步骤任务，给出一个简要计划：
-```
-1. [步骤] → 验证：[检查]
-2. [步骤] → 验证：[检查]
-3. [步骤] → 验证：[检查]
-```
-
-强有力的成功标准让你能独立迭代。弱标准（"让它跑起来"）需要不断澄清。
-
----
-
 ## 技术栈与运行时架构
 
 ### 核心依赖
@@ -127,14 +63,12 @@
 ```
 sirius_chat/
 ├── __init__.py              # 顶层公开 API 统一重导出（严格 __all__）
-├── async_engine/            # 兼容导出 + prompts/orchestration/utils 辅助层
-├── cache/                   # 可扩展缓存框架（LRU + TTL）
 ├── config/                  # 配置模型、JSONC 管理、WorkspaceConfig / SessionConfig
 ├── configs/                 # 内置配置模板
 ├── core/                    # 编排核心（v1.0 唯一引擎）
 │   ├── emotional_engine.py  # EmotionalGroupChatEngine（主引擎，v1.0）
 │   ├── persona_generator.py # 人格生成器（关键词/问卷）
-│   ├── persona_store.py     # 人格持久化（engine_state/persona.json）
+│   ├── persona_store.py     # 人格持久化（persona.json）
 │   ├── response_assembler.py # 执行层：Prompt 组装 + 风格适配
 │   ├── cognition.py         # 统一认知分析器（情感 + 意图）
 │   ├── response_strategy.py # 四层响应策略（立即/延迟/沉默/主动）
@@ -156,7 +90,6 @@ sirius_chat/
 │   ├── intent_v3.py         # IntentAnalysisV3 / SocialIntent
 │   ├── response_strategy.py # StrategyDecision / ResponseStrategy
 │   └── models.py            # Message / Participant / Transcript / User 等
-├── performance/             # 性能分析与基准测试
 ├── platforms/               # 平台适配层（v1.0 新增）
 │   ├── napcat_manager.py    # NapCat 环境管理器（全局安装 + 多实例）
 │   ├── napcat_adapter.py    # NapCat OneBot v11 WebSocket 适配
@@ -170,16 +103,17 @@ sirius_chat/
 ├── providers/               # Provider 实现、路由、中间件
 │   ├── routing.py           # 自动路由与 ProviderRegistry（全局共享）
 │   └── middleware/          # 重试、熔断、限流、成本监控
+├── session/                 # 会话存储（JsonSessionStore / SqliteSessionStore）
 ├── skills/                  # SKILL 注册、执行与数据存储
 │   └── builtin/             # 内置技能
 ├── token/                   # Token 统计、SQLite 持久化与分析
 ├── webui/                   # WebUI 管理面板
 │   ├── server.py            # aiohttp REST API（多人格 API）
 │   └── static/              # 前端页面（Dashboard + 配置面板）
-├── workspace/               # 布局管理、运行时、文件监听（旧版兼容）
-├── roleplay_prompting.py    # 人格资产生成、持久化与选择（旧版兼容）
+├── utils/                   # WorkspaceLayout、JsonSerializable mixin、开发辅助
+├── background_tasks.py      # 轻量级 asyncio 任务调度器
 ├── logging_config.py        # 日志配置（按日轮转、7 天备份）
-└── cli.py                   # 已移除（v1.0 后由 main.py 统一入口）
+└── roleplay_prompting.py    # 人格资产生成、持久化与选择（内部使用，不公开导出）
 
 main.py                      # 统一 CLI 入口（子命令式：run/webui/persona）
 
@@ -267,7 +201,7 @@ make clean         # 清理构建产物、缓存
 ### 强制约定
 1. **每模块首行必须是 `from __future__ import annotations`**。
 2. **`__all__` 纪律**：`sirius_chat/__init__.py` 定义严格的 `__all__`。
-3. **禁止在顶层暴露内部包**：`core`、`memory`、`config`、`async_engine`、`session`、`token`、`cache`、`performance` 等内部模块**不得**通过 `sirius_chat` 顶层直接访问；外部调用走 `sirius_chat` 顶层公开 API。
+3. **禁止在顶层暴露内部包**：`core`、`memory`、`config`、`session`、`token` 等内部模块**不得**通过 `sirius_chat` 顶层直接访问；外部调用走 `sirius_chat` 顶层公开 API。
 4. **模块级 logger**：使用标准库 `logging`，格式为 `'%(asctime)s - %(name)s - %(levelname)s - %(message)s'`。
 5. **dataclass 优先**：核心数据契约使用 `@dataclass` 定义。
 6. **原子文件写入**：配置持久化使用临时文件 + replace。

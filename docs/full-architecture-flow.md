@@ -504,3 +504,6 @@ flowchart TD
 | **配置层** | `config/` | 类型安全的配置契约、加载器、helpers、JSONC |
 | **WebUI 层** | `webui/` | aiohttp REST API + 管理面板 |
 | **Token 层** | `token/` | 统计、SQLite 持久化、多维分析 |
+| **会话存储** | `session/store.py` | JsonSessionStore / SqliteSessionStore / SessionStoreFactory |
+| **后台任务** | `background_tasks.py` | 轻量级 asyncio 任务调度器 |
+| **工具函数** | `utils/` | WorkspaceLayout、JsonSerializable mixin、开发辅助 |

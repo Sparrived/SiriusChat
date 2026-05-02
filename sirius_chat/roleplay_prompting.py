@@ -388,14 +388,7 @@ def _generated_agents_file_path(work_path: Path) -> Path:
 
 
 def _generated_agents_read_path(work_path: Path) -> Path:
-    layout = _workspace_layout(work_path)
-    new_path = layout.generated_agents_path()
-    if new_path.exists():
-        return new_path
-    legacy_path = layout.legacy_generated_agents_path()
-    if legacy_path.exists():
-        return legacy_path
-    return new_path
+    return _workspace_layout(work_path).generated_agents_path()
 
 
 def _normalize_agent_key(value: str) -> str:
@@ -658,8 +651,7 @@ def _preset_to_dict(
 def _dict_to_preset(payload: dict[str, object]) -> GeneratedSessionPreset:
     agent_payload = payload.get("agent")
     if not isinstance(agent_payload, dict):
-        # Accept legacy layout where agent fields lived at top-level.
-        agent_payload = payload
+        agent_payload = {}
     metadata_payload = agent_payload.get("metadata", {})
     metadata = dict(metadata_payload) if isinstance(metadata_payload, dict) else {}
     alias = str(agent_payload.get("alias", "")).strip()

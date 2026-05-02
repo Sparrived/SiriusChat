@@ -98,31 +98,6 @@ from sirius_chat.skills import (
     SkillResult,
 )
 
-# ── Roleplay / Prompting ──
-from sirius_chat.roleplay_prompting import (
-    GENERATED_AGENTS_FILE_NAME,
-    GENERATED_AGENT_TRACE_DIR_NAME,
-    DependencyFileSnapshot,
-    GeneratedSessionPreset,
-    PersonaGenerationTrace,
-    PersonaSpec,
-    RolePlayAnswer,
-    RolePlayQuestion,
-    abuild_roleplay_prompt_from_answers_and_apply,
-    agenerate_agent_prompts_from_answers,
-    agenerate_from_persona_spec,
-    aregenerate_agent_prompt_from_dependencies,
-    aupdate_agent_prompt,
-    create_session_config_from_selected_agent,
-    generate_humanized_roleplay_questions,
-    list_roleplay_question_templates,
-    load_generated_agent_library,
-    load_persona_generation_traces,
-    load_persona_spec,
-    persist_generated_agent_profile,
-    select_generated_agent_profile,
-)
-
 # ── Token usage ──
 from sirius_chat.token.store import TokenUsageStore
 from sirius_chat.token.usage import (
@@ -264,28 +239,6 @@ __all__ = [
     "SkillParameter",
     "SkillRegistry",
     "SkillResult",
-    # Roleplay
-    "GENERATED_AGENTS_FILE_NAME",
-    "GENERATED_AGENT_TRACE_DIR_NAME",
-    "DependencyFileSnapshot",
-    "GeneratedSessionPreset",
-    "PersonaGenerationTrace",
-    "PersonaSpec",
-    "RolePlayAnswer",
-    "RolePlayQuestion",
-    "abuild_roleplay_prompt_from_answers_and_apply",
-    "agenerate_agent_prompts_from_answers",
-    "agenerate_from_persona_spec",
-    "aregenerate_agent_prompt_from_dependencies",
-    "aupdate_agent_prompt",
-    "create_session_config_from_selected_agent",
-    "generate_humanized_roleplay_questions",
-    "list_roleplay_question_templates",
-    "load_generated_agent_library",
-    "load_persona_generation_traces",
-    "load_persona_spec",
-    "persist_generated_agent_profile",
-    "select_generated_agent_profile",
     # Token
     "TokenUsageStore",
     "AnalyticsReport",
@@ -334,13 +287,5 @@ __all__ = [
 AsyncLLMProvider.__doc__ = "Base class for LLM providers."
 JsonSessionStore.__doc__ = "JSON-based session store for persisting sessions."
 SqliteSessionStore.__doc__ = "SQLite-based session store for persisting sessions."
-abuild_roleplay_prompt_from_answers_and_apply.__doc__ = "Build roleplay prompt from user answers and apply it."
-agenerate_agent_prompts_from_answers.__doc__ = "Generate agent prompts from user answers."
 build_token_usage_baseline.__doc__ = "Build a baseline for token usage metrics."
-create_session_config_from_selected_agent.__doc__ = "Create session configuration from a selected agent preset."
-generate_humanized_roleplay_questions.__doc__ = "Generate humanized roleplay questions for user interaction."
-list_roleplay_question_templates.__doc__ = "List available roleplay questionnaire templates."
-load_generated_agent_library.__doc__ = "Load the generated agent profile library."
-persist_generated_agent_profile.__doc__ = "Persist a generated agent profile to storage."
-select_generated_agent_profile.__doc__ = "Select a generated agent profile from the library."
 summarize_token_usage.__doc__ = "Summarize token usage statistics."

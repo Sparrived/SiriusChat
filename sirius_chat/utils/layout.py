@@ -115,38 +115,6 @@ class WorkspaceLayout:
     def skill_data_dir(self) -> Path:
         return self.data_root / "skill_data"
 
-    def legacy_session_store_path(self, *, backend: str = "sqlite") -> Path:
-        normalized = backend.strip().lower()
-        if normalized == "json":
-            return self.data_root / _DEFAULT_SESSION_FILENAME_JSON
-        return self.data_root / _DEFAULT_SESSION_FILENAME_SQLITE
-
-    def legacy_primary_user_path(self) -> Path:
-        return self.data_root / "primary_user.json"
-
-    def legacy_provider_registry_path(self) -> Path:
-        return self.config_root / "provider_keys.json"
-
-    def legacy_user_memory_dir(self) -> Path:
-        return self.data_root / "users"
-
-    def legacy_event_memory_dir(self) -> Path:
-        return self.data_root / "events"
-
-    def legacy_event_memory_path(self) -> Path:
-        return self.legacy_event_memory_dir() / "events.json"
-
-    def legacy_self_memory_path(self) -> Path:
-        return self.data_root / "self_memory.json"
-
-    def legacy_token_usage_db_path(self) -> Path:
-        return self.data_root / "token_usage.db"
-
-    def legacy_generated_agents_path(self) -> Path:
-        return self.config_root / "generated_agents.json"
-
-
-
     def config_watch_paths(self) -> list[Path]:
         paths = [
             self.workspace_manifest_path(),

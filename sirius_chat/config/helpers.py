@@ -15,16 +15,6 @@ from sirius_chat.exceptions import OrchestrationConfigError
 _TASK_MEMORY_MANAGER = "memory_manager"
 
 
-def _coerce_legacy_debounce_to_threshold(value: object) -> int:
-    try:
-        numeric = float(str(value))
-    except (TypeError, ValueError):
-        return 0
-    if numeric <= 0:
-        return 0
-    return max(1, int(round(numeric)))
-
-
 def build_orchestration_policy_from_dict(
     orch_dict: dict[str, Any] | None,
     *,
@@ -156,47 +146,6 @@ def build_orchestration_policy_from_dict(
             continue
         value = raw.get(field_name)
         kwargs[field_name] = caster(value) if caster is not bool else bool(value)
-
-    if "pending_message_threshold" not in kwargs and "message_debounce_seconds" in raw:
-        kwargs["pending_message_threshold"] = _coerce_legacy_debounce_to_threshold(
-            raw.get("message_debounce_seconds")
-        )
-
-    legacy_intent_enabled = raw.get("enable_intent_analysis")
-    if legacy_intent_enabled is not None and "intent_analysis" not in kwargs.get("task_enabled", {}):
-        task_enabled = dict(kwargs.get("task_enabled", {}))
-        task_enabled["intent_analysis"] = bool(legacy_intent_enabled)
-        kwargs["task_enabled"] = task_enabled
-
-    legacy_intent_model = str(raw.get("intent_analysis_model", "")).strip()
-    if legacy_intent_model and "intent_analysis" not in kwargs.get("task_models", {}):
-        task_models = dict(kwargs.get("task_models", {}))
-        task_models["intent_analysis"] = legacy_intent_model
-        kwargs["task_models"] = task_models
-
-    legacy_memory_manager_model = str(raw.get("memory_manager_model", "")).strip()
-    if legacy_memory_manager_model and _TASK_MEMORY_MANAGER not in kwargs.get("task_models", {}):
-        task_models = dict(kwargs.get("task_models", {}))
-        task_models[_TASK_MEMORY_MANAGER] = legacy_memory_manager_model
-        kwargs["task_models"] = task_models
-
-    legacy_memory_manager_temperature = raw.get("memory_manager_temperature")
-    if (
-        legacy_memory_manager_temperature is not None
-        and _TASK_MEMORY_MANAGER not in kwargs.get("task_temperatures", {})
-    ):
-        task_temperatures = dict(kwargs.get("task_temperatures", {}))
-        task_temperatures[_TASK_MEMORY_MANAGER] = float(legacy_memory_manager_temperature)
-        kwargs["task_temperatures"] = task_temperatures
-
-    legacy_memory_manager_max_tokens = raw.get("memory_manager_max_tokens")
-    if (
-        legacy_memory_manager_max_tokens is not None
-        and _TASK_MEMORY_MANAGER not in kwargs.get("task_max_tokens", {})
-    ):
-        task_max_tokens = dict(kwargs.get("task_max_tokens", {}))
-        task_max_tokens[_TASK_MEMORY_MANAGER] = int(legacy_memory_manager_max_tokens)
-        kwargs["task_max_tokens"] = task_max_tokens
 
     if not kwargs.get("unified_model") and not kwargs.get("task_models"):
         kwargs["unified_model"] = agent_model

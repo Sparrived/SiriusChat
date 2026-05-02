@@ -216,56 +216,11 @@ class ConfigManager:
         *,
         fallback: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        has_explicit_pending_threshold = isinstance(value, dict) and "pending_message_threshold" in value
         sanitized = self._sanitize_nullable_mapping(value, fallback=fallback)
         sanitized.pop("task_budgets", None)
         sanitized.pop("split_marker", None)
         sanitized.pop("skill_call_marker", None)
         sanitized.pop("consolidation_enabled", None)
-        legacy_pending_threshold = sanitized.pop("message_debounce_seconds", None)
-        if legacy_pending_threshold is not None and not has_explicit_pending_threshold:
-            try:
-                numeric = float(legacy_pending_threshold)
-            except (TypeError, ValueError):
-                numeric = 0.0
-            sanitized["pending_message_threshold"] = 0 if numeric <= 0 else max(1, int(round(numeric)))
-        legacy_intent_enabled = sanitized.pop("enable_intent_analysis", None)
-        if legacy_intent_enabled is not None:
-            task_enabled = sanitized.get("task_enabled")
-            normalized_task_enabled = dict(task_enabled) if isinstance(task_enabled, dict) else {}
-            normalized_task_enabled.setdefault("intent_analysis", bool(legacy_intent_enabled))
-            sanitized["task_enabled"] = normalized_task_enabled
-
-        legacy_intent_model = str(sanitized.pop("intent_analysis_model", "")).strip()
-        if legacy_intent_model:
-            task_models = sanitized.get("task_models")
-            normalized_task_models = dict(task_models) if isinstance(task_models, dict) else {}
-            normalized_task_models.setdefault("intent_analysis", legacy_intent_model)
-            sanitized["task_models"] = normalized_task_models
-
-        legacy_memory_manager_model = str(sanitized.pop("memory_manager_model", "")).strip()
-        if legacy_memory_manager_model:
-            task_models = sanitized.get("task_models")
-            normalized_task_models = dict(task_models) if isinstance(task_models, dict) else {}
-            normalized_task_models.setdefault("memory_manager", legacy_memory_manager_model)
-            sanitized["task_models"] = normalized_task_models
-
-        legacy_memory_manager_temperature = sanitized.pop("memory_manager_temperature", None)
-        if legacy_memory_manager_temperature is not None:
-            task_temperatures = sanitized.get("task_temperatures")
-            normalized_task_temperatures = (
-                dict(task_temperatures) if isinstance(task_temperatures, dict) else {}
-            )
-            normalized_task_temperatures.setdefault("memory_manager", float(legacy_memory_manager_temperature))
-            sanitized["task_temperatures"] = normalized_task_temperatures
-
-        legacy_memory_manager_max_tokens = sanitized.pop("memory_manager_max_tokens", None)
-        if legacy_memory_manager_max_tokens is not None:
-            task_max_tokens = sanitized.get("task_max_tokens")
-            normalized_task_max_tokens = dict(task_max_tokens) if isinstance(task_max_tokens, dict) else {}
-            normalized_task_max_tokens.setdefault("memory_manager", int(legacy_memory_manager_max_tokens))
-            sanitized["task_max_tokens"] = normalized_task_max_tokens
-
         policy = build_orchestration_policy_from_dict(sanitized, agent_model="")
         if policy is None:
             return {}
@@ -618,19 +573,13 @@ class ConfigManager:
         return {}
 
     def _resolve_active_agent_key(self, layout: WorkspaceLayout) -> str:
-        candidate_paths = [
-            layout.generated_agents_path(),
-            layout.legacy_generated_agents_path(),
-        ]
-        for path in candidate_paths:
-            if not path.exists():
-                continue
+        path = layout.generated_agents_path()
+        if path.exists():
             payload = load_json_document(path)
-            if not isinstance(payload, dict):
-                continue
-            selected = str(payload.get("selected_generated_agent", "")).strip()
-            if selected:
-                return selected
+            if isinstance(payload, dict):
+                selected = str(payload.get("selected_generated_agent", "")).strip()
+                if selected:
+                    return selected
         return ""
 
     def _validate_config(self, config: dict[str, Any]) -> None:
@@ -718,49 +667,4 @@ class ConfigManager:
             orchestration=orchestration,
         )
 
-    def bootstrap_workspace_from_legacy_session_json(
-        self,
-        config_path: Path | str,
-        *,
-        work_path: Path | str,
-        data_path: Path | str | None = None,
-    ) -> tuple[WorkspaceConfig, list[dict[str, Any]]]:
-        """Bootstrap workspace config from a legacy session.json file.
 
-        Reads a session.json (or JSONC) config, extracts workspace-level
-        defaults and provider entries, persists them into the workspace
-        layout, and returns the resolved WorkspaceConfig and provider list.
-        """
-        path = Path(config_path)
-        if not path.exists():
-            raise FileNotFoundError(f"配置文件不存在：{path}")
-        raw = load_json_document(path)
-        if not isinstance(raw, dict):
-            raise ValueError("配置文件顶层必须是对象")
-
-        config_root = Path(work_path)
-        runtime_root = Path(data_path) if data_path is not None else config_root
-        layout = WorkspaceLayout(runtime_root, config_path=config_root)
-        layout.ensure_directories()
-
-        generated_agent_key = str(raw.get("generated_agent_key", "")).strip()
-        providers_config: list[dict[str, Any]] = list(raw.get("providers", []))
-
-        workspace_config = self.load_workspace_config(config_root, data_path=runtime_root)
-        if generated_agent_key:
-            workspace_config.active_agent_key = generated_agent_key
-        session_defaults_fields = {
-            "history_max_messages", "history_max_chars",
-            "max_recent_participant_messages", "enable_auto_compression",
-        }
-        for field_name in session_defaults_fields:
-            if field_name in raw:
-                setattr(workspace_config.session_defaults, field_name, type(
-                    getattr(workspace_config.session_defaults, field_name)
-                )(raw[field_name]))
-        orchestration_raw = raw.get("orchestration")
-        if isinstance(orchestration_raw, dict) and orchestration_raw:
-            workspace_config.orchestration_defaults = dict(orchestration_raw)
-
-        self.save_workspace_config(config_root, workspace_config, data_path=runtime_root)
-        return workspace_config, providers_config
