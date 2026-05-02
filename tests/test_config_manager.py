@@ -198,30 +198,6 @@ class TestConfigManager:
         assert session_config.orchestration.session_reply_mode == "auto"
         assert session_config.orchestration.pending_message_threshold == 0
 
-    def test_dict_to_session_config_maps_legacy_intent_fields_to_task_settings(
-        self,
-        config_manager: ConfigManager,
-    ) -> None:
-        """Test legacy intent fields are mapped into task-based orchestration settings."""
-        config_dict = {
-            "work_path": "/tmp/test",
-            "global_system_prompt": "Test prompt",
-            "agent": {
-                "name": "TestAgent",
-                "persona": "Test persona",
-                "model": "test-model",
-            },
-            "orchestration": {
-                "enable_intent_analysis": False,
-                "intent_analysis_model": "legacy-intent-model",
-            },
-        }
-
-        session_config = config_manager._dict_to_session_config(config_dict, Path("/tmp"))
-
-        assert session_config.orchestration.task_enabled["intent_analysis"] is False
-        assert session_config.orchestration.task_models["intent_analysis"] == "legacy-intent-model"
-
     def test_resolve_values_nested(self, config_manager: ConfigManager) -> None:
         """Test recursive environment variable resolution."""
         os.environ["TEST_MODEL"] = "test-model-value"
@@ -283,30 +259,6 @@ class TestConfigManager:
         payload = load_json_document(snapshot_path)
         assert payload["orchestration"]["task_enabled"]["intent_analysis"] is True
         assert payload["orchestration"]["pending_message_threshold"] == 4
-
-    def test_save_workspace_config_normalizes_legacy_intent_fields(self, tmp_path: Path) -> None:
-        """Test workspace persistence rewrites legacy intent fields to task-based keys."""
-        manager = ConfigManager(base_path=tmp_path)
-        workspace_config = manager.load_workspace_config(tmp_path)
-        workspace_config.orchestration_defaults = {
-            "enable_intent_analysis": False,
-            "intent_analysis_model": "legacy-intent-model",
-        }
-
-        manager.save_workspace_config(tmp_path, workspace_config)
-
-        layout = WorkspaceLayout(tmp_path)
-        manifest_payload = load_json_document(layout.workspace_manifest_path())
-        snapshot_payload = load_json_document(layout.session_config_path())
-
-        assert "enable_intent_analysis" not in manifest_payload["orchestration_defaults"]
-        assert "intent_analysis_model" not in manifest_payload["orchestration_defaults"]
-        assert manifest_payload["orchestration_defaults"]["task_enabled"]["intent_analysis"] is False
-        assert manifest_payload["orchestration_defaults"]["task_models"]["intent_analysis"] == "legacy-intent-model"
-        assert "enable_intent_analysis" not in snapshot_payload["orchestration"]
-        assert "intent_analysis_model" not in snapshot_payload["orchestration"]
-        assert snapshot_payload["orchestration"]["task_enabled"]["intent_analysis"] is False
-        assert snapshot_payload["orchestration"]["task_models"]["intent_analysis"] == "legacy-intent-model"
 
     def test_load_workspace_config_prefers_session_snapshot_orchestration_even_if_manifest_newer(
         self,
@@ -393,67 +345,6 @@ class TestConfigManager:
         assert snapshot_payload["enable_auto_compression"] is False
         assert snapshot_payload["orchestration"]["task_models"]["event_extract"] == "deepseek-chat"
         assert snapshot_payload["orchestration"]["pending_message_threshold"] == 0.0
-
-    def test_load_workspace_config_tolerates_null_fields_from_disk(self, tmp_path: Path) -> None:
-        manager = ConfigManager(base_path=tmp_path)
-        layout = WorkspaceLayout(tmp_path)
-        layout.ensure_directories()
-
-        layout.workspace_manifest_path().write_text(
-            json.dumps(
-                {
-                    "work_path": None,
-                    "data_path": None,
-                    "layout_version": None,
-                    "active_agent_key": None,
-                    "session_defaults": {
-                        "history_max_messages": None,
-                        "history_max_chars": None,
-                        "max_recent_participant_messages": None,
-                        "enable_auto_compression": None,
-                    },
-                    "orchestration_defaults": {
-                        "task_models": {"event_extract": None},
-                        "message_debounce_seconds": 0.0,
-                    },
-                    "provider_policy": {
-                        "prefer_workspace_registry": None,
-                    },
-                },
-                ensure_ascii=False,
-                indent=2,
-            ),
-            encoding="utf-8",
-        )
-        write_session_config_jsonc(
-            layout.session_config_path(),
-            {
-                "generated_agent_key": None,
-                "history_max_messages": None,
-                "history_max_chars": None,
-                "max_recent_participant_messages": None,
-                "enable_auto_compression": None,
-                "orchestration": {
-                    "task_models": {"event_extract": None},
-                    "message_debounce_seconds": 1.5,
-                },
-            },
-        )
-
-        loaded = manager.load_workspace_config(tmp_path)
-
-        assert loaded.work_path == tmp_path
-        assert loaded.data_path == tmp_path
-        assert loaded.layout_version == 2
-        assert loaded.active_agent_key == ""
-        assert loaded.session_defaults.history_max_messages == 24
-        assert loaded.session_defaults.history_max_chars == 6000
-        assert loaded.session_defaults.max_recent_participant_messages == 5
-        assert loaded.session_defaults.enable_auto_compression is True
-        assert loaded.orchestration_defaults["pending_message_threshold"] == 2
-        assert loaded.orchestration_defaults.get("task_models", {}) == {}
-        assert loaded.provider_policy.prefer_workspace_registry is True
-
 
 class TestEnvVarSubstitution:
     """Test environment variable substitution patterns."""

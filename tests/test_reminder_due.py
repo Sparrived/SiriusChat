@@ -67,6 +67,34 @@ def test_weekly_wrong_day():
     assert _is_reminder_due(reminder, now) is False
 
 
+def test_interval_due():
+    now = datetime(2026, 4, 27, 12, 0, 0, tzinfo=timezone.utc)
+    reminder = {"mode": "interval", "minutes_after": 10, "fire_at": "2026-04-27T11:59:00+00:00"}
+    assert _is_reminder_due(reminder, now) is True
+
+
+def test_interval_not_yet():
+    now = datetime(2026, 4, 27, 12, 0, 0, tzinfo=timezone.utc)
+    reminder = {"mode": "interval", "minutes_after": 10, "fire_at": "2026-04-27T12:01:00+00:00"}
+    assert _is_reminder_due(reminder, now) is False
+
+
+def test_interval_already_fired_this_minute():
+    now = datetime(2026, 4, 27, 12, 0, 0, tzinfo=timezone.utc)
+    reminder = {
+        "mode": "interval",
+        "minutes_after": 10,
+        "fire_at": "2026-04-27T11:59:00+00:00",
+        "last_fired_at": "2026-04-27T11:59:30+00:00",
+    }
+    assert _is_reminder_due(reminder, now) is False
+
+
+def test_interval_no_fire_at():
+    now = datetime(2026, 4, 27, 12, 0, 0, tzinfo=timezone.utc)
+    assert _is_reminder_due({"mode": "interval", "minutes_after": 10}, now) is False
+
+
 def test_invalid_mode():
     now = _utc_at_local(12, 0)
     assert _is_reminder_due({"mode": "unknown"}, now) is False

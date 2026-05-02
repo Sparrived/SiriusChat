@@ -156,7 +156,7 @@ def test_logger_hierarchy() -> None:
     configure_logging(level="INFO", format_type="console")
 
     parent_logger = get_logger("sirius_chat")
-    child_logger = get_logger("sirius_chat.async_engine")
+    child_logger = get_logger("sirius_chat.core")
 
     # 子logger应该继承父logger的配置
     assert child_logger.parent is logging.getLogger("sirius_chat")

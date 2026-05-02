@@ -211,6 +211,79 @@ def test_create_default_adapter_type_empty(store: MockDataStore):
     assert "adapter_type" not in reminders[0]
 
 
+def test_create_interval(store: MockDataStore):
+    result = run(
+        action="create",
+        content="喝水提醒",
+        mode="interval",
+        minutes_after=30,
+        data_store=store,
+    )
+    assert result["success"] is True
+    reminders = store.get("reminders")
+    assert reminders[0]["mode"] == "interval"
+    assert reminders[0]["minutes_after"] == 30
+    assert "fire_at" in reminders[0]
+    assert "每隔 30 分钟提醒一次" in result["text_blocks"][0]
+
+
+def test_create_interval_missing_minutes(store: MockDataStore):
+    result = run(
+        action="create",
+        content="喝水提醒",
+        mode="interval",
+        minutes_after=0,
+        data_store=store,
+    )
+    assert result["success"] is False
+    assert "minutes_after" in result["error"]
+
+
+def test_create_target_self(store: MockDataStore):
+    result = run(
+        action="create",
+        content="去看屏幕右边",
+        mode="once",
+        minutes_after=5,
+        target="self",
+        data_store=store,
+    )
+    assert result["success"] is True
+    reminders = store.get("reminders")
+    assert reminders[0]["target"] == "self"
+    assert "提醒自己" in result["text_blocks"][0]
+
+
+def test_create_target_default_is_user(store: MockDataStore):
+    result = run(
+        action="create",
+        content="起床",
+        mode="once",
+        minutes_after=5,
+        data_store=store,
+    )
+    assert result["success"] is True
+    reminders = store.get("reminders")
+    assert reminders[0]["target"] == "user"
+    assert "提醒用户" in result["text_blocks"][0]
+
+
+def test_create_with_skill_chain(store: MockDataStore):
+    result = run(
+        action="create",
+        content="汇报天气",
+        mode="once",
+        minutes_after=5,
+        skill_chain=[
+            {"skill": "weather", "params": {"city": "北京"}}
+        ],
+        data_store=store,
+    )
+    assert result["success"] is True
+    reminders = store.get("reminders")
+    assert reminders[0]["skill_chain"] == [{"skill": "weather", "params": {"city": "北京"}}]
+
+
 def test_weekday_name():
     assert _weekday_name(0) == "周一"
     assert _weekday_name(6) == "周日"

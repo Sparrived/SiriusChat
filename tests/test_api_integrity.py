@@ -57,8 +57,8 @@ class TestAPILayerHiding:
         
         # 这些包应该是内部实现，不应该直接导出
         internal_packages = {
-            'core', 'memory', 'config', 'async_engine',
-            'session', 'token', 'cache', 'performance'
+            'core', 'memory', 'config',
+            'session', 'token'
         }
         
         exposed = []
