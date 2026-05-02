@@ -89,6 +89,8 @@ class WebUIServer:
         self.app.router.add_get("/api/napcat/status", self.api_napcat_status)
         self.app.router.add_post("/api/napcat/install", self.api_napcat_install)
         self.app.router.add_post("/api/napcat/configure", self.api_napcat_configure)
+        self.app.router.add_post("/api/napcat/start", self.api_napcat_start)
+        self.app.router.add_post("/api/napcat/stop", self.api_napcat_stop)
         self.app.router.add_get("/api/napcat/logs", self.api_napcat_logs)
         self.app.router.add_get("/api/tokens", self.api_tokens_get)
         self.app.router.add_get("/api/telemetry", self.api_telemetry_get)
@@ -1120,6 +1122,40 @@ class WebUIServer:
         except Exception as exc:
             LOG.warning("读取 NapCat 日志失败: %s", exc)
             return _json_response({"enabled": True, "logs": [], "error": str(exc)})
+
+    async def api_napcat_start(self, request: web.Request) -> web.Response:
+        if self.napcat_manager is None:
+            return _json_response({"success": False, "message": "NapCat 管理未启用"}, 400)
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        qq_number = str(body.get("qq_number", "")).strip()
+        if not qq_number:
+            return _json_response({"success": False, "message": "QQ 号码不能为空"}, 400)
+        try:
+            result = await self.napcat_manager.start(qq_number)
+            return _json_response(result)
+        except Exception as exc:
+            LOG.exception("NapCat 启动失败")
+            return _json_response({"success": False, "message": str(exc)}, 500)
+
+    async def api_napcat_stop(self, request: web.Request) -> web.Response:
+        if self.napcat_manager is None:
+            return _json_response({"success": False, "message": "NapCat 管理未启用"}, 400)
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        qq_number = str(body.get("qq_number", "")).strip()
+        if not qq_number:
+            return _json_response({"success": False, "message": "QQ 号码不能为空"}, 400)
+        try:
+            result = await self.napcat_manager.stop(qq_number)
+            return _json_response(result)
+        except Exception as exc:
+            LOG.exception("NapCat 停止失败")
+            return _json_response({"success": False, "message": str(exc)}, 500)
 
     # ─── Skill 管理 API 代理方法 ──────────────────────────
     # 这些方法将请求转发到 server_skill_api 模块，保持路由注册简洁
