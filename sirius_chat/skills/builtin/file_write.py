@@ -2,27 +2,25 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import Any
-
-from sirius_chat.skills.models import SkillInvocationContext
-from sirius_chat.skills.security import ensure_developer_access
 
 SKILL_META = {
     "name": "file_write",
     "description": (
-        "在任意路径下创建或修改文本文件。支持写入新文件或追加到现有文件末尾。"
-        "支持绝对路径和相对路径，仅允许操作 UTF-8 文本文件，禁止覆盖二进制文件。"
+        "在 data/personaworkspace 目录下创建或修改文本文件。"
+        "只需提供文件名（可含子目录，如 notes.md 或 docs/report.txt），"
+        "skill 会自动写入到 data/personaworkspace 下。"
+        "支持覆盖写入或追加到现有文件末尾。"
     ),
     "version": "1.0.0",
     "tags": ["file", "io"],
-    "developer_only": True,
+    "developer_only": False,
     "dependencies": [],
     "parameters": {
         "path": {
             "type": "str",
-            "description": "文件路径，支持相对路径或绝对路径，例如 notes.md、D:/config.json、/etc/hosts",
+            "description": "文件名，可含子目录，例如 notes.md、docs/report.txt",
             "required": True,
         },
         "content": {
@@ -39,19 +37,11 @@ SKILL_META = {
     },
 }
 
-# 拒绝访问的路径模式（大小写不敏感）
-_DENY_PATTERNS = (
-    ".git",
-    ".venv",
-    "venv",
-    "__pycache__",
-    "node_modules",
-    ".env",
-    ".ssh",
-    ".aws",
-)
-_MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024  # 10 MB — refuse to overwrite existing files larger than this
-_MAX_WRITE_SIZE_BYTES = 1 * 1024 * 1024  # 1 MB — refuse to write content larger than this
+_MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024  # 10 MB
+_MAX_WRITE_SIZE_BYTES = 1 * 1024 * 1024  # 1 MB
+
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+_ALLOWED_WRITE_DIR = (_PROJECT_ROOT / "data" / "personaworkspace").resolve()
 
 
 def run(
@@ -59,30 +49,36 @@ def run(
     content: str = "",
     mode: str = "write",
     data_store: Any = None,
-    invocation_context: SkillInvocationContext | None = None,
     **kwargs: Any,
 ) -> dict[str, Any]:
-    ensure_developer_access(
-        skill_name="file_write",
-        invocation_context=invocation_context,
-    )
-
-    if not path or not path.strip():
+    name = (path or "").strip()
+    if not name:
         return {
             "success": False,
-            "error": "path 不能为空",
-            "summary": "文件写入失败：未提供路径",
+            "error": "文件名不能为空",
+            "summary": "文件写入失败：未提供文件名",
         }
 
-    target = _resolve_write_path(path.strip())
-    if target is None:
+    # Basic traversal guard: reject '..' and absolute-looking paths
+    normalized = name.replace("\\", "/")
+    if ".." in normalized or normalized.startswith("/"):
         return {
             "success": False,
-            "error": f"路径 '{path}' 包含非法遍历或命中黑名单目录",
-            "summary": "文件写入失败：路径被拒绝",
+            "error": f"文件名包含非法字符: {name}",
+            "summary": "文件写入失败：文件名被拒绝",
         }
 
-    # Reject writing to directories
+    target = (_ALLOWED_WRITE_DIR / name).resolve()
+    # Final safety: ensure resolved path is still inside allowed dir
+    try:
+        target.relative_to(_ALLOWED_WRITE_DIR)
+    except ValueError:
+        return {
+            "success": False,
+            "error": f"文件名超出允许范围: {name}",
+            "summary": "文件写入失败：文件名被拒绝",
+        }
+
     if target.exists() and target.is_dir():
         return {
             "success": False,
@@ -110,7 +106,6 @@ def run(
                 "summary": "文件写入失败：现有文件过大",
             }
 
-    # Guard write content size
     content_bytes = content.encode("utf-8")
     if len(content_bytes) > _MAX_WRITE_SIZE_BYTES:
         return {
@@ -122,7 +117,6 @@ def run(
             "summary": "文件写入失败：内容过大",
         }
 
-    # Binary guard for existing files
     if target.exists():
         try:
             header = target.read_bytes()[:8192]
@@ -139,8 +133,8 @@ def run(
                 "summary": "文件写入失败：文件访问错误",
             }
 
-    # Ensure parent directory exists
     try:
+        _ALLOWED_WRITE_DIR.mkdir(parents=True, exist_ok=True)
         target.parent.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
         return {
@@ -149,7 +143,6 @@ def run(
             "summary": "文件写入失败：目录创建错误",
         }
 
-    # Write
     write_mode = "a" if mode.lower() == "append" else "w"
     try:
         with target.open(write_mode, encoding="utf-8") as f:
@@ -161,7 +154,6 @@ def run(
             "summary": "文件写入失败：IO 错误",
         }
 
-    # Verify
     try:
         final_size = target.stat().st_size
     except OSError:
@@ -170,8 +162,8 @@ def run(
     action = "追加" if write_mode == "a" else "写入"
     return {
         "success": True,
-        "summary": f"已{action} '{path}'（{len(content_bytes)} 字节）",
-        "text_blocks": [f"{action}完成：{path}\n最终大小：{final_size} 字节"],
+        "summary": f"已{action} '{name}'（{len(content_bytes)} 字节）",
+        "text_blocks": [f"{action}完成：{name}\n最终大小：{final_size} 字节"],
         "internal_metadata": {
             "path": str(target),
             "mode": write_mode,
@@ -179,23 +171,3 @@ def run(
             "final_size_bytes": final_size,
         },
     }
-
-
-def _resolve_write_path(user_path: str) -> Path | None:
-    """Resolve a path for file writing with minimal safety checks.
-
-    Operates at the OS level: any path (absolute, relative, including '..')
-    is allowed except for deny-listed sensitive directories.
-    """
-    raw = user_path.strip()
-    if not raw:
-        return None
-
-    target = Path(raw).resolve()
-
-    deny_set = {d.lower() for d in _DENY_PATTERNS}
-    for part in target.parts:
-        if part.lower() in deny_set:
-            return None
-
-    return target

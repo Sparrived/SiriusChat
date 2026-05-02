@@ -1,4 +1,4 @@
-"""Built-in skill for listing and querying files within the workspace."""
+"""Built-in skill for listing files within data/personaworkspace."""
 
 from __future__ import annotations
 
@@ -8,14 +8,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from sirius_chat.skills.models import SkillInvocationContext
-from sirius_chat.skills.security import ensure_developer_access
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+_ALLOWED_LIST_DIR = (_PROJECT_ROOT / "data" / "personaworkspace").resolve()
 
 SKILL_META = {
     "name": "file_list",
     "description": (
-        "列出或搜索任意路径下的文件和目录，支持按路径、递归深度和 glob 模式过滤。"
-        "当不确定文件是否存在或需要浏览磁盘、项目结构时调用。"
+        "列出或搜索 data/personaworkspace 目录下的文件和目录，支持按路径、递归深度和 glob 模式过滤。"
+        "只需提供相对路径（如 . 或 docs/），不传则列出根目录。"
     ),
     "version": "1.0.0",
     "tags": ["file", "io"],
@@ -24,7 +24,7 @@ SKILL_META = {
     "parameters": {
         "path": {
             "type": "str",
-            "description": "起始路径，支持相对路径或绝对路径，例如 src/、docs/、D:/、/etc。不传则列出当前目录。注意：路径中的空格是有意义的，请严格按照用户给出的路径填写，不要擅自添加或删除空格",
+            "description": "相对路径，例如 .、docs/、images/。不传则列出根目录",
             "required": False,
             "default": ".",
         },
@@ -43,36 +43,17 @@ SKILL_META = {
     },
 }
 
-# 拒绝访问的路径模式（大小写不敏感）
-_DENY_PATTERNS = (
-    ".git",
-    ".venv",
-    "venv",
-    "__pycache__",
-    "node_modules",
-    ".env",
-    ".ssh",
-    ".aws",
-)
 _MAX_RESULTS = 200
 
-# 常见 AI 无法读取或意义不大的文件后缀（大小写不敏感）
 _SKIP_EXTENSIONS = {
-    # 二进制 / 可执行
     ".exe", ".dll", ".so", ".dylib", ".bin",
     ".obj", ".o", ".class", ".pyc", ".pyo",
-    # 图片（保留，AI 可通过多模态读取）
-    # 视频 / 音频
     ".mp4", ".avi", ".mov", ".mkv", ".flv",
     ".mp3", ".wav", ".ogg", ".flac", ".aac", ".wma",
-    # 压缩包
     ".zip", ".rar", ".7z", ".tar", ".gz", ".bz2", ".xz",
-    # 字体
     ".ttf", ".woff", ".woff2", ".eot", ".otf",
-    # 数据库 / 缓存 / 锁文件
     ".db", ".sqlite", ".sqlite3", ".lock",
     ".pkl", ".pickle", ".coverage",
-    # 其他
     ".swp", ".swo", ".tmp", ".temp", ".DS_Store",
 }
 
@@ -82,24 +63,32 @@ def run(
     recursive: bool = False,
     pattern: str = "",
     data_store: Any = None,
-    invocation_context: SkillInvocationContext | None = None,
     **kwargs: Any,
 ) -> dict[str, Any]:
-    raw_path = path.strip() or "."
-    target = _resolve_list_path(raw_path, data_store)
-    if target is None:
+    raw_path = (path or "").strip() or "."
+    normalized = raw_path.replace("\\", "/")
+    if ".." in normalized or normalized.startswith("/"):
         return {
             "success": False,
-            "error": f"路径 '{path}' 包含非法遍历或命中黑名单目录",
+            "error": f"路径包含非法字符: {raw_path}",
+            "summary": "文件查询失败：路径被拒绝",
+        }
+
+    target = (_ALLOWED_LIST_DIR / raw_path).resolve()
+    try:
+        target.relative_to(_ALLOWED_LIST_DIR)
+    except ValueError:
+        return {
+            "success": False,
+            "error": f"路径超出允许范围: {raw_path}",
             "summary": "文件查询失败：路径被拒绝",
         }
 
     if target.is_file():
-        # Treat single file as a one-item list
         info = _describe_entry(target, target.parent)
         return {
             "success": True,
-            "summary": f"'{path}' 是一个文件",
+            "summary": f"'{raw_path}' 是一个文件",
             "text_blocks": [_format_entries([info])],
             "internal_metadata": {
                 "path": str(target),
@@ -108,26 +97,13 @@ def run(
             },
         }
 
-    # Fallback: if path doesn't exist, try common LLM mis-formatting variants
-    # (e.g. model inserts space between CJK chars and digits)
     if not target.exists():
-        alt = Path(raw_path.replace(" ", "")).resolve()
-        if alt != target and alt.exists():
-            import logging
-            logging.getLogger(__name__).debug(
-                "file_list 路径回退: 原始路径 '%s' 不存在，使用修正路径 '%s'",
-                target,
-                alt,
-            )
-            target = alt
-        else:
-            return {
-                "success": False,
-                "error": f"路径不存在: {target}",
-                "summary": "文件查询失败：路径不存在",
-            }
+        return {
+            "success": False,
+            "error": f"路径不存在: {target}",
+            "summary": "文件查询失败：路径不存在",
+        }
 
-    # Collect entries
     entries: list[dict[str, Any]] = []
     truncated = False
     glob_pat = pattern.strip() if pattern else "*"
@@ -135,11 +111,6 @@ def run(
     try:
         if recursive:
             for root, dirs, files in os.walk(target):
-                # Prune denied directories in-place
-                dirs[:] = [
-                    d for d in dirs
-                    if not any(d.lower() == deny.lower() for deny in _DENY_PATTERNS)
-                ]
                 for name in files:
                     if glob_pat != "*" and not fnmatch.fnmatch(name, glob_pat):
                         continue
@@ -160,8 +131,6 @@ def run(
                     break
         else:
             for item in sorted(target.iterdir()):
-                if any(item.name.lower() == deny.lower() for deny in _DENY_PATTERNS):
-                    continue
                 if glob_pat != "*" and not fnmatch.fnmatch(item.name, glob_pat):
                     continue
                 if item.is_file() and any(
@@ -179,7 +148,7 @@ def run(
             "summary": "文件查询失败：目录遍历错误",
         }
 
-    summary = f"在 '{path}' 下找到 {len(entries)} 项"
+    summary = f"在 '{raw_path}' 下找到 {len(entries)} 项"
     if recursive:
         summary += "（递归）"
     if pattern:
@@ -233,23 +202,3 @@ def _format_entries(entries: list[dict[str, Any]]) -> str:
         mtime = e.get("modified", "-")
         lines.append(f"{t} {e['path']:<50} {size:>12} {mtime:>16}")
     return "\n".join(lines)
-
-
-def _resolve_list_path(user_path: str, data_store: Any) -> Path | None:
-    """Resolve a path for file listing with minimal safety checks.
-
-    Operates at the OS level: any path (absolute, relative, including '..')
-    is allowed except for deny-listed sensitive directories.
-    """
-    raw = user_path.strip()
-    if not raw:
-        raw = "."
-
-    target = Path(raw).resolve()
-
-    deny_set = {d.lower() for d in _DENY_PATTERNS}
-    for part in target.parts:
-        if part.lower() in deny_set:
-            return None
-
-    return target
