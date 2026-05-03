@@ -368,6 +368,7 @@ class BackgroundTasksMixin:
                 data={
                     "group_id": group_id,
                     "trigger_type": trigger["trigger_type"],
+                    "reply": reply,
                 },
             )
         )
@@ -417,6 +418,15 @@ class BackgroundTasksMixin:
                         self._pending_developer_chats.setdefault(group_id, []).append(reply)
                         self._last_developer_chat_at[group_id] = now
                         self._log_inner_thought(f"突然想跟开发者聊聊，发了条消息过去～")
+                        await self.event_bus.emit(
+                            SessionEvent(
+                                type=SessionEventType.DEVELOPER_CHAT_TRIGGERED,
+                                data={
+                                    "group_id": group_id,
+                                    "reply": reply,
+                                },
+                            )
+                        )
                 except Exception as exc:
                     logger.warning("Developer chat check failed for %s: %s", group_id, exc)
 
@@ -772,6 +782,16 @@ class BackgroundTasksMixin:
                 self._log_inner_thought(f"AI 生成提醒：{reply[:40]}")
                 if gid.startswith("private_"):
                     self._active_private_groups.add(gid)
+                await self.event_bus.emit(
+                    SessionEvent(
+                        type=SessionEventType.REMINDER_TRIGGERED,
+                        data={
+                            "group_id": gid,
+                            "reply": reply,
+                            "adapter_type": adapter_type,
+                        },
+                    )
+                )
 
     async def _generate_reminder_message(
         self,
@@ -983,10 +1003,14 @@ class BackgroundTasksMixin:
         # 只注入当前 triggered items 的图片（归属明确，就是当前用户发的）。
         # 历史图片不再通过 multimodal 注入，而是通过 XML history 中的 <image>
         # 标签以文本形式暴露给模型，避免归属混乱。
+        # 动画表情 (sub_type=1) 不注入，它们对回复生成无意义。
         all_multimodal: list[dict[str, str]] = []
         for triggered_item in triggered:
             if getattr(triggered_item, "multimodal_inputs", None):
-                all_multimodal.extend(triggered_item.multimodal_inputs)
+                for m in triggered_item.multimodal_inputs:
+                    if m.get("type") == "image" and m.get("sub_type") == "1":
+                        continue
+                    all_multimodal.append(m)
 
         messages = self._inject_multimodal_into_user_message(messages, all_multimodal)
 
@@ -1258,17 +1282,18 @@ class BackgroundTasksMixin:
         self._last_reply_at[group_id] = datetime.now(timezone.utc).timestamp()
         self._persist_group_state(group_id)
 
-        # Emit events for all triggered items but return only one result
-        for item in triggered:
-            await self.event_bus.emit(
-                SessionEvent(
-                    type=SessionEventType.DELAYED_RESPONSE_TRIGGERED,
-                    data={
-                        "group_id": group_id,
-                        "item_id": item.item_id,
-                    },
-                )
+        # Emit event with full reply data for external delivery
+        await self.event_bus.emit(
+            SessionEvent(
+                type=SessionEventType.DELAYED_RESPONSE_TRIGGERED,
+                data={
+                    "group_id": group_id,
+                    "item_id": triggered[0].item_id,
+                    "reply": final_reply,
+                    "partial_replies": partial_replies,
+                },
             )
+        )
 
         # Determine return strategy: if any triggered item is IMMEDIATE, report as immediate
         from sirius_chat.models.response_strategy import ResponseStrategy

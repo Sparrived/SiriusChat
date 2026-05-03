@@ -230,7 +230,7 @@ class _EmotionalGroupChatEngineBase:
         self._skill_registry: Any | None = None
         self._skill_executor: Any | None = None
 
-        self.glossary_manager = GlossaryManager(work_path)
+        self.glossary_manager = GlossaryManager(work_path, persona_name=self.persona.name)
 
         # Background tasks
         self._bg_tasks: set[asyncio.Task] = set()
