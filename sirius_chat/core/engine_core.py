@@ -107,14 +107,11 @@ class _EmotionalGroupChatEngineBase:
         self._default_model = analysis_model
         self._task_models = {
             # 分析类
-            "emotion_analyze": analysis_model,
-            "intent_analyze": analysis_model,
             "cognition_analyze": analysis_model,
             "memory_extract": analysis_model,
             # 生成类
             "response_generate": chat_model,
             "proactive_generate": chat_model,
-            "empathy_generate": chat_model,
             # 多模态覆盖
             "vision": vision_model,
         }
@@ -310,8 +307,34 @@ class _EmotionalGroupChatEngineBase:
             )
         )
 
+        # Pure image message (no substantive text) -> generate caption via cognition,
+        # save to context, but skip decision/execution. The later text message will
+        # pull the caption from basic memory via XML history.
+        if message.multimodal_inputs and self._is_pure_image_message(message.content):
+            self._log_inner_thought(f"{speaker} 发了一张图，我先默默记下来～")
+            intent, emotion, memories, empathy = await self._cognition(
+                content, user_id, group_id,
+                sender_type=message.sender_type,
+                multimodal_inputs=message.multimodal_inputs,
+            )
+            # 回写图片描述到 basic_memory
+            if intent.image_caption:
+                recent = self.basic_memory.get_context(group_id, n=1)
+                if recent:
+                    last_entry = recent[0]
+                    last_entry.content = f"[图片] [图片描述：{intent.image_caption}]"
+                    if last_entry.multimodal_inputs:
+                        for m in last_entry.multimodal_inputs:
+                            if m.get("type") == "image":
+                                m["caption"] = intent.image_caption
+            return {
+                "strategy": "silent",
+                "reply": None,
+                "emotion": emotion.to_dict() if emotion else {},
+                "intent": intent.to_dict() if intent else {},
+            }
+
         # 2. Cognition (unified emotion + intent)
-        # 即使是纯图片消息也走完整 cognition，让 vision model 分析图片意图
         intent, emotion, memories, empathy = await self._cognition(
             content, user_id, group_id,
             sender_type=message.sender_type,

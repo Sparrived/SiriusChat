@@ -348,9 +348,9 @@ async function loadAvailableModels() {
 }
 
 const ORCH_GENERAL_MAP = {
-  analysis_model: ['emotion_analyze', 'intent_analyze', 'cognition_analyze', 'memory_extract'],
-  chat_model: ['response_generate', 'proactive_generate', 'empathy_generate'],
-  vision_model: ['vision', 'memory_manager', 'event_extract'],
+  analysis_model: ['cognition_analyze', 'memory_extract'],
+  chat_model: ['response_generate', 'proactive_generate'],
+  vision_model: ['vision'],
 };
 
 const ORCH_TASK_GROUPS = [
@@ -358,8 +358,6 @@ const ORCH_TASK_GROUPS = [
     title: '分析类',
     generalKey: 'analysis_model',
     tasks: [
-      { key: 'emotion_analyze', label: '情感分析' },
-      { key: 'intent_analyze', label: '意图分析' },
       { key: 'cognition_analyze', label: '认知分析' },
       { key: 'memory_extract', label: '记忆提取' },
     ],
@@ -370,7 +368,6 @@ const ORCH_TASK_GROUPS = [
     tasks: [
       { key: 'response_generate', label: '回复生成' },
       { key: 'proactive_generate', label: '主动发言' },
-      { key: 'empathy_generate', label: '共情回复' },
     ],
   },
   {
@@ -378,8 +375,6 @@ const ORCH_TASK_GROUPS = [
     generalKey: 'vision_model',
     tasks: [
       { key: 'vision', label: '多模态' },
-      { key: 'memory_manager', label: '记忆管理' },
-      { key: 'event_extract', label: '事件提取' },
     ],
   },
 ];

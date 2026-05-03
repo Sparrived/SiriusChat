@@ -28,14 +28,7 @@ class TaskConfig:
 
 _DEFAULT_TASK_REGISTRY: dict[str, TaskConfig] = {
     # Lightweight tasks → fast/cheap models
-    "emotion_analyze": TaskConfig(
-        model_name="gpt-4o-mini",
-        temperature=0.3,
-        max_tokens=256,
-        timeout=10.0,
-        fallback_model="deepseek-chat",
-    ),
-    "intent_analyze": TaskConfig(
+    "cognition_analyze": TaskConfig(
         model_name="gpt-4o-mini",
         temperature=0.3,
         max_tokens=512,
@@ -43,13 +36,6 @@ _DEFAULT_TASK_REGISTRY: dict[str, TaskConfig] = {
         fallback_model="deepseek-chat",
     ),
     "memory_extract": TaskConfig(
-        model_name="gpt-4o-mini",
-        temperature=0.3,
-        max_tokens=512,
-        timeout=20.0,
-        fallback_model="deepseek-chat",
-    ),
-    "event_extract": TaskConfig(
         model_name="gpt-4o-mini",
         temperature=0.3,
         max_tokens=512,
@@ -68,13 +54,6 @@ _DEFAULT_TASK_REGISTRY: dict[str, TaskConfig] = {
         model_name="gpt-4o",
         temperature=0.8,
         max_tokens=1024,
-        timeout=20.0,
-        fallback_model="deepseek-chat",
-    ),
-    "empathy_generate": TaskConfig(
-        model_name="gpt-4o",
-        temperature=0.6,
-        max_tokens=512,
         timeout=20.0,
         fallback_model="deepseek-chat",
     ),
