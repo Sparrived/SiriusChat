@@ -542,3 +542,59 @@ class PipelineMixin:
                     )
                 except Exception:
                     pass
+
+        # Sticker learning: learn from animated stickers (sub_type=1) only.
+        # Normal images are not treated as stickers and should not be learned.
+        if intent.image_caption and getattr(message, "multimodal_inputs", None):
+            self._learn_sticker_from_message(message, intent, group_id, user_id)
+
+    def _learn_sticker_from_message(
+        self,
+        message: Any,
+        intent: Any,
+        group_id: str,
+        user_id: str,
+    ) -> None:
+        """Learn a sticker from an animated sticker (sub_type=1) message.
+
+        Only processes animated stickers (sub_type=1), not normal images.
+        Normal images are not suitable for sticker RAG as they lack
+        the expressive nature of animated stickers.
+        """
+        if self._sticker_system is None:
+            return
+        learner = self._sticker_system.get("learner")
+        if learner is None:
+            return
+        try:
+            # Extract animated sticker info from multimodal_inputs
+            multimodal = getattr(message, "multimodal_inputs", []) or []
+            for item in multimodal:
+                if item.get("type") != "image":
+                    continue
+                # Only process animated stickers (sub_type=1), skip normal images
+                if item.get("sub_type") != "1":
+                    continue
+                # Use file_path or url as sticker_id source
+                file_path = item.get("file_path", "") or item.get("url", "")
+                if not file_path:
+                    continue
+                # Generate a stable sticker_id from file_path
+                import hashlib
+                sticker_id = hashlib.md5(file_path.encode()).hexdigest()
+                caption = intent.image_caption or ""
+                source_message = getattr(message, "content", "") or ""
+                source_user = user_id or getattr(message, "speaker", "") or ""
+                source_group = group_id
+                asyncio.create_task(
+                    learner.learn_from_message(
+                        sticker_id=sticker_id,
+                        file_path=file_path,
+                        caption=caption,
+                        source_message=source_message,
+                        source_user=source_user,
+                        source_group=source_group,
+                    )
+                )
+        except Exception as exc:
+            logger.warning("Sticker learning failed: %s", exc)

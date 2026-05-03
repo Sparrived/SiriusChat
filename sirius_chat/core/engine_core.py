@@ -230,6 +230,9 @@ class _EmotionalGroupChatEngineBase:
         self._skill_registry: Any | None = None
         self._skill_executor: Any | None = None
 
+        # Sticker RAG system
+        self._sticker_system: Any | None = None
+
         self.glossary_manager = GlossaryManager(work_path, persona_name=self.persona.name)
 
         # Background tasks
@@ -692,11 +695,36 @@ class _EmotionalGroupChatEngineBase:
                 "之前的记忆都找回来啦，一共 %d 个群的上下文我都记得。",
                 len(self.basic_memory.list_groups()),
             )
+
+            # Initialize sticker system
+            self._init_sticker_system()
         except Exception as exc:
             logger.warning("状态恢复部分出错，继续尝试加载 proactive 状态: %s", exc)
         finally:
             # Proactive state must always be attempted regardless of other failures
             self._load_proactive_state()
+
+    def _init_sticker_system(self) -> None:
+        """Initialize the sticker RAG system."""
+        try:
+            from sirius_chat.skills.builtin.send_sticker import init_sticker_system
+
+            self._sticker_system = init_sticker_system(
+                work_path=self.work_path,
+                persona_name=self.persona.name if self.persona else "default",
+                provider_async=self.provider_async,
+                basic_memory=self.basic_memory,
+            )
+            logger.info("表情包系统初始化完成: %s", self.persona.name if self.persona else "default")
+
+            # Generate preference from persona if not exists
+            pref_manager = self._sticker_system.get("preference_manager")
+            if pref_manager and not pref_manager._file_path.exists():
+                asyncio.create_task(
+                    pref_manager.generate_from_persona(self.persona, self.provider_async)
+                )
+        except Exception as exc:
+            logger.warning("表情包系统初始化失败: %s", exc)
 
     # ------------------------------------------------------------------
     # Proactive state persistence

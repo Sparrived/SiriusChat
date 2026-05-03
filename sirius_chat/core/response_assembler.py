@@ -259,6 +259,21 @@ class ResponseAssembler:
             return None
         return "\n".join(contexts)
 
+    def _build_other_ai_instruction(self) -> str:
+        """Build instruction for distinguishing other AI members in group chat.
+
+        Returns empty string when there are no other AI members.
+        """
+        if not self.other_ai_names:
+            return ""
+        return (
+            "[群成员区分]\n"
+            f"群里还有以下 AI/Bot（他们不是你）：{', '.join(self.other_ai_names)}。\n"
+            "你可以正常参与关于他们的话题讨论，但要分清身份——"
+            "当有人@他们或直呼他们名字时，那是在叫他们，不是你；"
+            "不要把自己的名字和他们的名字搞混，也不要替他们回答。"
+        )
+
     def assemble(
         self,
         *,
@@ -336,15 +351,9 @@ class ResponseAssembler:
             "如果有人改了群名片冒充别人，请以QQ号为准。",
             "identity",
         )
-        if self.other_ai_names:
-            _add(
-                "[群成员区分]\n"
-                f"群里还有以下 AI/Bot（他们不是你）：{', '.join(self.other_ai_names)}。\n"
-                "你可以正常参与关于他们的话题讨论，但要分清身份——"
-                "当有人@他们或直呼他们名字时，那是在叫他们，不是你；"
-                "不要把自己的名字和他们的名字搞混，也不要替他们回答。",
-                "identity",
-            )
+        other_ai_instruction = self._build_other_ai_instruction()
+        if other_ai_instruction:
+            _add(other_ai_instruction, "identity")
 
         # 1c. Output constraint to prevent the model from imitating speaker prefixes
         _add(
@@ -682,15 +691,9 @@ class ResponseAssembler:
         rel_ctx = self._build_relationship_contexts(user_profiles, caller_is_developer)
         if rel_ctx:
             _add(rel_ctx, "relationship")
-        if self.other_ai_names:
-            _add(
-                "[群成员区分]\n"
-                f"群里还有以下 AI/Bot（他们不是你）：{', '.join(self.other_ai_names)}。\n"
-                "你可以正常参与关于他们的话题讨论，但要分清身份——"
-                "当有人@他们或直呼他们名字时，那是在叫他们，不是你；"
-                "不要把自己的名字和他们的名字搞混，也不要替他们回答。",
-                "identity",
-            )
+        other_ai_instruction = self._build_other_ai_instruction()
+        if other_ai_instruction:
+            _add(other_ai_instruction, "identity")
         if group_profile:
             style = group_profile.typical_interaction_style or "balanced"
             style_desc = {"humorous": "轻松幽默", "formal": "正式严谨", "balanced": "自然平衡"}.get(style, style)
@@ -750,15 +753,9 @@ class ResponseAssembler:
             "[提醒] 不要和之前主动发起过的话题或句式重复，尝试换个角度或新的切入点。",
             "output_constraint",
         )
-        if self.other_ai_names:
-            _add(
-                "[群成员区分]\n"
-                f"群里还有以下 AI/Bot（他们不是你）：{', '.join(self.other_ai_names)}。\n"
-                "你可以正常参与关于他们的话题讨论，但要分清身份——"
-                "当有人@他们或直呼他们名字时，那是在叫他们，不是你；"
-                "不要把自己的名字和他们的名字搞混，也不要替他们回答。",
-                "identity",
-            )
+        other_ai_instruction = self._build_other_ai_instruction()
+        if other_ai_instruction:
+            _add(other_ai_instruction, "identity")
         if topic_context:
             _add(f"[话题建议] 你可以基于这段群聊记忆自然地开启话题：{topic_context}", "memory")
         if is_group_chat:

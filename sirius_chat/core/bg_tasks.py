@@ -41,6 +41,7 @@ class BackgroundTasksMixin:
             asyncio.create_task(self._bg_diary_consolidator(), name="diary_consolidator"),
             asyncio.create_task(self._bg_proactive_developer_chat_checker(), name="dev_chat"),
             asyncio.create_task(self._bg_reminder_checker(), name="reminder_check"),
+            asyncio.create_task(self._bg_sticker_novelty_updater(), name="sticker_novelty"),
         ]
         for t in tasks:
             self._bg_tasks.add(t)
@@ -645,6 +646,19 @@ class BackgroundTasksMixin:
                 store.save()
         except Exception as exc:
             logger.warning("Failed to inject group_id into reminder: %s", exc)
+
+    async def _bg_sticker_novelty_updater(self) -> None:
+        """Periodically update sticker novelty scores."""
+        interval = self.config.get("sticker_novelty_update_interval_seconds", 3600)
+        while self._bg_running:
+            await asyncio.sleep(interval)
+            try:
+                if self._sticker_system is not None:
+                    feedback_observer = self._sticker_system.get("feedback_observer")
+                    if feedback_observer is not None:
+                        await feedback_observer.update_novelty_scores()
+            except Exception as exc:
+                logger.warning("Sticker novelty update failed: %s", exc)
 
     async def _bg_reminder_checker(self) -> None:
         """Periodically check due reminders for all active groups."""
@@ -1278,6 +1292,18 @@ class BackgroundTasksMixin:
                 speaker_name=self.persona.name if self.persona else "assistant",
             )
 
+        # Determine return strategy: if any triggered item is IMMEDIATE, report as immediate
+        from sirius_chat.models.response_strategy import ResponseStrategy
+
+        strategy = "delayed"
+        if any(i.strategy_decision.strategy == ResponseStrategy.IMMEDIATE for i in triggered):
+            strategy = "immediate"
+
+        # Never leak raw SKILL_CALL markers to the user.
+        # If the model only emitted skill calls with no natural language,
+        # fall back to the last partial reply or an empty string.
+        final_reply = clean_reply or (partial_replies[-1] if partial_replies else "")
+
         # Record reply timestamp for cooldown tracking (once per tick)
         self._last_reply_at[group_id] = datetime.now(timezone.utc).timestamp()
         self._persist_group_state(group_id)
@@ -1294,18 +1320,6 @@ class BackgroundTasksMixin:
                 },
             )
         )
-
-        # Determine return strategy: if any triggered item is IMMEDIATE, report as immediate
-        from sirius_chat.models.response_strategy import ResponseStrategy
-
-        strategy = "delayed"
-        if any(i.strategy_decision.strategy == ResponseStrategy.IMMEDIATE for i in triggered):
-            strategy = "immediate"
-
-        # Never leak raw SKILL_CALL markers to the user.
-        # If the model only emitted skill calls with no natural language,
-        # fall back to the last partial reply or an empty string.
-        final_reply = clean_reply or (partial_replies[-1] if partial_replies else "")
 
         return [
             {
