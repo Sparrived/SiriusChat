@@ -1080,3 +1080,143 @@ async function saveSkillConfig() {
     toast('保存失败', 'error');
   }
 }
+
+// ── Stickers ──────────────────────────────────────────
+let _currentStickerId = null;
+
+async function loadStickers() {
+  if (!currentPersona) { toast('请先选择人格', 'error'); return; }
+  try {
+    const data = await get(pApi('/stickers'));
+    if (data.error) { toast(data.error, 'error'); return; }
+
+    // 统计卡片
+    const stats = data.stats || {};
+    $('ssTotal').textContent = stats.total || 0;
+    $('ssGroups').textContent = stats.groups || 0;
+    $('ssUsage').textContent = stats.total_usage || 0;
+    const vs = data.vector_store || {};
+    $('ssVector').textContent = vs.available ? `${vs.total_entries} 条` : '未启用';
+
+    // 偏好信息
+    const pref = data.preference || {};
+    const prefCard = $('stickerPreferenceCard');
+    const prefBody = $('stickerPreferenceBody');
+    if (pref && Object.keys(pref).length > 0) {
+      prefCard.style.display = 'block';
+      const preferred = (pref.preferred_tags || []).join('、') || '无';
+      const avoided = (pref.avoided_tags || []).join('、') || '无';
+      const novelty = ((pref.novelty_preference || 0.5) * 100).toFixed(0);
+      prefBody.innerHTML = `
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;font-size:13px">
+          <div><strong>偏好标签：</strong><span style="color:var(--accent)">${preferred}</span></div>
+          <div><strong>回避标签：</strong><span style="color:var(--danger)">${avoided}</span></div>
+          <div><strong>喜新程度：</strong><span>${novelty}%</span></div>
+          <div><strong>情绪标签映射：</strong><span>${JSON.stringify(pref.emotion_tag_map || {})}</span></div>
+        </div>
+      `;
+    } else {
+      prefCard.style.display = 'none';
+    }
+
+    // 标签云
+    const tagsEl = $('stickerTags');
+    const topTags = stats.top_tags || [];
+    if (topTags.length === 0) {
+      tagsEl.innerHTML = '<span style="color:var(--text-2)">暂无标签数据</span>';
+    } else {
+      tagsEl.innerHTML = topTags.map(([tag, count]) =>
+        `<span class="tag" style="font-size:${12 + Math.min(count * 2, 8)}px">${tag} (${count})</span>`
+      ).join('');
+    }
+
+    // 表情包列表
+    renderStickerList(data.records || []);
+  } catch (e) {
+    toast('加载表情包数据失败', 'error');
+    console.error(e);
+  }
+}
+
+function renderStickerList(records) {
+  const el = $('stickerList');
+  if (records.length === 0) {
+    el.innerHTML = '<p style="color:var(--text-2)">暂无表情包数据</p>';
+    return;
+  }
+  el.innerHTML = records.map(r => {
+    const tags = (r.tags || []).map(t => `<span class="tag">${t}</span>`).join('');
+    const usage = r.usage_count || 0;
+    const contextPreview = (r.usage_context || '').substring(0, 60).replace(/\n/g, ' ');
+    return `
+      <div class="sticker-item" style="display:flex;gap:12px;padding:12px;border:1px solid var(--border);border-radius:8px;margin-bottom:8px;cursor:pointer;align-items:flex-start"
+           onclick="openStickerDetail('${r.sticker_id}')"
+           title="使用情境：${contextPreview}...">
+        <div style="width:64px;height:64px;background:var(--surface-2);border-radius:6px;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:28px"
+             title="${r.caption || ''}">🖼️</div>
+        <div style="flex:1;min-width:0">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+            <strong style="font-size:14px">${r.caption || '未命名表情包'}</strong>
+            <span style="font-size:12px;color:var(--text-2)">使用 ${usage} 次</span>
+          </div>
+          <div style="font-size:12px;color:var(--text-2);margin-bottom:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+            情境：${contextPreview}...
+          </div>
+          <div style="display:flex;flex-wrap:wrap;gap:4px">${tags}</div>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+async function openStickerDetail(stickerId) {
+  if (!currentPersona) return;
+  _currentStickerId = stickerId;
+  try {
+    const data = await get(pApi(`/stickers/${stickerId}`));
+    if (data.error) { toast(data.error, 'error'); return; }
+    const r = data.record || {};
+    $('stickerDetailTitle').textContent = r.caption || '表情包详情';
+    const tags = (r.tags || []).map(t => `<span class="tag">${t}</span>`).join('') || '无';
+    $('stickerDetailBody').innerHTML = `
+      <div style="display:grid;gap:10px;font-size:13px">
+        <div><strong>ID：</strong><code>${r.sticker_id}</code></div>
+        <div><strong>图片描述：</strong>${r.caption || '无'}</div>
+        <div><strong>使用情境：</strong><pre style="background:var(--surface-2);padding:8px;border-radius:6px;white-space:pre-wrap;margin:4px 0">${r.usage_context || '无'}</pre></div>
+        <div><strong>触发消息：</strong>${r.trigger_message || '无'}</div>
+        <div><strong>触发情绪：</strong>${r.trigger_emotion || '无'}</div>
+        <div><strong>来源用户：</strong>${r.source_user || '未知'}</div>
+        <div><strong>来源群聊：</strong>${r.source_group || '未知'}</div>
+        <div><strong>发现时间：</strong>${r.discovered_at || '未知'}</div>
+        <div><strong>使用次数：</strong>${r.usage_count || 0}</div>
+        <div><strong>新鲜度：</strong>${((r.novelty_score || 1) * 100).toFixed(0)}%</div>
+        <div><strong>标签：</strong>${tags}</div>
+      </div>
+    `;
+    $('stickerDetailModal').style.display = 'flex';
+  } catch (e) {
+    toast('加载详情失败', 'error');
+  }
+}
+
+function closeStickerDetail() {
+  $('stickerDetailModal').style.display = 'none';
+  _currentStickerId = null;
+}
+
+async function deleteCurrentSticker() {
+  if (!_currentStickerId || !currentPersona) return;
+  if (!confirm('确定要删除这个表情包吗？此操作不可恢复。')) return;
+  try {
+    const res = await del(pApi(`/stickers/${_currentStickerId}`));
+    if (res.success) {
+      toast('已删除', 'success');
+      closeStickerDetail();
+      loadStickers();
+    } else {
+      toast(res.error || '删除失败', 'error');
+    }
+  } catch (e) {
+    toast('删除失败', 'error');
+  }
+}

@@ -87,6 +87,14 @@ async function post(path, body) {
   }
   return r.json();
 }
+async function del(path) {
+  const r = await fetch(API + path, { method: 'DELETE' });
+  if (!r.ok) {
+    const text = await r.text();
+    throw new Error(`HTTP ${r.status} ${r.statusText}: ${text.slice(0, 200)}`);
+  }
+  return r.json();
+}
 
 function pApi(path) {
   return `/personas/${currentPersona}${path}`;
@@ -109,6 +117,7 @@ const pageTitles = {
   'diary': ['日记', 'Analytics / Diary'],
   'users': ['用户画像', 'Analytics / Users'],
   'glossary': ['名词解释', 'Analytics / Glossary'],
+  'stickers': ['表情包库', 'Analytics / Stickers'],
 };
 
 async function navTo(page) {
@@ -157,6 +166,7 @@ async function navTo(page) {
   if (page === 'diary') diaryLoadData();
   if (page === 'users') loadUsers();
   if (page === 'glossary') loadGlossary();
+  if (page === 'stickers') loadStickers();
 
   // Replace native <select> with custom dropdowns after page loads
   setTimeout(() => mountCustomSelects(), 0);
@@ -298,6 +308,7 @@ async function loadPersonaStatus() {
     if (currentPage === 'cognition') await loadCognition();
     if (currentPage === 'diary') diaryLoadData();
     if (currentPage === 'users') loadUsers();
+    if (currentPage === 'glossary') glossaryLoadData();
   } catch (e) {
     console.error('loadPersonaStatus', e);
   }

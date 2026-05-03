@@ -51,6 +51,9 @@ from sirius_chat.webui.memory_api import (
     api_persona_users_get,
     api_persona_user_get,
     api_persona_glossary_get,
+    api_persona_stickers_get,
+    api_persona_sticker_detail_get,
+    api_persona_sticker_delete,
 )
 from sirius_chat.webui.napcat_api import (
     api_napcat_status,
@@ -166,6 +169,17 @@ class WebUIServer(_WebUIServer):
 
     async def api_persona_glossary_get(self, request):
         return await api_persona_glossary_get(request, self.persona_manager)
+
+    # ─── 多人格 API: 表情包管理 ───────────────────────────
+
+    async def api_persona_stickers_get(self, request):
+        return await api_persona_stickers_get(request, self.persona_manager)
+
+    async def api_persona_sticker_detail_get(self, request):
+        return await api_persona_sticker_detail_get(request, self.persona_manager)
+
+    async def api_persona_sticker_delete(self, request):
+        return await api_persona_sticker_delete(request, self.persona_manager)
 
     # ─── 多人格 API: 桥接配置 ─────────────────────────────
 

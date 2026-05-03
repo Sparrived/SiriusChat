@@ -69,6 +69,9 @@ class TestDiaryRetrievalQuality:
         for e in entries:
             idx.add(e)
 
+        if not idx.semantic_available:
+            pytest.skip("语义模型加载失败，跳过语义检索测试")
+
         # "机器学习" should be closer to d1/d2 than d3/d4
         results = idx.search("机器学习", top_k=2, group_id="g1")
         ids = [r[0].entry_id for r in results]
@@ -96,6 +99,9 @@ class TestDiaryRetrievalQuality:
             for e in entries:
                 idx.add(e)
 
+            if not idx.semantic_available:
+                pytest.skip("语义模型加载失败，跳过语义检索测试")
+
             results = idx.search("量子力学", top_k=3, group_id="g1")
             ids = [r[0].entry_id for r in results]
             assert len(ids) >= 2
@@ -117,6 +123,9 @@ class TestDiaryRetrievalQuality:
         ]
         for e in entries:
             idx.add(e)
+
+        if not idx.semantic_available:
+            pytest.skip("语义模型加载失败，跳过语义检索测试")
 
         results = idx.search("PyTorch深度学习", top_k=3, group_id="g1")
         ids = [r[0].entry_id for r in results]

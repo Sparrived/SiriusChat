@@ -583,7 +583,8 @@ class PipelineMixin:
                 import hashlib
                 sticker_id = hashlib.md5(file_path.encode()).hexdigest()
                 caption = intent.image_caption or ""
-                source_message = getattr(message, "content", "") or ""
+                trigger_message = getattr(message, "content", "") or ""
+                trigger_emotion = getattr(intent, "emotion", "") or ""
                 source_user = user_id or getattr(message, "speaker", "") or ""
                 source_group = group_id
                 asyncio.create_task(
@@ -591,7 +592,8 @@ class PipelineMixin:
                         sticker_id=sticker_id,
                         file_path=file_path,
                         caption=caption,
-                        source_message=source_message,
+                        trigger_message=trigger_message,
+                        trigger_emotion=trigger_emotion,
                         source_user=source_user,
                         source_group=source_group,
                     )

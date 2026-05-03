@@ -130,6 +130,11 @@ class WebUIServer:
         self.app.router.add_get("/api/personas/{name}/skills/{skill_name}/config", self.api_persona_skill_config_get)
         self.app.router.add_post("/api/personas/{name}/skills/{skill_name}/config", self.api_persona_skill_config_post)
 
+        # 表情包管理（每人格独立）
+        self.app.router.add_get("/api/personas/{name}/stickers", self.api_persona_stickers_get)
+        self.app.router.add_get("/api/personas/{name}/stickers/{sticker_id}", self.api_persona_sticker_detail_get)
+        self.app.router.add_delete("/api/personas/{name}/stickers/{sticker_id}", self.api_persona_sticker_delete)
+
     # ─── 生命周期 ─────────────────────────────────────────
 
     async def start(self) -> None:
