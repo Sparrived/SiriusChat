@@ -1,0 +1,1376 @@
+"""Background tasks for EmotionalGroupChatEngine.
+
+Delayed queue ticker, proactive checker, diary promoter/consolidator,
+developer chat checker, and reminder checker.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+from datetime import datetime, timedelta, timezone
+from typing import Any
+
+from sirius_chat.core.delayed_response_queue import _parse_iso
+from sirius_chat.core.events import SessionEvent, SessionEventType
+from sirius_chat.skills.executor import strip_skill_calls
+
+logger = logging.getLogger(__name__)
+
+
+class BackgroundTasksMixin:
+    """Mixin providing background task methods for EmotionalGroupChatEngine."""
+
+    # ==================================================================
+    # Background tasks
+    # ==================================================================
+
+    def start_background_tasks(self) -> None:
+        """Start periodic background tasks for delayed queue, proactive triggers,
+        and memory promotion. Idempotent: safe to call multiple times.
+        """
+        if self._bg_running:
+            return
+        self._bg_running = True
+
+        tasks = [
+            asyncio.create_task(self._bg_delayed_queue_ticker(), name="delayed_queue"),
+            asyncio.create_task(self._bg_proactive_checker(), name="proactive_check"),
+            asyncio.create_task(self._bg_diary_promoter(), name="diary_promote"),
+            asyncio.create_task(self._bg_diary_consolidator(), name="diary_consolidator"),
+            asyncio.create_task(self._bg_proactive_developer_chat_checker(), name="dev_chat"),
+            asyncio.create_task(self._bg_reminder_checker(), name="reminder_check"),
+        ]
+        for t in tasks:
+            self._bg_tasks.add(t)
+            t.add_done_callback(self._bg_tasks.discard)
+
+    def stop_background_tasks(self) -> None:
+        """Cancel all background tasks."""
+        self._bg_running = False
+        for t in list(self._bg_tasks):
+            t.cancel()
+        self._bg_tasks.clear()
+
+    async def _bg_delayed_queue_ticker(self) -> None:
+        """Smart-sleep ticker for the delayed queue.
+
+        Wakes up at the next pending item's expiry time (or max interval)
+        and emits DELAYED_RESPONSE_TRIGGERED events for expired items only.
+        Actual reply generation and delivery is handled by the external
+        caller via tick_delayed_queue().
+        """
+        max_interval = self.config.get("delayed_queue_tick_interval_seconds", 10)
+        while self._bg_running:
+            # Compute how long we can sleep until the next item expires
+            next_wake = max_interval
+            now = datetime.now(timezone.utc)
+            for group_id in list(self._group_last_message_at.keys()):
+                for item in self.delayed_queue.get_pending(group_id):
+                    enqueue_dt = _parse_iso(item.enqueue_time)
+                    if enqueue_dt:
+                        remaining = item.window_seconds - (now - enqueue_dt).total_seconds()
+                        if remaining <= 0:
+                            next_wake = 0
+                            break
+                        next_wake = min(next_wake, remaining)
+                    if next_wake <= 0:
+                        break
+                if next_wake <= 0:
+                    break
+
+            # Guard against busy-loop when items are already expired but not yet
+            # consumed by the external delivery loop.
+            if next_wake <= 0:
+                next_wake = 1.0
+
+            await asyncio.sleep(next_wake)
+
+            now = datetime.now(timezone.utc)
+            for group_id in list(self._group_last_message_at.keys()):
+                try:
+                    pending = self.delayed_queue.get_pending(group_id)
+                    # Per-group emitted tracking: only clean up IDs that no longer
+                    # exist in this group's pending list.
+                    emitted = self._delayed_event_emitted.setdefault(group_id, set())
+                    existing_ids = {i.item_id for i in pending}
+                    emitted &= existing_ids
+
+                    expired = []
+                    for item in pending:
+                        enqueue_dt = _parse_iso(item.enqueue_time)
+                        if enqueue_dt and (now - enqueue_dt).total_seconds() >= item.window_seconds:
+                            expired.append(item)
+
+                    newly_expired = [i for i in expired if i.item_id not in emitted]
+                    if newly_expired:
+                        self._log_inner_thought("之前记下的延迟回复，现在该开口了～")
+                        for item in newly_expired:
+                            emitted.add(item.item_id)
+                            await self.event_bus.emit(
+                                SessionEvent(
+                                    type=SessionEventType.DELAYED_RESPONSE_TRIGGERED,
+                                    data={
+                                        "group_id": group_id,
+                                        "item_id": item.item_id,
+                                    },
+                                )
+                            )
+                except Exception as exc:
+                    logger.warning("Delayed queue tick failed for %s: %s", group_id, exc)
+
+    async def _bg_proactive_checker(self) -> None:
+        """Periodically check proactive triggers for all active groups."""
+        interval = self.config.get("proactive_check_interval_seconds", 60)
+        while self._bg_running:
+            await asyncio.sleep(interval)
+            for group_id in list(self._group_last_message_at.keys()):
+                try:
+                    result = await self.proactive_check(group_id)
+                    if result and result.get("reply"):
+                        self._log_inner_thought("群里安静了好一会儿，我主动打破沉默吧...")
+                except Exception as exc:
+                    logger.warning("Proactive check failed for %s: %s", group_id, exc)
+
+    async def _bg_diary_promoter(self) -> None:
+        """Periodically promote basic memory entries to diary summaries.
+
+        Trigger conditions (OR):
+        1. Group is cold (heat < threshold AND silence >= threshold).
+        2. Sufficient volume of undiarized archive candidates.
+        """
+        interval = self.config.get("memory_promote_interval_seconds", 180)
+        volume_threshold = self.config.get("diary_volume_threshold", 8)
+        while self._bg_running:
+            await asyncio.sleep(interval)
+            try:
+                if self.provider_async is None:
+                    continue
+
+                promoted_total = 0
+                for group_id in list(self.basic_memory.list_groups()):
+                    candidates = self.basic_memory.get_archive_candidates(group_id)
+                    if not candidates:
+                        continue
+
+                    # Filter out already diarized candidates
+                    candidates = [
+                        c
+                        for c in candidates
+                        if not self.diary_manager.is_source_diarized(group_id, c.entry_id)
+                    ]
+                    if not candidates:
+                        continue
+
+                    # Trigger: cold group OR sufficient undiarized volume
+                    should_promote = (
+                        self.basic_memory.is_cold(group_id) or len(candidates) >= volume_threshold
+                    )
+                    if not should_promote:
+                        continue
+
+                    import time
+
+                    cfg = self.model_router.resolve("memory_extract")
+                    t0 = time.perf_counter()
+                    result = await self.diary_manager.generate_from_candidates(
+                        group_id=group_id,
+                        candidates=candidates,
+                        persona_name=self.persona.name,
+                        persona_description=(
+                            self.persona.persona_summary or self.persona.backstory or ""
+                        ),
+                        provider_async=self.provider_async,
+                        model_name=cfg.model_name,
+                    )
+                    diary_duration_ms = round((time.perf_counter() - t0) * 1000, 2)
+                    generator = getattr(self.diary_manager, "_generator", None)
+                    if generator is not None:
+                        self._record_subtask_tokens(
+                            task_name="diary_generate",
+                            model_name=cfg.model_name,
+                            group_id=group_id,
+                            request=getattr(generator, "_last_request", None),
+                            duration_ms=diary_duration_ms,
+                        )
+                    if result:
+                        promoted_total += 1
+                        # Update semantic memory with LLM-extracted topics
+                        profile = self.semantic_memory.ensure_group_profile(group_id)
+                        if result.dominant_topic:
+                            profile.dominant_topic = result.dominant_topic
+                        for topic in result.interest_topics:
+                            if topic and topic not in profile.interest_topics:
+                                profile.interest_topics.append(topic)
+                        self.semantic_memory.save_group_profile(group_id)
+
+                if promoted_total > 0:
+                    self._log_inner_thought(
+                        f"整理了 {promoted_total} 个群的对话日记，过去的回忆又清晰了一点～"
+                    )
+            except Exception as exc:
+                logger.warning("Diary promotion failed: %s", exc)
+
+    async def _bg_diary_consolidator(self) -> None:
+        """Periodically consolidate diary entries via LLM merging."""
+        interval = self.config.get("consolidation_interval_seconds", 600)
+        while self._bg_running:
+            await asyncio.sleep(interval)
+            try:
+                await self._run_diary_consolidation()
+            except Exception as exc:
+                logger.warning("Diary consolidation failed: %s", exc)
+
+    async def _run_diary_consolidation(self) -> None:
+        """Find similar diary entries and merge them via LLM."""
+        from sirius_chat.memory.diary.consolidator import DiaryConsolidator
+        from sirius_chat.providers.base import GenerationRequest
+
+        import time
+
+        consolidator = DiaryConsolidator(self.diary_manager, self.config)
+        cfg = self.model_router.resolve("memory_extract")
+
+        for group_id in list(self._group_last_message_at.keys()):
+            try:
+                clusters = consolidator.find_clusters(group_id)
+                if not clusters:
+                    continue
+
+                merged_entries: list[Any] = []
+                for cluster in clusters:
+                    system_prompt, user_content = consolidator.build_merge_prompt(cluster)
+                    request = GenerationRequest(
+                        model=cfg.model_name,
+                        system_prompt=system_prompt,
+                        messages=[{"role": "user", "content": user_content}],
+                        temperature=0.4,
+                        max_tokens=2048,
+                        purpose="diary_consolidate",
+                    )
+                    t0 = time.perf_counter()
+                    raw = await self.provider_async.generate_async(request)
+                    consolidate_duration_ms = round((time.perf_counter() - t0) * 1000, 2)
+
+                    from sirius_chat.token.utils import PromptTokenBreakdown, estimate_tokens
+
+                    sub_bd = PromptTokenBreakdown()
+                    sub_bd.output_format = estimate_tokens(system_prompt)
+                    sub_bd.user_message = estimate_tokens(user_content)
+                    sub_bd.output_total = estimate_tokens(raw)
+                    sub_bd.total = sub_bd.output_format + sub_bd.user_message + sub_bd.output_total
+
+                    self._record_subtask_tokens(
+                        task_name="diary_consolidate",
+                        model_name=cfg.model_name,
+                        group_id=group_id,
+                        request=request,
+                        duration_ms=consolidate_duration_ms,
+                        token_breakdown=sub_bd.to_dict(),
+                    )
+                    entry = consolidator.parse_merge_result(raw, cluster)
+                    if entry:
+                        merged_entries.append(entry)
+
+                if merged_entries:
+                    consolidator.rebuild_entries(group_id, clusters, merged_entries)
+                    self._log_inner_thought(
+                        f"整理了 {len(clusters)} 组相似日记，合并成 {len(merged_entries)} 条喵~"
+                    )
+            except Exception as exc:
+                logger.warning("Diary consolidation failed for %s: %s", group_id, exc)
+
+    async def proactive_check(
+        self,
+        group_id: str,
+        *,
+        _now: datetime | None = None,
+    ) -> dict[str, Any] | None:
+        """Check if proactive trigger should fire for a group."""
+        if not self.is_proactive_enabled(group_id):
+            return None
+
+        last_at = self._group_last_message_at.get(group_id)
+        group_profile = self.semantic_memory.ensure_group_profile(group_id)
+
+        trigger = self.proactive_trigger.check(
+            group_id,
+            last_message_at=last_at,
+            group_atmosphere={
+                "valence": (
+                    getattr(group_profile.atmosphere_history[-1], "group_valence", 0.0)
+                    if group_profile.atmosphere_history
+                    else 0.0
+                ),
+            },
+            _now=_now,
+        )
+        if not trigger:
+            return None
+
+        # Guard: do not send another proactive message if nobody replied to the last one.
+        last_proactive_iso = self._last_proactive_at.get(group_id)
+        if last_proactive_iso:
+            last_proactive_dt = _parse_iso(last_proactive_iso)
+            last_msg_dt = _parse_iso(last_at) if last_at else None
+            if last_proactive_dt and (last_msg_dt is None or last_proactive_dt > last_msg_dt):
+                return None
+
+        # Check conversation gap readiness before proactive insertion
+        recent = self._get_recent_messages(group_id, n=6)
+        rhythm = self.rhythm_analyzer.analyze(group_id, recent)
+        if rhythm.turn_gap_readiness < self.expressiveness.proactive_gap_threshold:
+            # Conversation is in full flow, don't interrupt with proactive
+            return None
+
+        # Record proactive trigger timestamp
+        now_iso = (_now if _now is not None else datetime.now(timezone.utc)).isoformat()
+        self._last_proactive_at[group_id] = now_iso
+        self.proactive_trigger._last_proactive[group_id] = now_iso
+        self._save_proactive_state()
+
+        # Generate proactive message
+        bundle = self._build_proactive_prompt(trigger, group_id)
+        style = self.style_adapter.adapt(
+            heat_level="warm",
+            pace="steady",
+            is_group_chat=True,
+        )
+        # Use ContextAssembler to build full messages with diary RAG + XML history
+        msgs, ca_breakdown = self.context_assembler.build_messages_with_breakdown(
+            group_id=group_id,
+            current_query=bundle.user_content or "...",
+            system_prompt=bundle.system_prompt,
+            search_query=bundle.user_content or "",
+            recent_n=10,
+        )
+        system_prompt = msgs[0]["content"]
+        messages = msgs[1:]
+
+        # Merge assembler breakdown into response-assembler breakdown
+        token_breakdown = bundle.token_breakdown.to_dict() if bundle.token_breakdown else {}
+        for key, val in ca_breakdown.items():
+            if key == "diary":
+                token_breakdown["memory"] = token_breakdown.get("memory", 0) + val
+            else:
+                token_breakdown[key] = token_breakdown.get(key, 0) + val
+
+        raw_reply = await self._generate(
+            system_prompt, messages, group_id, style,
+            token_breakdown=token_breakdown,
+        )
+        reply = raw_reply.strip()
+
+        await self.event_bus.emit(
+            SessionEvent(
+                type=SessionEventType.PROACTIVE_RESPONSE_TRIGGERED,
+                data={
+                    "group_id": group_id,
+                    "trigger_type": trigger["trigger_type"],
+                },
+            )
+        )
+
+        # Record assistant reply into basic memory so future turns can see it
+        clean_reply = strip_skill_calls(reply).strip()
+        if clean_reply:
+            self.basic_memory.add_entry(
+                group_id=group_id,
+                user_id="assistant",
+                role="assistant",
+                content=clean_reply,
+                speaker_name=self.persona.name if self.persona else "assistant",
+            )
+
+        # Record reply timestamp for cooldown tracking
+        self._last_reply_at[group_id] = datetime.now(timezone.utc).timestamp()
+        self._persist_group_state(group_id)
+
+        return {
+            "strategy": "proactive",
+            "trigger_type": trigger["trigger_type"],
+            "reply": reply,
+        }
+
+    # ------------------------------------------------------------------
+    # Developer proactive private-chat memory conversations
+    # ------------------------------------------------------------------
+
+    async def _bg_proactive_developer_chat_checker(self) -> None:
+        """Periodically generate proactive memory-oriented chats for developers.
+
+        Window is short (default 5 min) so the AI can create more shared
+        memories with the developer in private-chat contexts.
+        """
+        interval = self.config.get("proactive_developer_chat_interval_seconds", 1800)
+        min_silence = self.config.get("proactive_developer_min_silence_seconds", 120)
+        while self._bg_running:
+            await asyncio.sleep(interval)
+            now = datetime.now(timezone.utc).timestamp()
+            for group_id in list(self._developer_private_groups):
+                try:
+                    if not self._should_chat_with_developer(group_id, now, min_silence, interval):
+                        continue
+                    reply = await self._generate_developer_chat(group_id)
+                    if reply:
+                        self._pending_developer_chats.setdefault(group_id, []).append(reply)
+                        self._last_developer_chat_at[group_id] = now
+                        self._log_inner_thought(f"突然想跟开发者聊聊，发了条消息过去～")
+                except Exception as exc:
+                    logger.warning("Developer chat check failed for %s: %s", group_id, exc)
+
+    def _should_chat_with_developer(
+        self,
+        group_id: str,
+        now: float,
+        min_silence: float,
+        interval: float,
+    ) -> bool:
+        """Check whether it's appropriate to proactively chat with a developer."""
+        # Active hours check
+        start = self.config.get("proactive_active_start_hour", 8)
+        end = self.config.get("proactive_active_end_hour", 23)
+        local_hour = datetime.fromtimestamp(now).hour
+        if not (start <= local_hour < end):
+            return False
+
+        # Respect silence since last message
+        last_msg_iso = self._group_last_message_at.get(group_id)
+        if last_msg_iso:
+            last_msg_dt = _parse_iso(last_msg_iso)
+            if last_msg_dt and (now - last_msg_dt.timestamp()) < min_silence:
+                return False
+
+        # Respect interval since last proactive developer chat
+        last_chat = self._last_developer_chat_at.get(group_id, 0)
+        if now - last_chat < interval:
+            return False
+
+        # CRITICAL: Do not send a new proactive message if the developer
+        # has not replied to the last one. We compare the timestamp of the
+        # last human message against the last proactive chat timestamp.
+        if last_chat > 0:
+            if last_msg_iso:
+                last_msg_dt = _parse_iso(last_msg_iso)
+                if last_msg_dt and last_msg_dt.timestamp() <= last_chat:
+                    # Developer has not replied since our last proactive msg
+                    return False
+            else:
+                # No human message recorded at all, but we already chatted
+                return False
+
+        return True
+
+    async def _generate_developer_chat(self, group_id: str) -> str | None:
+        """Generate a memory-oriented proactive message for a developer."""
+        user_id = group_id.replace("private_", "")
+        user_profile = self.semantic_memory.get_global_user_profile(user_id)
+
+        topic = self._pick_developer_chat_topic(group_id, user_id, user_profile)
+        if not topic:
+            return None
+
+        identity = self.persona.build_system_prompt() if self.persona else ""
+        sections: list[str] = []
+        if identity:
+            sections.append(identity)
+        sections.extend(
+            [
+                "[当前场景] 你突然想起了开发者，想主动找他聊聊，分享一个话题或回忆。",
+                "[语气] 亲密、自然、像老朋友一样。不要机械，不要过度热情。",
+                f"[话题] {topic}",
+            ]
+        )
+
+        if user_profile and user_profile.relationship_state:
+            familiarity = user_profile.relationship_state.compute_familiarity()
+            if familiarity > 0.7:
+                sections.append("[关系] 你们已经很熟了，可以用更随意的语气。")
+            elif familiarity > 0.4:
+                sections.append("[关系] 你们关系不错，保持友好自然的语气。")
+
+        system_prompt = "\n\n".join(sections)
+        messages = [{"role": "user", "content": "（你决定主动开口）"}]
+        style = self.style_adapter.adapt(heat_level="warm", pace="steady", is_group_chat=False)
+
+        from sirius_chat.token.utils import PromptTokenBreakdown, estimate_tokens
+
+        sub_bd = PromptTokenBreakdown()
+        if identity:
+            sub_bd.persona = estimate_tokens(identity)
+        sub_bd.memory = estimate_tokens(system_prompt) - sub_bd.persona
+        sub_bd.total = estimate_tokens(system_prompt)
+
+        user_comm_style = getattr(user_profile, "communication_style", "") if user_profile else ""
+        raw_reply = await self._generate(
+            system_prompt, messages, group_id, style,
+            user_communication_style=user_comm_style,
+            token_breakdown=sub_bd.to_dict(),
+        )
+        reply = raw_reply.strip()
+
+        clean_reply = strip_skill_calls(reply).strip()
+        if clean_reply:
+            self.basic_memory.add_entry(
+                group_id=group_id,
+                user_id="assistant",
+                role="assistant",
+                content=clean_reply,
+                speaker_name=self.persona.name if self.persona else "assistant",
+            )
+            self._last_reply_at[group_id] = datetime.now(timezone.utc).timestamp()
+            self._persist_group_state(group_id)
+
+        return clean_reply or None
+
+    def _pick_developer_chat_topic(
+        self,
+        group_id: str,
+        user_id: str,
+        user_profile: Any | None,
+    ) -> str:
+        """Pick a personal/memory-oriented topic for developer proactive chat."""
+        import random
+
+        candidates: list[str] = []
+
+        # 1. User interest graph
+        if user_profile and user_profile.interest_graph:
+            for node in user_profile.interest_graph:
+                if getattr(node, "participation", 0) >= 0.3 and getattr(node, "topic", ""):
+                    candidates.append(f"你之前聊过「{node.topic}」，后来有什么新想法吗？")
+
+        # 2. Recent diary entries for this private group
+        try:
+            diary_entries = self.diary_manager.get_entries_for_group(group_id)
+            if diary_entries:
+                recent = sorted(
+                    diary_entries,
+                    key=lambda e: getattr(e, "created_at", ""),
+                    reverse=True,
+                )[:3]
+                for entry in recent:
+                    summary = getattr(entry, "summary", "") or getattr(entry, "content", "")[:60]
+                    if summary:
+                        candidates.append(f"刚才整理日记时看到这段记录：{summary}，挺有意思的。")
+                        break
+        except Exception:
+            pass
+
+        # 3. Preset memory-oriented templates
+        templates = [
+            "突然想到一个有趣的问题：如果你可以改变过去的一个决定，你会选哪个？",
+            "今天整理记忆的时候，发现我们聊过很多有意思的东西，你最近有什么新发现吗？",
+            "想和你分享一个刚想到的观点——你觉得 AI 和人类之间，最重要的是什么？",
+            "突然有点好奇，你最近在做的事情进展怎么样了？",
+            "翻到了以前的聊天记录，感觉时间过得好快，你最近过得怎么样？",
+            "刚才想到一个话题，想听听你的看法：你觉得未来五年，什么技术会改变生活？",
+            "突然想起我们第一次聊天的时候，那时候聊了什么来着？",
+        ]
+        candidates.extend(random.sample(templates, min(2, len(templates))))
+
+        if not candidates:
+            return ""
+
+        return random.choice(candidates)
+
+    def pop_developer_chats(self, group_id: str) -> list[str]:
+        """Pop pending proactive developer chats for a group.
+
+        Called by the external delivery loop to retrieve and send chats.
+        """
+        return self._pending_developer_chats.pop(group_id, [])
+
+    # ------------------------------------------------------------------
+    # Reminder (timer) support
+    # ------------------------------------------------------------------
+
+    def pop_reminders(self, group_id: str, adapter_type: str | None = None) -> list[str]:
+        """Pop pending reminder messages for a group.
+
+        Called by the external delivery loop to retrieve and send due reminders.
+        If *adapter_type* is provided, only reminders created for that adapter
+        are returned; unmatched items remain in the queue.
+        """
+        items = self._pending_reminders.pop(group_id, [])
+        if adapter_type is None:
+            return [i["text"] for i in items]
+        matched = []
+        unmatched = []
+        for i in items:
+            if i.get("adapter_type") == adapter_type:
+                matched.append(i["text"])
+            else:
+                unmatched.append(i)
+        if unmatched:
+            self._pending_reminders[group_id] = unmatched
+        return matched
+
+    def _inject_group_id_into_latest_reminder(self, group_id: str) -> None:
+        """Attach group_id and adapter_type to the most recently created reminder."""
+        if self._skill_executor is None:
+            return
+        try:
+            store = self._skill_executor.get_data_store("reminder")
+            reminders = list(store.get("reminders", []))
+            if not reminders:
+                return
+            # Find the reminder with the latest created_at
+            latest = max(
+                reminders,
+                key=lambda r: datetime.fromisoformat(
+                    str(r.get("created_at", "1970-01-01T00:00:00+00:00")).replace("Z", "+00:00")
+                ),
+            )
+            updated = False
+            if "group_id" not in latest:
+                latest["group_id"] = group_id
+                updated = True
+            if "adapter_type" not in latest:
+                latest["adapter_type"] = self._current_adapter_type
+                updated = True
+            if updated:
+                store.set("reminders", reminders)
+                store.save()
+        except Exception as exc:
+            logger.warning("Failed to inject group_id into reminder: %s", exc)
+
+    async def _bg_reminder_checker(self) -> None:
+        """Periodically check due reminders for all active groups."""
+        interval = self.config.get("reminder_check_interval_seconds", 10)
+        while self._bg_running:
+            await asyncio.sleep(interval)
+            try:
+                await self._check_due_reminders()
+            except Exception as exc:
+                logger.warning("Reminder check failed: %s", exc)
+
+    async def _check_due_reminders(self) -> None:
+        """Scan reminders and queue due ones for delivery.
+
+        Each due reminder triggers an AI-generated message in the persona's
+        own voice. The model receives the original reminder content as context
+        and produces a natural reply.
+        """
+        if self._skill_executor is None or self.provider_async is None:
+            return
+        store = self._skill_executor.get_data_store("reminder")
+        reminders = list(store.get("reminders", []))
+        now = datetime.now(timezone.utc)
+        triggered: list[tuple[str, str, str, str, str, str, list[dict[str, Any]]]] = []
+        remaining: list[dict[str, Any]] = []
+
+        for r in reminders:
+            if _is_reminder_due(r, now):
+                gid = r.get("group_id")
+                if gid:
+                    content = r.get("content", "提醒时间到啦")
+                    user_id = r.get("user_id", "")
+                    user_name = r.get("user_name", "")
+                    adapter_type = r.get("adapter_type", "")
+                    target = r.get("target", "user")
+                    skill_chain = r.get("skill_chain")
+                    skill_results: list[dict[str, Any]] = []
+                    if skill_chain and self.skill_executor:
+                        logger.info(
+                            "Reminder %s skill_chain start: %d items",
+                            r.get("id"),
+                            len(skill_chain),
+                        )
+                        for item in skill_chain:
+                            if not isinstance(item, dict):
+                                logger.warning(
+                                    "Reminder %s skill_chain skip non-dict item: %s",
+                                    r.get("id"),
+                                    item,
+                                )
+                                continue
+                            skill_name = item.get("skill", "")
+                            params = item.get("params", {}) or {}
+                            if not skill_name:
+                                logger.warning(
+                                    "Reminder %s skill_chain skip empty skill name",
+                                    r.get("id"),
+                                )
+                                continue
+                            try:
+                                logger.info(
+                                    "Reminder %s executing skill: %s(%s)",
+                                    r.get("id"),
+                                    skill_name,
+                                    params,
+                                )
+                                result = await self.skill_executor.execute(
+                                    skill_name=skill_name,
+                                    params=params,
+                                    group_id=gid,
+                                    user_id=user_id,
+                                    user_name=user_name,
+                                )
+                                logger.info(
+                                    "Reminder %s skill %s executed successfully",
+                                    r.get("id"),
+                                    skill_name,
+                                )
+                                skill_results.append(
+                                    {
+                                        "skill": skill_name,
+                                        "params": params,
+                                        "result": result,
+                                    }
+                                )
+                            except Exception as exc:
+                                logger.warning(
+                                    "Reminder %s skill_chain execute failed: %s(%s) -> %s",
+                                    r.get("id"),
+                                    skill_name,
+                                    params,
+                                    exc,
+                                )
+                                skill_results.append(
+                                    {
+                                        "skill": skill_name,
+                                        "params": params,
+                                        "error": str(exc),
+                                    }
+                                )
+                        logger.info(
+                            "Reminder %s skill_chain finished: %d/%d succeeded",
+                            r.get("id"),
+                            sum(1 for sr in skill_results if "error" not in sr),
+                            len(skill_results),
+                        )
+                    triggered.append(
+                        (gid, content, user_id, user_name, adapter_type, target, skill_results)
+                    )
+                    r["last_fired_at"] = now.isoformat()
+                    r["fire_count"] = r.get("fire_count", 0) + 1
+                    mode = r.get("mode", "once")
+                    if mode == "once":
+                        continue  # Drop one-shot reminders after firing
+                    if mode == "interval":
+                        interval = r.get("minutes_after", 1)
+                        next_fire = now + timedelta(minutes=interval)
+                        r["fire_at"] = next_fire.isoformat()
+                else:
+                    logger.warning("Reminder %s has no group_id, skipping", r.get("id"))
+            remaining.append(r)
+
+        if len(remaining) != len(reminders):
+            store.set("reminders", remaining)
+            store.save()
+
+        for gid, content, user_id, user_name, adapter_type, target, skill_results in triggered:
+            reply = await self._generate_reminder_message(
+                gid, content, user_id, user_name, target, skill_results
+            )
+            if reply:
+                self._pending_reminders.setdefault(gid, []).append(
+                    {"text": reply, "adapter_type": adapter_type}
+                )
+                self._log_inner_thought(f"AI 生成提醒：{reply[:40]}")
+                if gid.startswith("private_"):
+                    self._active_private_groups.add(gid)
+
+    async def _generate_reminder_message(
+        self,
+        group_id: str,
+        content: str,
+        user_id: str,
+        user_name: str,
+        target: str = "user",
+        skill_results: list[dict[str, Any]] | None = None,
+    ) -> str | None:
+        """Generate a persona-styled reminder message via LLM."""
+        try:
+            identity = self.persona.build_system_prompt() if self.persona else ""
+            sections: list[str] = []
+            if identity:
+                sections.append(identity)
+            who = user_name or user_id or "用户"
+            if target == "self":
+                sections.append(
+                    f"到时间了，该去做之前答应 {who} 的事了：{content}。"
+                    f"随便说两句就行，不用太正式，就像平时聊天一样。"
+                )
+            else:
+                sections.append(
+                    f"到时间了，该提醒 {who} 了：{content}。"
+                    f"随便说两句就行，不用太正式，就像平时聊天一样。"
+                )
+
+            if skill_results:
+                results_text = "\n".join(
+                    f"- [{i+1}] {sr['skill']}({json.dumps(sr.get('params', {}), ensure_ascii=False)}): "
+                    f"{json.dumps(sr.get('result') or sr.get('error'), ensure_ascii=False, default=str)}"
+                    for i, sr in enumerate(skill_results)
+                )
+                sections.append(
+                    f"顺便一提，刚才已经执行了这些操作：\n{results_text}\n"
+                    f"有结果的话直接带进去说，不用刻意汇报。"
+                )
+
+            # Inject available skills so the model can chain-call during reminders
+            skill_desc = self.response_assembler._build_skill_descriptions(
+                caller_is_developer=False,
+                adapter_type=self._current_adapter_type or None,
+            )
+            if skill_desc:
+                sections.append(skill_desc)
+
+            system_prompt = "\n\n".join(sections)
+            messages = [{"role": "user", "content": "（提醒时间到了）"}]
+            user_profile = self.semantic_memory.get_global_user_profile(user_id)
+            user_comm_style = getattr(user_profile, "communication_style", "") if user_profile else ""
+
+            from sirius_chat.token.utils import PromptTokenBreakdown, estimate_tokens
+
+            sub_bd = PromptTokenBreakdown()
+            if identity:
+                sub_bd.persona = estimate_tokens(identity)
+            sub_bd.memory = estimate_tokens(system_prompt) - sub_bd.persona
+            sub_bd.total = estimate_tokens(system_prompt)
+
+            raw_reply = await self._generate(
+                system_prompt, messages, group_id,
+                task_name="proactive_generate",
+                user_communication_style=user_comm_style,
+                token_breakdown=sub_bd.to_dict(),
+            )
+            reply = strip_skill_calls(raw_reply).strip()
+            if reply:
+                self.basic_memory.add_entry(
+                    group_id=group_id,
+                    user_id="assistant",
+                    role="assistant",
+                    content=reply,
+                    speaker_name=self.persona.name if self.persona else "assistant",
+                )
+                self._last_reply_at[group_id] = datetime.now(timezone.utc).timestamp()
+                self._persist_group_state(group_id)
+            return reply or None
+        except Exception as exc:
+            logger.warning("Failed to generate reminder message: %s", exc)
+            return None
+
+    async def tick_delayed_queue(
+        self,
+        group_id: str,
+        on_partial_reply: Any | None = None,
+    ) -> list[dict[str, Any]]:
+        """Process delayed response queue for a group.
+
+        If multiple items trigger in the same tick, merge them into a single
+        prompt so the model generates only one consolidated reply.
+        Supports multi-round SKILL execution similar to immediate responses.
+
+        Args:
+            group_id: The group / private chat to tick.
+            on_partial_reply: Optional async callable invoked immediately
+                when non-skill text is extracted *before* skills are executed.
+                This lets callers send "让我查一下…" in real time while
+                the skill runs, rather than batching everything at the end.
+        """
+        recent = self._get_recent_messages(group_id, n=10)
+        rhythm = self.rhythm_analyzer.analyze(group_id, recent)
+        triggered = self.delayed_queue.tick(group_id, recent, rhythm)
+        if not triggered:
+            return []
+
+        # Determine caller from the first triggered item
+        caller_profile = None
+        item = triggered[0]
+        # Defensive: if _queues was corrupted externally, item may be a dict.
+        if isinstance(item, dict):
+            logger.warning(
+                "tick_delayed_queue: triggered[0] is dict (item_id=%s), converting to DelayedResponseItem",
+                item.get("item_id", "unknown"),
+            )
+            from sirius_chat.models.response_strategy import DelayedResponseItem, StrategyDecision, ResponseStrategy
+
+            sd_raw = item.get("strategy_decision", {}) or {}
+            try:
+                strategy_val = sd_raw.get("strategy", "silent")
+                if isinstance(strategy_val, str):
+                    strategy_enum = ResponseStrategy(strategy_val)
+                else:
+                    strategy_enum = ResponseStrategy.SILENT
+            except Exception:
+                strategy_enum = ResponseStrategy.SILENT
+            strategy_decision = StrategyDecision(
+                strategy=strategy_enum,
+                score=float(sd_raw.get("score", 0.0)),
+                threshold=float(sd_raw.get("threshold", 0.5)),
+                urgency=float(sd_raw.get("urgency", 0.0)),
+                relevance=float(sd_raw.get("relevance", 0.0)),
+                reason=str(sd_raw.get("reason", "")),
+                estimated_delay_seconds=float(sd_raw.get("estimated_delay_seconds", 0.0)),
+                context=dict(sd_raw.get("context", {})),
+            )
+            item = DelayedResponseItem(
+                item_id=item.get("item_id", ""),
+                group_id=item.get("group_id", group_id),
+                user_id=item.get("user_id", ""),
+                channel=item.get("channel"),
+                channel_user_id=item.get("channel_user_id"),
+                message_content=item.get("message_content", ""),
+                strategy_decision=strategy_decision,
+                emotion_state=item.get("emotion_state", {}),
+                candidate_memories=item.get("candidate_memories", []),
+                enqueue_time=item.get("enqueue_time", ""),
+                window_seconds=float(item.get("window_seconds", 30.0)),
+                status=item.get("status", "pending"),
+                multimodal_inputs=item.get("multimodal_inputs", []),
+            )
+            triggered[0] = item
+
+        if item.channel and item.channel_user_id:
+            resolved_uid = self.user_manager.resolve_user_id(
+                platform=item.channel,
+                external_uid=item.channel_user_id,
+            )
+            if resolved_uid:
+                caller_profile = self.user_manager.get_user(resolved_uid, group_id)
+        if caller_profile is None:
+            # Fallback: search by user_id (nickname) across all groups
+            resolved_uid = self.user_manager.resolve_user_id(speaker=item.user_id)
+            if resolved_uid:
+                caller_profile = self.user_manager.get_user(resolved_uid, group_id)
+        caller_is_developer = bool(caller_profile and caller_profile.is_developer)
+
+        # Trust score for SKILL permission control
+        caller_trust = 0.5  # default for new / unknown users
+        if resolved_uid:
+            semantic_profile = self.semantic_memory.get_user_profile(group_id, resolved_uid)
+            if semantic_profile and semantic_profile.relationship_state:
+                caller_trust = semantic_profile.relationship_state.trust_score
+
+        # Merge all triggered items into one prompt and one generation call
+        adapter_type = getattr(triggered[0], "adapter_type", None) if triggered else None
+        is_first_interaction = any(
+            bool(getattr(item, "emotion_state", {}).get("_is_first_interaction"))
+            for item in triggered
+        )
+        bundle = self._build_delayed_prompt(
+            triggered,
+            group_id,
+            caller_is_developer=caller_is_developer,
+            adapter_type=adapter_type,
+            is_first_interaction=is_first_interaction,
+        )
+
+        # Use ContextAssembler to build full messages with diary RAG + XML history
+        msgs, ca_breakdown = self.context_assembler.build_messages_with_breakdown(
+            group_id=group_id,
+            current_query=bundle.user_content,
+            system_prompt=bundle.system_prompt,
+            search_query=bundle.user_content,
+            recent_n=10,
+        )
+        system_prompt = msgs[0]["content"]
+        messages = msgs[1:]
+
+        # Merge assembler breakdown into response-assembler breakdown
+        token_breakdown = bundle.token_breakdown.to_dict() if bundle.token_breakdown else {}
+        for key, val in ca_breakdown.items():
+            if key == "diary":
+                token_breakdown["memory"] = token_breakdown.get("memory", 0) + val
+            else:
+                token_breakdown[key] = token_breakdown.get(key, 0) + val
+
+        # Collect multimodal inputs from all triggered items and inject into user message
+        all_multimodal: list[dict[str, str]] = []
+        for triggered_item in triggered:
+            if getattr(triggered_item, "multimodal_inputs", None):
+                all_multimodal.extend(triggered_item.multimodal_inputs)
+
+        # Also inject recent images from basic memory so the model can see
+        # pictures referenced in the current conversation (e.g. user sends a
+        # photo then asks "who is this character?").
+        seen_urls: set[str] = {str(m.get("value", "")) for m in all_multimodal}
+        for entry in self.basic_memory.get_context(group_id, n=10):
+            if entry.multimodal_inputs:
+                for m in entry.multimodal_inputs:
+                    url = str(m.get("value", ""))
+                    # 跳过公网 URL——QQ 临时链接 Provider 无法下载，只保留本地缓存路径
+                    if not url or url in seen_urls or m.get("type") != "image":
+                        continue
+                    if url.startswith(("http://", "https://")):
+                        continue
+                    all_multimodal.append(dict(m))
+                    seen_urls.add(url)
+
+        messages = self._inject_multimodal_into_user_message(messages, all_multimodal)
+
+        # Multi-round generation with SKILL support
+        from sirius_chat.skills.executor import parse_skill_calls, strip_skill_calls
+        from sirius_chat.skills.models import SkillInvocationContext
+
+        max_skill_rounds = self.config.get("max_skill_rounds", 8)
+        partial_replies: list[str] = []
+        _any_partial_sent = False
+        last_round_had_partial = False
+
+        # Determine user communication style from the triggered batch
+        resolved_uid = None
+        for item in triggered:
+            uid = getattr(item, "user_id", None)
+            if uid:
+                resolved_uid = uid
+                break
+        user_profile = self.semantic_memory.get_user_profile(group_id, resolved_uid) if resolved_uid else None
+        user_comm_style = getattr(user_profile, "communication_style", "") if user_profile else ""
+
+        for _round in range(max_skill_rounds + 1):
+            raw_reply = await self._generate(
+                system_prompt, messages, group_id,
+                user_communication_style=user_comm_style,
+                token_breakdown=token_breakdown,
+            )
+            reply = raw_reply.strip()
+
+            calls = parse_skill_calls(reply)
+            if not calls or self._skill_registry is None or self._skill_executor is None:
+                break
+
+            # Determine if every invoked skill is marked silent.
+            # Silent skills should not trigger partial replies or a follow-up round.
+            all_silent = all(
+                self._skill_registry.get(name) is not None and self._skill_registry.get(name).silent
+                for name, _ in calls
+            )
+
+            # Extract non-skill text as a partial reply to send immediately.
+            non_skill_text = strip_skill_calls(reply).strip()
+            last_round_had_partial = False
+            if non_skill_text and not all_silent:
+                self._log_inner_thought(f"先跟用户回一声：{non_skill_text[:40]}...")
+                last_round_had_partial = True
+                _any_partial_sent = True
+                if on_partial_reply is not None:
+                    try:
+                        await on_partial_reply(non_skill_text)
+                    except Exception as exc:
+                        logger.warning("on_partial_reply failed: %s", exc)
+                else:
+                    partial_replies.append(non_skill_text)
+
+            # Execute skills and collect results
+            skill_results: list[str] = []
+            skill_multimodal: list[dict[str, Any]] = []
+            from sirius_chat.memory.user.models import UserProfile
+
+            caller_user_id = item.user_id
+            skill_caller = UserProfile(
+                user_id=caller_user_id,
+                name=caller_profile.name if caller_profile else caller_user_id,
+                metadata={"is_developer": caller_is_developer},
+            )
+            developer_profiles: list[UserProfile] = []
+            group_entries = self.user_manager.entries.get(group_id, {})
+            for profile in group_entries.values():
+                if profile.is_developer:
+                    developer_profiles.append(profile)
+
+            if self._skill_executor is not None:
+                self._skill_executor.set_chat_context(group_id=group_id, user_id=caller_user_id or "")
+
+            for idx, (skill_name, params) in enumerate(calls):
+                skill = self._skill_registry.get(skill_name)
+                if skill is None:
+                    err = f"SKILL '{skill_name}' 未找到"
+                    logger.warning(err)
+                    if not all_silent:
+                        skill_results.append(f"[{err}]")
+                    continue
+                # Trust-based permission: low-trust non-developers cannot invoke skills
+                if caller_trust < 0.3 and not caller_is_developer:
+                    err = f"SKILL '{skill_name}' 被拒绝：信任度不足 ({caller_trust:.2f})"
+                    logger.warning(err)
+                    if not all_silent:
+                        skill_results.append(f"[SKILL '{skill_name}' 拒绝] 你还不够熟，这个技能暂不可用")
+                    continue
+
+                if skill.developer_only and not caller_is_developer:
+                    err = f"SKILL '{skill_name}' 被拒绝：caller 不是 developer"
+                    logger.warning(err)
+                    if not all_silent:
+                        skill_results.append(f"[SKILL '{skill_name}' 拒绝] 该技能仅 developer 可用")
+                    continue
+                ctx = SkillInvocationContext(
+                    caller=skill_caller,
+                    developer_profiles=developer_profiles,
+                )
+                logger.info(
+                    "Skill execute: %s(params=%s, caller=%s, group=%s)",
+                    skill_name,
+                    params,
+                    caller_user_id,
+                    group_id,
+                )
+                try:
+                    result = await self._skill_executor.execute_async(
+                        skill, params, invocation_context=ctx, max_retries=2
+                    )
+                    logger.info(
+                        "Skill execute success: %s -> %s",
+                        skill_name,
+                        "success" if result.success else "failed",
+                    )
+                    if result.success:
+                        if not skill.silent:
+                            skill_results.append(
+                                f"[SKILL '{skill_name}' 结果] {result.to_display_text()}"
+                            )
+                            for block in result.multimodal_blocks:
+                                skill_multimodal.append(
+                                    {
+                                        "type": "image_url",
+                                        "image_url": {"url": block.value},
+                                    }
+                                )
+                        # Auto-persist glossary terms from learn_term
+                        if skill_name == "learn_term":
+                            term = params.get("term", "")
+                            definition = params.get("definition", "")
+                            if term and definition:
+                                from sirius_chat.memory.glossary import GlossaryTerm
+
+                                self.glossary_manager.add_or_update(
+                                    group_id,
+                                    GlossaryTerm(term=term, definition=definition, source="skill"),
+                                )
+                        # Inject group_id into newly created reminders
+                        if (
+                            skill_name == "reminder"
+                            and params.get("action", "").strip().lower() == "create"
+                        ):
+                            self._inject_group_id_into_latest_reminder(group_id)
+                    else:
+                        err = result.error or "未知错误"
+                        logger.warning("SKILL '%s' 执行失败: %s", skill_name, err)
+                        if not skill.silent:
+                            skill_results.append(f"[SKILL '{skill_name}' 失败] {err}")
+                except Exception as exc:
+                    logger.error("SKILL '%s' 执行异常: %s", skill_name, exc)
+                    if not skill.silent:
+                        skill_results.append(f"[SKILL '{skill_name}' 异常] {exc}")
+
+                # 链式调用中间增加延迟，避免回复过快
+                if idx < len(calls) - 1:
+                    await asyncio.sleep(2)
+
+            # If all skills were silent, skip the follow-up generation round.
+            if all_silent:
+                break
+
+            # Inject skill results into the conversation for the next round
+            assistant_content = strip_skill_calls(reply)
+            if _any_partial_sent:
+                assistant_content += "\n\n（以上内容已发送给用户）"
+            messages.append({"role": "assistant", "content": assistant_content})
+
+            suffix_parts = [
+                "\n\n[继续] 请基于以上技能执行结果，继续完成你的回复。",
+                "如果结果中包含错误或失败信息，请直接忽略，",
+                "不要向用户提及任何关于能力调用或失败的内容，继续自然地对话。",
+                "如果当前结果还不够完整，你可以继续调用其他技能来获取补充信息，",
+                "形成链式调用。",
+                "重要：如果你说要去搜索、查找、读取或执行任何操作，",
+                "必须在同一句回复中紧跟对应的 [SKILL_CALL: ...] 标记，绝对不能只说不动。",
+                "错误示例（只说不动）：\"我再去搜索一下\" ❌",
+                "正确示例（边说边做）：\"我再去搜索一下 [SKILL_CALL: bing_search | {\\\"query\\\": \\\"xxx\\\"}]\" ✅",
+                "重要：你的每次回复都必须包含自然语言内容，",
+                "不能把 SKILL_CALL 标记作为回复的唯一内容。",
+            ]
+            if _any_partial_sent:
+                suffix_parts.append(
+                    "注意：上文标记为“已发送给用户”的内容已经由你发送给用户，"
+                    "现在只需基于技能结果给出简短补充，不要重复之前的确认内容。"
+                )
+            messages.append(
+                {
+                    "role": "user",
+                    "content": self._build_skill_result_content(
+                        skill_results,
+                        skill_multimodal,
+                        suffix="\n\n".join(suffix_parts),
+                    ),
+                }
+            )
+
+            # Persist intermediate skill turns into basic memory
+            self.basic_memory.add_entry(
+                group_id=group_id,
+                user_id="assistant",
+                role="assistant",
+                content=strip_skill_calls(reply),
+                speaker_name=self.persona.name if self.persona else "assistant",
+            )
+            if skill_results:
+                self.basic_memory.add_entry(
+                    group_id=group_id,
+                    user_id="skill_system",
+                    role="system",
+                    content=f"[技能执行结果]\n{'\n'.join(skill_results)}",
+                )
+
+        # If the loop ended because max rounds were exhausted and the last round
+        # already sent a partial reply, don't duplicate that text as the final reply.
+        ended_because_max_rounds = (
+            _round == max_skill_rounds
+            and calls
+            and self._skill_registry is not None
+            and self._skill_executor is not None
+        )
+        if ended_because_max_rounds and last_round_had_partial:
+            logger.debug(
+                "Chain hit max_skill_rounds=%d; last partial already sent, "
+                "clearing clean_reply to avoid duplication",
+                max_skill_rounds,
+            )
+            reply = ""
+
+        # Record assistant reply into basic memory so future turns can see it
+        clean_reply = strip_skill_calls(reply).strip()
+
+        # Deduplication: suppress if nearly identical to a recent reply
+        if clean_reply:
+            import time
+
+            now_ts = datetime.now(timezone.utc).timestamp()
+            recent = self._recent_sent_replies.get(group_id, [])
+            recent = [(t, r) for t, r in recent if now_ts - t < self._reply_dedup_window]
+            if any(
+                self._text_similarity(clean_reply, r) > self._reply_dedup_threshold
+                for _, r in recent
+            ):
+                logger.debug(
+                    "Suppressing duplicate reply for %s (window=%ds, threshold=%.2f): %s...",
+                    group_id,
+                    self._reply_dedup_window,
+                    self._reply_dedup_threshold,
+                    clean_reply[:40],
+                )
+                clean_reply = ""
+            else:
+                recent.append((now_ts, clean_reply))
+            self._recent_sent_replies[group_id] = recent
+
+        if clean_reply:
+            self.basic_memory.add_entry(
+                group_id=group_id,
+                user_id="assistant",
+                role="assistant",
+                content=clean_reply,
+                speaker_name=self.persona.name if self.persona else "assistant",
+            )
+
+        # Record reply timestamp for cooldown tracking (once per tick)
+        self._last_reply_at[group_id] = datetime.now(timezone.utc).timestamp()
+        self._persist_group_state(group_id)
+
+        # Emit events for all triggered items but return only one result
+        for item in triggered:
+            await self.event_bus.emit(
+                SessionEvent(
+                    type=SessionEventType.DELAYED_RESPONSE_TRIGGERED,
+                    data={
+                        "group_id": group_id,
+                        "item_id": item.item_id,
+                    },
+                )
+            )
+
+        # Determine return strategy: if any triggered item is IMMEDIATE, report as immediate
+        from sirius_chat.models.response_strategy import ResponseStrategy
+
+        strategy = "delayed"
+        if any(i.strategy_decision.strategy == ResponseStrategy.IMMEDIATE for i in triggered):
+            strategy = "immediate"
+
+        # Never leak raw SKILL_CALL markers to the user.
+        # If the model only emitted skill calls with no natural language,
+        # fall back to the last partial reply or an empty string.
+        final_reply = clean_reply or (partial_replies[-1] if partial_replies else "")
+
+        return [
+            {
+                "strategy": strategy,
+                "item_id": triggered[0].item_id,
+                "reply": final_reply,
+                "partial_replies": partial_replies,
+            }
+        ]
+
+
+def _is_reminder_due(reminder: dict[str, Any], now: datetime) -> bool:
+    """Check whether a single reminder should fire at *now*."""
+    mode = reminder.get("mode", "once")
+    if mode == "once":
+        fire_at_str = reminder.get("fire_at")
+        if not fire_at_str:
+            return False
+        try:
+            fire_at = datetime.fromisoformat(str(fire_at_str).replace("Z", "+00:00"))
+        except ValueError:
+            return False
+        return now >= fire_at
+
+    if mode == "interval":
+        fire_at_str = reminder.get("fire_at")
+        if not fire_at_str:
+            return False
+        try:
+            fire_at = datetime.fromisoformat(str(fire_at_str).replace("Z", "+00:00"))
+        except ValueError:
+            return False
+        if now < fire_at:
+            return False
+        # Avoid duplicate fire within the same minute
+        last_fired = reminder.get("last_fired_at")
+        if last_fired:
+            try:
+                last_dt = datetime.fromisoformat(str(last_fired).replace("Z", "+00:00"))
+                if (now - last_dt).total_seconds() < 60:
+                    return False
+            except ValueError:
+                pass
+        return True
+
+    if mode in ("daily", "weekly"):
+        time_str = reminder.get("time", "")
+        if not time_str or ":" not in time_str:
+            return False
+        try:
+            h, m = map(int, str(time_str).split(":"))
+        except ValueError:
+            return False
+        # Compare against local time since user inputs time in local timezone
+        now_local = now.astimezone()
+        if now_local.hour != h or now_local.minute != m:
+            return False
+        # Avoid duplicate fire within the same minute
+        last_fired = reminder.get("last_fired_at")
+        if last_fired:
+            try:
+                last_dt = datetime.fromisoformat(str(last_fired).replace("Z", "+00:00"))
+                last_local = last_dt.astimezone()
+                if (
+                    last_local.year == now_local.year
+                    and last_local.month == now_local.month
+                    and last_local.day == now_local.day
+                    and last_local.hour == now_local.hour
+                    and last_local.minute == now_local.minute
+                ):
+                    return False
+            except ValueError:
+                pass
+        if mode == "weekly":
+            weekday = reminder.get("weekday")
+            if weekday is not None and now_local.weekday() != int(weekday):
+                return False
+        return True
+
+    return False
