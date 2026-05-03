@@ -12,7 +12,7 @@ from sirius_chat.config.models import Agent, MemoryPolicy, MultiModelConfig, Orc
 from sirius_chat.exceptions import OrchestrationConfigError
 
 
-_TASK_MEMORY_MANAGER = "memory_manager"
+_TASK_COGNITION_ANALYZE = "cognition_analyze"
 
 
 def build_orchestration_policy_from_dict(
@@ -35,14 +35,8 @@ def build_orchestration_policy_from_dict(
         "max_multimodal_value_length",
         "enable_prompt_driven_splitting",
         "split_marker",
-        "memory_manager_model",
-        "memory_manager_temperature",
-        "memory_manager_max_tokens",
         "memory_extract_batch_size",
         "memory_extract_min_content_length",
-        "event_extract_batch_size",
-        "enable_intent_analysis",
-        "intent_analysis_model",
         "consolidation_enabled",
         "consolidation_interval_seconds",
         "consolidation_min_entries",
@@ -266,10 +260,11 @@ def configure_orchestration_models(
         config: 会话配置对象
         **task_models: 任务名称到模型名称的映射。
             支持的任务名：
-            - memory_extract: 用户记忆提取
-            - event_extract: 事件提取
-            - intent_analysis: 意图分析
-            - memory_manager: 记忆整理与后台归纳
+            - cognition_analyze: 认知分析
+            - memory_extract: 记忆提取
+            - response_generate: 回复生成
+            - proactive_generate: 主动发言
+            - vision: 多模态
             
     Returns:
         更新后的 SessionConfig 对象（原对象被修改并返回）
@@ -279,8 +274,8 @@ def configure_orchestration_models(
         >>> from sirius_chat.config import configure_orchestration_models
         >>> config = configure_orchestration_models(
         ...     config,
+        ...     cognition_analyze="gpt-4-mini",
         ...     memory_extract="gpt-4-mini",
-        ...     event_extract="gpt-4-mini",
         ... )
     """
     if not config.orchestration:

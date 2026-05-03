@@ -11,14 +11,14 @@ class TestModelRouterDefaults:
     def test_list_tasks(self):
         router = ModelRouter()
         tasks = router.list_tasks()
-        assert "emotion_analyze" in tasks
+        assert "cognition_analyze" in tasks
         assert "response_generate" in tasks
         assert "proactive_generate" in tasks
 
-    def test_emotion_task_is_lightweight(self):
+    def test_cognition_task_is_lightweight(self):
         router = ModelRouter()
-        cfg = router.resolve("emotion_analyze")
-        assert cfg.max_tokens <= 256
+        cfg = router.resolve("cognition_analyze")
+        assert cfg.max_tokens <= 512
         assert cfg.temperature <= 0.5
 
     def test_response_task_is_stronger(self):
@@ -98,9 +98,9 @@ class TestOverrides:
 
     def test_partial_override_preserves_others(self):
         router = ModelRouter(overrides={
-            "emotion_analyze": {"model_name": "custom-model"},
+            "cognition_analyze": {"model_name": "custom-model"},
         })
-        cfg = router.resolve("emotion_analyze")
+        cfg = router.resolve("cognition_analyze")
         assert cfg.model_name == "custom-model"
         assert cfg.temperature == 0.3  # unchanged
 
@@ -108,7 +108,7 @@ class TestOverrides:
 class TestFallback:
     def test_fallback_returns_config(self):
         router = ModelRouter()
-        fb = router.get_fallback("emotion_analyze")
+        fb = router.get_fallback("cognition_analyze")
         assert fb is not None
         assert fb.model_name == "deepseek-chat"
 

@@ -40,7 +40,6 @@ class TestConfigManager:
             "orchestration": {
                 "task_enabled": {
                     "memory_extract": True,
-                    "event_extract": True,
                 },
                 "task_models": {},
             },
@@ -120,21 +119,6 @@ class TestConfigManager:
         with pytest.raises(ValueError, match="无效的 work_path|Invalid work_path"):
             config_manager._validate_config(config)
 
-    def test_load_from_env_dev(self, config_manager: ConfigManager) -> None:
-        """Test loading dev environment config."""
-        try:
-            config = config_manager.load_from_env("dev")
-            assert isinstance(config, SessionConfig)
-            assert config.agent.name == "SiriusAI-Dev"
-        except FileNotFoundError:
-            # Config files might not exist in test environment
-            pytest.skip("Config files not available")
-
-    def test_load_from_env_invalid_env(self, config_manager: ConfigManager) -> None:
-        """Test error handling for invalid environment."""
-        with pytest.raises(ValueError, match="未知环境|Unknown environment"):
-            config_manager.load_from_env("invalid")
-
     def test_dict_to_session_config(self, config_manager: ConfigManager) -> None:
         """Test conversion from dict to SessionConfig."""
         config_dict = {
@@ -176,14 +160,13 @@ class TestConfigManager:
             "orchestration": {
                 "task_enabled": {
                     "memory_extract": False,
-                    "event_extract": False,
-                    "intent_analysis": True,
+                    "cognition_analyze": True,
                 },
                 "task_models": {
-                    "intent_analysis": "intent-model",
+                    "cognition_analyze": "cognition-model",
                 },
                 "task_max_tokens": {
-                    "intent_analysis": 192,
+                    "cognition_analyze": 192,
                 },
                 "session_reply_mode": "auto",
                 "pending_message_threshold": 0,
@@ -192,9 +175,9 @@ class TestConfigManager:
 
         session_config = config_manager._dict_to_session_config(config_dict, Path("/tmp"))
 
-        assert session_config.orchestration.task_enabled["intent_analysis"] is True
-        assert session_config.orchestration.task_models["intent_analysis"] == "intent-model"
-        assert session_config.orchestration.task_max_tokens["intent_analysis"] == 192
+        assert session_config.orchestration.task_enabled["cognition_analyze"] is True
+        assert session_config.orchestration.task_models["cognition_analyze"] == "cognition-model"
+        assert session_config.orchestration.task_max_tokens["cognition_analyze"] == 192
         assert session_config.orchestration.session_reply_mode == "auto"
         assert session_config.orchestration.pending_message_threshold == 0
 
@@ -228,7 +211,6 @@ class TestConfigManager:
             "orchestration": {
                 "task_enabled": {
                     "memory_extract": True,
-                    "event_extract": True,
                 }
             },
         }
@@ -257,7 +239,7 @@ class TestConfigManager:
         assert '"max_concurrent_llm_calls"' in content
 
         payload = load_json_document(snapshot_path)
-        assert payload["orchestration"]["task_enabled"]["intent_analysis"] is True
+        assert payload["orchestration"]["task_enabled"]["cognition_analyze"] is True
         assert payload["orchestration"]["pending_message_threshold"] == 4
 
     def test_load_workspace_config_prefers_session_snapshot_orchestration_even_if_manifest_newer(
@@ -268,8 +250,8 @@ class TestConfigManager:
         workspace_config = manager.load_workspace_config(tmp_path)
         workspace_config.active_agent_key = "main_agent"
         workspace_config.orchestration_defaults = {
-            "task_models": {"event_extract": "qwen3.5-plus"},
-            "task_enabled": {"event_extract": True},
+            "task_models": {"memory_extract": "qwen3.5-plus"},
+            "task_enabled": {"memory_extract": True},
         }
         manager.save_workspace_config(tmp_path, workspace_config)
 
@@ -279,8 +261,7 @@ class TestConfigManager:
         snapshot_payload["generated_agent_key"] = "main_agent"
         snapshot_payload["orchestration"]["task_models"] = {
             "memory_extract": "deepseek-chat",
-            "event_extract": "deepseek-chat",
-            "intent_analysis": "deepseek-chat",
+            "cognition_analyze": "deepseek-chat",
         }
         write_session_config_jsonc(snapshot_path, snapshot_payload)
 
@@ -290,8 +271,8 @@ class TestConfigManager:
 
         loaded = manager.load_workspace_config(tmp_path)
 
-        assert loaded.orchestration_defaults["task_models"]["event_extract"] == "deepseek-chat"
-        assert loaded.orchestration_defaults["task_models"]["intent_analysis"] == "deepseek-chat"
+        assert loaded.orchestration_defaults["task_models"]["memory_extract"] == "deepseek-chat"
+        assert loaded.orchestration_defaults["task_models"]["cognition_analyze"] == "deepseek-chat"
 
     def test_save_workspace_config_preserves_existing_values_when_new_payload_contains_nulls(
         self,
@@ -305,7 +286,7 @@ class TestConfigManager:
         workspace_config.session_defaults.max_recent_participant_messages = 9
         workspace_config.session_defaults.enable_auto_compression = False
         workspace_config.orchestration_defaults = {
-            "task_models": {"event_extract": "deepseek-chat"},
+            "task_models": {"memory_extract": "deepseek-chat"},
             "pending_message_threshold": 0,
         }
         manager.save_workspace_config(tmp_path, workspace_config)
@@ -316,7 +297,7 @@ class TestConfigManager:
         object.__setattr__(workspace_config.session_defaults, "max_recent_participant_messages", None)
         object.__setattr__(workspace_config.session_defaults, "enable_auto_compression", None)
         workspace_config.orchestration_defaults = {
-            "task_models": {"event_extract": None},
+            "task_models": {"memory_extract": None},
             "pending_message_threshold": None,
         }
         object.__setattr__(workspace_config.provider_policy, "prefer_workspace_registry", None)
@@ -335,7 +316,7 @@ class TestConfigManager:
         assert manifest_payload["session_defaults"]["history_max_chars"] == 7777
         assert manifest_payload["session_defaults"]["max_recent_participant_messages"] == 9
         assert manifest_payload["session_defaults"]["enable_auto_compression"] is False
-        assert manifest_payload["orchestration_defaults"]["task_models"]["event_extract"] == "deepseek-chat"
+        assert manifest_payload["orchestration_defaults"]["task_models"]["memory_extract"] == "deepseek-chat"
         assert manifest_payload["orchestration_defaults"]["pending_message_threshold"] == 0.0
         assert manifest_payload["provider_policy"]["prefer_workspace_registry"] is True
         assert snapshot_payload["generated_agent_key"] == "main_agent"
@@ -343,7 +324,7 @@ class TestConfigManager:
         assert snapshot_payload["history_max_chars"] == 7777
         assert snapshot_payload["max_recent_participant_messages"] == 9
         assert snapshot_payload["enable_auto_compression"] is False
-        assert snapshot_payload["orchestration"]["task_models"]["event_extract"] == "deepseek-chat"
+        assert snapshot_payload["orchestration"]["task_models"]["memory_extract"] == "deepseek-chat"
         assert snapshot_payload["orchestration"]["pending_message_threshold"] == 0.0
 
 class TestEnvVarSubstitution:

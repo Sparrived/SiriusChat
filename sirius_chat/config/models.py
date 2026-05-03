@@ -181,9 +181,7 @@ class OrchestrationPolicy:
     # Task enablement control (bool fields, all enabled by default)
     task_enabled: dict[str, bool] = field(default_factory=lambda: {
         "memory_extract": True,
-        "event_extract": True,
-        "intent_analysis": True,
-        "memory_manager": True,
+        "cognition_analyze": True,
     })
     
     # Per-task parameter tuning
@@ -250,12 +248,9 @@ class OrchestrationPolicy:
     auto_install_skill_deps: bool = True  # auto-install missing SKILL dependencies via uv/pip
 
     def __post_init__(self) -> None:
-        if "intent_analysis" not in self.task_enabled:
+        if "cognition_analyze" not in self.task_enabled:
             self.task_enabled = dict(self.task_enabled)
-            self.task_enabled["intent_analysis"] = True
-        if "memory_manager" not in self.task_enabled:
-            self.task_enabled = dict(self.task_enabled)
-            self.task_enabled["memory_manager"] = True
+            self.task_enabled["cognition_analyze"] = True
 
     def is_task_enabled(self, task_name: str) -> bool:
         return bool(self.task_enabled.get(task_name, True))
