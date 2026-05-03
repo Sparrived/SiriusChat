@@ -898,3 +898,154 @@ async function usersLoadData() {
     if (listEl) listEl.innerHTML = '<div style="color:var(--text-2);padding:12px">加载失败</div>';
   }
 }
+
+// ── Glossary ──────────────────────────────────────────
+let _glossaryGroupFilter = '';
+let _glossarySearchQuery = '';
+let _glossaryEntriesCache = [];
+
+function loadGlossary() {
+  renderPersonaSelect();
+  if (!currentPersona && personas.length > 0) {
+    selectPersona(personas[0].name);
+  }
+  glossaryLoadData();
+}
+
+function glossaryToggleDropdown() {
+  const list = $('glossaryDropdownList');
+  const arrow = $('glossaryDropdownArrow');
+  if (!list) return;
+  const open = list.style.display === 'block';
+  list.style.display = open ? 'none' : 'block';
+  if (arrow) arrow.style.transform = open ? 'rotate(0deg)' : 'rotate(180deg)';
+  if (!open) {
+    const close = (e) => {
+      if (!list.contains(e.target) && !$('glossaryGroupDropdown').contains(e.target)) {
+        list.style.display = 'none';
+        if (arrow) arrow.style.transform = 'rotate(0deg)';
+        document.removeEventListener('click', close);
+      }
+    };
+    setTimeout(() => document.addEventListener('click', close), 0);
+  }
+}
+
+function glossarySelectGroup(gid) {
+  _glossaryGroupFilter = gid;
+  const label = $('glossaryDropdownLabel');
+  if (label) label.textContent = gid || '全部群聊';
+  const list = $('glossaryDropdownList');
+  const arrow = $('glossaryDropdownArrow');
+  if (list) list.style.display = 'none';
+  if (arrow) arrow.style.transform = 'rotate(0deg)';
+  glossaryLoadData();
+}
+
+function glossaryOnSearch(value) {
+  _glossarySearchQuery = value.trim();
+  glossaryRenderEntries();
+}
+
+function glossaryConfidenceTag(confidence) {
+  if (confidence >= 0.8) return { text: '高', color: 'var(--success)' };
+  if (confidence >= 0.6) return { text: '~', color: 'var(--accent)' };
+  return { text: '?', color: 'var(--danger)' };
+}
+
+function glossaryRenderEntries() {
+  const listEl = $('glossaryList');
+  if (!listEl) return;
+
+  let terms = _glossaryEntriesCache;
+
+  if (_glossarySearchQuery) {
+    const q = _glossarySearchQuery.toLowerCase();
+    terms = terms.filter((t) =>
+      (t.term || '').toLowerCase().includes(q) ||
+      (t.definition || '').toLowerCase().includes(q)
+    );
+  }
+
+  if (!terms.length) {
+    listEl.innerHTML = '<div style="color:var(--text-2);padding:12px">暂无名词解释数据</div>';
+    return;
+  }
+
+  listEl.innerHTML = terms.map((t) => {
+    const tag = glossaryConfidenceTag(t.confidence || 0);
+    const examples = (t.context_examples || []).slice(0, 3);
+    const related = (t.related_terms || []).slice(0, 5);
+    const domainColors = {
+      tech: '#58a6ff', daily: '#a371f7', culture: '#e3b341', game: '#3fb950', custom: '#8b949e',
+    };
+    const domainColor = domainColors[t.domain] || domainColors.custom;
+
+    return `
+      <div style="background:var(--bg-2);border:1px solid var(--border);border-radius:8px;padding:12px 14px">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
+          <div style="flex:1;min-width:0">
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+              <span style="font-size:15px;font-weight:600;color:var(--text)">${t.term || '未知'}</span>
+              <span style="font-size:11px;color:${tag.color};font-weight:600">${tag.text}</span>
+              <span style="font-size:10px;color:${domainColor};background:${domainColor}15;border:1px solid ${domainColor}40;border-radius:4px;padding:1px 6px">${t.domain || 'custom'}</span>
+            </div>
+            <div style="font-size:13px;color:var(--text-2);margin-top:4px;line-height:1.5">${t.definition || '待明确'}</div>
+          </div>
+          <div style="text-align:right;flex-shrink:0">
+            <div style="font-size:11px;color:var(--text-3)">引用 ${t.usage_count || 0} 次</div>
+            <div style="font-size:10px;color:var(--text-3);margin-top:2px">${t.source || 'inferred'}</div>
+          </div>
+        </div>
+        ${examples.length ? `<div style="margin-top:8px;display:flex;flex-direction:column;gap:3px">
+          ${examples.map((ex) => `<div style="font-size:11px;color:var(--text-3);padding-left:8px;border-left:2px solid var(--border)">${ex}</div>`).join('')}
+        </div>` : ''}
+        ${related.length ? `<div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:4px">
+          ${related.map((r) => `<span style="font-size:10px;color:var(--text-3);background:var(--bg-2);border:1px solid var(--border);border-radius:4px;padding:1px 6px">${r}</span>`).join('')}
+        </div>` : ''}
+      </div>
+    `;
+  }).join('');
+}
+
+async function glossaryLoadData() {
+  renderPersonaSelect();
+  if (!currentPersona && personas.length > 0) {
+    selectPersona(personas[0].name);
+  }
+  if (!currentPersona) return;
+  try {
+    const groupId = _glossaryGroupFilter;
+    const qs = groupId ? `?group_id=${encodeURIComponent(groupId)}` : '';
+    const res = await get(`/personas/${currentPersona}/glossary${qs}`);
+
+    _glossaryEntriesCache = res.terms || [];
+    const groups = res.groups || [];
+
+    // Stats
+    const stats = res.stats || {};
+    const totalEl = $('glossaryTotal');
+    const groupsEl = $('glossaryGroups');
+    if (totalEl) totalEl.textContent = (stats.total || 0).toLocaleString();
+    if (groupsEl) groupsEl.textContent = groups.length.toLocaleString();
+
+    // Dropdown
+    const listEl = $('glossaryDropdownList');
+    const labelEl = $('glossaryDropdownLabel');
+    if (listEl) {
+      const items = [{ gid: '', label: '全部群聊' }].concat(groups.map((g) => ({ gid: g, label: g })));
+      listEl.innerHTML = items.map((it) => {
+        const active = it.gid === _glossaryGroupFilter;
+        return `<div onclick="glossarySelectGroup('${it.gid.replace(/'/g, "\\'")}')" class="diary-dropdown-item" style="padding:8px 12px;font-size:13px;cursor:pointer;color:${active ? 'var(--accent)' : 'var(--text)'};background:${active ? 'var(--surface-2)' : 'transparent'};border-radius:6px;margin:2px 4px"
+          onmouseenter="this.style.background='var(--surface-2)'" onmouseleave="this.style.background='${active ? 'var(--surface-2)' : 'transparent'}'">${it.label}</div>`;
+      }).join('');
+    }
+    if (labelEl) labelEl.textContent = _glossaryGroupFilter || '全部群聊';
+
+    glossaryRenderEntries();
+  } catch (e) {
+    console.error('glossaryLoadData', e);
+    const listEl = $('glossaryList');
+    if (listEl) listEl.innerHTML = '<div style="color:var(--text-2);padding:12px">加载失败</div>';
+  }
+}

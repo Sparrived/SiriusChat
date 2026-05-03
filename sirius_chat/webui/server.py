@@ -50,6 +50,7 @@ from sirius_chat.webui.memory_api import (
     api_persona_vector_store_status_get,
     api_persona_users_get,
     api_persona_user_get,
+    api_persona_glossary_get,
 )
 from sirius_chat.webui.napcat_api import (
     api_napcat_status,
@@ -162,6 +163,9 @@ class WebUIServer(_WebUIServer):
 
     async def api_persona_user_get(self, request):
         return await api_persona_user_get(request, self.persona_manager)
+
+    async def api_persona_glossary_get(self, request):
+        return await api_persona_glossary_get(request, self.persona_manager)
 
     # ─── 多人格 API: 桥接配置 ─────────────────────────────
 

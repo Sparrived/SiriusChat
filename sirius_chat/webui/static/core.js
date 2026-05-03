@@ -108,6 +108,7 @@ const pageTitles = {
   'cognition': ['认知分析', 'Analytics / Cognition'],
   'diary': ['日记', 'Analytics / Diary'],
   'users': ['用户画像', 'Analytics / Users'],
+  'glossary': ['名词解释', 'Analytics / Glossary'],
 };
 
 async function navTo(page) {
@@ -155,6 +156,7 @@ async function navTo(page) {
   if (page === 'cognition') loadCognition();
   if (page === 'diary') diaryLoadData();
   if (page === 'users') loadUsers();
+  if (page === 'glossary') loadGlossary();
 
   // Replace native <select> with custom dropdowns after page loads
   setTimeout(() => mountCustomSelects(), 0);

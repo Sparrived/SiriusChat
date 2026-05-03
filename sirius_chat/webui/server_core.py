@@ -118,6 +118,9 @@ class WebUIServer:
         self.app.router.add_get("/api/personas/{name}/users", self.api_persona_users_get)
         self.app.router.add_get("/api/personas/{name}/users/{user_id}", self.api_persona_user_get)
 
+        # Glossary terms (per persona)
+        self.app.router.add_get("/api/personas/{name}/glossary", self.api_persona_glossary_get)
+
         # 桥接配置（写入 adapters.json）
         self.app.router.add_post("/api/personas/{name}/config", self.api_config_post)
 

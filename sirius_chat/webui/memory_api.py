@@ -471,3 +471,71 @@ async def api_persona_user_get(request: web.Request, persona_manager: Any) -> we
     except Exception as exc:
         LOG.warning("读取用户画像失败 %s/%s: %s", name, user_id, exc)
         return _json_response({"error": str(exc)}, 500)
+
+
+async def api_persona_glossary_get(request: web.Request, persona_manager: Any) -> web.Response:
+    """Return glossary terms for a persona.
+
+    Query params:
+      - group_id: filter by group (optional)
+      - search: text search (optional)
+      - limit: max terms (default 200)
+    """
+    from sirius_chat.memory.glossary.manager import GlossaryManager
+
+    name = _get_name(request)
+    paths = persona_manager.get_persona_paths(name)
+    if paths is None:
+        return _json_response({"error": "人格不存在"}, 404)
+
+    glossary_dir = paths.dir / "glossary"
+    if not glossary_dir.exists():
+        return _json_response({"terms": [], "groups": [], "stats": {}})
+
+    try:
+        group_id = request.query.get("group_id", "")
+        search = request.query.get("search", "")
+        limit = int(request.query.get("limit", "200"))
+
+        manager = GlossaryManager(paths.dir, persona_name=name)
+
+        terms: list[dict[str, Any]] = []
+        groups: set[str] = set()
+
+        # Discover all group files
+        persona_glossary_dir = glossary_dir / manager._safe_name(name)
+        if persona_glossary_dir.exists():
+            for path in persona_glossary_dir.glob("*.json"):
+                if path.suffix == ".json" and not path.name.endswith(".migrated"):
+                    g_id = path.stem
+                    groups.add(g_id)
+
+        target_groups = [group_id] if group_id else sorted(groups)
+
+        for g_id in target_groups:
+            group_terms = manager._group_terms(g_id)
+            for term in group_terms.values():
+                term_dict = term.to_dict()
+                term_dict["group_id"] = g_id
+                terms.append(term_dict)
+
+        if search:
+            search_lower = search.lower()
+            terms = [
+                t for t in terms
+                if search_lower in t.get("term", "").lower()
+                or search_lower in t.get("definition", "").lower()
+            ]
+
+        terms.sort(key=lambda t: t.get("confidence", 0) * t.get("usage_count", 1), reverse=True)
+        terms = terms[:limit]
+
+        stats = {
+            "total": len(terms),
+            "groups": len(groups),
+        }
+
+        return _json_response({"terms": terms, "groups": sorted(groups), "stats": stats})
+    except Exception as exc:
+        LOG.warning("读取名词解释失败 %s: %s", name, exc)
+        return _json_response({"error": str(exc)}, 500)
