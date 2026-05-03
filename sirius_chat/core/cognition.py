@@ -232,7 +232,7 @@ _LLM_COGNITION_PROMPT = """分析以下消息的【情感状态】、【社交�
   "sarcasm_score": 0.0-1.0,
   "confidence": 0.0-1.0,
   "search_query": "用于检索记忆的一句话查询，概括用户核心需求（不是标签，是自然语言）。如果查询内容中包含双引号，请用单引号替代",
-  "image_caption": "如果消息包含图片，请用1-2句话描述图片内容，并说明图片与消息意图的关系。如果没有图片，留空。"
+  "image_caption": "如果消息包含图片，请用1-2句话描述图片内容，并说明图片与消息意图的关系。如果是表情包/动画表情，请着重描述角色的神态、动作、表情细节、肢体语言、以及它传达的情绪和氛围（如'得意洋洋的挑眉'、'委屈巴巴地缩成一团'、'疯狂拍桌大笑'）。如果没有图片，留空。"
 }}
 
 定义：
@@ -300,6 +300,9 @@ class CognitionAnalyzer:
         # Intent state tracking
         self.group_activity_history: dict[str, list[tuple[float, float]]] = {}
         self.user_response_prefs: dict[str, dict[str, Any]] = {}
+
+        # Image caption cache: url/path -> caption, avoids repeated vision calls
+        self._image_caption_cache: dict[str, str] = {}
 
     # ------------------------------------------------------------------
     # Public API
@@ -595,8 +598,14 @@ class CognitionAnalyzer:
         multimodal_inputs: list[dict[str, str]],
     ) -> list[dict[str, Any]]:
         """Build OpenAI-compatible multimodal messages for vision cognition."""
+        # Detect if any item is a sticker so we can tell the model explicitly.
+        has_sticker = any(
+            item.get("type") == "image" and item.get("sub_type") == "1"
+            for item in multimodal_inputs
+        )
+        prefix = "[动画表情]" if has_sticker else "[图片]"
         content: list[dict[str, Any]] = [
-            {"type": "text", "text": message or "[图片]"},
+            {"type": "text", "text": message or prefix},
         ]
         for item in multimodal_inputs:
             if item.get("type") == "image":
@@ -658,9 +667,46 @@ class CognitionAnalyzer:
             ai_identity_note=ai_note,
         )
 
-        # 多模态消息：如果存在图片，使用 vision model 并通过 messages 传递图片
+        # Check image caption cache before calling LLM.
+        # Use content hash extracted from local cache path as key, so the same
+        # image (same MD5) hits cache even if the original QQ URL changes.
+        # Stickers (sub_type=1) are also cached on first sight; subsequent
+        # occurrences reuse the caption without another vision call.
+        cached_caption = ""
+        sticker_caption = ""
         if multimodal_inputs:
-            mm_messages = self._build_multimodal_messages(message, multimodal_inputs)
+            for item in multimodal_inputs:
+                if item.get("type") != "image":
+                    continue
+                path = str(item.get("value", ""))
+                cache_key = self._image_cache_key(path)
+                if cache_key and cache_key in self._image_caption_cache:
+                    hit = self._image_caption_cache[cache_key]
+                    if item.get("sub_type") == "1":
+                        sticker_caption = hit
+                        logger.debug("Sticker caption cache hit for %s", cache_key)
+                    else:
+                        cached_caption = hit
+                        logger.debug("Image caption cache hit for %s", cache_key)
+                        break
+
+        # Build the list of images to actually send to the vision model.
+        # Normal images are always sent unless cached.
+        # Stickers are sent only on first sight (not yet cached).
+        filtered_mm: list[dict[str, str]] = []
+        if multimodal_inputs:
+            for item in multimodal_inputs:
+                if item.get("type") != "image":
+                    continue
+                is_sticker = item.get("sub_type") == "1"
+                if is_sticker and sticker_caption:
+                    # Already cached: skip vision
+                    continue
+                filtered_mm.append(item)
+
+        # 多模态消息：如果存在图片，使用 vision model 并通过 messages 传递图片
+        if filtered_mm:
+            mm_messages = self._build_multimodal_messages(message, filtered_mm)
             request = GenerationRequest(
                 model=self.model_name,
                 system_prompt=prompt,
@@ -679,6 +725,28 @@ class CognitionAnalyzer:
                 purpose="cognition_analyze",
             )
         self._last_request = request
+
+        # If all normal images are cached and no stickers need first-analysis,
+        # skip the LLM call entirely.
+        if cached_caption and not filtered_mm:
+            # Use rule-based emotion since we skip LLM
+            text_emotion = self._text_analysis(message)
+            context_emotion = self._context_inference(current_user_id)
+            group_emotion = self.group_cache.get(current_user_id)
+            emotion = self._fuse_emotion(text_emotion, context_emotion, group_emotion)
+            return {
+                "emotion": emotion,
+                "social_intent": SocialIntent.SOCIAL,
+                "subtype": SocialSubtype.TOPIC_DISCUSSION,
+                "confidence": 0.7,
+                "urgency_score": 30.0,
+                "relevance_score": 0.5,
+                "directed_score": 0.3,
+                "directed_reason": "cached_image_caption",
+                "sarcasm_score": 0.0,
+                "search_query": message or "",
+                "image_caption": cached_caption,
+            }
 
         if hasattr(self.provider_async, "generate_async"):
             raw = await self.provider_async.generate_async(request)
@@ -720,6 +788,18 @@ class CognitionAnalyzer:
             subtype_str = data.get("intent_subtype", "topic_discussion")
             subtype = self._parse_subtype(subtype_str, social_intent)
 
+            caption = data.get("image_caption", "")
+            # Cache the caption for future reuse (keyed by content hash).
+            # Cache ALL images that were sent to vision model, including stickers.
+            if caption and filtered_mm:
+                for item in filtered_mm:
+                    if item.get("type") == "image":
+                        path = str(item.get("value", ""))
+                        cache_key = self._image_cache_key(path)
+                        if cache_key:
+                            self._image_caption_cache[cache_key] = caption
+                            logger.debug("Cached image caption for %s", cache_key)
+
             return {
                 "emotion": emotion,
                 "social_intent": social_intent,
@@ -731,7 +811,7 @@ class CognitionAnalyzer:
                 "directed_reason": data.get("directed_reason", ""),
                 "sarcasm_score": float(data.get("sarcasm_score", 0.0)),
                 "search_query": data.get("search_query", ""),
-                "image_caption": data.get("image_caption", ""),
+                "image_caption": caption,
             }
         except (ValueError, KeyError) as exc:
             logger.warning("Failed to extract cognition fields: %s | raw=%r", exc, raw)
@@ -769,6 +849,25 @@ class CognitionAnalyzer:
                     pass
 
         return fields if fields else None
+
+    @staticmethod
+    def _image_cache_key(path: str) -> str:
+        """Extract content hash from local image cache path for stable cache keys.
+
+        NapCatBridge caches images as ``{md5_hash}{ext}`` under ``image_cache/``.
+        The same image always gets the same hash, so we use the hash as the
+        cache key regardless of the original (possibly transient) QQ URL.
+        """
+        from pathlib import Path
+
+        p = Path(path)
+        # filename like "a1b2c3d4.jpg" -> stem "a1b2c3d4"
+        stem = p.stem
+        # Simple heuristic: 32-char hex string is likely an MD5 hash
+        if len(stem) == 32 and all(c in "0123456789abcdef" for c in stem.lower()):
+            return stem.lower()
+        # Fallback: use the full path (for non-cached images or direct URLs)
+        return path
 
     @staticmethod
     def _parse_basic_emotion(emotion_str: str) -> BasicEmotion | None:
