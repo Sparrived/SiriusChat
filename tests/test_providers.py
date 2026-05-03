@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 from email.message import Message as EmailMessage
+import functools
 import io
 import json
 import logging
@@ -143,6 +144,12 @@ def _ids(specs: list[dict]) -> list[str]:
     return [s["id"] for s in specs]
 
 
+@functools.lru_cache(maxsize=128)
+def _parse_payload(called_request) -> dict:
+    """Cache payload parsing to avoid repeated json.loads in parametric tests."""
+    return json.loads(called_request.data.decode("utf-8"))
+
+
 # ---------------------------------------------------------------------------
 # 基准 1：纯文本内容返回
 # ---------------------------------------------------------------------------
@@ -157,11 +164,6 @@ def test_provider_returns_plain_content(spec: dict) -> None:
         )
         output = provider.generate(_make_request(spec["model"]))
     assert output == "文本内容"
-
-
-# ---------------------------------------------------------------------------
-# 基准 2：默认 endpoint 正确
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("spec", _PROVIDER_SPECS, ids=_ids(_PROVIDER_SPECS))
@@ -186,7 +188,7 @@ def test_provider_applies_expected_thinking_defaults(spec: dict) -> None:
         provider.generate(_make_request(spec["model"]))
 
     called_request = mocked.call_args[0][0]
-    payload = json.loads(called_request.data.decode("utf-8"))
+    payload = _parse_payload(called_request)
     thinking_defaults = spec["thinking_defaults"]
     if thinking_defaults:
         for key, value in thinking_defaults.items():
@@ -297,7 +299,7 @@ def test_provider_converts_local_image_path_to_data_url(spec: dict, tmp_path: Pa
         provider.generate(request)
 
     called_request = mocked.call_args[0][0]
-    payload = json.loads(called_request.data.decode("utf-8"))
+    payload = _parse_payload(called_request)
     image_url = payload["messages"][1]["content"][1]["image_url"]["url"]
     assert image_url.startswith("data:image/png;base64,")
 
@@ -327,11 +329,6 @@ def test_provider_surfaces_multimodal_download_hint(spec: dict) -> None:
     assert "data URL" in message
 
 
-# ---------------------------------------------------------------------------
-# 基准 5：refusal 回退
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.parametrize("spec", _PROVIDER_SPECS, ids=_ids(_PROVIDER_SPECS))
 def test_provider_falls_back_to_refusal(spec: dict) -> None:
     provider = spec["cls"](**spec["init"])
@@ -342,10 +339,6 @@ def test_provider_falls_back_to_refusal(spec: dict) -> None:
         output = provider.generate(_make_request(spec["model"]))
     assert output == "拒绝回答"
 
-
-# ---------------------------------------------------------------------------
-# 基准 6：reasoning_content 回退（仅支持的 provider）
-# ---------------------------------------------------------------------------
 
 _REASONING_SPECS = [s for s in _PROVIDER_SPECS if s["has_reasoning"]]
 
@@ -368,11 +361,6 @@ def test_provider_falls_back_to_reasoning_content(spec: dict) -> None:
         )
         output = provider.generate(_make_request(spec["model"]))
     assert output == "推理结果"
-
-
-# ---------------------------------------------------------------------------
-# 基准 7：网络错误处理
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("spec", _PROVIDER_SPECS, ids=_ids(_PROVIDER_SPECS))

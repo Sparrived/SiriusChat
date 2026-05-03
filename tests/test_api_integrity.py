@@ -130,10 +130,6 @@ class TestAPILayerHiding:
                 f"文档不完整: {undoc_count}/{class_count} 个类缺少文档"
 
 
-class TestAPIBackwardCompatibility:
-    """验证向后兼容性"""
-
-
 class TestAPIFunctionality:
     """验证通过公开API能完整使用库"""
     

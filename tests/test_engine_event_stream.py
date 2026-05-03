@@ -3,21 +3,19 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
+
 import pytest
 
-from sirius_chat.core.emotional_engine import EmotionalGroupChatEngine
 from sirius_chat.core.events import SessionEventType
 from sirius_chat.models.models import Message, Participant
-from sirius_chat.models.persona import PersonaProfile
+from sirius_chat.providers.mock import MockProvider
 
 
 class TestEventStream:
     @pytest.mark.asyncio
-    async def test_process_message_emits_pipeline_events(self, tmp_path):
-        engine = EmotionalGroupChatEngine(
-            work_path=tmp_path,
-            persona=PersonaProfile(name="TestBot"),
-        )
+    async def test_process_message_emits_pipeline_events(self, engine_factory):
+        engine = engine_factory()
         events = []
 
         async def collector():
@@ -45,11 +43,10 @@ class TestEventStream:
         assert SessionEventType.EXECUTION_COMPLETED in types
 
     @pytest.mark.asyncio
-    async def test_decision_event_contains_strategy(self, tmp_path):
-        engine = EmotionalGroupChatEngine(
-            work_path=tmp_path,
-            persona=PersonaProfile(name="TestBot"),
-        )
+    async def test_decision_event_contains_strategy(self, engine_factory):
+        # Use a different persona name to get a fresh engine instance
+        from sirius_chat.models.persona import PersonaProfile
+        engine = engine_factory(persona=PersonaProfile(name="DecisionTestBot"))
         events = []
 
         async def collector():
@@ -78,10 +75,11 @@ class TestEventStream:
         assert decision_event.data["strategy"] in ("immediate", "delayed", "silent")
 
     @pytest.mark.asyncio
-    async def test_proactive_check_emits_event(self, tmp_path):
-        engine = EmotionalGroupChatEngine(
-            work_path=tmp_path,
-            persona=PersonaProfile(name="TestBot"),
+    async def test_proactive_check_emits_event(self, engine_factory):
+        provider = MockProvider(responses=[" proactively!"])
+        engine = engine_factory(
+            provider_async=provider,
+            config={"expressiveness": 1.0, "sensitivity": 0.0},
         )
         events = []
 
@@ -92,27 +90,23 @@ class TestEventStream:
         task = asyncio.create_task(collector())
         await asyncio.sleep(0)  # let subscriber register
 
-        # Fake a last message time far in the past
+        # Fake a last message time far in the past to force proactive trigger
         engine._group_last_message_at["group_a"] = "2026-04-01T00:00:00+00:00"
-        result = await engine.proactive_check("group_a")
+        result = await engine.proactive_check("group_a", _now=datetime(2026, 5, 3, 15, 0, 0, tzinfo=timezone.utc))
 
         await asyncio.sleep(0.05)
         await engine.event_bus.close()
         await task
 
-        # proactive_check may or may not trigger depending on threshold
-        # but if it does, we should see the event
-        if result:
-            proactive_events = [e for e in events if e.type == SessionEventType.PROACTIVE_RESPONSE_TRIGGERED]
-            assert len(proactive_events) >= 1
-            assert proactive_events[0].data["group_id"] == "group_a"
+        assert result is not None, "proactive_check should trigger with old last_message_at"
+        assert result["strategy"] == "proactive"
+        proactive_events = [e for e in events if e.type == SessionEventType.PROACTIVE_RESPONSE_TRIGGERED]
+        assert len(proactive_events) >= 1
+        assert proactive_events[0].data["group_id"] == "group_a"
 
     @pytest.mark.asyncio
-    async def test_multiple_messages_in_order(self, tmp_path):
-        engine = EmotionalGroupChatEngine(
-            work_path=tmp_path,
-            persona=PersonaProfile(name="TestBot"),
-        )
+    async def test_multiple_messages_in_order(self, engine_factory):
+        engine = engine_factory()
         events = []
 
         async def collector():

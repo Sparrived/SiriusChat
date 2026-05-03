@@ -720,8 +720,8 @@ class TestSkillEngineIntegration:
         policy = OrchestrationPolicy(unified_model="test-model", pending_message_threshold=0.0)
         assert policy.enable_skills is True
 
-    def test_public_api_exports(self):
-        """Verify skill classes are importable from top-level."""
+    def test_public_api_exports(self, tmp_path):
+        """Verify skill classes are importable from top-level and functional."""
         from sirius_chat import (
             SkillDataStore,
             SkillDefinition,
@@ -731,10 +731,34 @@ class TestSkillEngineIntegration:
             SkillRegistry,
             SkillResult,
         )
-        # Basic smoke test
+
         assert SkillRegistry is not None
         assert SkillExecutor is not None
         assert SkillInvocationContext is not None
+
+        registry = SkillRegistry()
+        assert len(registry.all_skills()) == 0
+
+        definition = SkillDefinition(
+            name="test_skill",
+            description="A test skill",
+            parameters=[SkillParameter(name="arg1", type="string", description="")],
+        )
+        assert definition.name == "test_skill"
+
+        ctx = SkillInvocationContext()
+        assert ctx.caller is None
+        assert ctx.caller_is_developer is False
+
+        result = SkillResult(success=True, data="ok")
+        assert result.success is True
+        assert result.data == "ok"
+
+        store_path = tmp_path / "skill_store.json"
+        store = SkillDataStore(store_path)
+        store.set("k", {"v": 1})
+        store.save()
+        assert store.get("k") == {"v": 1}
 
 
 class TestExampleSkillSystemInfo:
