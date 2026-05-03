@@ -226,13 +226,21 @@ class ContextAssembler:
             # 为带图消息输出带归属的 image 标签
             if getattr(entry, "multimodal_inputs", None):
                 for m in entry.multimodal_inputs:
-                    if m.get("type") == "image":
-                        url = html.escape(str(m.get("value", "")), quote=True)
-                        caption = html.escape(str(m.get("caption", "")), quote=True)
+                    if m.get("type") != "image":
+                        continue
+                    # 动画表情 (sub_type=1) 简化输出，不暴露本地路径
+                    if m.get("sub_type") == "1":
                         lines.append(
-                            f'  <image src="{url}" caption="{caption}" '
+                            f'  <image type="sticker" caption="动画表情" '
                             f'speaker="{safe_speaker}" user_id="{safe_user_id}"/>'
                         )
+                        continue
+                    url = html.escape(str(m.get("value", "")), quote=True)
+                    caption = html.escape(str(m.get("caption", "")), quote=True)
+                    lines.append(
+                        f'  <image src="{url}" caption="{caption}" '
+                        f'speaker="{safe_speaker}" user_id="{safe_user_id}"/>'
+                    )
         lines.append(f'</{tag}>')
         return "\n".join(lines)
 
