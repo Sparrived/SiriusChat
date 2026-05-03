@@ -39,6 +39,7 @@ test = [
 	"pytest>=8.0.0",
 	"pytest-asyncio>=0.21.0",
 	"pytest-cov>=4.0.0",
+	"pytest-xdist>=3.0.0",  # 并行测试执行
 	"psutil>=5.9.0",  # 性能监控和系统信息
 ]
 provider = [
@@ -72,6 +73,7 @@ quality = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
+addopts = "-n auto --dist=load"
 
 [build-system]
 requires = ["setuptools>=61.0"]
