@@ -50,7 +50,7 @@ Sirius Chat 是一个面向"多人用户与单主 AI"交互场景的编排框架
 | `sirius_chat/core/` | 编排核心：`EmotionalGroupChatEngine`、意图分析、情感分析、响应策略、阈值引擎、节奏分析、事件总线、身份解析 | 不负责人格目录组织 |
 | `sirius_chat/memory/` | 基础记忆、日记记忆、用户管理、名词解释、语义记忆、上下文组装 | 不直接决定 provider 路由 |
 | `sirius_chat/providers/` | provider 协议、具体上游实现、注册表、自动路由、中间件 | 不介入高层人格生命周期 |
-| `sirius_chat/skills/` | SKILL 注册、依赖解析、执行、安全校验、遥测、数据存储 | 不负责 provider 注册表 |
+| `sirius_chat/skills/` | SKILL 注册、依赖解析、执行、安全校验、遥测、数据存储；内置 `send_sticker` 等技能 | 不负责 provider 注册表 |
 | `sirius_chat/config/` | SessionConfig、WorkspaceConfig、ConfigManager、JSONC、helpers | 不改变核心对话契约 |
 | `sirius_chat/models/` | 数据契约：Message、Participant、EmotionState、IntentAnalysisV3 等 | 不处理持久化 |
 | `sirius_chat/session/` | SessionStore（Json/Sqlite）、持久化后端 | 不介入对话逻辑 |
@@ -77,7 +77,7 @@ Sirius Chat 是一个面向"多人用户与单主 AI"交互场景的编排框架
 
 - 全局配置：`data/global_config.json`、`data/providers/provider_keys.json`、`data/adapter_port_registry.json`
 - 人格级配置（`data/personas/{name}/`）：`persona.json`、`orchestration.json`、`adapters.json`、`experience.json`
-- 人格级运行数据（`data/personas/{name}/`）：`memory/`、`diary/`、`engine_state/`、`skill_data/`、`logs/`
+- 人格级运行数据（`data/personas/{name}/`）：`memory/`、`diary/`、`engine_state/`、`skill_data/`（含 `stickers/` 表情包 RAG 库）、`logs/`
 
 ### 关键组件
 
@@ -125,4 +125,6 @@ Sirius Chat 是一个面向"多人用户与单主 AI"交互场景的编排框架
 2. **认知层（统一）**：`CognitionAnalyzer` 联合规则引擎分析情绪+意图（零成本热路径，~90% 命中）；LLM fallback 处理复杂情况（~10% 命中）。
 3. **决策层**：`RhythmAnalyzer` 分析对话节奏；`ThresholdEngine` 计算动态阈值（base × activity × relationship × time）；`ResponseStrategyEngine` 选择 IMMEDIATE / DELAYED / SILENT / PROACTIVE；更新 `AssistantEmotionState`。
 4. **执行层**：`ResponseAssembler` 返回 `PromptBundle`（`system_prompt` 包含 persona、情绪、共情策略、日记引用、glossary、skill 描述与输出格式指令；`user_content` 为当前消息的格式化内容）。`ContextAssembler.build_messages()` 将基础记忆最近 n 条以 XML 格式嵌入 system prompt，日记检索 top_k 条同样注入 system prompt，最终只返回 `[{"role":"system","content":...}, {"role":"user","content":...}]` 2 条消息；`_generate()` 自动清洗模型仿写的 `<conversation_history>` 标签。`StyleAdapter` 动态调整 `max_tokens` / `temperature` / `tone`。`ModelRouter` 按任务感知选择模型，调用 provider 生成回复。
-5. **后台层（异步）**：`_bg_diary_promoter` 检查群体变冷（heat < 0.25 且沉默 > 300s）的基础记忆归档，经 `DiaryGenerator` 生成日记并写入 `DiaryManager`；群氛围与规范学习随消息实时更新。
+5. **后台层（异步）**：`_bg_diary_promoter` 检查群体变冷（heat < 0.25 且沉默 > 300s）的基础记忆归档，经 `DiaryGenerator` 生成日记并写入 `DiaryManager`；群氛围与规范学习随消息实时更新。`_bg_sticker_novelty_updater` 定期衰减表情包新鲜度，模拟人类"喜新厌旧"行为。
+
+6. **表情包学习（实时）**：当认知层检测到消息包含动画表情（`sub_type=1`）时，`_learn_sticker_from_message()` 提取表情包文件路径、构建使用情境（最近 3 条消息 + 触发消息）、生成标签，存入人格独立的 `skill_data/stickers/` RAG 库。模型在回复中可通过 `[SKILL_CALL: send_sticker]` 调用 `send_sticker` 内置 SKILL，按当前对话情境检索并发送最匹配的表情包。

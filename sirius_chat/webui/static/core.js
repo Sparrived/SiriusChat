@@ -151,7 +151,7 @@ async function navTo(page) {
     selectPersona(personas[0].name);
   }
 
-  if (page === 'dashboard') { renderPersonaCards(); loadProviders(); _lastTelemetryData = null; _lastTokenData = null; loadTelemetry(); loadTokenStats(); }
+  if (page === 'dashboard') { renderPersonaCards(); loadProviders(); _lastTelemetryData = null; _lastTokenData = null; loadTokenStats(); }
   if (page === 'global-settings') loadGlobalSettings();
   if (page === 'persona') loadPersonaPreview();
   if (page === 'create-persona') { renderInterviewQuestions(); loadAvailableModels(); }
@@ -308,7 +308,7 @@ async function loadPersonaStatus() {
     if (currentPage === 'cognition') await loadCognition();
     if (currentPage === 'diary') diaryLoadData();
     if (currentPage === 'users') loadUsers();
-    if (currentPage === 'glossary') glossaryLoadData();
+    if (currentPage === 'glossary') loadGlossary();
   } catch (e) {
     console.error('loadPersonaStatus', e);
   }
@@ -954,8 +954,8 @@ async function loadTokenStats() {
 }
 
 async function loadTelemetry() {
-  const container = $('dashSkillStats');
-  const totalEl = $('dashSkillTotalCalls');
+  const container = $('dashSkillStats') || $('skillsTelemetryStats');
+  const totalEl = $('dashSkillTotalCalls') || $('skillsTelemetryTotalCalls');
   if (!container) return;
   try {
     const res = await get('/telemetry');

@@ -902,6 +902,7 @@ async function loadSkills() {
     console.error('loadSkills', e);
     $('skillsList').innerHTML = '<div style="color:var(--text-2);padding:12px">加载 Skill 列表失败</div>';
   }
+  loadTelemetry();
 }
 
 function renderSkillsList(skills) {

@@ -33,7 +33,7 @@ async def api_tokens_get(request: web.Request, persona_manager: Any) -> web.Resp
         paths = persona_manager.get_persona_paths(name)
         if paths is None:
             continue
-        db_path = paths.dir / "token_usage.db"
+        db_path = paths.dir / "token" / "token_usage.db"
         if not db_path.exists():
             continue
         try:
