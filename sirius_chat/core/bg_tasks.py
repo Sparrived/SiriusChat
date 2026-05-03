@@ -979,27 +979,14 @@ class BackgroundTasksMixin:
             else:
                 token_breakdown[key] = token_breakdown.get(key, 0) + val
 
-        # Collect multimodal inputs from all triggered items and inject into user message
+        # Collect multimodal inputs from all triggered items and inject into user message.
+        # 只注入当前 triggered items 的图片（归属明确，就是当前用户发的）。
+        # 历史图片不再通过 multimodal 注入，而是通过 XML history 中的 <image>
+        # 标签以文本形式暴露给模型，避免归属混乱。
         all_multimodal: list[dict[str, str]] = []
         for triggered_item in triggered:
             if getattr(triggered_item, "multimodal_inputs", None):
                 all_multimodal.extend(triggered_item.multimodal_inputs)
-
-        # Also inject recent images from basic memory so the model can see
-        # pictures referenced in the current conversation (e.g. user sends a
-        # photo then asks "who is this character?").
-        seen_urls: set[str] = {str(m.get("value", "")) for m in all_multimodal}
-        for entry in self.basic_memory.get_context(group_id, n=10):
-            if entry.multimodal_inputs:
-                for m in entry.multimodal_inputs:
-                    url = str(m.get("value", ""))
-                    # 跳过公网 URL——QQ 临时链接 Provider 无法下载，只保留本地缓存路径
-                    if not url or url in seen_urls or m.get("type") != "image":
-                        continue
-                    if url.startswith(("http://", "https://")):
-                        continue
-                    all_multimodal.append(dict(m))
-                    seen_urls.add(url)
 
         messages = self._inject_multimodal_into_user_message(messages, all_multimodal)
 

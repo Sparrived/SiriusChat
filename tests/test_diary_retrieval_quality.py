@@ -1,32 +1,19 @@
 """Automated retrieval quality tests for diary memory.
 
 Uses synthetic diary entries with known relevance to verify
-recall@k metrics. No real LLM calls — embeddings are mocked.
+recall@k metrics. Semantic tests require sentence-transformers.
 """
 
 from __future__ import annotations
 
-import math
 import tempfile
 from typing import Any
 
 import pytest
 
-from sirius_chat.memory.diary.indexer import DiaryIndexer
+from sirius_chat.memory.diary.indexer import DiaryIndexer, _ST_AVAILABLE
 from sirius_chat.memory.diary.models import DiaryEntry
 from sirius_chat.memory.diary.vector_store import DiaryVectorStore
-
-
-def _make_embedding(text: str, dim: int = 384) -> list[float]:
-    """Deterministic fake embedding from text hash."""
-    h = hash(text) % (2**31)
-    vec = []
-    for i in range(dim):
-        v = math.sin(h + i * 1.3) * 0.5 + 0.5
-        vec.append(v)
-    # Normalize to unit length
-    norm = math.sqrt(sum(v * v for v in vec))
-    return [v / norm for v in vec]
 
 
 def _entry(
@@ -36,7 +23,7 @@ def _entry(
     keywords: list[str] | None = None,
     summary: str = "",
 ) -> DiaryEntry:
-    entry = DiaryEntry(
+    return DiaryEntry(
         entry_id=entry_id,
         group_id=group_id,
         created_at="2026-04-22T10:00:00+00:00",
@@ -44,23 +31,6 @@ def _entry(
         keywords=keywords or [],
         summary=summary or content[:20],
     )
-    entry.embedding = _make_embedding(content)
-    return entry
-
-
-class FakeModel:
-    """Mock sentence-transformers model that returns deterministic embeddings."""
-
-    def __init__(self, dim: int = 384) -> None:
-        self._dim = dim
-
-    def encode(self, texts: str | list[str], **kwargs: Any) -> Any:
-        if isinstance(texts, str):
-            return _make_embedding(texts, self._dim)
-        return [_make_embedding(t, self._dim) for t in texts]
-
-    def get_embedding_dimension(self) -> int:
-        return self._dim
 
 
 class TestDiaryRetrievalQuality:
@@ -85,13 +55,11 @@ class TestDiaryRetrievalQuality:
         assert "d3" in ids
 
     def test_recall_at_k_semantic_mock(self) -> None:
-        """With mocked embeddings, semantic search should find nearest neighbors."""
-        idx = DiaryIndexer(enable_semantic=True)
-        # Inject fake model
-        fake = FakeModel()
-        idx._model = fake
-        idx._embedding_dim = fake.get_embedding_dimension()
+        """Semantic search should find nearest neighbors."""
+        if not _ST_AVAILABLE:
+            pytest.skip("sentence-transformers 未安装")
 
+        idx = DiaryIndexer(enable_semantic=True)
         entries = [
             _entry("d1", "g1", "深度学习在图像识别中的应用"),
             _entry("d2", "g1", "神经网络模型训练技巧"),
@@ -105,21 +73,19 @@ class TestDiaryRetrievalQuality:
         results = idx.search("机器学习", top_k=2, group_id="g1")
         ids = [r[0].entry_id for r in results]
         assert len(ids) == 2
-        # d1 and d2 share more hash-space with "机器学习" than d3/d4
-        # because all use the same _make_embedding function
         assert set(ids).issubset({"d1", "d2", "d3", "d4"})
 
     def test_recall_with_vector_store(self) -> None:
         """Chroma-backed search should match in-memory search results."""
+        if not _ST_AVAILABLE:
+            pytest.skip("sentence-transformers 未安装")
+
         with tempfile.TemporaryDirectory() as td:
             store = DiaryVectorStore(td)
             if not store.available:
                 pytest.skip("chromadb 未安装，跳过向量存储测试")
 
             idx = DiaryIndexer(enable_semantic=True, vector_store=store)
-            fake = FakeModel()
-            idx._model = fake
-            idx._embedding_dim = fake.get_embedding_dimension()
 
             entries = [
                 _entry("d1", "g1", "量子计算的基本原理"),
@@ -139,10 +105,10 @@ class TestDiaryRetrievalQuality:
 
     def test_fusion_boosts_keyword_match(self) -> None:
         """Hybrid fusion should boost entries that match both semantic and keyword."""
+        if not _ST_AVAILABLE:
+            pytest.skip("sentence-transformers 未安装")
+
         idx = DiaryIndexer(enable_semantic=True)
-        fake = FakeModel()
-        idx._model = fake
-        idx._embedding_dim = fake.get_embedding_dimension()
 
         entries = [
             _entry("d1", "g1", "深度学习框架对比", ["PyTorch", "TensorFlow"]),
@@ -157,9 +123,7 @@ class TestDiaryRetrievalQuality:
         # d1 has both semantic similarity and keyword match
         assert "d1" in ids
         # d3 is semantically irrelevant and has no keyword match,
-        # so it should not outrank d1.  Mock embeddings are not
-        # deterministic, so we only assert d1 is present and d3 is
-        # not ranked higher (or absent).
+        # so it should not outrank d1.
         if "d3" in ids:
             assert ids.index("d1") < ids.index("d3")
 

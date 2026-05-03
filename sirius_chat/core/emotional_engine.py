@@ -12,9 +12,10 @@ This module re-exports the combined class so existing imports continue to work.
 
 from __future__ import annotations
 
+from typing import Any
+
 from sirius_chat.core.engine_core import (
-    EmotionalGroupChatEngine as _EmotionalGroupChatEngine,
-    create_emotional_engine,
+    _EmotionalGroupChatEngineBase,
 )
 from sirius_chat.core.pipeline import PipelineMixin
 from sirius_chat.core.bg_tasks import BackgroundTasksMixin, _is_reminder_due
@@ -23,7 +24,7 @@ from sirius_chat.core.helpers import HelpersMixin
 
 
 class EmotionalGroupChatEngine(
-    _EmotionalGroupChatEngine,
+    _EmotionalGroupChatEngineBase,
     PipelineMixin,
     BackgroundTasksMixin,
     PromptBuildersMixin,
@@ -34,5 +35,35 @@ class EmotionalGroupChatEngine(
     pass
 
 
-# Re-export standalone function and internal helpers for backward compatibility
+def create_emotional_engine(
+    work_path: Any,
+    *,
+    provider: Any | None = None,
+    persona: Any | None = None,
+    config: dict[str, Any] | None = None,
+    vector_store: Any | None = None,
+) -> "EmotionalGroupChatEngine":
+    """Factory for EmotionalGroupChatEngine (v0.28+).
+
+    Args:
+        work_path: Workspace path for persistence.
+        provider: Optional LLM provider for async generation tasks.
+        persona: Optional PersonaProfile or string archetype name.
+        config: Optional engine configuration dict.
+        vector_store: Optional DiaryVectorStore for persistent embeddings.
+
+    Returns:
+        Configured EmotionalGroupChatEngine instance.
+    """
+    provider_async = provider if provider is None or hasattr(provider, "generate_async") else None
+    return EmotionalGroupChatEngine(
+        work_path=work_path,
+        provider_async=provider_async,
+        persona=persona,
+        config=config,
+        vector_store=vector_store,
+    )
+
+
+# Re-export internal helpers for backward compatibility
 __all__ = ["EmotionalGroupChatEngine", "create_emotional_engine", "_is_reminder_due"]

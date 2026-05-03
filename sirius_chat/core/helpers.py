@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import logging
+import re
 from datetime import datetime
 from typing import Any
 
@@ -309,8 +311,6 @@ class HelpersMixin:
                 text = text.split("```json")[-1].split("```")[0].strip()
             elif "```" in text:
                 text = text.split("```")[-1].split("```")[0].strip()
-
-            import json
 
             result = json.loads(text)
             style = str(result.get("communication_style", "")).strip()

@@ -222,6 +222,17 @@ class ContextAssembler:
                 attrs += f' group="{safe_group}"'
 
             lines.append(f'  <message{attrs}>{safe_content}</message>')
+
+            # 为带图消息输出带归属的 image 标签
+            if getattr(entry, "multimodal_inputs", None):
+                for m in entry.multimodal_inputs:
+                    if m.get("type") == "image":
+                        url = html.escape(str(m.get("value", "")), quote=True)
+                        caption = html.escape(str(m.get("caption", "")), quote=True)
+                        lines.append(
+                            f'  <image src="{url}" caption="{caption}" '
+                            f'speaker="{safe_speaker}" user_id="{safe_user_id}"/>'
+                        )
         lines.append(f'</{tag}>')
         return "\n".join(lines)
 

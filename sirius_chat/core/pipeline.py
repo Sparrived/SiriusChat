@@ -87,6 +87,7 @@ class PipelineMixin:
         group_id: str,
         *,
         sender_type: str = "human",
+        multimodal_inputs: list[dict[str, str]] | None = None,
     ) -> tuple[IntentAnalysisV3, EmotionState, list[dict[str, Any]], Any]:
         """Cognitive layer: unified emotion + intent + empathy + memory retrieval."""
         # Build context from recent working memory (exclude current message)
@@ -103,6 +104,7 @@ class PipelineMixin:
         emotion, intent, empathy = await self.cognition_analyzer.analyze(
             content, user_id, group_id, context_messages,
             sender_type=sender_type,
+            multimodal_inputs=multimodal_inputs,
         )
         cognition_duration_ms = round((time.perf_counter() - t0) * 1000, 2)
         if self.cognition_analyzer._last_request is not None:

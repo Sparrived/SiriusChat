@@ -1,7 +1,8 @@
-"""EmotionalGroupChatEngine core: class definition, __init__, public API, persistence.
+"""EmotionalGroupChatEngine core: base class definition, __init__, public API, persistence.
 
-This module contains the EmotionalGroupChatEngine class and its factory.
-Other methods are mixed in from companion modules via multiple inheritance.
+This module contains the _EmotionalGroupChatEngineBase class.
+Other methods are mixed in from companion modules via multiple inheritance
+in emotional_engine.py to form the complete EmotionalGroupChatEngine.
 """
 
 from __future__ import annotations
@@ -42,37 +43,7 @@ from sirius_chat.skills.executor import strip_skill_calls
 logger = logging.getLogger(__name__)
 
 
-def create_emotional_engine(
-    work_path: Any,
-    *,
-    provider: Any | None = None,
-    persona: Any | None = None,
-    config: dict[str, Any] | None = None,
-    vector_store: Any | None = None,
-) -> "EmotionalGroupChatEngine":
-    """Factory for EmotionalGroupChatEngine (v0.28+).
-
-    Args:
-        work_path: Workspace path for persistence.
-        provider: Optional LLM provider for async generation tasks.
-        persona: Optional PersonaProfile or string archetype name.
-        config: Optional engine configuration dict.
-        vector_store: Optional DiaryVectorStore for persistent embeddings.
-
-    Returns:
-        Configured EmotionalGroupChatEngine instance.
-    """
-    provider_async = provider if provider is None or hasattr(provider, "generate_async") else None
-    return EmotionalGroupChatEngine(
-        work_path=work_path,
-        provider_async=provider_async,
-        persona=persona,
-        config=config,
-        vector_store=vector_store,
-    )
-
-
-class EmotionalGroupChatEngine:
+class _EmotionalGroupChatEngineBase:
     """Next-generation engine for emotional group chat (v0.28+)."""
 
     def __init__(
@@ -339,24 +310,29 @@ class EmotionalGroupChatEngine:
             )
         )
 
-        # Pure image message (no substantive text) -> save to context but skip
-        # analysis.  This prevents duplicate replies when a user sends an image
-        # followed by a text message: the image is kept SILENT, and the later
-        # text message will pull the image URL from basic memory and inject it
-        # into the LLM prompt in tick_delayed_queue.
-        if message.multimodal_inputs and self._is_pure_image_message(message.content):
-            self._log_inner_thought(f"{speaker} 发了一张图，我先默默记下来～")
-            return {
-                "strategy": "silent",
-                "reply": None,
-                "emotion": {},
-                "intent": {},
-            }
-
         # 2. Cognition (unified emotion + intent)
+        # 即使是纯图片消息也走完整 cognition，让 vision model 分析图片意图
         intent, emotion, memories, empathy = await self._cognition(
-            content, user_id, group_id, sender_type=message.sender_type
+            content, user_id, group_id,
+            sender_type=message.sender_type,
+            multimodal_inputs=message.multimodal_inputs,
         )
+
+        # 如果 cognition 生成了图片描述，回写到 basic_memory 最后一条 entry
+        if intent.image_caption:
+            recent = self.basic_memory.get_context(group_id, n=1)
+            if recent:
+                last_entry = recent[0]
+                original_content = last_entry.content or ""
+                if self._is_pure_image_message(original_content):
+                    last_entry.content = f"[图片] [图片描述：{intent.image_caption}]"
+                else:
+                    last_entry.content = f"{original_content} [图片描述：{intent.image_caption}]"
+                # 将 caption 也存入 multimodal_inputs 供 XML 渲染使用
+                if last_entry.multimodal_inputs:
+                    for m in last_entry.multimodal_inputs:
+                        if m.get("type") == "image":
+                            m["caption"] = intent.image_caption
         # 内心活动：理解消息后的感受
         self._log_cognition_thought(speaker, intent, emotion)
         await self.event_bus.emit(

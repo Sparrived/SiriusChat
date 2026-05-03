@@ -31,6 +31,9 @@ class DiaryManager:
         self._diarized_sources: dict[str, set[str]] = {}
         # Track which groups have been loaded from disk (lazy loading)
         self._loaded_groups: set[str] = set()
+        # Track the last few source_ids of each group's most recent diary entry
+        # for continuity overlap on next generation.
+        self._last_diary_tail_sources: dict[str, list[str]] = {}
 
     # ------------------------------------------------------------------
     # Generation
@@ -45,10 +48,52 @@ class DiaryManager:
         persona_description: str,
         provider_async: Any,
         model_name: str,
+        min_candidate_count: int = 12,
+        overlap_tail_count: int = 3,
     ) -> DiaryGenerationResult | None:
-        """Generate a diary entry from candidates and index it."""
+        """Generate a diary entry from candidates and index it.
+
+        Args:
+            min_candidate_count: Minimum number of undiarized candidates
+                required before generating a diary entry.
+            overlap_tail_count: Number of source_ids from the previous
+                diary entry to prepend as overlap for continuity.
+        """
         if not candidates:
             return None
+
+        if len(candidates) < min_candidate_count:
+            logger.debug(
+                "群 %s 日记候选消息不足 %d 条（当前 %d 条），暂不生成日记。",
+                group_id,
+                min_candidate_count,
+                len(candidates),
+            )
+            return None
+
+        # Build overlap from previous diary tail sources for continuity
+        overlap_sources = self._last_diary_tail_sources.get(group_id, [])
+        if overlap_sources:
+            # Find candidates that match overlap source_ids and prepend them
+            overlap_map = {c.entry_id: c for c in candidates}
+            overlapped = []
+            for sid in overlap_sources:
+                if sid in overlap_map:
+                    overlapped.append(overlap_map[sid])
+            # Deduplicate while preserving order
+            seen: set[str] = set()
+            unique_overlap: list[BasicMemoryEntry] = []
+            for c in overlapped:
+                if c.entry_id not in seen:
+                    seen.add(c.entry_id)
+                    unique_overlap.append(c)
+            if unique_overlap:
+                candidates = unique_overlap + candidates
+                logger.info(
+                    "群 %s 日记生成时带上了前次末尾 %d 条重叠消息以保证连续性。",
+                    group_id,
+                    len(unique_overlap),
+                )
 
         result = await self._generator.generate(
             group_id=group_id,
@@ -66,6 +111,9 @@ class DiaryManager:
         # Mark sources as diarized
         sources = self._diarized_sources.setdefault(group_id, set())
         sources.update(result.entry.source_ids)
+
+        # Remember the tail sources of this diary for next overlap
+        self._last_diary_tail_sources[group_id] = list(result.entry.source_ids)[-overlap_tail_count:]
 
         logger.info(
             "群 %s 的日记写好了，总结了 %d 条对话。",

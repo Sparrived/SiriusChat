@@ -159,3 +159,83 @@ class TestDiaryManager:
             loaded = mgr._store.load("g1")
             assert len(loaded) == 1
             assert loaded[0].content == "测试日记"
+
+    @pytest.mark.asyncio
+    async def test_generate_from_candidates_min_threshold(self) -> None:
+        """只有候选消息不足 12 条时不应生成日记。"""
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            mgr = DiaryManager(td)
+            mock_provider = AsyncMock()
+            candidates = [
+                BasicMemoryEntry(f"b{i}", "g1", "alice", "human", f"msg{i}", "2026-04-22T10:00:00+00:00")
+                for i in range(8)
+            ]
+            result = await mgr.generate_from_candidates(
+                group_id="g1",
+                candidates=candidates,
+                persona_name="小星",
+                persona_description="",
+                provider_async=mock_provider,
+                model_name="gpt-4o-mini",
+            )
+            assert result is None
+            mock_provider.generate_async.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_generate_from_candidates_with_overlap(self) -> None:
+        """生成日记时应带上前次末尾 3 条消息作为重叠。"""
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            mgr = DiaryManager(td)
+            mock_provider = AsyncMock()
+            mock_provider.generate_async.return_value = (
+                '{"content": "日记内容", '
+                '"keywords": ["k1"], '
+                '"summary": "摘要", '
+                '"dominant_topic": "话题", '
+                '"interest_topics": ["t1"]}'
+            )
+            # 第一次用 12 条生成
+            first_candidates = [
+                BasicMemoryEntry(f"b{i:02d}", "g1", "alice", "human", f"msg{i}", "2026-04-22T10:00:00+00:00")
+                for i in range(12)
+            ]
+            result1 = await mgr.generate_from_candidates(
+                group_id="g1",
+                candidates=first_candidates,
+                persona_name="小星",
+                persona_description="",
+                provider_async=mock_provider,
+                model_name="gpt-4o-mini",
+            )
+            assert result1 is not None
+            # 模拟第二次生成，前 3 条 source_ids 应该被自动 prepend
+            # 重叠的 source_ids 是 b09, b10, b11，需要包含在 second_candidates 里
+            # 这样 manager 才能找到它们并 prepend
+            second_candidates = [
+                BasicMemoryEntry(f"b{i:02d}", "g1", "alice", "human", f"msg{i}", "2026-04-22T10:00:00+00:00")
+                for i in range(9, 24)
+            ]
+            result2 = await mgr.generate_from_candidates(
+                group_id="g1",
+                candidates=second_candidates,
+                persona_name="小星",
+                persona_description="",
+                provider_async=mock_provider,
+                model_name="gpt-4o-mini",
+            )
+            assert result2 is not None
+            # 检查第二次调用时 candidates 包含了前次末尾 3 条
+            call_args = mock_provider.generate_async.await_args_list[-1]
+            request = call_args[0][0]
+            # 请求中的 messages[0].content 应该包含重叠的 b09, b10, b11
+            prompt = request.messages[0]["content"]
+            # prompt 里显示的是 msg9 等而不是 b09，因为 prompt 由 speaker_name + content 构成
+            assert "msg9" in prompt
+            assert "msg10" in prompt
+            assert "msg11" in prompt
+            # 同时确认重叠消息出现在新消息之前（prepend 逻辑）
+            assert prompt.index("msg9") < prompt.index("msg12")
+            assert prompt.index("msg10") < prompt.index("msg12")
+            assert prompt.index("msg11") < prompt.index("msg12")
