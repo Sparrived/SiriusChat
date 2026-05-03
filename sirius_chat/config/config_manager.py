@@ -94,33 +94,6 @@ class ConfigManager:
         # Build SessionConfig from dict
         return _dict_to_session_config(resolved, config_path.parent)
 
-    def load_from_env(self, env: str = "dev") -> SessionConfig:
-        """Load configuration for a specific environment.
-        
-        Args:
-            env: Environment name (dev, test, prod)
-            
-        Returns:
-            SessionConfig instance
-            
-        Raises:
-            ValueError: If environment not found
-        """
-        env_mapping = {
-            "dev": "dev.json",
-            "test": "test.json",
-            "prod": "prod.json",
-        }
-
-        if env not in env_mapping:
-            raise ValueError(f"未知环境：{env}。必须是：{list(env_mapping.keys())}")
-
-        config_file = self.base_path / "presets" / env_mapping[env]
-        if not config_file.exists():
-            raise FileNotFoundError(f"环境 '{env}' 的配置文件不存在：{config_file}")
-
-        return self.load_from_json(config_file)
-
     def merge_configs(
         self,
         base: dict[str, Any],
