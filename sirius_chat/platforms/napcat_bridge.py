@@ -124,7 +124,6 @@ class NapCatBridge:
             if key not in self._store:
                 self._store.set(key, value)
 
-        self._bg_task: asyncio.Task | None = None
         self._event_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
         self._event_bus_task: asyncio.Task | None = None
 
@@ -137,20 +136,12 @@ class NapCatBridge:
         except Exception as exc:
             LOG.error("引擎启动失败: %s", exc)
 
-        self._bg_task = asyncio.create_task(self._background_delivery_loop())
         self._event_bus_task = asyncio.create_task(self._event_bus_listener())
         self.adapter.on_event(self._on_event)
         LOG.info("NapCatBridge 已启动")
 
     async def stop(self) -> None:
         self._running = False
-        if self._bg_task is not None:
-            self._bg_task.cancel()
-            try:
-                await self._bg_task
-            except asyncio.CancelledError:
-                pass
-            self._bg_task = None
         if self._event_bus_task is not None:
             self._event_bus_task.cancel()
             try:
@@ -372,25 +363,32 @@ class NapCatBridge:
                             LOG.info("Proactive 回复已发送: %s", reply[:80])
                     elif event.type == SessionEventType.DELAYED_RESPONSE_TRIGGERED:
                         gid = str(event.data.get("group_id", ""))
-                        reply = event.data.get("reply", "")
-                        partials = event.data.get("partial_replies", [])
-                        if gid.startswith("private_"):
-                            uid = gid.replace("private_", "").replace("qq_", "")
-                            for partial in partials:
-                                if partial:
-                                    await self._send_private_text_raw(uid, partial)
-                                    LOG.info("Private partial 回复已发送: %s", partial[:80])
-                            if reply:
-                                await self._send_private_text_raw(uid, reply)
-                                LOG.info("Private 回复已发送: %s", reply[:80])
-                        elif gid in self._get_allowed_group_ids():
-                            for partial in partials:
-                                if partial:
-                                    await self._send_group_text_raw(gid, partial)
-                                    LOG.info("Partial 回复已发送: %s", partial[:80])
-                            if reply:
-                                await self._send_group_text_raw(gid, reply)
-                                LOG.info("Delayed 回复已发送: %s", reply[:80])
+                        # 事件仅携带触发信号，需要调用 tick_delayed_queue 生成实际回复
+                        try:
+                            results = await self.runtime.engine.tick_delayed_queue(gid)
+                        except Exception as exc:
+                            LOG.warning("Delayed queue tick 失败 (%s): %s", gid, exc)
+                            results = []
+                        for result in results:
+                            reply = result.get("reply", "")
+                            partials = result.get("partial_replies", [])
+                            if gid.startswith("private_"):
+                                uid = gid.replace("private_", "").replace("qq_", "")
+                                for partial in partials:
+                                    if partial:
+                                        await self._send_private_text_raw(uid, partial)
+                                        LOG.info("Private partial 回复已发送: %s", partial[:80])
+                                if reply:
+                                    await self._send_private_text_raw(uid, reply)
+                                    LOG.info("Private 回复已发送: %s", reply[:80])
+                            elif gid in self._get_allowed_group_ids():
+                                for partial in partials:
+                                    if partial:
+                                        await self._send_group_text_raw(gid, partial)
+                                        LOG.info("Partial 回复已发送: %s", partial[:80])
+                                if reply:
+                                    await self._send_group_text_raw(gid, reply)
+                                    LOG.info("Delayed 回复已发送: %s", reply[:80])
                     elif event.type == SessionEventType.DEVELOPER_CHAT_TRIGGERED:
                         gid = str(event.data.get("group_id", ""))
                         reply = event.data.get("reply", "")
@@ -415,19 +413,6 @@ class NapCatBridge:
             except Exception as exc:
                 LOG.warning("事件总线监听异常: %s", exc)
                 await asyncio.sleep(1)
-
-    # ─── 后台投递 ─────────────────────────────────────────
-
-    async def _background_delivery_loop(self) -> None:
-        while self._running:
-            await asyncio.sleep(3)
-            if not self._enabled or not self.runtime.is_ready():
-                continue
-            try:
-                pass
-            except Exception as exc:
-                import traceback
-                LOG.warning("后台投递异常: %s\n%s", exc, traceback.format_exc())
 
     # ─── 消息渲染 ─────────────────────────────────────────
 
