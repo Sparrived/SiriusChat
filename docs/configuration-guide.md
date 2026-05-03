@@ -56,11 +56,10 @@ JSON/JSONC 文件（磁盘）
 | `task_temperatures` | 按任务映射 temperature |
 | `task_max_tokens` | 按任务映射 max_tokens |
 | `task_retries` | 按任务映射重试次数 |
-| `task_enabled` | 按任务开关：`{"intent_analysis": true, ...}` |
+| `task_enabled` | 按任务开关：`{"cognition_analyze": true, ...}` |
 | `engagement_sensitivity` | 回复敏感度（0~1） |
 | `reply_frequency` | 回复频率限制 |
 | `enable_skills` / `max_skill_rounds` / `skill_execution_timeout` | SKILL 系统控制 |
-| `memory_manager_model` / `memory_manager_temperature` | 记忆管理任务参数 |
 
 **验证规则**：
 - 不能同时设置 `unified_model` 和 `task_models`
@@ -97,10 +96,7 @@ JSON/JSONC 文件（磁盘）
 
 | 旧字段 | 新字段 |
 |--------|--------|
-| `enable_intent_analysis` | `task_enabled["intent_analysis"]` |
-| `intent_analysis_model` | `task_models["intent_analysis"]` |
 | `message_debounce_seconds` | `pending_message_threshold`（四舍五入） |
-| `memory_manager_model` | `task_models["memory_manager"]` |
 
 ### 3.3 不可变更新
 
@@ -180,11 +176,8 @@ JSON/JSONC 文件（磁盘）
 |---------|---------|------|
 | `response_generate` | `chat_model` | 回复生成 |
 | `proactive_generate` | `chat_model` | 主动发言生成 |
-| `empathy_generate` | `chat_model` | 共情文本生成 |
 | `cognition_analyze` | `analysis_model` | 统一情绪+意图分析 |
 | `memory_extract` | `analysis_model` | 日记/记忆提取 |
-| `emotion_analyze` | `analysis_model` | 情感分析（保留兼容） |
-| `intent_analyze` | `analysis_model` | 意图分析（保留兼容） |
 | `vision` | `vision_model` | 多模态视觉任务 |
 
 ### 5.3 平台适配器（`adapters.json`）

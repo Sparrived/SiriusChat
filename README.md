@@ -1,4 +1,4 @@
-﻿<h1 align="center">🌟 Sirius Chat 🌟</h1>
+<h1 align="center">🌟 Sirius Chat 🌟</h1>
 
 <div align="center">
 
@@ -477,33 +477,32 @@ msg = Message(
   "orchestration": {
     "task_enabled": {
       "memory_extract": true,
-      "event_extract": true,
-      "intent_analysis": true,
-      "memory_manager": true
+      "cognition_analyze": true
     },
     "task_models": {
       "memory_extract": "gpt-3.5-turbo",
-      "event_extract": "gpt-3.5-turbo",
-      "intent_analysis": "gpt-4o-mini",
-      "memory_manager": "gpt-4o-mini"
+      "cognition_analyze": "gpt-4o-mini",
+      "response_generate": "gpt-4o",
+      "proactive_generate": "gpt-4o",
+      "vision": "gpt-4o"
     },
     "task_temperatures": {
       "memory_extract": 0.1,
-      "event_extract": 0.1,
-      "intent_analysis": 0.1,
-      "memory_manager": 0.3
+      "cognition_analyze": 0.3,
+      "response_generate": 0.7,
+      "proactive_generate": 0.8
     },
     "task_max_tokens": {
       "memory_extract": 128,
-      "event_extract": 192,
-      "intent_analysis": 192,
-      "memory_manager": 256
+      "cognition_analyze": 512,
+      "response_generate": 4096,
+      "proactive_generate": 1024
     },
     "task_retries": {
       "memory_extract": 1,
-      "event_extract": 1,
-      "intent_analysis": 1,
-      "memory_manager": 1
+      "cognition_analyze": 1,
+      "response_generate": 1,
+      "proactive_generate": 1
     },
     "memory_extract_batch_size": 3,
     "memory_extract_min_content_length": 50,
@@ -520,15 +519,14 @@ msg = Message(
 
 - **多模型协同已成为默认方式**，所有任务默认启用，可通过 `task_enabled` 按需禁用
 - 图片不再经过 `multimodal_parse` 辅助任务；会直接随用户消息以 vision 格式发送给主模型
-- `memory_manager` 已纳入标准任务路由；模型、温度、max_tokens、重试统一通过 `task_models/task_temperatures/task_max_tokens/task_retries` 配置
 - `memory_extract` 频率控制：
   - `batch_size=3` 表示每 3 条消息提取一次
   - `min_content_length=50` 表示只提取 ≥50 字符的消息
   - 两个条件同时满足时才执行
 - `min_reply_interval_seconds` 可配置（默认 0，关闭）：AI 刚回复后，runtime 会在最小间隔内继续排队；窗口结束后先合并同一说话人的连续消息，再进入正常的 reply_mode/intent 判断
-- `intent_analysis` 启用后必须通过模型推断；若调用失败或解析失败，该轮不会再回退到关键词意图推断
-- 多 AI 群聊里，`intent_analysis` 会优先区分“当前模型自身”与“其他 AI”；当用户明显是在调用其他 AI 时，当前模型会抑制自动回复
-- 为减少多 AI 误判，`intent_analysis` 传给模型的上下文已改为最近交互链摘要，并会显式标出最近 AI / 人类发言者、近期发言人的 aliases、`environment_context` 环境线索，以及当前消息命中的当前模型名字、其他 AI 名字和人类名字
+- `cognition_analyze` 统一处理情绪+意图分析；若调用失败或解析失败，该轮会回退到规则引擎热路径
+- 多 AI 群聊里，`cognition_analyze` 会优先区分"当前模型自身"与"其他 AI"；当用户明显是在调用其他 AI 时，当前模型会抑制自动回复
+- 为减少多 AI 误判，`cognition_analyze` 传给模型的上下文已改为最近交互链摘要，并会显式标出最近 AI / 人类发言者、近期发言人的 aliases、`environment_context` 环境线索，以及当前消息命中的当前模型名字、其他 AI 名字和人类名字
 - 对“关闭本群AI / 禁用机器人 / 别让 bot 说话”这类群控或停用命令，若未明确点名当前模型自身，auto 模式下会直接抑制当前模型回复
 - `max_concurrent_llm_calls` 可配置（默认 1）：LLM 并发数限流
 - `pending_message_threshold` 可配置（默认 4）：当单会话待处理消息积压超过阈值时，runtime 会进入静默批处理并合并同一说话人的连续消息

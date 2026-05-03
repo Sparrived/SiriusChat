@@ -25,9 +25,8 @@
     "task_model_overrides": {
       "// 示例": { "model": "gpt-4o-mini", "max_tokens": 256, "temperature": 0.7 },
       "response_generate": { "model": "gpt-4o", "max_tokens": 512, "temperature": 0.7 },
-      "emotion_analyze": { "model": "gpt-4o-mini", "max_tokens": 256, "temperature": 0.2 },
-      "intent_analyze": { "model": "gpt-4o-mini", "max_tokens": 256, "temperature": 0.2 },
-      "cognition_analyze": { "model": "gpt-4o-mini", "max_tokens": 384, "temperature": 0.2 }
+      "cognition_analyze": { "model": "gpt-4o-mini", "max_tokens": 384, "temperature": 0.2 },
+      "memory_extract": { "model": "gpt-4o-mini", "max_tokens": 512, "temperature": 0.3 }
     },
 
     "// 决策层": "",

@@ -113,7 +113,7 @@ Sirius Chat 是一个面向"多人用户与单主 AI"交互场景的编排框架
 5. `PersonaManager` 扫描 `data/personas/` 目录，为每个人格分配 NapCat 端口并维护注册表。
 6. `PersonaWorker` 创建 `EngineRuntime`，后者懒加载 `EmotionalGroupChatEngine` 并启动后台任务。
 
-补充说明：`ConfigManager` 会在构建 `SessionConfig` 前把旧版 `enable_intent_analysis` / `intent_analysis_model` 自动规范化到 `task_enabled["intent_analysis"]` / `task_models["intent_analysis"]`，把旧版 `message_debounce_seconds` 按四舍五入映射到 `pending_message_threshold`，并把旧版 `memory_manager_model` / `memory_manager_temperature` / `memory_manager_max_tokens` 迁移为 `memory_manager` 任务参数；新的模板与持久化快照不再写回这些旧字段。
+补充说明：`ConfigManager` 会在构建 `SessionConfig` 前把旧版 `message_debounce_seconds` 按四舍五入映射到 `pending_message_threshold`；新的模板与持久化快照不再写回旧字段。
 
 ### 2. 执行单轮消息
 
