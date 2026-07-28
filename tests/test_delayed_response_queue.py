@@ -1161,7 +1161,7 @@ async def test_delayed_queue_when_fenced_markdown_has_context_then_sends_text_im
 
     async def send_markdown_card(content: str, *, adapter, group_id: str, title: str = "") -> str:
         order.append("card")
-        assert content == "**顶层模块**：\n- core/"
+        assert content == "**顶层模块**：\n- core/\n\n---\n\n**执行层**：\n- worker/"
         assert adapter is engine._adapter
         assert group_id == "group-1"
         assert title == ""
@@ -1173,8 +1173,8 @@ async def test_delayed_queue_when_fenced_markdown_has_context_then_sends_text_im
         SimpleNamespace(name="lookup", silent=False, developer_only=False),
         [
             SimpleNamespace(
-                raw_text="我先说下整体思路。\n```markdown\n**顶层模块**：\n- core/\n```\n细节之后再聊。",
-                clean_text="我先说下整体思路。\n```markdown\n**顶层模块**：\n- core/\n```\n细节之后再聊。",
+                raw_text="我先说下整体思路。\n```markdown\n**顶层模块**：\n- core/\n```\n中间说明。\n```markdown\n**执行层**：\n- worker/\n```\n细节之后再聊。",
+                clean_text="我先说下整体思路。\n```markdown\n**顶层模块**：\n- core/\n```\n中间说明。\n```markdown\n**执行层**：\n- worker/\n```\n细节之后再聊。",
                 tool_calls=[],
                 reply_references=[],
                 injected_request={
@@ -1202,8 +1202,13 @@ async def test_delayed_queue_when_fenced_markdown_has_context_then_sends_text_im
 
     results = await tasks.tick_delayed_queue("group-1", on_partial_reply=capture_partial)
 
-    assert partials == ["我先说下整体思路。", "细节之后再聊。"]
-    assert order == ["text:我先说下整体思路。", "card", "text:细节之后再聊。"]
+    assert partials == ["我先说下整体思路。", "中间说明。", "细节之后再聊。"]
+    assert order == [
+        "text:我先说下整体思路。",
+        "card",
+        "text:中间说明。",
+        "text:细节之后再聊。",
+    ]
     assert engine.brain.chat.await_count == 1
     execute_skill.assert_not_awaited()
     assert results[0]["reply"] == ""
@@ -1224,7 +1229,7 @@ async def test_delayed_queue_when_fenced_markdown_has_context_then_sends_text_im
         {
             "group_id": "group-1",
             "target_user_id": "u1",
-            "content": "**顶层模块**：\n- core/",
+            "content": "**顶层模块**：\n- core/\n\n---\n\n**执行层**：\n- worker/",
             "system_prompt": "",
             "tags": [{"type": "image", "label": "富文本卡片"}],
             "injected_request": {
@@ -1235,6 +1240,19 @@ async def test_delayed_queue_when_fenced_markdown_has_context_then_sends_text_im
             },
             "injected_tool_names": [],
             "platform_message_id": "42",
+        },
+        {
+            "group_id": "group-1",
+            "target_user_id": "u1",
+            "content": "中间说明。",
+            "system_prompt": "",
+            "injected_request": {
+                "system_prompt": "system",
+                "messages": [{"role": "user", "content": "question"}],
+                "tools": [],
+                "tool_choice": None,
+            },
+            "injected_tool_names": [],
         },
         {
             "group_id": "group-1",

@@ -692,24 +692,33 @@ class DelayedQueueTasks:
                 agent_turn.advance(AgentTurnPhase.RESPOND)
                 await self._emit_agent_turn(engine, agent_turn)
                 fenced_parts = _markdown_image.split_fenced_markdown(round_clean)
-                if not plan_mode and any(is_markdown for is_markdown, _ in fenced_parts):
+                markdown_contents = [
+                    content for is_markdown, content in fenced_parts if is_markdown
+                ]
+                merged_markdown = _markdown_image.merge_markdown_blocks(markdown_contents)
+                if not plan_mode and markdown_contents:
+                    markdown_sent = False
                     for is_markdown, content in fenced_parts:
                         if is_markdown:
-                            message_id = await _markdown_image.render_and_send_markdown_image(
-                                content,
-                                adapter=getattr(engine, "_adapter", None),
-                                group_id=group_id,
-                            )
-                            engine._record_assistant_message(
-                                group_id=group_id,
-                                target_user_id=item.user_id,
-                                content=content,
-                                system_prompt=getattr(chat_result, "system_prompt", ""),
-                                tags=[{"type": "image", "label": "富文本卡片"}],
-                                injected_request=getattr(chat_result, "injected_request", {}),
-                                injected_tool_names=getattr(chat_result, "injected_tool_names", []),
-                                platform_message_id=message_id,
-                            )
+                            if not markdown_sent:
+                                message_id = await _markdown_image.render_and_send_markdown_image(
+                                    merged_markdown,
+                                    adapter=getattr(engine, "_adapter", None),
+                                    group_id=group_id,
+                                )
+                                engine._record_assistant_message(
+                                    group_id=group_id,
+                                    target_user_id=item.user_id,
+                                    content=merged_markdown,
+                                    system_prompt=getattr(chat_result, "system_prompt", ""),
+                                    tags=[{"type": "image", "label": "富文本卡片"}],
+                                    injected_request=getattr(chat_result, "injected_request", {}),
+                                    injected_tool_names=getattr(
+                                        chat_result, "injected_tool_names", []
+                                    ),
+                                    platform_message_id=message_id,
+                                )
+                                markdown_sent = True
                         else:
                             if on_partial_reply is None:
                                 raise RuntimeError(

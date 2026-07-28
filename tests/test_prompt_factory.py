@@ -177,7 +177,7 @@ def test_persona_prompt_includes_full_profile_fields_and_custom_prompt_guardrail
         typical_signoffs=["回头见"],
     )
     custom_prompt = PromptFactory.build_persona_prompt(
-        name="Bot", full_system_prompt="这是自定义人格。"
+        name="Bot", persona_summary="结构化人格补充", full_system_prompt="这是自定义人格。"
     )
 
     assert "做事时主要在意可靠、好奇" in prompt
@@ -185,6 +185,8 @@ def test_persona_prompt_includes_full_profile_fields_and_custom_prompt_guardrail
     assert "常用开场可参考早" in prompt
     assert "常用收尾可参考回头见" in prompt
     assert "这是自定义人格。" in custom_prompt
+    assert "你的整体气质是结构化人格补充。" in custom_prompt
+    assert custom_prompt.count("【身份锚定】") == 1
     assert "【不可覆盖的运行约束】" in custom_prompt
 
 

@@ -806,6 +806,10 @@ function renderMessages() {
   const el = $('messageList');
   if (!el) return;
 
+  const timelineItems = embeddedMode
+    ? buildEmbeddedTimelineItems(messages)
+    : messages.map((message, sourceIndex) => ({ kind: 'message', message, sourceIndex }));
+
   // 保存当前滚动位置和内容高度（用于补偿新消息插入导致的偏移）
   const oldScrollTop = el.scrollTop;
   const oldScrollHeight = el.scrollHeight;
@@ -823,7 +827,7 @@ function renderMessages() {
     }
   });
 
-  if (!messages.length) {
+  if (!timelineItems.length) {
     el.innerHTML = `
       <div class="card">
         <div style="padding:60px;text-align:center;color:var(--text-3)">
@@ -836,7 +840,12 @@ function renderMessages() {
   }
 
   msgIdCounter = 0;
-  el.innerHTML = messages.map((m, idx) => {
+  el.innerHTML = timelineItems.map(item => {
+    if (item.kind === 'tool-call') return renderMemoryToolCallMessage(item);
+    if (item.kind === 'tool-result') return renderMemoryToolResultMessage(item);
+
+    const m = item.message;
+    const idx = item.sourceIndex;
     const roleStyle = getRoleStyle(m.role);
     const speakerName = m.speaker_name || m.user_id || roleStyle.label;
     const content = m.content || '';
@@ -920,6 +929,108 @@ function formatToolPayload(payload) {
   } catch {
     return String(payload || '');
   }
+}
+
+function buildEmbeddedTimelineItems(sourceMessages) {
+  const items = [];
+  const seenCallIds = new Set();
+  const seenResultIds = new Set();
+
+  sourceMessages.forEach((message, sourceIndex) => {
+    items.push({ kind: 'message', message, sourceIndex });
+    if (message?.role !== 'assistant') return;
+
+    const builtChain = buildConversationChain(message);
+    const chain = builtChain.length > 0
+      ? builtChain
+      : (getToolCalls(message).length > 0 ? [message] : []);
+    const toolNamesById = new Map();
+
+    chain.forEach(chainMessage => {
+      getToolCalls(chainMessage).forEach(call => {
+        if (call.id) toolNamesById.set(String(call.id), getToolName(call));
+      });
+    });
+
+    chain.forEach((chainMessage, chainIndex) => {
+      getToolCalls(chainMessage).forEach((call, callIndex) => {
+        const callId = call.id ? String(call.id) : '';
+        if (callId && seenCallIds.has(callId)) return;
+        if (callId) seenCallIds.add(callId);
+        items.push({
+          kind: 'tool-call',
+          call,
+          content: normalizeChainContent(chainMessage.content),
+          sourceMessage: message,
+          sourceIndex,
+          chainIndex,
+          callIndex,
+        });
+      });
+
+      if (chainMessage.role !== 'tool') return;
+      const callId = chainMessage.tool_call_id ? String(chainMessage.tool_call_id) : '';
+      if (callId && seenResultIds.has(callId)) return;
+      if (callId) seenResultIds.add(callId);
+      items.push({
+        kind: 'tool-result',
+        result: chainMessage,
+        toolName: toolNamesById.get(callId) || '',
+        sourceMessage: message,
+        sourceIndex,
+        chainIndex,
+      });
+    });
+  });
+
+  return items;
+}
+
+function renderMemoryToolCallMessage(item) {
+  const call = item.call || {};
+  const name = getToolName(call);
+  const callId = String(call.id || '');
+  const argumentsText = formatToolPayload(call.function?.arguments ?? call.arguments);
+  const content = normalizeChainContent(item.content);
+
+  return `
+    <div data-tool-event-kind="call" style="padding:12px 16px;background:var(--bg-2);border-radius:8px;border-left:3px solid #ff9800">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <div style="display:flex;align-items:center;gap:8px">
+          <span style="color:#ff9800;font-weight:600;font-size:13px">工具调用</span>
+          <span class="tag" style="font-size:10px;padding:2px 6px">1 个调用</span>
+        </div>
+        <span style="font-size:11px;color:var(--text-3)">${formatTime(item.sourceMessage?.timestamp)}</span>
+      </div>
+      ${content ? `<div style="font-size:13px;color:var(--text-1);line-height:1.6;white-space:pre-wrap;margin-bottom:8px">${escapeHtml(content)}</div>` : ''}
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:5px">
+        <span style="font-size:12px;font-weight:600;color:var(--text-1)">${escapeHtml(name)}</span>
+        ${callId ? `<span style="font-size:10px;color:var(--text-3);margin-left:auto">${escapeHtml(callId)}</span>` : ''}
+      </div>
+      <pre style="margin:0;padding:8px;background:var(--bg-1);font-size:11px;color:var(--text-2);line-height:1.5;white-space:pre-wrap;word-break:break-word;max-height:260px;overflow-y:auto;font-family:monospace">${escapeHtml(argumentsText)}</pre>
+    </div>
+  `;
+}
+
+function renderMemoryToolResultMessage(item) {
+  const result = item.result || {};
+  const toolName = item.toolName || 'unknown';
+  const callId = String(result.tool_call_id || '');
+  const rawContent = normalizeChainContent(result.content);
+  const resultText = rawContent ? formatToolPayload(rawContent) : '（无返回内容）';
+
+  return `
+    <div data-tool-event-kind="result" style="padding:12px 16px;background:var(--bg-2);border-radius:8px;border-left:3px solid #ff9800">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <div style="display:flex;align-items:center;gap:8px">
+          <span style="color:#ff9800;font-weight:600;font-size:13px">工具调用结果 · ${escapeHtml(toolName)}</span>
+        </div>
+        <span style="font-size:11px;color:var(--text-3)">${formatTime(item.sourceMessage?.timestamp)}</span>
+      </div>
+      ${callId ? `<div style="font-size:10px;color:var(--text-3);margin-bottom:5px">${escapeHtml(callId)}</div>` : ''}
+      <pre style="margin:0;padding:8px;background:var(--bg-1);font-size:11px;color:var(--text-2);line-height:1.5;white-space:pre-wrap;word-break:break-word;max-height:300px;overflow-y:auto;font-family:monospace">${escapeHtml(resultText)}</pre>
+    </div>
+  `;
 }
 
 function chainMessageLength(message) {

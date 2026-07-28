@@ -6,6 +6,7 @@ import base64
 import html
 import re
 import tempfile
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -19,7 +20,7 @@ _FENCED_MARKDOWN_RE = re.compile(r"```[^\r\n]*\r?\n(.*?)```", re.DOTALL)
 
 
 def split_fenced_markdown(text: str) -> list[tuple[bool, str]]:
-    """Split a reply into ordinary text and Markdown image blocks in display order."""
+    """Split a reply into ordinary text and fenced Markdown blocks in display order."""
     source = str(text or "")
     parts: list[tuple[bool, str]] = []
     cursor = 0
@@ -35,6 +36,12 @@ def split_fenced_markdown(text: str) -> list[tuple[bool, str]]:
     if after:
         parts.append((False, after))
     return parts
+
+
+def merge_markdown_blocks(blocks: Iterable[str]) -> str:
+    """Join fenced blocks into one readable Markdown document."""
+    clean_blocks = [str(block or "").strip() for block in blocks if str(block or "").strip()]
+    return "\n\n---\n\n".join(clean_blocks)
 
 
 def has_fenced_markdown(text: str) -> bool:
@@ -118,26 +125,42 @@ def build_markdown_card_html(content: str, title: str = "") -> str:
     return f"""<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><style>
 * {{ box-sizing: border-box; }}
-body {{ margin: 0; background: #e8edef; color: #1d2529; font-family: "Microsoft YaHei", "Noto Sans CJK SC", "Segoe UI", sans-serif; }}
-#markdown-card {{ width: 900px; background: #fff; border: 1px solid #cbd6d9; border-radius: 8px; overflow: hidden; }}
-.accent {{ height: 10px; background: #117f85; }}
-.content {{ padding: 34px 42px 38px; }}
-h1 {{ color: #123a40; font-size: 30px; line-height: 1.3; margin: 0 0 24px; }}
-h2 {{ color: #123a40; font-size: 24px; line-height: 1.35; margin: 28px 0 12px; }}
-h3 {{ color: #176b70; font-size: 19px; line-height: 1.4; margin: 24px 0 10px; }}
-h4 {{ color: #176b70; font-size: 16px; line-height: 1.4; margin: 20px 0 8px; }}
-p, li, blockquote {{ font-size: 17px; line-height: 1.75; }}
+html {{ background: #dfe4df; }}
+body {{ margin: 0; padding: 24px; background: #dfe4df; color: #202a2b; font-family: "Microsoft YaHei", "Noto Sans CJK SC", "Segoe UI", sans-serif; }}
+#markdown-card {{ width: 900px; background: #f7f7f2; border: 1px solid #1c2b2e; border-radius: 8px; box-shadow: 8px 8px 0 #b8c4bc; overflow: hidden; }}
+.masthead {{ display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; min-height: 132px; padding: 25px 36px 24px; background: #18252a; color: #f3f0e7; }}
+.identity {{ display: flex; align-items: center; gap: 16px; }}
+.signal-mark {{ display: grid; grid-template-columns: repeat(3, 7px); gap: 4px; width: 38px; padding: 7px; border: 1px solid #7bd7c6; background: #26383b; }}
+.signal-mark span {{ display: block; height: 7px; background: #7bd7c6; }}
+.signal-mark span:nth-child(2), .signal-mark span:nth-child(5), .signal-mark span:nth-child(8) {{ background: #f0b85d; }}
+.signal-mark span:nth-child(3), .signal-mark span:nth-child(7) {{ background: #e36b52; }}
+.eyebrow, .telemetry-label, .footer {{ font-family: "Cascadia Mono", Consolas, monospace; letter-spacing: 1.4px; text-transform: uppercase; }}
+.eyebrow {{ color: #7bd7c6; font-size: 11px; font-weight: 700; }}
+.wordmark {{ margin-top: 5px; color: #f3f0e7; font-size: 27px; font-weight: 800; letter-spacing: 1px; }}
+.telemetry {{ min-width: 160px; padding-left: 16px; border-left: 1px solid #536467; }}
+.telemetry-label {{ color: #a8b8b5; font-size: 10px; }}
+.telemetry-value {{ margin-top: 8px; color: #f0b85d; font-family: "Cascadia Mono", Consolas, monospace; font-size: 12px; font-weight: 700; }}
+.accent {{ height: 8px; background: #e36b52; position: relative; }}
+.accent::after {{ content: ""; position: absolute; top: 0; right: 0; width: 34%; height: 100%; background: #f0b85d; }}
+.content {{ padding: 34px 42px 37px; }}
+h1 {{ color: #18252a; font-size: 30px; line-height: 1.3; margin: 0 0 24px; overflow-wrap: anywhere; }}
+h2 {{ color: #18252a; font-size: 24px; line-height: 1.35; margin: 28px 0 12px; padding-bottom: 8px; border-bottom: 2px solid #b8c4bc; }}
+h3 {{ color: #b34e3d; font-size: 19px; line-height: 1.4; margin: 24px 0 10px; }}
+h4 {{ color: #55716c; font-size: 16px; line-height: 1.4; margin: 20px 0 8px; }}
+p, li, blockquote {{ font-size: 17px; line-height: 1.75; overflow-wrap: anywhere; }}
 p {{ margin: 0 0 15px; overflow-wrap: anywhere; }}
 ul, ol {{ margin: 8px 0 18px; padding-left: 28px; }}
 li {{ margin: 4px 0; padding-left: 4px; }}
-blockquote {{ border-left: 4px solid #6db5b6; color: #466166; margin: 18px 0; padding: 4px 0 4px 16px; }}
-pre {{ background: #f3f6f7; border: 1px solid #d9e2e4; border-radius: 5px; color: #24363a; font-family: "Cascadia Mono", Consolas, monospace; font-size: 14px; line-height: 1.65; margin: 18px 0; overflow-wrap: anywhere; padding: 16px; white-space: pre-wrap; }}
-code {{ background: #edf3f3; border-radius: 3px; color: #8e3d2a; font-family: "Cascadia Mono", Consolas, monospace; font-size: .9em; padding: 2px 4px; }}
+blockquote {{ border-left: 5px solid #e36b52; background: #e8eeea; color: #4a605e; margin: 18px 0; padding: 7px 15px; }}
+hr {{ height: 1px; margin: 29px 0; border: 0; background: #b8c4bc; position: relative; }}
+hr::after {{ content: ""; position: absolute; top: -2px; left: 0; width: 36px; height: 5px; background: #7bd7c6; }}
+pre {{ background: #202d31; border: 0; border-left: 5px solid #7bd7c6; border-radius: 3px; color: #e8f0e9; font-family: "Cascadia Mono", Consolas, monospace; font-size: 14px; line-height: 1.65; margin: 18px 0; overflow-wrap: anywhere; padding: 16px; white-space: pre-wrap; }}
+code {{ background: #e4ebe5; border-radius: 3px; color: #b34e3d; font-family: "Cascadia Mono", Consolas, monospace; font-size: .9em; padding: 2px 4px; }}
 pre code {{ background: transparent; color: inherit; padding: 0; }}
-strong {{ color: #102e34; }} em {{ color: #45676a; }}
-.table-line {{ background: #f6f8f8; border-left: 3px solid #b6c7ca; font-family: "Cascadia Mono", Consolas, monospace; font-size: 14px; padding: 7px 10px; white-space: pre-wrap; }}
-.footer {{ border-top: 1px solid #dfe7e9; color: #6b7d81; font-size: 11px; margin-top: 28px; padding-top: 14px; }}
-</style></head><body><article id="markdown-card"><div class="accent"></div><div class="content">{heading}{_markdown_body_html(content)}<div class="footer">SIRIUS CHAT</div></div></article></body></html>"""
+strong {{ color: #18252a; }} em {{ color: #55716c; }}
+.table-line {{ background: #edf1eb; border-left: 3px solid #f0b85d; font-family: "Cascadia Mono", Consolas, monospace; font-size: 14px; padding: 7px 10px; white-space: pre-wrap; }}
+.footer {{ display: flex; justify-content: space-between; gap: 20px; border-top: 1px solid #c9d2cb; color: #70827d; font-size: 10px; margin-top: 30px; padding-top: 14px; }}
+</style></head><body><article id="markdown-card"><header class="masthead"><div class="identity"><div class="signal-mark" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span></div><div><div class="eyebrow">SIRIUS / RESPONSE ARCHIVE</div><div class="wordmark">FIELD NOTE</div></div></div><div class="telemetry"><div class="telemetry-label">Output mode</div><div class="telemetry-value">MERGED RESPONSE</div></div></header><div class="accent"></div><div class="content">{heading}{_markdown_body_html(content)}<div class="footer"><span>SIRIUS CHAT</span><span>ONE REPLY / MANY SIGNALS</span></div></div></article></body></html>"""
 
 
 def _markdown_body_html(content: str) -> str:
@@ -180,6 +203,12 @@ def _markdown_body_html(content: str) -> str:
         if not line.strip():
             flush_paragraph()
             flush_list()
+            continue
+
+        if line.strip() in {"---", "***", "___"}:
+            flush_paragraph()
+            flush_list()
+            blocks.append("<hr>")
             continue
 
         heading_match = _HEADING_RE.match(line)

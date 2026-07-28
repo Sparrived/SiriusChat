@@ -7,6 +7,7 @@ import pytest
 from sirius_pulse.skills.builtin import _markdown_image
 from sirius_pulse.skills.builtin._markdown_image import (
     build_markdown_card_html,
+    merge_markdown_blocks,
     split_fenced_markdown,
 )
 
@@ -21,6 +22,10 @@ def test_split_fenced_markdown_preserves_text_before_and_after_the_card():
         (True, "**顶层模块**：\n- core/"),
         (False, "细节之后再聊。"),
     ]
+
+
+def test_merge_markdown_blocks_adds_a_visible_section_break():
+    assert merge_markdown_blocks(["# first", "- second"]) == "# first\n\n---\n\n- second"
 
 
 @pytest.mark.asyncio

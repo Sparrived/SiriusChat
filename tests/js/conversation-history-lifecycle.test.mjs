@@ -73,7 +73,14 @@ assert.equal(
   'conversation chain details should be rendered on demand when expanded',
 );
 
-for (const helper of ['getToolCalls', 'renderChainToolCallMessage', 'renderChainToolResultMessage']) {
+for (const helper of [
+  'getToolCalls',
+  'buildEmbeddedTimelineItems',
+  'renderMemoryToolCallMessage',
+  'renderMemoryToolResultMessage',
+  'renderChainToolCallMessage',
+  'renderChainToolResultMessage',
+]) {
   assert.equal(
     source.includes(`function ${helper}`),
     true,
@@ -109,7 +116,10 @@ vm.runInNewContext(
     .replace(/^import .*;$/gm, '')
     .replace(/^export /gm, '')
     + '\nglobalThis.renderChainMessagesForTest = renderChainMessages;'
-    + '\nglobalThis.renderInjectedRequestPanelForTest = renderInjectedRequestPanel;',
+    + '\nglobalThis.renderInjectedRequestPanelForTest = renderInjectedRequestPanel;'
+    + '\nglobalThis.buildEmbeddedTimelineItemsForTest = buildEmbeddedTimelineItems;'
+    + '\nglobalThis.renderMemoryToolCallMessageForTest = renderMemoryToolCallMessage;'
+    + '\nglobalThis.renderMemoryToolResultMessageForTest = renderMemoryToolResultMessage;',
   context,
 );
 
@@ -168,3 +178,64 @@ assert.match(renderedToolChain, /lookup_weather/);
 assert.match(renderedToolChain, /Shanghai/);
 assert.match(renderedToolChain, /工具调用结果 · lookup_weather/);
 assert.match(renderedToolChain, /temperature/);
+
+const memoryAssistantMessage = {
+  entry_id: 'assistant-memory-1',
+  role: 'assistant',
+  timestamp: '2026-07-28T12:00:00Z',
+  conversation_chain: [
+    {
+      role: 'assistant',
+      content: '临雀姐姐问服务器状态喵～让我看看现在的情况~',
+      tool_calls: [{
+        id: 'call_00_6Hd3xFX08LA74aUQo5pc7535',
+        type: 'function',
+        function: {
+          name: 'bash',
+          arguments: '{"command":"docker ps","timeout_seconds":10}',
+        },
+      }],
+    },
+    {
+      role: 'tool',
+      tool_call_id: 'call_00_6Hd3xFX08LA74aUQo5pc7535',
+      content: 'sirius-pulse-v2-test healthy',
+    },
+  ],
+};
+
+const memoryTimeline = context.buildEmbeddedTimelineItemsForTest([memoryAssistantMessage]);
+assert.equal(
+  JSON.stringify(Array.from(memoryTimeline, item => item.kind)),
+  JSON.stringify(['message', 'tool-call', 'tool-result']),
+  'embedded memory should place tool events beside the source message',
+);
+assert.equal(memoryTimeline[1].sourceIndex, 0);
+assert.equal(memoryTimeline[2].toolName, 'bash');
+
+const renderedMemoryCall = context.renderMemoryToolCallMessageForTest(memoryTimeline[1]);
+assert.match(renderedMemoryCall, /工具调用/);
+assert.match(renderedMemoryCall, /bash/);
+assert.match(renderedMemoryCall, /call_00_6Hd3xFX08LA74aUQo5pc7535/);
+assert.match(renderedMemoryCall, /docker ps/);
+assert.match(renderedMemoryCall, /临雀姐姐问服务器状态/);
+
+const renderedMemoryResult = context.renderMemoryToolResultMessageForTest(memoryTimeline[2]);
+assert.match(renderedMemoryResult, /工具调用结果 · bash/);
+assert.match(renderedMemoryResult, /call_00_6Hd3xFX08LA74aUQo5pc7535/);
+assert.match(renderedMemoryResult, /healthy/);
+
+const duplicateMemoryTimeline = context.buildEmbeddedTimelineItemsForTest([
+  memoryAssistantMessage,
+  { ...memoryAssistantMessage, entry_id: 'assistant-memory-duplicate' },
+]);
+assert.equal(
+  duplicateMemoryTimeline.filter(item => item.kind === 'tool-call').length,
+  1,
+  'duplicate tool calls should be collapsed by call ID',
+);
+assert.equal(
+  duplicateMemoryTimeline.filter(item => item.kind === 'tool-result').length,
+  1,
+  'duplicate tool results should be collapsed by tool_call_id',
+);
