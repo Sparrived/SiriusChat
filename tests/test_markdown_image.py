@@ -47,7 +47,24 @@ def test_split_fenced_markdown_repairs_unclosed_fullwidth_fence():
 def test_split_fenced_markdown_detects_structured_content_without_fence():
     result = split_fenced_markdown("markdown:\n# 部署结果\n\n- WebUI 正常\n- Embedding 正常")
 
-    assert result == [(True, "# 部署结果\n\n- WebUI 正常\n- Embedding 正常")]
+    assert result == [
+        (True, "# 部署结果"),
+        (True, "- WebUI 正常\n- Embedding 正常"),
+    ]
+
+
+def test_split_fenced_markdown_keeps_natural_language_around_unfenced_markdown():
+    result = split_fenced_markdown(
+        "我看完了，核心问题是连接还没就绪。\n\n"
+        "# 部署结果\n- WebUI 正常\n- Embedding 正常\n\n"
+        "如果还在刷屏，可以重启。"
+    )
+
+    assert result == [
+        (False, "我看完了，核心问题是连接还没就绪。"),
+        (True, "# 部署结果\n- WebUI 正常\n- Embedding 正常"),
+        (False, "如果还在刷屏，可以重启。"),
+    ]
 
 
 def test_split_fenced_markdown_keeps_ordinary_text_unwrapped():

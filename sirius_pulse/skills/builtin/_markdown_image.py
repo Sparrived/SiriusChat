@@ -70,11 +70,7 @@ def split_fenced_markdown(text: str) -> list[tuple[bool, str]]:
     if any(is_markdown for is_markdown, _ in parts):
         return parts
 
-    candidate = _strip_markdown_label(source)
-    if _looks_like_unfenced_markdown(candidate):
-        return [(True, candidate)]
-    clean_source = source.strip()
-    return [(False, clean_source)] if clean_source else []
+    return _split_unfenced_markdown(source)
 
 
 def merge_markdown_blocks(blocks: Iterable[str]) -> str:
@@ -100,6 +96,48 @@ def _strip_markdown_label(text: str) -> str:
     return "\n".join(lines).strip()
 
 
+def _split_unfenced_markdown(text: str) -> list[tuple[bool, str]]:
+    source = _strip_markdown_label(text)
+    if not source:
+        return []
+
+    parts: list[tuple[bool, str]] = []
+    for block in re.split(r"\n\s*\n", source):
+        lines = block.splitlines()
+        structural_indexes = [
+            index for index, line in enumerate(lines) if _is_markdown_structure_line(line)
+        ]
+        if not structural_indexes or not _looks_like_unfenced_markdown(block):
+            clean_block = block.strip()
+            if clean_block:
+                parts.append((False, clean_block))
+            continue
+
+        first = structural_indexes[0]
+        last = structural_indexes[-1]
+        before = "\n".join(lines[:first]).strip()
+        markdown = "\n".join(lines[first : last + 1]).strip()
+        after = "\n".join(lines[last + 1 :]).strip()
+        if before:
+            parts.append((False, before))
+        if markdown:
+            parts.append((True, markdown))
+        if after:
+            parts.append((False, after))
+    return parts
+
+
+def _is_markdown_structure_line(line: str) -> bool:
+    clean_line = str(line or "").strip()
+    return bool(
+        _HEADING_RE.match(clean_line)
+        or _ORDERED_ITEM_RE.match(clean_line)
+        or _BULLET_ITEM_RE.match(clean_line)
+        or clean_line.startswith(">")
+        or clean_line.count("|") >= 2
+    )
+
+
 def _looks_like_unfenced_markdown(text: str) -> bool:
     source = str(text or "").strip()
     if not source:
@@ -110,7 +148,6 @@ def _looks_like_unfenced_markdown(text: str) -> bool:
     ordered = sum(bool(_ORDERED_ITEM_RE.match(line)) for line in lines)
     table_rows = sum(line.count("|") >= 2 for line in lines)
     quotes = sum(line.startswith(">") for line in lines)
-    paragraphs = sum(bool(block.strip()) for block in re.split(r"\n\s*\n", source))
     score = 2 * headings
     score += 2 if bullets >= 2 else 0
     score += 2 if ordered >= 2 else 0
@@ -118,11 +155,9 @@ def _looks_like_unfenced_markdown(text: str) -> bool:
     score += min(quotes, 1)
     score += 1 if re.search(r"[`*_]{2}", source) else 0
     score += 1 if len(source) >= 160 else 0
-    has_structural_signal = bool(
+    return score >= 2 and bool(
         headings or bullets >= 2 or ordered >= 2 or table_rows >= 2 or quotes
     )
-    has_long_form_signal = len(source) >= 200 and paragraphs >= 2
-    return score >= 2 and (has_structural_signal or has_long_form_signal)
 
 
 def _is_code_fence_line(line: str) -> bool:
