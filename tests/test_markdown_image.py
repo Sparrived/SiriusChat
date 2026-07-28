@@ -67,6 +67,27 @@ def test_split_fenced_markdown_keeps_natural_language_around_unfenced_markdown()
     ]
 
 
+def test_split_unfenced_markdown_keeps_table_and_bold_markdown_in_the_card():
+    result = split_fenced_markdown(
+        "当然可以。\n\n"
+        "---\n\n"
+        "# 状态报告\n\n"
+        "| 项目 | 状态 |\n"
+        "|------|------|\n"
+        "| WebUI | 正常 |\n\n"
+        "**服务器状态速报**\n\n"
+        "姐姐，一切安好。"
+    )
+
+    assert result == [
+        (False, "当然可以。"),
+        (True, "# 状态报告"),
+        (True, "| 项目 | 状态 |\n|------|------|\n| WebUI | 正常 |"),
+        (True, "**服务器状态速报**"),
+        (False, "姐姐，一切安好。"),
+    ]
+
+
 def test_split_fenced_markdown_keeps_ordinary_text_unwrapped():
     text = "今天状态不错，准备晚点再看看服务器。"
 
@@ -125,3 +146,14 @@ def test_markdown_card_escapes_content_and_renders_common_structures():
     assert "<code>docker ps</code>" in html
     assert "&lt;script&gt;alert(1)&lt;/script&gt;" in html
     assert "<script>" not in html
+
+
+def test_markdown_card_renders_pipe_tables_as_html_tables():
+    rendered = build_markdown_card_html("| 项目 | 状态 |\n" "|:-----|:----:|\n" "| WebUI | 正常 |")
+
+    assert "<table>" in rendered
+    assert "<thead>" in rendered
+    assert '<th align="left">项目</th>' in rendered
+    assert '<th align="center">状态</th>' in rendered
+    assert '<td align="left">WebUI</td>' in rendered
+    assert '<p class="table-line">' not in rendered

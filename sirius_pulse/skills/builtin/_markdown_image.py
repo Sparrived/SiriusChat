@@ -19,6 +19,8 @@ _BULLET_ITEM_RE = re.compile(r"^[-*+]\s+(.+)$")
 _FENCE_LINE_RE = re.compile(r"^\s{0,3}([`~]+)([^\r\n]*)$")
 _MARKDOWN_LABEL_RE = re.compile(r"^\s*(?:markdown|md)\s*[:：]\s*(.*)$", re.IGNORECASE)
 _MARKDOWN_LABEL_ONLY_RE = re.compile(r"^\s*(?:markdown|md)\s*$", re.IGNORECASE)
+_STRONG_ONLY_RE = re.compile(r"^\s*(?:\*\*.+\*\*|__.+__)\s*$")
+_HORIZONTAL_RULE_RE = re.compile(r"^(?:-{3,}|\*{3,}|_{3,})$")
 
 
 def split_fenced_markdown(text: str) -> list[tuple[bool, str]]:
@@ -124,7 +126,7 @@ def _split_unfenced_markdown(text: str) -> list[tuple[bool, str]]:
             parts.append((True, markdown))
         if after:
             parts.append((False, after))
-    return parts
+    return _remove_orphan_markdown_separators(parts)
 
 
 def _is_markdown_structure_line(line: str) -> bool:
@@ -134,7 +136,9 @@ def _is_markdown_structure_line(line: str) -> bool:
         or _ORDERED_ITEM_RE.match(clean_line)
         or _BULLET_ITEM_RE.match(clean_line)
         or clean_line.startswith(">")
-        or clean_line.count("|") >= 2
+        or _is_table_row_line(clean_line)
+        or _STRONG_ONLY_RE.match(clean_line)
+        or _HORIZONTAL_RULE_RE.match(clean_line)
     )
 
 
@@ -146,18 +150,41 @@ def _looks_like_unfenced_markdown(text: str) -> bool:
     headings = sum(bool(_HEADING_RE.match(line)) for line in lines)
     bullets = sum(bool(_BULLET_ITEM_RE.match(line)) for line in lines)
     ordered = sum(bool(_ORDERED_ITEM_RE.match(line)) for line in lines)
-    table_rows = sum(line.count("|") >= 2 for line in lines)
+    table_rows = sum(_is_table_row_line(line) for line in lines)
     quotes = sum(line.startswith(">") for line in lines)
+    strong_lines = sum(bool(_STRONG_ONLY_RE.match(line)) for line in lines)
+    horizontal_rules = sum(bool(_HORIZONTAL_RULE_RE.match(line)) for line in lines)
     score = 2 * headings
     score += 2 if bullets >= 2 else 0
     score += 2 if ordered >= 2 else 0
     score += 2 if table_rows >= 2 else 0
+    score += 2 if strong_lines else 0
     score += min(quotes, 1)
+    score += min(horizontal_rules, 1)
     score += 1 if re.search(r"[`*_]{2}", source) else 0
     score += 1 if len(source) >= 160 else 0
     return score >= 2 and bool(
-        headings or bullets >= 2 or ordered >= 2 or table_rows >= 2 or quotes
+        headings or bullets >= 2 or ordered >= 2 or table_rows >= 2 or quotes or strong_lines
     )
+
+
+def _is_table_row_line(line: str) -> bool:
+    return str(line or "").count("|") >= 2
+
+
+def _remove_orphan_markdown_separators(
+    parts: list[tuple[bool, str]],
+) -> list[tuple[bool, str]]:
+    separators = {"---", "***", "___"}
+    result: list[tuple[bool, str]] = []
+    for index, (is_markdown, content) in enumerate(parts):
+        if not is_markdown and content.strip() in separators:
+            previous_is_markdown = bool(result and result[-1][0])
+            next_is_markdown = index + 1 < len(parts) and parts[index + 1][0]
+            if previous_is_markdown or next_is_markdown:
+                continue
+        result.append((is_markdown, content))
+    return result
 
 
 def _is_code_fence_line(line: str) -> bool:
@@ -279,6 +306,10 @@ pre {{ background: #202d31; border: 0; border-left: 5px solid #7bd7c6; border-ra
 code {{ background: #e4ebe5; border-radius: 3px; color: #b34e3d; font-family: "Cascadia Mono", Consolas, monospace; font-size: .9em; padding: 2px 4px; }}
 pre code {{ background: transparent; color: inherit; padding: 0; }}
 strong {{ color: #18252a; }} em {{ color: #55716c; }}
+table {{ width: 100%; border-collapse: collapse; margin: 18px 0 22px; table-layout: fixed; }}
+th, td {{ border: 1px solid #c9d2cb; padding: 9px 11px; vertical-align: top; text-align: left; overflow-wrap: anywhere; }}
+th {{ background: #e8eeea; color: #18252a; font-weight: 800; }}
+tbody tr:nth-child(even) td {{ background: #f1f4ef; }}
 .table-line {{ background: #edf1eb; border-left: 3px solid #f0b85d; font-family: "Cascadia Mono", Consolas, monospace; font-size: 14px; padding: 7px 10px; white-space: pre-wrap; }}
 .footer {{ display: flex; justify-content: space-between; gap: 20px; border-top: 1px solid #c9d2cb; color: #70827d; font-size: 10px; margin-top: 30px; padding-top: 14px; }}
 </style></head><body><article id="markdown-card"><header class="masthead"><div class="identity"><div class="signal-mark" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span></div><div><div class="eyebrow">SIRIUS / RESPONSE ARCHIVE</div><div class="wordmark">FIELD NOTE</div></div></div><div class="telemetry"><div class="telemetry-label">Output mode</div><div class="telemetry-value">MERGED RESPONSE</div></div></header><div class="accent"></div><div class="content">{heading}{_markdown_body_html(content)}<div class="footer"><span>SIRIUS CHAT</span><span>ONE REPLY / MANY SIGNALS</span></div></div></article></body></html>"""
@@ -289,6 +320,7 @@ def _markdown_body_html(content: str) -> str:
     paragraph: list[str] = []
     list_items: list[str] = []
     list_tag = ""
+    table_lines: list[str] = []
     code_lines: list[str] = []
     in_code = False
 
@@ -309,9 +341,50 @@ def _markdown_body_html(content: str) -> str:
             blocks.append(f"<pre><code>{html.escape(chr(10).join(code_lines))}</code></pre>")
             code_lines.clear()
 
+    def flush_table() -> None:
+        if not table_lines:
+            return
+        if len(table_lines) < 2 or not _is_table_separator(table_lines[1]):
+            blocks.extend(f'<p class="table-line">{_inline_html(line)}</p>' for line in table_lines)
+            table_lines.clear()
+            return
+
+        header = _table_cells(table_lines[0])
+        alignments = _table_alignments(table_lines[1])
+        rows = [_table_cells(line) for line in table_lines[2:]]
+        column_count = max([len(header), *(len(row) for row in rows)], default=0)
+        header.extend([""] * (column_count - len(header)))
+        alignments.extend([""] * (column_count - len(alignments)))
+
+        def cell_html(tag: str, value: str, alignment: str) -> str:
+            align = f' align="{alignment}"' if alignment else ""
+            return f"<{tag}{align}>{_inline_html(value)}</{tag}>"
+
+        head_html = "".join(
+            cell_html("th", header[index], alignments[index]) for index in range(column_count)
+        )
+        body_html = "".join(
+            "<tr>"
+            + "".join(
+                cell_html(
+                    "td",
+                    row[index] if index < len(row) else "",
+                    alignments[index],
+                )
+                for index in range(column_count)
+            )
+            + "</tr>"
+            for row in rows
+        )
+        blocks.append(
+            f"<table><thead><tr>{head_html}</tr></thead><tbody>{body_html}</tbody></table>"
+        )
+        table_lines.clear()
+
     for raw_line in str(content or "").strip().splitlines():
         line = raw_line.rstrip()
         if _is_code_fence_line(line):
+            flush_table()
             flush_paragraph()
             flush_list()
             if in_code:
@@ -322,11 +395,13 @@ def _markdown_body_html(content: str) -> str:
             code_lines.append(line)
             continue
         if not line.strip():
+            flush_table()
             flush_paragraph()
             flush_list()
             continue
 
         if line.strip() in {"---", "***", "___"}:
+            flush_table()
             flush_paragraph()
             flush_list()
             blocks.append("<hr>")
@@ -334,12 +409,14 @@ def _markdown_body_html(content: str) -> str:
 
         heading_match = _HEADING_RE.match(line)
         if heading_match:
+            flush_table()
             flush_paragraph()
             flush_list()
             level = min(4, len(heading_match.group(1)) + 1)
             blocks.append(f"<h{level}>{_inline_html(heading_match.group(2))}</h{level}>")
             continue
         if line.startswith(">"):
+            flush_table()
             flush_paragraph()
             flush_list()
             blocks.append(f"<blockquote>{_inline_html(line[1:].lstrip())}</blockquote>")
@@ -348,6 +425,7 @@ def _markdown_body_html(content: str) -> str:
         ordered_match = _ORDERED_ITEM_RE.match(line)
         bullet_match = _BULLET_ITEM_RE.match(line)
         if ordered_match or bullet_match:
+            flush_table()
             flush_paragraph()
             next_tag = "ol" if ordered_match else "ul"
             if list_tag and list_tag != next_tag:
@@ -358,17 +436,47 @@ def _markdown_body_html(content: str) -> str:
             continue
 
         flush_list()
-        if line.count("|") >= 2:
+        if _is_table_row_line(line):
             flush_paragraph()
-            blocks.append(f'<p class="table-line">{_inline_html(line)}</p>')
+            table_lines.append(line.strip())
         else:
+            flush_table()
             paragraph.append(line)
 
     if in_code:
         flush_code()
+    flush_table()
     flush_paragraph()
     flush_list()
     return "".join(blocks)
+
+
+def _table_cells(line: str) -> list[str]:
+    clean_line = str(line or "").strip()
+    if clean_line.startswith("|"):
+        clean_line = clean_line[1:]
+    if clean_line.endswith("|"):
+        clean_line = clean_line[:-1]
+    return [cell.strip().replace("\\|", "|") for cell in re.split(r"(?<!\\)\|", clean_line)]
+
+
+def _is_table_separator(line: str) -> bool:
+    cells = _table_cells(line)
+    return bool(cells) and all(re.fullmatch(r":?-{3,}:?", cell) for cell in cells)
+
+
+def _table_alignments(line: str) -> list[str]:
+    alignments: list[str] = []
+    for cell in _table_cells(line):
+        if cell.startswith(":") and cell.endswith(":"):
+            alignments.append("center")
+        elif cell.startswith(":"):
+            alignments.append("left")
+        elif cell.endswith(":"):
+            alignments.append("right")
+        else:
+            alignments.append("")
+    return alignments
 
 
 def _inline_html(text: str) -> str:
