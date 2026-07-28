@@ -21,6 +21,7 @@ _MARKDOWN_LABEL_RE = re.compile(r"^\s*(?:markdown|md)\s*[:：]\s*(.*)$", re.IGNO
 _MARKDOWN_LABEL_ONLY_RE = re.compile(r"^\s*(?:markdown|md)\s*$", re.IGNORECASE)
 _STRONG_ONLY_RE = re.compile(r"^\s*(?:\*\*.+\*\*|__.+__)\s*$")
 _HORIZONTAL_RULE_RE = re.compile(r"^(?:-{3,}|\*{3,}|_{3,})$")
+_CUTE_FONT_PATH = Path(__file__).with_name("assets") / "ZCOOLKuaiLe-Regular.ttf"
 
 
 def split_fenced_markdown(text: str) -> list[tuple[bool, str]]:
@@ -270,11 +271,13 @@ def build_markdown_card_html(content: str, title: str = "") -> str:
     """Build escaped HTML for the small Markdown subset used in chat replies."""
     clean_title = str(title or "").strip()[:_MAX_TITLE_CHARS]
     heading = f"<h1>{_inline_html(clean_title)}</h1>" if clean_title else ""
+    font_face = _cute_font_face_css()
     return f"""<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><style>
+{font_face}
 * {{ box-sizing: border-box; }}
 html {{ background: #dfe4df; }}
-body {{ margin: 0; padding: 24px; background: #dfe4df; color: #202a2b; font-family: "Microsoft YaHei", "Noto Sans CJK SC", "Segoe UI", sans-serif; }}
+body {{ margin: 0; padding: 24px; background: #dfe4df; color: #202a2b; font-family: "Sirius Cute", "Noto Sans CJK SC", "Microsoft YaHei", sans-serif; }}
 #markdown-card {{ width: 900px; background: #f7f7f2; border: 1px solid #1c2b2e; border-radius: 8px; box-shadow: 8px 8px 0 #b8c4bc; overflow: hidden; }}
 .masthead {{ display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; min-height: 132px; padding: 25px 36px 24px; background: #18252a; color: #f3f0e7; }}
 .identity {{ display: flex; align-items: center; gap: 16px; }}
@@ -313,6 +316,20 @@ tbody tr:nth-child(even) td {{ background: #f1f4ef; }}
 .table-line {{ background: #edf1eb; border-left: 3px solid #f0b85d; font-family: "Cascadia Mono", Consolas, monospace; font-size: 14px; padding: 7px 10px; white-space: pre-wrap; }}
 .footer {{ display: flex; justify-content: space-between; gap: 20px; border-top: 1px solid #c9d2cb; color: #70827d; font-size: 10px; margin-top: 30px; padding-top: 14px; }}
 </style></head><body><article id="markdown-card"><header class="masthead"><div class="identity"><div class="signal-mark" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span></div><div><div class="eyebrow">SIRIUS / RESPONSE ARCHIVE</div><div class="wordmark">FIELD NOTE</div></div></div><div class="telemetry"><div class="telemetry-label">Output mode</div><div class="telemetry-value">MERGED RESPONSE</div></div></header><div class="accent"></div><div class="content">{heading}{_markdown_body_html(content)}<div class="footer"><span>SIRIUS CHAT</span><span>ONE REPLY / MANY SIGNALS</span></div></div></article></body></html>"""
+
+
+def _cute_font_face_css() -> str:
+    try:
+        encoded = base64.b64encode(_CUTE_FONT_PATH.read_bytes()).decode("ascii")
+    except OSError:
+        return ""
+    return (
+        "@font-face {"
+        "font-family: 'Sirius Cute';"
+        f"src: url(data:font/ttf;base64,{encoded}) format('truetype');"
+        "font-style: normal; font-weight: 400; font-display: block;"
+        "}"
+    )
 
 
 def _markdown_body_html(content: str) -> str:

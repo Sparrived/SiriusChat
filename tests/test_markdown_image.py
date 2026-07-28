@@ -140,6 +140,8 @@ def test_markdown_card_escapes_content_and_renders_common_structures():
     )
 
     assert "<h1>处理结果</h1>" in html
+    assert "@font-face" in html
+    assert 'font-family: "Sirius Cute"' in html
     assert "<h2>概览</h2>" in html
     assert "<ul>" in html
     assert "<strong>服务</strong>" in html
