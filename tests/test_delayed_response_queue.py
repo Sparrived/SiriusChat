@@ -1268,3 +1268,59 @@ async def test_delayed_queue_when_fenced_markdown_has_context_then_sends_text_im
             "injected_tool_names": [],
         },
     ]
+
+
+@pytest.mark.asyncio
+async def test_delayed_queue_when_markdown_card_render_fails_then_falls_back_to_text(
+    monkeypatch,
+):
+    queue = DelayedResponseQueue()
+    item = queue.enqueue(
+        "group-1",
+        "u1",
+        "show status",
+        _decision(ResponseStrategy.IMMEDIATE),
+    )
+    item.enqueue_time = _past(item.window_seconds + 1)
+
+    async def fail_to_render(*args, **kwargs):
+        raise ValueError("content 过长")
+
+    execute_skill = AsyncMock()
+    tasks, engine = _agent_tool_tasks(
+        queue,
+        SimpleNamespace(name="lookup", silent=False, developer_only=False),
+        [
+            SimpleNamespace(
+                raw_text="```markdown\n# 状态\n- healthy\n```",
+                clean_text="```markdown\n# 状态\n- healthy\n```",
+                tool_calls=[],
+                reply_references=[],
+                injected_request={
+                    "system_prompt": "system",
+                    "messages": [{"role": "user", "content": "question"}],
+                    "tools": [],
+                    "tool_choice": None,
+                },
+            )
+        ],
+        execute_skill,
+    )
+    engine._adapter = SimpleNamespace()
+    monkeypatch.setattr(
+        "sirius_pulse.core.bg_tasks_delayed._markdown_image.render_and_send_markdown_image",
+        fail_to_render,
+    )
+    delivered: list[dict[str, object]] = []
+    engine._record_assistant_message = lambda **kwargs: delivered.append(kwargs)
+    partials: list[str] = []
+
+    async def capture_partial(text: str) -> None:
+        partials.append(text)
+
+    results = await tasks.tick_delayed_queue("group-1", on_partial_reply=capture_partial)
+
+    assert partials == ["# 状态\n- healthy"]
+    assert results[0]["reply"] == ""
+    assert delivered[0]["content"] == "# 状态\n- healthy"
+    assert "tags" not in delivered[0]

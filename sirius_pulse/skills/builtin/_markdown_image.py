@@ -16,32 +16,118 @@ _MAX_TITLE_CHARS = 80
 _HEADING_RE = re.compile(r"^(#{1,3})\s+(.+)$")
 _ORDERED_ITEM_RE = re.compile(r"^\d+[.)]\s+(.+)$")
 _BULLET_ITEM_RE = re.compile(r"^[-*+]\s+(.+)$")
-_FENCED_MARKDOWN_RE = re.compile(r"```[^\r\n]*\r?\n(.*?)```", re.DOTALL)
+_FENCE_LINE_RE = re.compile(r"^\s{0,3}([`~]+)([^\r\n]*)$")
+_MARKDOWN_LABEL_RE = re.compile(r"^\s*(?:markdown|md)\s*[:：]\s*(.*)$", re.IGNORECASE)
+_MARKDOWN_LABEL_ONLY_RE = re.compile(r"^\s*(?:markdown|md)\s*$", re.IGNORECASE)
 
 
 def split_fenced_markdown(text: str) -> list[tuple[bool, str]]:
-    """Split a reply into ordinary text and fenced Markdown blocks in display order."""
-    source = str(text or "")
+    """Split and repair fenced or clearly structured Markdown in display order."""
+    source = _normalize_fence_chars(str(text or ""))
     parts: list[tuple[bool, str]] = []
-    cursor = 0
-    for match in _FENCED_MARKDOWN_RE.finditer(source):
-        before = source[cursor : match.start()].strip()
-        content = match.group(1).strip()
-        if before:
-            parts.append((False, before))
+    plain_lines: list[str] = []
+    markdown_lines: list[str] = []
+    fence_char = ""
+
+    def flush_plain() -> None:
+        content = "\n".join(plain_lines).strip()
+        if content:
+            parts.append((False, content))
+        plain_lines.clear()
+
+    def flush_markdown() -> None:
+        content = "\n".join(markdown_lines).strip()
         if content:
             parts.append((True, content))
-        cursor = match.end()
-    after = source[cursor:].strip()
-    if after:
-        parts.append((False, after))
-    return parts
+        markdown_lines.clear()
+
+    for raw_line in source.splitlines():
+        line = raw_line.rstrip()
+        fence_match = _FENCE_LINE_RE.match(line)
+        marker = fence_match.group(1) if fence_match else ""
+        info = fence_match.group(2).strip() if fence_match else ""
+
+        if not fence_char:
+            if len(marker) >= 3:
+                flush_plain()
+                fence_char = marker[0]
+            else:
+                plain_lines.append(raw_line)
+            continue
+
+        # Accept a shorter matching closing marker so a malformed model fence
+        # cannot swallow the rest of the reply.
+        if marker and marker[0] == fence_char and not info:
+            flush_markdown()
+            fence_char = ""
+        else:
+            markdown_lines.append(raw_line)
+
+    if fence_char:
+        flush_markdown()
+    flush_plain()
+
+    if any(is_markdown for is_markdown, _ in parts):
+        return parts
+
+    candidate = _strip_markdown_label(source)
+    if _looks_like_unfenced_markdown(candidate):
+        return [(True, candidate)]
+    clean_source = source.strip()
+    return [(False, clean_source)] if clean_source else []
 
 
 def merge_markdown_blocks(blocks: Iterable[str]) -> str:
     """Join fenced blocks into one readable Markdown document."""
     clean_blocks = [str(block or "").strip() for block in blocks if str(block or "").strip()]
     return "\n\n---\n\n".join(clean_blocks)
+
+
+def _normalize_fence_chars(text: str) -> str:
+    return str(text or "").replace("｀", "`").replace("～", "~")
+
+
+def _strip_markdown_label(text: str) -> str:
+    lines = str(text or "").strip().splitlines()
+    if not lines:
+        return ""
+    label_match = _MARKDOWN_LABEL_RE.match(lines[0])
+    if label_match:
+        replacement = label_match.group(1).strip()
+        lines = ([replacement] if replacement else []) + lines[1:]
+    elif _MARKDOWN_LABEL_ONLY_RE.match(lines[0]):
+        lines = lines[1:]
+    return "\n".join(lines).strip()
+
+
+def _looks_like_unfenced_markdown(text: str) -> bool:
+    source = str(text or "").strip()
+    if not source:
+        return False
+    lines = [line.strip() for line in source.splitlines() if line.strip()]
+    headings = sum(bool(_HEADING_RE.match(line)) for line in lines)
+    bullets = sum(bool(_BULLET_ITEM_RE.match(line)) for line in lines)
+    ordered = sum(bool(_ORDERED_ITEM_RE.match(line)) for line in lines)
+    table_rows = sum(line.count("|") >= 2 for line in lines)
+    quotes = sum(line.startswith(">") for line in lines)
+    paragraphs = sum(bool(block.strip()) for block in re.split(r"\n\s*\n", source))
+    score = 2 * headings
+    score += 2 if bullets >= 2 else 0
+    score += 2 if ordered >= 2 else 0
+    score += 2 if table_rows >= 2 else 0
+    score += min(quotes, 1)
+    score += 1 if re.search(r"[`*_]{2}", source) else 0
+    score += 1 if len(source) >= 160 else 0
+    has_structural_signal = bool(
+        headings or bullets >= 2 or ordered >= 2 or table_rows >= 2 or quotes
+    )
+    has_long_form_signal = len(source) >= 200 and paragraphs >= 2
+    return score >= 2 and (has_structural_signal or has_long_form_signal)
+
+
+def _is_code_fence_line(line: str) -> bool:
+    match = _FENCE_LINE_RE.match(str(line or "").rstrip())
+    return bool(match and len(match.group(1)) >= 3)
 
 
 def has_fenced_markdown(text: str) -> bool:
@@ -190,7 +276,7 @@ def _markdown_body_html(content: str) -> str:
 
     for raw_line in str(content or "").strip().splitlines():
         line = raw_line.rstrip()
-        if line.strip().startswith("```"):
+        if _is_code_fence_line(line):
             flush_paragraph()
             flush_list()
             if in_code:

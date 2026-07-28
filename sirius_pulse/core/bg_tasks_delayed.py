@@ -701,23 +701,51 @@ class DelayedQueueTasks:
                     for is_markdown, content in fenced_parts:
                         if is_markdown:
                             if not markdown_sent:
-                                message_id = await _markdown_image.render_and_send_markdown_image(
-                                    merged_markdown,
-                                    adapter=getattr(engine, "_adapter", None),
-                                    group_id=group_id,
-                                )
-                                engine._record_assistant_message(
-                                    group_id=group_id,
-                                    target_user_id=item.user_id,
-                                    content=merged_markdown,
-                                    system_prompt=getattr(chat_result, "system_prompt", ""),
-                                    tags=[{"type": "image", "label": "富文本卡片"}],
-                                    injected_request=getattr(chat_result, "injected_request", {}),
-                                    injected_tool_names=getattr(
-                                        chat_result, "injected_tool_names", []
-                                    ),
-                                    platform_message_id=message_id,
-                                )
+                                try:
+                                    message_id = (
+                                        await _markdown_image.render_and_send_markdown_image(
+                                            merged_markdown,
+                                            adapter=getattr(engine, "_adapter", None),
+                                            group_id=group_id,
+                                        )
+                                    )
+                                except (RuntimeError, ValueError) as exc:
+                                    logger.warning(
+                                        "Markdown card delivery failed for %s; falling back to text: %s",
+                                        group_id,
+                                        exc,
+                                    )
+                                    if on_partial_reply is None:
+                                        raise
+                                    await on_partial_reply(merged_markdown)
+                                    engine._record_assistant_message(
+                                        group_id=group_id,
+                                        target_user_id=item.user_id,
+                                        content=merged_markdown,
+                                        system_prompt=getattr(chat_result, "system_prompt", ""),
+                                        injected_request=getattr(
+                                            chat_result, "injected_request", {}
+                                        ),
+                                        injected_tool_names=getattr(
+                                            chat_result, "injected_tool_names", []
+                                        ),
+                                    )
+                                    last_partial_sent_at = time.monotonic()
+                                else:
+                                    engine._record_assistant_message(
+                                        group_id=group_id,
+                                        target_user_id=item.user_id,
+                                        content=merged_markdown,
+                                        system_prompt=getattr(chat_result, "system_prompt", ""),
+                                        tags=[{"type": "image", "label": "富文本卡片"}],
+                                        injected_request=getattr(
+                                            chat_result, "injected_request", {}
+                                        ),
+                                        injected_tool_names=getattr(
+                                            chat_result, "injected_tool_names", []
+                                        ),
+                                        platform_message_id=message_id,
+                                    )
                                 markdown_sent = True
                         else:
                             if on_partial_reply is None:

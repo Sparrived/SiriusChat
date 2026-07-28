@@ -28,6 +28,34 @@ def test_merge_markdown_blocks_adds_a_visible_section_break():
     assert merge_markdown_blocks(["# first", "- second"]) == "# first\n\n---\n\n- second"
 
 
+def test_split_fenced_markdown_repairs_tilde_indent_and_short_closing_fence():
+    result = split_fenced_markdown("前言\n  ~~~markdown\n# 状态\n- healthy\n~\n后言")
+
+    assert result == [
+        (False, "前言"),
+        (True, "# 状态\n- healthy"),
+        (False, "后言"),
+    ]
+
+
+def test_split_fenced_markdown_repairs_unclosed_fullwidth_fence():
+    result = split_fenced_markdown("｀｀｀md\n# 结果\n\n- 已完成")
+
+    assert result == [(True, "# 结果\n\n- 已完成")]
+
+
+def test_split_fenced_markdown_detects_structured_content_without_fence():
+    result = split_fenced_markdown("markdown:\n# 部署结果\n\n- WebUI 正常\n- Embedding 正常")
+
+    assert result == [(True, "# 部署结果\n\n- WebUI 正常\n- Embedding 正常")]
+
+
+def test_split_fenced_markdown_keeps_ordinary_text_unwrapped():
+    text = "今天状态不错，准备晚点再看看服务器。"
+
+    assert split_fenced_markdown(text) == [(False, text)]
+
+
 @pytest.mark.asyncio
 async def test_render_and_send_markdown_image_sends_base64_and_removes_artifact(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch

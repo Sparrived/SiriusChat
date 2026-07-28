@@ -52,6 +52,7 @@ const PROBE_CACHE_TTL = 30 * 60 * 1000;
 let providers = [];
 let editingIdx = null;
 let currentModal = null;
+const modal$ = (id) => currentModal?.querySelector(`#${id}`);
 let modalModels = [];
 let probeStatus = {};
 let _root = null;
@@ -528,20 +529,20 @@ function openAddModal() {
   currentModal = overlay;
 
   overlay.addEventListener('click', (e) => { if (e.target === overlay) closeModal(); });
-  $('modalClose').addEventListener('click', closeModal);
-  $('modalCancelBtn').addEventListener('click', closeModal);
-  $('modalSaveBtn').addEventListener('click', saveFromModal);
+  modal$('modalClose').addEventListener('click', closeModal);
+  modal$('modalCancelBtn').addEventListener('click', closeModal);
+  modal$('modalSaveBtn').addEventListener('click', saveFromModal);
 
-  $('modal_type').addEventListener('change', () => {
-    const newType = $('modal_type').value;
-    const urlInput = $('modal_url');
+  modal$('modal_type').addEventListener('change', () => {
+    const newType = modal$('modal_type').value;
+    const urlInput = modal$('modal_url');
     if (BUILTIN_TYPES.includes(newType)) {
       urlInput.value = DEFAULT_URLS[newType] || '';
     }
   });
 
-  $('modalAddModelBtn').addEventListener('click', addModelToModal);
-  $('modal_newModel').addEventListener('keydown', (e) => {
+  modal$('modalAddModelBtn').addEventListener('click', addModelToModal);
+  modal$('modal_newModel').addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
       e.preventDefault();
       addModelToModal();
@@ -552,7 +553,7 @@ function openAddModal() {
 }
 
 function renderModalModels() {
-  const container = $('modal_models_container');
+  const container = modal$('modal_models_container');
   if (!container) return;
   if (!modalModels.length) {
     container.innerHTML = '<span style="color:var(--text-3);font-size:12px">无模型</span>';
@@ -572,7 +573,7 @@ function renderModalModels() {
 }
 
 function addModelToModal() {
-  const input = $('modal_newModel');
+  const input = modal$('modal_newModel');
   if (!input) return;
   const name = input.value.trim();
   if (!name) return;
@@ -593,11 +594,11 @@ function closeModal() {
 }
 
 async function saveFromModal() {
-  const platformType = $('modal_type')?.value || '';
-  const baseUrl = $('modal_url')?.value?.trim() || '';
-  const apiKey = $('modal_key')?.value?.trim() || '';
-  const healthcheckModel = $('modal_health')?.value?.trim() || '';
-  const enabled = $('modal_enabled')?.checked || false;
+  const platformType = modal$('modal_type')?.value || '';
+  const baseUrl = modal$('modal_url')?.value?.trim() || '';
+  const apiKey = modal$('modal_key')?.value?.trim() || '';
+  const healthcheckModel = modal$('modal_health')?.value?.trim() || '';
+  const enabled = modal$('modal_enabled')?.checked || false;
 
   if (!apiKey) {
     toast('请填写 API Key', 'warning');
