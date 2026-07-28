@@ -32,7 +32,7 @@ class _Provider:
 
 
 @pytest.mark.asyncio
-async def test_brain_chat_when_skill_is_disabled_then_tool_schema_is_not_sent_to_provider():
+async def test_brain_chat_when_skills_are_enabled_then_all_available_schemas_are_sent():
     provider = _Provider()
     registry = SkillRegistry()
     registry.register(_skill("interaction"))
@@ -57,13 +57,12 @@ async def test_brain_chat_when_skill_is_disabled_then_tool_schema_is_not_sent_to
             user_id="u1",
             system_prompt="system",
             messages=[{"role": "user", "content": "hello"}],
-            disabled_skill_names={"interaction"},
         )
     )
 
     assert provider.last_request is not None
     tool_names = [tool["function"]["name"] for tool in (provider.last_request.tools or [])]
-    assert tool_names == ["lookup"]
+    assert tool_names == ["interaction", "lookup"]
 
 
 @pytest.mark.asyncio
@@ -104,7 +103,7 @@ async def test_brain_chat_result_records_injected_tool_names():
 
 
 @pytest.mark.asyncio
-async def test_brain_chat_when_query_scopes_skills_then_only_matching_tools_are_sent():
+async def test_brain_chat_when_skills_are_enabled_then_unrelated_schemas_are_sent_too():
     provider = _Provider()
     registry = SkillRegistry()
     registry.register(_skill("weather_lookup"))
@@ -126,14 +125,45 @@ async def test_brain_chat_when_query_scopes_skills_then_only_matching_tools_are_
             user_id="u1",
             system_prompt="system",
             messages=[{"role": "user", "content": "weather"}],
-            skill_query="weather",
-            max_skill_candidates=1,
         )
     )
 
     assert provider.last_request is not None
     assert [tool["function"]["name"] for tool in (provider.last_request.tools or [])] == [
-        "weather_lookup"
+        "weather_lookup",
+        "calendar_lookup",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_brain_chat_when_tool_choice_is_none_then_all_schemas_are_still_sent():
+    provider = _Provider()
+    registry = SkillRegistry()
+    registry.register(_skill("lookup"))
+    brain = Brain(
+        provider_async=provider,
+        model_router=SimpleNamespace(
+            resolve=lambda *args, **kwargs: SimpleNamespace(
+                model_name="model", max_tokens=100, temperature=0.1, timeout=30
+            )
+        ),
+        persona=SimpleNamespace(name="tester", build_system_prompt=lambda: ""),
+        skill_registry=registry,
+    )
+
+    await brain.chat(
+        ChatRequest(
+            group_id="group-1",
+            user_id="u1",
+            system_prompt="system",
+            messages=[{"role": "user", "content": "write text only"}],
+            tool_choice="none",
+        )
+    )
+
+    assert provider.last_request.tool_choice == "none"
+    assert [tool["function"]["name"] for tool in (provider.last_request.tools or [])] == [
+        "lookup"
     ]
 
 

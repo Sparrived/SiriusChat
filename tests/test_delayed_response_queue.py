@@ -405,9 +405,6 @@ async def test_delayed_queue_when_tool_call_has_text_then_partial_leads_final_re
     tool_message = next(message for message in second_request.messages if message["role"] == "tool")
     assert tool_message["content"].startswith("[Tool result: success]")
     assert "reference data" in tool_message["content"]
-    first_request = engine.brain.chat.await_args_list[0].args[0]
-    assert first_request.skill_query == "check status"
-    assert first_request.max_skill_candidates == 8
     turn_events = [
         call.args[0].data
         for call in engine.event_bus.emit.await_args_list
@@ -1144,3 +1141,86 @@ async def test_delayed_queue_when_interaction_sticker_tool_is_called_then_sticke
     execute_skill.assert_not_awaited()
     assert results[0]["reply"] == "先说正文"
     assert results[0]["sticker_names"] == ["开心"]
+
+
+@pytest.mark.asyncio
+async def test_delayed_queue_when_fenced_markdown_has_context_then_sends_text_image_text(
+    monkeypatch,
+):
+    queue = DelayedResponseQueue()
+    item = queue.enqueue(
+        "group-1",
+        "u1",
+        "describe the architecture",
+        _decision(ResponseStrategy.IMMEDIATE),
+    )
+    item.enqueue_time = _past(item.window_seconds + 1)
+    order: list[str] = []
+
+    async def send_markdown_card(content: str, *, adapter, group_id: str, title: str = "") -> str:
+        order.append("card")
+        assert content == "**顶层模块**：\n- core/"
+        assert adapter is engine._adapter
+        assert group_id == "group-1"
+        assert title == ""
+        return "42"
+
+    execute_skill = AsyncMock()
+    tasks, engine = _agent_tool_tasks(
+        queue,
+        SimpleNamespace(name="lookup", silent=False, developer_only=False),
+        [
+            SimpleNamespace(
+                raw_text="我先说下整体思路。\n```markdown\n**顶层模块**：\n- core/\n```\n细节之后再聊。",
+                clean_text="我先说下整体思路。\n```markdown\n**顶层模块**：\n- core/\n```\n细节之后再聊。",
+                tool_calls=[],
+                reply_references=[],
+            )
+        ],
+        execute_skill,
+    )
+    engine._adapter = SimpleNamespace()
+    monkeypatch.setattr(
+        "sirius_pulse.core.bg_tasks_delayed._markdown_image.render_and_send_markdown_image",
+        send_markdown_card,
+    )
+    delivered_cards: list[dict[str, object]] = []
+    engine._record_assistant_message = lambda **kwargs: delivered_cards.append(kwargs)
+    partials: list[str] = []
+
+    async def capture_partial(text: str) -> None:
+        order.append(f"text:{text}")
+        partials.append(text)
+
+    results = await tasks.tick_delayed_queue("group-1", on_partial_reply=capture_partial)
+
+    assert partials == ["我先说下整体思路。", "细节之后再聊。"]
+    assert order == ["text:我先说下整体思路。", "card", "text:细节之后再聊。"]
+    assert engine.brain.chat.await_count == 1
+    execute_skill.assert_not_awaited()
+    assert results[0]["reply"] == ""
+    assert delivered_cards == [
+        {
+            "group_id": "group-1",
+            "target_user_id": "u1",
+            "content": "我先说下整体思路。",
+            "system_prompt": "",
+            "injected_tool_names": [],
+        },
+        {
+            "group_id": "group-1",
+            "target_user_id": "u1",
+            "content": "**顶层模块**：\n- core/",
+            "system_prompt": "",
+            "tags": [{"type": "image", "label": "富文本卡片"}],
+            "injected_tool_names": [],
+            "platform_message_id": "42",
+        },
+        {
+            "group_id": "group-1",
+            "target_user_id": "u1",
+            "content": "细节之后再聊。",
+            "system_prompt": "",
+            "injected_tool_names": [],
+        },
+    ]

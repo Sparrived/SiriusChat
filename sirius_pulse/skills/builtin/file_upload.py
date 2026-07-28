@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import base64
 import logging
 from pathlib import Path
 from typing import Any
@@ -32,7 +31,6 @@ _config.group("图片与文件").add(
 _config.group("图片与文件").add(
     "file_name", type="str", description="action=file 时在聊天中显示的文件名。"
 )
-
 SKILL_META = {
     "name": "file_upload",
     "description": (
@@ -259,10 +257,6 @@ def _private_target_id(value: str) -> str:
 
 def _to_image_reference(image_path: str) -> str:
     """Encode local images so NapCat need not access this container's filesystem."""
-    if image_path.startswith(("http://", "https://", "data:", "base64://")):
-        return image_path
-    path = Path(image_path.removeprefix("file://")).expanduser()
-    if not path.is_file():
-        return image_path
-    encoded = base64.b64encode(path.read_bytes()).decode("ascii")
-    return f"base64://{encoded}"
+    from sirius_pulse.skills.builtin._markdown_image import to_image_reference
+
+    return to_image_reference(image_path)

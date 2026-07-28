@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import importlib.util
 import logging
-import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -360,35 +359,6 @@ class SkillRegistry:
             )
         ]
 
-    def build_tools_for_query(
-        self,
-        query: str,
-        *,
-        limit: int,
-        invocation_context: SkillInvocationContext | None = None,
-        adapter_type: str | None = None,
-        chat_type: str | None = None,
-        admin_allowed: bool = False,
-    ) -> list[dict[str, Any]]:
-        """Return a bounded, query-relevant subset of available tool schemas."""
-        query_tokens = _tool_retrieval_tokens(query)
-        if not query_tokens or limit <= 0:
-            return []
-
-        # ponytail: lexical ranking is sufficient until evaluations justify semantic retrieval.
-        ranked = [
-            (score, skill.name.casefold(), skill)
-            for skill in self._available_model_skills(
-                invocation_context=invocation_context,
-                adapter_type=adapter_type,
-                chat_type=chat_type,
-                admin_allowed=admin_allowed,
-            )
-            if (score := _tool_query_score(skill, query_tokens)) > 0
-        ]
-        ranked.sort(key=lambda item: (-item[0], item[1]))
-        return [skill.to_tool_schema() for _, _, skill in ranked[:limit]]
-
     def build_tool_descriptions(
         self,
         *,
@@ -504,21 +474,3 @@ def _build_compact_param_signature(parameters: list[SkillParameter]) -> str:
             piece += f" {p.description.strip()}"
         parts.append(piece)
     return f"({', '.join(parts)})"
-
-
-_TOOL_RETRIEVAL_TOKEN_RE = re.compile(r"[a-z0-9]+|[\u4e00-\u9fff]")
-
-
-def _tool_retrieval_tokens(text: str) -> set[str]:
-    return set(_TOOL_RETRIEVAL_TOKEN_RE.findall(text.casefold()))
-
-
-def _tool_query_score(skill: SkillDefinition, query_tokens: set[str]) -> int:
-    name_tokens = _tool_retrieval_tokens(skill.name)
-    tag_tokens = _tool_retrieval_tokens(" ".join(skill.tags))
-    description_tokens = _tool_retrieval_tokens(skill.description)
-    return (
-        4 * len(query_tokens & name_tokens)
-        + 2 * len(query_tokens & tag_tokens)
-        + len(query_tokens & description_tokens)
-    )

@@ -167,41 +167,6 @@ def test_skill_registry_when_skill_requires_admin_then_visible_only_for_admin_gr
     assert [tool["function"]["name"] for tool in tools] == ["group_management"]
 
 
-def test_skill_registry_when_query_scopes_tools_then_ranked_results_are_bounded():
-    registry = SkillRegistry()
-    registry.register(_skill("weather_lookup", description="查询实时预报"))
-    registry.register(_skill("forecast", description="查询天气", tags=["weather", "forecast"]))
-    registry.register(_skill("web_search", description="搜索网页", tags=["search"]))
-
-    tools = registry.build_tools_for_query("weather forecast", limit=2)
-
-    assert [tool["function"]["name"] for tool in tools] == [
-        "forecast",
-        "weather_lookup",
-    ]
-    assert registry.build_tools_for_query("unrelated", limit=2) == []
-
-
-def test_skill_registry_when_query_scopes_tools_then_existing_access_filters_apply():
-    registry = SkillRegistry()
-    registry.register(_skill("public_weather", description="天气查询"))
-    registry.register(_skill("developer_weather", developer_only=True, description="天气查询"))
-    registry.register(_skill("admin_weather", admin_required=True, description="天气查询"))
-    registry.register(_skill("discord_weather", adapter_types=["discord"], description="天气查询"))
-    registry.register(_skill("hidden_weather", description="天气查询", model_visible=False))
-    user_context = SkillInvocationContext(caller=UnifiedUser(user_id="u1", name="普通用户"))
-
-    tools = registry.build_tools_for_query(
-        "天气",
-        limit=5,
-        invocation_context=user_context,
-        adapter_type="napcat",
-        chat_type="group",
-    )
-
-    assert [tool["function"]["name"] for tool in tools] == ["public_weather"]
-
-
 def test_skill_registry_when_builtin_skills_load_then_composite_napcat_tools_are_visible(
     tmp_path: Path,
 ):

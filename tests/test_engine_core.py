@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from sirius_pulse.core import engine_core
 from sirius_pulse.core.engine_core import _EmotionalGroupChatEngineBase
+from sirius_pulse.memory.basic import BasicMemoryManager
 
 
 def test_engine_when_pending_message_is_low_information_then_detects_filler():
     assert _EmotionalGroupChatEngineBase._is_low_information_pending_message("哈哈") is True
     assert _EmotionalGroupChatEngineBase._is_low_information_pending_message("ok") is True
     assert _EmotionalGroupChatEngineBase._is_low_information_pending_message("怎么了？") is False
+
 
 def test_engine_orchestration_defaults_route_memory_extract_to_memory_model(tmp_path):
     engine = engine_core._EmotionalGroupChatEngineBase.__new__(
@@ -46,3 +50,33 @@ def test_engine_orchestration_custom_models_route_memory_extract_to_memory_model
     assert engine._task_models["memory_extract"] == "memory-model"
     assert "diary_generate" not in engine._task_models
     assert "diary_consolidate" not in engine._task_models
+
+
+def test_engine_records_delivered_markdown_card_in_basic_history():
+    engine = _EmotionalGroupChatEngineBase.__new__(_EmotionalGroupChatEngineBase)
+    stored = []
+    semantic = []
+    persisted = []
+    engine.persona = SimpleNamespace(name="月白")
+    engine.basic_memory = BasicMemoryManager()
+    engine.basic_store = SimpleNamespace(append=stored.append)
+    engine.semantic_memory = SimpleNamespace(
+        record_ai_sent=lambda **kwargs: semantic.append(kwargs)
+    )
+    engine._persist_group_state = persisted.append
+
+    engine._record_assistant_message(
+        group_id="9001",
+        target_user_id="1001",
+        content="部署结论\n\n- 服务已恢复",
+        tags=[{"type": "image", "label": "富文本卡片"}],
+        platform_message_id="42",
+    )
+
+    entry = engine.basic_memory.get_context("9001", n=1)[0]
+    assert entry.content == "部署结论\n\n- 服务已恢复"
+    assert entry.tags == [{"type": "image", "label": "富文本卡片"}]
+    assert entry.platform_message_id == "42"
+    assert stored == [entry]
+    assert semantic[0]["target_user_id"] == "1001"
+    assert persisted == ["9001"]

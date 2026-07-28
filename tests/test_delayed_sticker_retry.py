@@ -106,7 +106,7 @@ async def test_delayed_queue_when_only_interaction_sticker_tool_then_retries_tex
 
     execute_skill.assert_not_awaited()
     assert brain_chat.await_count == 2
-    assert brain_chat.await_args_list[0].args[0].disabled_skill_names == set()
-    assert brain_chat.await_args_list[1].args[0].disabled_skill_names == {"interaction"}
+    assert brain_chat.await_args_list[0].args[0].tool_choice is None
+    assert brain_chat.await_args_list[1].args[0].tool_choice == "none"
     assert results[0]["reply"] == "text after sticker"
     assert results[0]["sticker_names"] == ["happy"]

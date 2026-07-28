@@ -64,10 +64,8 @@ class ChatRequest:
     # ── SKILL 控制 ──
     enable_skills: bool = True
     caller_is_developer: bool = False
-    disabled_skill_names: set[str] = field(default_factory=set)
     extra_tools: list[dict[str, Any]] | None = None
-    skill_query: str = ""
-    max_skill_candidates: int = 0
+    tool_choice: str | None = None
 
     # ── 对话深度 ──
     last_reply_at: float = 0.0
@@ -479,25 +477,7 @@ class Brain:
                         else False
                     ),
                 }
-                if (
-                    request.skill_query.strip()
-                    and request.max_skill_candidates > 0
-                    and hasattr(self.skill_registry, "build_tools_for_query")
-                ):
-                    tools = self.skill_registry.build_tools_for_query(
-                        request.skill_query,
-                        limit=request.max_skill_candidates,
-                        **tool_kwargs,
-                    )
-                else:
-                    tools = self.skill_registry.build_tools_list(**tool_kwargs)
-                if request.disabled_skill_names:
-                    disabled = set(request.disabled_skill_names)
-                    tools = [
-                        tool
-                        for tool in tools
-                        if str(tool.get("function", {}).get("name", "")) not in disabled
-                    ]
+                tools = self.skill_registry.build_tools_list(**tool_kwargs)
                 if not tools:
                     tools = None
 
@@ -513,6 +493,7 @@ class Brain:
                 system_prompt=system_prompt.strip(),
                 messages=messages_with_time,
                 tools=tools,
+                tool_choice=request.tool_choice,
                 temperature=effective_temperature,
                 max_tokens=effective_max_tokens,
                 timeout_seconds=cfg.timeout,
@@ -540,6 +521,7 @@ class Brain:
                     system_prompt=base_system_prompt.strip(),
                     messages=fresh_messages,
                     tools=tools,
+                    tool_choice=request.tool_choice,
                     temperature=effective_temperature,
                     max_tokens=effective_max_tokens,
                     timeout_seconds=cfg.timeout,

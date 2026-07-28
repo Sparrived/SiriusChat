@@ -198,6 +198,14 @@ def test_reply_spec_when_function_call_enabled_then_requires_task_driven_tool_us
     assert "每次回复结束时必须调用" not in spec
 
 
+def test_persona_prompt_when_structured_response_is_needed_then_defines_fenced_delivery():
+    spec = PromptFactory.build_persona_prompt(name="月白")
+
+    assert "类Markdown内容必须使用```进行包裹" in spec
+    assert "转译为图片发送" in spec
+    assert "file_upload" not in spec
+
+
 def test_persona_prompt_uses_companion_template_fields():
     prompt = PromptFactory.build_persona_prompt(
         name="月白",
@@ -219,7 +227,7 @@ def test_persona_prompt_uses_companion_template_fields():
     assert "天然亲近、信任和在意的人" in prompt
     assert "你的核心原则是：友善但不盲从，亲近但不卑微，拒绝道德绑架" in prompt
     assert "只调用完成当前任务所需的最少工具" in prompt
-    assert "不要输出 #、*、-、```、|、**、> 这类 Markdown 标记" in prompt
+    assert "类Markdown内容必须使用```进行包裹" in prompt
     assert "你现在就是月白。保持角色，不要跳出角色解释设定" in prompt
 
 

@@ -52,6 +52,7 @@ from sirius_pulse.memory.user.unified_manager import UnifiedUserManager
 from sirius_pulse.models.emotion import AssistantEmotionState, EmotionState
 from sirius_pulse.models.models import Message, Transcript, UnifiedUser
 from sirius_pulse.models.response_strategy import ResponseStrategy, StrategyDecision
+from sirius_pulse.skills.builtin import _markdown_image
 
 logger = logging.getLogger(__name__)
 
@@ -700,6 +701,8 @@ class _EmotionalGroupChatEngineBase:
 
         # ── priority 30: 回复去重（仅常规对话）──
         def _hook_dedup(_brain: Any, _req: Any, _result: Any, ctx: dict[str, Any]) -> None:
+            if _markdown_image.has_fenced_markdown(_result.clean_text):
+                return
             if not _result.clean_text:
                 return
             gid = _req.group_id
@@ -723,7 +726,9 @@ class _EmotionalGroupChatEngineBase:
 
         # ── priority 40: 记忆记录 ──
         def _hook_memory(_brain: Any, _req: Any, _result: Any, ctx: dict[str, Any]) -> None:
-            # 确定要记录的内容：只记录实际文本回复。
+            # 围栏内容由调度器在平台确认发送成功后按实际顺序写回历史。
+            if _markdown_image.has_fenced_markdown(_result.clean_text):
+                return
             record_content = _result.clean_text
             if not record_content:
                 return
@@ -750,10 +755,9 @@ class _EmotionalGroupChatEngineBase:
                     chain_msgs.append({**_m, "content": _text})
                 else:
                     chain_msgs.append(_m)
-            _entry = _engine.basic_memory.add_entry(
+            _engine._record_assistant_message(
                 group_id=gid,
-                user_id="assistant",
-                role="assistant",
+                target_user_id=uid,
                 content=record_content,
                 speaker_name=persona_name,
                 system_prompt=_result.system_prompt,
@@ -761,16 +765,6 @@ class _EmotionalGroupChatEngineBase:
                 conversation_chain=chain_msgs,
                 injected_tool_names=_result.injected_tool_names,
             )
-            _engine.basic_store.append(_entry)
-            try:
-                _engine.semantic_memory.record_ai_sent(
-                    group_id=gid,
-                    target_user_id=uid or "",
-                    topic_hint=record_content[:100],
-                    response_length=len(record_content),
-                )
-            except Exception:
-                pass
 
         # ── priority 50: 回复时间戳+持久化 ──
         def _hook_timestamp(_brain: Any, _req: Any, _result: Any, ctx: dict[str, Any]) -> None:
@@ -875,6 +869,47 @@ class _EmotionalGroupChatEngineBase:
         self.brain.register_post_hook(_hook_dedup, priority=30, task_filter=_CHAT)
         self.brain.register_post_hook(_hook_memory, priority=40, task_filter=_ALL)
         self.brain.register_post_hook(_hook_timestamp, priority=50, task_filter=_ALL)
+
+    def _record_assistant_message(
+        self,
+        *,
+        group_id: str,
+        target_user_id: str,
+        content: str,
+        speaker_name: str = "",
+        system_prompt: str = "",
+        tags: list[dict[str, str]] | None = None,
+        conversation_chain: list[dict[str, Any]] | None = None,
+        injected_tool_names: list[str] | None = None,
+        platform_message_id: str = "",
+    ) -> None:
+        """Persist text that was actually delivered to the chat platform."""
+        record_content = str(content or "").strip()
+        if not record_content:
+            return
+        entry = self.basic_memory.add_entry(
+            group_id=group_id,
+            user_id="assistant",
+            role="assistant",
+            content=record_content,
+            speaker_name=speaker_name or (self.persona.name if self.persona else "assistant"),
+            system_prompt=system_prompt,
+            platform_message_id=platform_message_id,
+            tags=tags,
+            conversation_chain=conversation_chain,
+            injected_tool_names=injected_tool_names,
+        )
+        self.basic_store.append(entry)
+        try:
+            self.semantic_memory.record_ai_sent(
+                group_id=group_id,
+                target_user_id=target_user_id or "",
+                topic_hint=record_content[:100],
+                response_length=len(record_content),
+            )
+        except Exception:
+            pass
+        self._persist_group_state(group_id)
 
     # ==================================================================
     # Public API

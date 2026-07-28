@@ -32,6 +32,7 @@ from sirius_pulse.core.sticker_delivery import (
     defer_interaction_sticker_tool,
 )
 from sirius_pulse.providers.base import ToolCall
+from sirius_pulse.skills.builtin import _markdown_image
 
 if TYPE_CHECKING:
     from sirius_pulse.core.engine_core import _EmotionalGroupChatEngineBase
@@ -56,6 +57,7 @@ def _composite_action(tool_call: ToolCall) -> str:
 
 def _is_sticker_tool_call(tool_call: ToolCall) -> bool:
     return _composite_action(tool_call) == "sticker"
+
 
 # ── 内置流程控制工具定义 ──────────────────────────────────────────────
 
@@ -543,12 +545,6 @@ class DelayedQueueTasks:
             query=raw_chat_content,
         )
         await self._emit_agent_turn(engine, agent_turn)
-        try:
-            agent_max_skill_candidates = max(
-                1, int(engine.config.get("agent_max_skill_candidates", 8))
-            )
-        except (TypeError, ValueError):
-            agent_max_skill_candidates = 8
 
         msgs, ca_breakdown = engine.context_assembler.build_messages_with_breakdown(
             group_id=group_id,
@@ -669,8 +665,6 @@ class DelayedQueueTasks:
                         caller_is_developer=caller_is_developer,
                         post_process=True,
                         extra_tools=_extra_tools,
-                        skill_query=agent_turn.query,
-                        max_skill_candidates=agent_max_skill_candidates,
                     )
                 )
                 _round += 1
@@ -697,6 +691,45 @@ class DelayedQueueTasks:
             if not tool_calls:
                 agent_turn.advance(AgentTurnPhase.RESPOND)
                 await self._emit_agent_turn(engine, agent_turn)
+                fenced_parts = _markdown_image.split_fenced_markdown(round_clean)
+                if not plan_mode and any(is_markdown for is_markdown, _ in fenced_parts):
+                    for is_markdown, content in fenced_parts:
+                        if is_markdown:
+                            message_id = await _markdown_image.render_and_send_markdown_image(
+                                content,
+                                adapter=getattr(engine, "_adapter", None),
+                                group_id=group_id,
+                            )
+                            engine._record_assistant_message(
+                                group_id=group_id,
+                                target_user_id=item.user_id,
+                                content=content,
+                                system_prompt=getattr(chat_result, "system_prompt", ""),
+                                tags=[{"type": "image", "label": "富文本卡片"}],
+                                injected_tool_names=getattr(
+                                    chat_result, "injected_tool_names", []
+                                ),
+                                platform_message_id=message_id,
+                            )
+                        else:
+                            if on_partial_reply is None:
+                                raise RuntimeError(
+                                    "Fenced Markdown delivery requires on_partial_reply for text"
+                                )
+                            await on_partial_reply(content)
+                            engine._record_assistant_message(
+                                group_id=group_id,
+                                target_user_id=item.user_id,
+                                content=content,
+                                system_prompt=getattr(chat_result, "system_prompt", ""),
+                                injected_tool_names=getattr(
+                                    chat_result, "injected_tool_names", []
+                                ),
+                            )
+                            last_partial_sent_at = time.monotonic()
+                    chat_result.clean_text = ""
+                    reply = ""
+                    break
                 if plan_mode:
                     plan_final_reply = chat_result.clean_text
                     plan_send_to_group = bool(plan_final_reply)
@@ -930,9 +963,8 @@ class DelayedQueueTasks:
                     return _composite_action(tool_call) == "image"
                 return skill.silent
 
-            all_silent = bool(regular_tools) and all(_tool_is_silent(tc) for tc in regular_tools)
-
             non_skill_text = round_clean
+            all_silent = bool(regular_tools) and all(_tool_is_silent(tc) for tc in regular_tools)
             last_round_had_partial = False
             if plan_mode and non_skill_text:
                 engine._log_inner_thought(f"计划模式中间文本已隐藏: {non_skill_text[:40]}...")
@@ -1192,12 +1224,10 @@ class DelayedQueueTasks:
                             messages=messages,
                             task_name="response_generate",
                             enable_skills=True,
-                            disabled_skill_names={tc.function_name for tc in regular_tools},
                             caller_is_developer=caller_is_developer,
                             post_process=True,
                             extra_tools=_extra_tools,
-                            skill_query=agent_turn.query,
-                            max_skill_candidates=agent_max_skill_candidates,
+                            tool_choice="none",
                         )
                     )
                     continue
@@ -1222,7 +1252,6 @@ class DelayedQueueTasks:
             clean_reply = ""
         else:
             clean_reply = chat_result.clean_text if chat_result else ""
-
         if plan_mode and plan_session is not None and plan_final_reply is None:
             finish_plan_session(engine, group_id, status="aborted")
             plan_final_reply = clean_reply if clean_reply else ""
