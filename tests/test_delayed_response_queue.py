@@ -440,7 +440,9 @@ async def test_delayed_queue_executes_high_risk_tool_without_confirmation():
             SimpleNamespace(
                 raw_text="", clean_text="", tool_calls=[tool_call], reply_references=[]
             ),
-            SimpleNamespace(raw_text="Done.", clean_text="Done.", tool_calls=[], reply_references=[]),
+            SimpleNamespace(
+                raw_text="Done.", clean_text="Done.", tool_calls=[], reply_references=[]
+            ),
         ],
         execute_skill,
     )
@@ -1175,6 +1177,12 @@ async def test_delayed_queue_when_fenced_markdown_has_context_then_sends_text_im
                 clean_text="我先说下整体思路。\n```markdown\n**顶层模块**：\n- core/\n```\n细节之后再聊。",
                 tool_calls=[],
                 reply_references=[],
+                injected_request={
+                    "system_prompt": "system",
+                    "messages": [{"role": "user", "content": "question"}],
+                    "tools": [],
+                    "tool_choice": None,
+                },
             )
         ],
         execute_skill,
@@ -1205,6 +1213,12 @@ async def test_delayed_queue_when_fenced_markdown_has_context_then_sends_text_im
             "target_user_id": "u1",
             "content": "我先说下整体思路。",
             "system_prompt": "",
+            "injected_request": {
+                "system_prompt": "system",
+                "messages": [{"role": "user", "content": "question"}],
+                "tools": [],
+                "tool_choice": None,
+            },
             "injected_tool_names": [],
         },
         {
@@ -1213,6 +1227,12 @@ async def test_delayed_queue_when_fenced_markdown_has_context_then_sends_text_im
             "content": "**顶层模块**：\n- core/",
             "system_prompt": "",
             "tags": [{"type": "image", "label": "富文本卡片"}],
+            "injected_request": {
+                "system_prompt": "system",
+                "messages": [{"role": "user", "content": "question"}],
+                "tools": [],
+                "tool_choice": None,
+            },
             "injected_tool_names": [],
             "platform_message_id": "42",
         },
@@ -1221,6 +1241,12 @@ async def test_delayed_queue_when_fenced_markdown_has_context_then_sends_text_im
             "target_user_id": "u1",
             "content": "细节之后再聊。",
             "system_prompt": "",
+            "injected_request": {
+                "system_prompt": "system",
+                "messages": [{"role": "user", "content": "question"}],
+                "tools": [],
+                "tool_choice": None,
+            },
             "injected_tool_names": [],
         },
     ]

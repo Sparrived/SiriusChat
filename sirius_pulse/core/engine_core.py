@@ -739,30 +739,26 @@ class _EmotionalGroupChatEngineBase:
             gid = _req.group_id
             uid = _req.user_id
             persona_name = _engine.persona.name if _engine.persona else "assistant"
-            # 构建完整 LLM 消息链：system + user/assistant 交替
+            # 只从 Brain 的最终 GenerationRequest 快照记录，不能回拼原始 ChatRequest。
+            injected_request = (
+                _result.injected_request if isinstance(_result.injected_request, dict) else {}
+            )
             chain_msgs: list[dict[str, Any]] = []
-            if _result.system_prompt:
-                chain_msgs.append({"role": "system", "content": _result.system_prompt})
-            # 规范化多模态 content 数组为纯文本，避免前端 [object Object]
-            for _m in _req.messages:
-                _c = _m.get("content")
-                if isinstance(_c, list):
-                    _text = "".join(
-                        p.get("text", "")
-                        for p in _c
-                        if isinstance(p, dict) and p.get("type") == "text"
-                    )
-                    chain_msgs.append({**_m, "content": _text})
-                else:
-                    chain_msgs.append(_m)
+            system_prompt = injected_request.get("system_prompt")
+            if isinstance(system_prompt, str) and system_prompt:
+                chain_msgs.append({"role": "system", "content": system_prompt})
+            messages = injected_request.get("messages")
+            if isinstance(messages, list):
+                chain_msgs.extend(message for message in messages if isinstance(message, dict))
             _engine._record_assistant_message(
                 group_id=gid,
                 target_user_id=uid,
                 content=record_content,
                 speaker_name=persona_name,
-                system_prompt=_result.system_prompt,
+                system_prompt=str(injected_request.get("system_prompt") or ""),
                 tags=entry_tags,
                 conversation_chain=chain_msgs,
+                injected_request=injected_request,
                 injected_tool_names=_result.injected_tool_names,
             )
 
@@ -880,6 +876,7 @@ class _EmotionalGroupChatEngineBase:
         system_prompt: str = "",
         tags: list[dict[str, str]] | None = None,
         conversation_chain: list[dict[str, Any]] | None = None,
+        injected_request: dict[str, Any] | None = None,
         injected_tool_names: list[str] | None = None,
         platform_message_id: str = "",
     ) -> None:
@@ -897,6 +894,7 @@ class _EmotionalGroupChatEngineBase:
             platform_message_id=platform_message_id,
             tags=tags,
             conversation_chain=conversation_chain,
+            injected_request=injected_request,
             injected_tool_names=injected_tool_names,
         )
         self.basic_store.append(entry)

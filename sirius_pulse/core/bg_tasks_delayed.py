@@ -706,9 +706,8 @@ class DelayedQueueTasks:
                                 content=content,
                                 system_prompt=getattr(chat_result, "system_prompt", ""),
                                 tags=[{"type": "image", "label": "富文本卡片"}],
-                                injected_tool_names=getattr(
-                                    chat_result, "injected_tool_names", []
-                                ),
+                                injected_request=getattr(chat_result, "injected_request", {}),
+                                injected_tool_names=getattr(chat_result, "injected_tool_names", []),
                                 platform_message_id=message_id,
                             )
                         else:
@@ -722,9 +721,8 @@ class DelayedQueueTasks:
                                 target_user_id=item.user_id,
                                 content=content,
                                 system_prompt=getattr(chat_result, "system_prompt", ""),
-                                injected_tool_names=getattr(
-                                    chat_result, "injected_tool_names", []
-                                ),
+                                injected_request=getattr(chat_result, "injected_request", {}),
+                                injected_tool_names=getattr(chat_result, "injected_tool_names", []),
                             )
                             last_partial_sent_at = time.monotonic()
                     chat_result.clean_text = ""
@@ -1059,7 +1057,9 @@ class DelayedQueueTasks:
                             deduplicate=side_effect != "read_only",
                         ):
                             err_msg = f"Skill '{skill_name}' 被拒绝：本轮相同副作用动作已经执行过。"
-                            messages.append({"role": "tool", "tool_call_id": tc.id, "content": err_msg})
+                            messages.append(
+                                {"role": "tool", "tool_call_id": tc.id, "content": err_msg}
+                            )
                             continue
                         agent_turn.advance(AgentTurnPhase.ACT)
                         await self._emit_agent_turn(engine, agent_turn)
@@ -1130,7 +1130,9 @@ class DelayedQueueTasks:
                         agent_turn.finish_action(
                             tc.id,
                             success=result.success,
-                            summary=result.error if not result.success else result.to_display_text(),
+                            summary=(
+                                result.error if not result.success else result.to_display_text()
+                            ),
                         )
                         agent_turn.advance(AgentTurnPhase.VERIFY)
                         await self._emit_agent_turn(engine, agent_turn)
@@ -1167,7 +1169,9 @@ class DelayedQueueTasks:
                                 self._inject_group_id_into_latest_reminder(group_id)
                         else:
                             logger.warning(
-                                "SKILL '%s' 执行失败: %s", skill_name, result.error or "Unknown error"
+                                "SKILL '%s' 执行失败: %s",
+                                skill_name,
+                                result.error or "Unknown error",
                             )
                     except Exception as exc:
                         tool_content = SkillResult(success=False, error=str(exc)).to_model_text()

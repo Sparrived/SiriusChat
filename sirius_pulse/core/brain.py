@@ -20,6 +20,7 @@ Hook 机制：
 from __future__ import annotations
 
 import asyncio
+from copy import deepcopy
 import json
 import logging
 import re
@@ -89,6 +90,7 @@ class ChatResult:
     duration_ms: float
     token_record: Any
     system_prompt: str = ""  # 存储本次对话使用的完整 system prompt
+    injected_request: dict[str, Any] = field(default_factory=dict)
     sticker_names: list[str] = field(default_factory=list)
     injected_tool_names: list[str] = field(default_factory=list)
     has_tool_call: bool = False
@@ -609,6 +611,18 @@ class Brain:
                 duration_ms=duration_ms,
                 token_record=token_record,
                 system_prompt=gen_request.system_prompt,
+                injected_request={
+                    "model": gen_request.model,
+                    "system_prompt": gen_request.system_prompt,
+                    "messages": deepcopy(gen_request.messages),
+                    "tools": deepcopy(gen_request.tools),
+                    "tool_choice": deepcopy(gen_request.tool_choice),
+                    "temperature": gen_request.temperature,
+                    "max_tokens": gen_request.max_tokens,
+                    "timeout_seconds": gen_request.timeout_seconds,
+                    "purpose": gen_request.purpose,
+                    "response_format": deepcopy(gen_request.response_format),
+                },
                 sticker_names=[],
                 injected_tool_names=_tool_names_from_schemas(gen_request.tools),
                 has_tool_call=bool(tool_calls),

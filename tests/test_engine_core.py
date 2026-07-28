@@ -71,12 +71,19 @@ def test_engine_records_delivered_markdown_card_in_basic_history():
         content="部署结论\n\n- 服务已恢复",
         tags=[{"type": "image", "label": "富文本卡片"}],
         platform_message_id="42",
+        injected_request={
+            "system_prompt": "完整 system",
+            "messages": [{"role": "user", "content": "完整 user"}],
+            "tools": [],
+            "tool_choice": None,
+        },
     )
 
     entry = engine.basic_memory.get_context("9001", n=1)[0]
     assert entry.content == "部署结论\n\n- 服务已恢复"
     assert entry.tags == [{"type": "image", "label": "富文本卡片"}]
     assert entry.platform_message_id == "42"
+    assert entry.injected_request["system_prompt"] == "完整 system"
     assert stored == [entry]
     assert semantic[0]["target_user_id"] == "1001"
     assert persisted == ["9001"]

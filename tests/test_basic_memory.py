@@ -165,17 +165,27 @@ def test_basic_memory_entry_when_intent_scores_are_missing_then_defaults_to_empt
 
 def test_basic_memory_entry_records_injected_tool_names():
     mgr = BasicMemoryManager()
+    injected_request = {
+        "system_prompt": "system",
+        "messages": [{"role": "user", "content": "question"}],
+        "tools": [{"type": "function", "function": {"name": "lookup"}}],
+        "tool_choice": None,
+    }
 
     entry = mgr.add_entry(
         "group_a",
         "assistant",
         "assistant",
         "reply",
+        injected_request=injected_request,
         injected_tool_names=["lookup", "stop"],
     )
 
+    injected_request["messages"][0]["content"] = "changed"
+    assert entry.injected_request["messages"][0]["content"] == "question"
     assert entry.injected_tool_names == ["lookup", "stop"]
     assert entry.to_dict()["injected_tool_names"] == ["lookup", "stop"]
+    assert entry.to_dict()["injected_request"]["system_prompt"] == "system"
 
 
 def test_basic_memory_store_when_entry_is_updated_then_archive_keeps_intent_scores(

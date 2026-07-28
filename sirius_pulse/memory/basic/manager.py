@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 import logging
 import math
 import uuid
@@ -104,6 +105,7 @@ class BasicMemoryManager:
         multimodal_inputs: list[dict[str, str]] | None = None,
         tags: list[dict[str, str]] | None = None,
         conversation_chain: list[dict[str, Any]] | None = None,
+        injected_request: dict[str, Any] | None = None,
         injected_tool_names: list[str] | None = None,
     ) -> BasicMemoryEntry:
         """Add an entry to a group's basic memory window."""
@@ -126,6 +128,9 @@ class BasicMemoryManager:
             ],
             tags=list(tags) if tags else [],
             conversation_chain=list(conversation_chain) if conversation_chain else [],
+            injected_request=(
+                deepcopy(injected_request) if isinstance(injected_request, dict) else {}
+            ),
             injected_tool_names=list(injected_tool_names) if injected_tool_names else [],
         )
 

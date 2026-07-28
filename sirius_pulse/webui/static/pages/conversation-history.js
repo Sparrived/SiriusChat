@@ -88,12 +88,16 @@ export async function init(container, params = {}) {
     return;
   }
 
+  const pageTitle = embeddedMode ? '基础记忆完整注入' : '历史对话分析';
+  const pageSubtitle = embeddedMode
+    ? '仅展示最终发送给模型的请求快照'
+    : `查看 ${name} 的完整对话记录`;
   container.innerHTML = `
     <div class="card" style="margin-bottom:20px">
       <div class="card-header">
         <div>
-          <div class="card-title">历史对话分析</div>
-          <div class="card-subtitle">查看 ${name} 的完整对话记录</div>
+          <div class="card-title">${pageTitle}</div>
+          <div class="card-subtitle">${pageSubtitle}</div>
         </div>
         <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
           <input type="text" id="msgSearch" placeholder="搜索消息内容..." style="width:180px;background:var(--surface-2);border:1px solid var(--border);border-radius:6px;padding:6px 10px;font-size:13px;color:var(--text-1)">
@@ -383,6 +387,14 @@ function truncate(str, max = 500) {
 function buildConversationChain(message) {
   if (!message || message.role !== 'assistant') return [];
 
+  const injectedRequest = getInjectedRequest(message);
+  if (injectedRequest) {
+    const messages = injectedRequest.messages.filter(m => m && typeof m === 'object');
+    const systemPrompt = injectedRequest.system_prompt || '';
+    return systemPrompt ? [{ role: 'system', content: systemPrompt }, ...messages] : messages;
+  }
+  if (embeddedMode) return [];
+
   const chain = Array.isArray(message.conversation_chain)
     ? message.conversation_chain.filter(m => m && typeof m === 'object')
     : [];
@@ -394,6 +406,52 @@ function buildConversationChain(message) {
   if (hasSystem) return chain;
 
   return [{ role: 'system', content: systemPrompt }, ...chain];
+}
+
+function getInjectedRequest(message) {
+  const request = message?.injected_request;
+  return request && typeof request === 'object' && !Array.isArray(request)
+    && Array.isArray(request.messages)
+    ? request
+    : null;
+}
+
+function formatInjectedRequest(request) {
+  try {
+    return JSON.stringify(request, null, 2);
+  } catch {
+    return '（请求快照无法序列化）';
+  }
+}
+
+function renderInjectedRequestCard(message, index) {
+  const request = getInjectedRequest(message);
+  const groupId = message.group_id || '';
+  const header = `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+      <div style="display:flex;align-items:center;gap:8px">
+        <span style="color:var(--success);font-weight:600;font-size:13px">完整模型注入</span>
+        ${groupId ? `<span class="tag" style="font-size:10px;padding:2px 6px">${escapeHtml(groupId)}</span>` : ''}
+      </div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <span style="font-size:11px;color:var(--text-3)">${formatTime(message.timestamp)}</span>
+        <button class="btn btn-sm btn-danger conversation-delete" data-delete-index="${index}" style="font-size:11px;padding:3px 8px">删除</button>
+      </div>
+    </div>`;
+
+  if (!request) {
+    return `
+      <div style="padding:12px 16px;background:var(--bg-2);border-radius:8px;border-left:3px solid var(--text-3)">
+        ${header}
+        <div style="font-size:12px;color:var(--text-3);line-height:1.6">旧记录缺少最终请求快照，无法证明其与模型实际注入内容完全一致。</div>
+      </div>`;
+  }
+
+  return `
+    <div style="padding:12px 16px;background:var(--bg-2);border-radius:8px;border-left:3px solid var(--success)">
+      ${header}
+      <pre style="margin:0;max-height:680px;overflow:auto;font-size:11px;color:var(--text-2);line-height:1.5;white-space:pre-wrap;word-break:break-word;font-family:monospace">${escapeHtml(formatInjectedRequest(request))}</pre>
+    </div>`;
 }
 
 const SECTION_COLORS = {
@@ -642,6 +700,12 @@ function renderMessages() {
   const el = $('messageList');
   if (!el) return;
 
+  const visibleMessages = embeddedMode
+    ? messages
+      .map((message, index) => ({ message, index }))
+      .filter(({ message }) => message.role === 'assistant')
+    : messages.map((message, index) => ({ message, index }));
+
   // 保存当前滚动位置和内容高度（用于补偿新消息插入导致的偏移）
   const oldScrollTop = el.scrollTop;
   const oldScrollHeight = el.scrollHeight;
@@ -659,12 +723,12 @@ function renderMessages() {
     }
   });
 
-  if (!messages.length) {
+  if (!visibleMessages.length) {
     el.innerHTML = `
       <div class="card">
         <div style="padding:60px;text-align:center;color:var(--text-3)">
           <div style="font-size:48px;margin-bottom:16px">◧</div>
-          <div style="font-size:16px;margin-bottom:8px">暂无对话记录</div>
+          <div style="font-size:16px;margin-bottom:8px">${embeddedMode ? '暂无基础记忆注入记录' : '暂无对话记录'}</div>
         </div>
       </div>
     `;
@@ -672,7 +736,9 @@ function renderMessages() {
   }
 
   msgIdCounter = 0;
-  el.innerHTML = messages.map((m, idx) => {
+  el.innerHTML = visibleMessages.map(({ message: m, index }, idx) => {
+    if (embeddedMode) return renderInjectedRequestCard(m, index);
+
     const roleStyle = getRoleStyle(m.role);
     const speakerName = m.speaker_name || m.user_id || roleStyle.label;
     const content = m.content || '';
@@ -680,7 +746,7 @@ function renderMessages() {
     const conversationChain = buildConversationChain(m);
     const hasChain = m.role === 'assistant' && conversationChain.length > 0;
     const chainMsgId = `chain-${msgIdCounter++}`;
-    const entryId = m.entry_id || m.timestamp || `idx-${idx}`;
+    const entryId = m.entry_id || m.timestamp || `idx-${index}`;
     const tags = m.tags || [];
     const injectedToolNames = m.injected_tool_names || [];
 
@@ -694,7 +760,7 @@ function renderMessages() {
           </div>
           <div style="display:flex;align-items:center;gap:8px">
             <span style="font-size:11px;color:var(--text-3)">${formatTime(m.timestamp)}</span>
-            <button class="btn btn-sm btn-danger conversation-delete" data-delete-index="${idx}" style="font-size:11px;padding:3px 8px">删除</button>
+            <button class="btn btn-sm btn-danger conversation-delete" data-delete-index="${index}" style="font-size:11px;padding:3px 8px">删除</button>
           </div>
         </div>
         <div style="font-size:13px;color:var(--text-1);line-height:1.6;white-space:pre-wrap">${escapeHtml(truncate(content))}</div>
@@ -702,7 +768,7 @@ function renderMessages() {
         ${renderMemoryCompressionTags(m)}
         ${m.role === 'assistant' ? renderInjectedToolTags(injectedToolNames) : ''}
         ${renderIntentScores(m.intent_scores)}
-        ${hasChain ? renderConversationChainToggle(chainMsgId, conversationChain, entryId, idx, openChainEntryIds.has(entryId), m) : ''}
+        ${hasChain ? renderConversationChainToggle(chainMsgId, conversationChain, entryId, index, openChainEntryIds.has(entryId), m) : ''}
       </div>
     `;
   }).join('');

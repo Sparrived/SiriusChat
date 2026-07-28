@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from types import SimpleNamespace
 
 import pytest
@@ -28,6 +29,17 @@ class _Provider:
 
     async def generate_async(self, request):
         self.last_request = request
+        return GenerationResult(content="ok")
+
+
+class _RetryingProvider:
+    def __init__(self) -> None:
+        self.requests = []
+
+    async def generate_async(self, request):
+        self.requests.append(deepcopy(request))
+        if len(self.requests) == 1:
+            raise RuntimeError("temporary failure")
         return GenerationResult(content="ok")
 
 
@@ -100,6 +112,54 @@ async def test_brain_chat_result_records_injected_tool_names():
     )
 
     assert result.injected_tool_names == ["lookup", "stop"]
+    assert provider.last_request is not None
+    assert result.injected_request == {
+        "model": provider.last_request.model,
+        "system_prompt": provider.last_request.system_prompt,
+        "messages": deepcopy(provider.last_request.messages),
+        "tools": deepcopy(provider.last_request.tools),
+        "tool_choice": provider.last_request.tool_choice,
+        "temperature": provider.last_request.temperature,
+        "max_tokens": provider.last_request.max_tokens,
+        "timeout_seconds": provider.last_request.timeout_seconds,
+        "purpose": provider.last_request.purpose,
+        "response_format": provider.last_request.response_format,
+    }
+    provider.last_request.messages[0]["content"] = "mutated"
+    assert result.injected_request["messages"][0]["content"] != "mutated"
+
+
+@pytest.mark.asyncio
+async def test_brain_chat_after_retry_records_the_final_provider_request():
+    provider = _RetryingProvider()
+    brain = Brain(
+        provider_async=provider,
+        model_router=SimpleNamespace(
+            resolve=lambda *args, **kwargs: SimpleNamespace(
+                model_name="model", max_tokens=100, temperature=0.1, timeout=30
+            )
+        ),
+        persona=SimpleNamespace(name="tester", build_system_prompt=lambda: "persona"),
+    )
+    contexts = iter(["first context", "final context"])
+    brain._build_current_time_context = lambda: next(contexts)
+
+    result = await brain.chat(
+        ChatRequest(
+            group_id="group-1",
+            user_id="u1",
+            system_prompt="system",
+            messages=[{"role": "user", "content": "hello"}],
+            retry_max=1,
+            retry_delay=0,
+        )
+    )
+
+    assert len(provider.requests) == 2
+    assert "first context" in provider.requests[0].messages[0]["content"]
+    assert "final context" in provider.requests[1].messages[0]["content"]
+    assert result.injected_request["messages"] == provider.requests[1].messages
+    assert result.injected_request["system_prompt"] == provider.requests[1].system_prompt
 
 
 @pytest.mark.asyncio
@@ -162,9 +222,7 @@ async def test_brain_chat_when_tool_choice_is_none_then_all_schemas_are_still_se
     )
 
     assert provider.last_request.tool_choice == "none"
-    assert [tool["function"]["name"] for tool in (provider.last_request.tools or [])] == [
-        "lookup"
-    ]
+    assert [tool["function"]["name"] for tool in (provider.last_request.tools or [])] == ["lookup"]
 
 
 @pytest.mark.asyncio
