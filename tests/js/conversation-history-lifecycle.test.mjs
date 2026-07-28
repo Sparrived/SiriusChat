@@ -36,6 +36,32 @@ assert.equal(
 );
 
 assert.equal(
+  source.includes('const visibleMessages = embeddedMode'),
+  false,
+  'embedded memory view must keep the original message visualization',
+);
+
+assert.equal(
+  source.includes('if (embeddedMode) return [];'),
+  false,
+  'embedded memory view must keep rendering stored conversation chains',
+);
+
+for (const helper of ['renderInjectedRequestPanel', 'renderInjectedToolDefinitions', 'renderToolCallActivity', 'renderChainDetail']) {
+  assert.equal(
+    source.includes(`function ${helper}`),
+    true,
+    `conversation chains should define ${helper} for full injection rendering`,
+  );
+}
+
+assert.equal(
+  source.includes('renderInjectedRequestPanel(parentMessage, chain)'),
+  true,
+  'full injection should be rendered inside the original chain detail',
+);
+
+assert.equal(
   source.includes('点击后加载消息链详情'),
   true,
   'conversation chains should render lazily instead of prebuilding hidden details',
@@ -82,9 +108,49 @@ vm.runInNewContext(
   source
     .replace(/^import .*;$/gm, '')
     .replace(/^export /gm, '')
-    + '\nglobalThis.renderChainMessagesForTest = renderChainMessages;',
+    + '\nglobalThis.renderChainMessagesForTest = renderChainMessages;'
+    + '\nglobalThis.renderInjectedRequestPanelForTest = renderInjectedRequestPanel;',
   context,
 );
+
+const renderedInjection = context.renderInjectedRequestPanelForTest(
+  {
+    injected_request: {
+      model: 'gpt-test',
+      purpose: 'response_generate',
+      system_prompt: 'system prompt',
+      messages: [{ role: 'user', content: 'question' }],
+      tools: [{
+        type: 'function',
+        function: {
+          name: 'lookup_weather',
+          description: 'look up weather',
+          parameters: { type: 'object', properties: { city: { type: 'string' } } },
+        },
+      }],
+      tool_choice: 'auto',
+      max_tokens: 256,
+    },
+  },
+  [
+    {
+      role: 'assistant',
+      tool_calls: [{
+        id: 'call_lookup',
+        type: 'function',
+        function: { name: 'lookup_weather', arguments: '{"city":"Shanghai"}' },
+      }],
+    },
+    { role: 'tool', tool_call_id: 'call_lookup', content: '{"temperature":30}' },
+  ],
+);
+assert.match(renderedInjection, /最终注入请求/);
+assert.match(renderedInjection, /gpt-test/);
+assert.match(renderedInjection, /lookup_weather/);
+assert.match(renderedInjection, /city/);
+assert.match(renderedInjection, /实际调用记录/);
+assert.match(renderedInjection, /temperature/);
+assert.match(renderedInjection, /查看完整请求 JSON/);
 
 const renderedToolChain = context.renderChainMessagesForTest([
   {

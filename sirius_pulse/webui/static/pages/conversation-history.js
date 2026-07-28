@@ -90,7 +90,7 @@ export async function init(container, params = {}) {
 
   const pageTitle = embeddedMode ? '基础记忆完整注入' : '历史对话分析';
   const pageSubtitle = embeddedMode
-    ? '仅展示最终发送给模型的请求快照'
+    ? '查看基础记忆、最终注入请求与工具链路'
     : `查看 ${name} 的完整对话记录`;
   container.innerHTML = `
     <div class="card" style="margin-bottom:20px">
@@ -270,10 +270,10 @@ function renderStats(total) {
       <div class="stat-label">AI 回复</div>
       <div class="stat-value">${assistantCount}</div>
     </div>
-    ${embeddedMode ? '' : `<div class="stat-card">
+    <div class="stat-card">
       <div class="stat-label">系统消息</div>
       <div class="stat-value">${systemCount}</div>
-    </div>`}
+    </div>
     <div class="stat-card">
       <div class="stat-label">参与用户</div>
       <div class="stat-value">${uniqueUsers}</div>
@@ -393,8 +393,6 @@ function buildConversationChain(message) {
     const systemPrompt = injectedRequest.system_prompt || '';
     return systemPrompt ? [{ role: 'system', content: systemPrompt }, ...messages] : messages;
   }
-  if (embeddedMode) return [];
-
   const chain = Array.isArray(message.conversation_chain)
     ? message.conversation_chain.filter(m => m && typeof m === 'object')
     : [];
@@ -424,34 +422,142 @@ function formatInjectedRequest(request) {
   }
 }
 
-function renderInjectedRequestCard(message, index) {
-  const request = getInjectedRequest(message);
-  const groupId = message.group_id || '';
-  const header = `
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-      <div style="display:flex;align-items:center;gap:8px">
-        <span style="color:var(--success);font-weight:600;font-size:13px">完整模型注入</span>
-        ${groupId ? `<span class="tag" style="font-size:10px;padding:2px 6px">${escapeHtml(groupId)}</span>` : ''}
-      </div>
-      <div style="display:flex;align-items:center;gap:8px">
-        <span style="font-size:11px;color:var(--text-3)">${formatTime(message.timestamp)}</span>
-        <button class="btn btn-sm btn-danger conversation-delete" data-delete-index="${index}" style="font-size:11px;padding:3px 8px">删除</button>
-      </div>
-    </div>`;
+function getInjectedTools(request) {
+  return Array.isArray(request?.tools)
+    ? request.tools.filter(tool => tool && typeof tool === 'object')
+    : [];
+}
 
-  if (!request) {
-    return `
-      <div style="padding:12px 16px;background:var(--bg-2);border-radius:8px;border-left:3px solid var(--text-3)">
-        ${header}
-        <div style="font-size:12px;color:var(--text-3);line-height:1.6">旧记录缺少最终请求快照，无法证明其与模型实际注入内容完全一致。</div>
-      </div>`;
-  }
+function formatInjectedValue(value) {
+  if (value === null || value === undefined || value === '') return '—';
+  return typeof value === 'object' ? formatToolPayload(value) : String(value);
+}
+
+function renderToolCallActivity(chain) {
+  const resultsById = new Map(
+    chain
+      .filter(message => message?.role === 'tool' && message.tool_call_id)
+      .map(message => [message.tool_call_id, message]),
+  );
+  const calls = chain.flatMap(message => getToolCalls(message).map(call => ({
+    call,
+    result: resultsById.get(call.id),
+  })));
+  if (!calls.length) return '';
 
   return `
-    <div style="padding:12px 16px;background:var(--bg-2);border-radius:8px;border-left:3px solid var(--success)">
-      ${header}
-      <pre style="margin:0;max-height:680px;overflow:auto;font-size:11px;color:var(--text-2);line-height:1.5;white-space:pre-wrap;word-break:break-word;font-family:monospace">${escapeHtml(formatInjectedRequest(request))}</pre>
-    </div>`;
+    <div style="border-top:1px solid var(--border)">
+      <div style="padding:6px 12px;font-size:10px;color:var(--text-3)">实际调用记录</div>
+      ${calls.map(({ call, result }, index) => {
+        const name = getToolName(call);
+        const argumentsText = formatToolPayload(call.function?.arguments ?? call.arguments);
+        const resultText = result ? formatToolPayload(result.content) : '（尚无返回结果）';
+        return `
+          <div style="padding:8px 12px;border-top:1px solid var(--border)">
+            <div style="display:flex;align-items:center;gap:6px;margin-bottom:5px">
+              <span style="font-size:10px;color:var(--text-3)">#${index + 1}</span>
+              <span style="font-size:11px;font-weight:600;color:#ff9800">${escapeHtml(name)}</span>
+              ${call.id ? `<span style="font-size:10px;color:var(--text-3);margin-left:auto">${escapeHtml(call.id)}</span>` : ''}
+            </div>
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:6px">
+              <div>
+                <div style="font-size:9px;color:var(--text-3);margin-bottom:2px">参数</div>
+                <pre style="margin:0;padding:6px;background:var(--bg-1);font-size:10px;color:var(--text-2);line-height:1.4;white-space:pre-wrap;word-break:break-word;max-height:140px;overflow:auto;font-family:monospace">${escapeHtml(argumentsText)}</pre>
+              </div>
+              <div>
+                <div style="font-size:9px;color:var(--text-3);margin-bottom:2px">结果</div>
+                <pre style="margin:0;padding:6px;background:var(--bg-1);font-size:10px;color:var(--text-2);line-height:1.4;white-space:pre-wrap;word-break:break-word;max-height:140px;overflow:auto;font-family:monospace">${escapeHtml(resultText)}</pre>
+              </div>
+            </div>
+          </div>
+        `;
+      }).join('')}
+    </div>
+  `;
+}
+
+function renderInjectedToolDefinitions(tools, chain = []) {
+  const callCount = chain.reduce((count, message) => count + getToolCalls(message).length, 0);
+  const resultCount = chain.filter(message => message?.role === 'tool').length;
+  const toolBody = tools.length
+    ? tools.map((tool, index) => {
+        const definition = tool.function && typeof tool.function === 'object'
+          ? tool.function
+          : tool;
+        const name = definition.name || `tool_${index + 1}`;
+        const description = definition.description || '';
+        const parameters = formatToolPayload(definition.parameters || {});
+        return `
+          <div style="padding:8px 12px;border-bottom:1px solid var(--border)">
+            <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
+              <span style="font-size:10px;color:var(--text-3)">#${index + 1}</span>
+              <span style="font-size:11px;font-weight:600;color:#2196f3">${escapeHtml(name)}</span>
+            </div>
+            ${description ? `<div style="font-size:10px;color:var(--text-2);line-height:1.5;margin-bottom:5px">${escapeHtml(description)}</div>` : ''}
+            <pre style="margin:0;font-size:10px;color:var(--text-2);line-height:1.45;white-space:pre-wrap;word-break:break-word;max-height:180px;overflow-y:auto;font-family:monospace">${escapeHtml(parameters)}</pre>
+          </div>
+        `;
+      }).join('')
+    : '<div style="padding:10px 12px;font-size:11px;color:var(--text-3)">本轮没有注入可调用工具</div>';
+
+  return `
+    <div style="border:1px solid #2196f344;background:#2196f308;margin-bottom:8px">
+      <div style="padding:7px 12px;display:flex;align-items:center;gap:6px;background:#2196f312">
+        <span style="font-size:11px;font-weight:600;color:#2196f3">工具调用</span>
+        <span style="font-size:10px;color:var(--text-3);margin-left:auto">已注入 ${tools.length} 个 · 实际调用 ${callCount} 次 · 返回 ${resultCount} 个</span>
+      </div>
+      <div style="padding:6px 12px;font-size:10px;color:var(--text-3);border-bottom:1px solid var(--border)">可调用工具定义</div>
+      ${toolBody}
+      ${renderToolCallActivity(chain)}
+    </div>
+  `;
+}
+
+function renderInjectedRequestPanel(message, chain = []) {
+  const request = getInjectedRequest(message);
+  if (!request) return '';
+
+  const tools = getInjectedTools(request);
+  const requestMessages = Array.isArray(request.messages)
+    ? request.messages.filter(item => item && typeof item === 'object')
+    : [];
+  const prompt = typeof request.system_prompt === 'string' ? request.system_prompt : '';
+  const inputTokens = estimateTokens(prompt) + requestMessages.reduce(
+    (total, item) => total + chainMessageLength(item),
+    0,
+  );
+  const metadata = [
+    ['模型', request.model],
+    ['用途', request.purpose],
+    ['消息', `${requestMessages.length} 条 · 约 ${inputTokens} tokens`],
+    ['工具', `${tools.length} 个`],
+    ['选择', request.tool_choice],
+    ['温度', request.temperature],
+    ['最大输出', request.max_tokens],
+    ['超时', request.timeout_seconds === undefined ? undefined : `${request.timeout_seconds} 秒`],
+  ].map(([label, value]) => `
+    <div style="padding:6px 8px;background:var(--bg-1);border:1px solid var(--border)">
+      <div style="font-size:9px;color:var(--text-3);margin-bottom:2px">${label}</div>
+      <div style="font-size:10px;color:var(--text-1);white-space:pre-wrap;word-break:break-word">${escapeHtml(formatInjectedValue(value))}</div>
+    </div>
+  `).join('');
+
+  return `
+    <div style="padding:8px 12px;border-bottom:1px solid var(--border);background:var(--success)08">
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:7px">
+        <span style="font-size:11px;font-weight:600;color:var(--success)">最终注入请求</span>
+        <span style="font-size:10px;color:var(--text-3)">provider 发送快照</span>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:5px;margin-bottom:8px">
+        ${metadata}
+      </div>
+      ${renderInjectedToolDefinitions(tools, chain)}
+      <details>
+        <summary style="cursor:pointer;font-size:10px;color:var(--text-2)">查看完整请求 JSON</summary>
+        <pre style="margin:6px 0 0;padding:8px;background:var(--bg-1);font-size:10px;color:var(--text-2);line-height:1.45;white-space:pre-wrap;word-break:break-word;max-height:360px;overflow:auto;font-family:monospace">${escapeHtml(formatInjectedRequest(request))}</pre>
+      </details>
+    </div>
+  `;
 }
 
 const SECTION_COLORS = {
@@ -700,12 +806,6 @@ function renderMessages() {
   const el = $('messageList');
   if (!el) return;
 
-  const visibleMessages = embeddedMode
-    ? messages
-      .map((message, index) => ({ message, index }))
-      .filter(({ message }) => message.role === 'assistant')
-    : messages.map((message, index) => ({ message, index }));
-
   // 保存当前滚动位置和内容高度（用于补偿新消息插入导致的偏移）
   const oldScrollTop = el.scrollTop;
   const oldScrollHeight = el.scrollHeight;
@@ -723,12 +823,12 @@ function renderMessages() {
     }
   });
 
-  if (!visibleMessages.length) {
+  if (!messages.length) {
     el.innerHTML = `
       <div class="card">
         <div style="padding:60px;text-align:center;color:var(--text-3)">
           <div style="font-size:48px;margin-bottom:16px">◧</div>
-          <div style="font-size:16px;margin-bottom:8px">${embeddedMode ? '暂无基础记忆注入记录' : '暂无对话记录'}</div>
+          <div style="font-size:16px;margin-bottom:8px">暂无对话记录</div>
         </div>
       </div>
     `;
@@ -736,9 +836,7 @@ function renderMessages() {
   }
 
   msgIdCounter = 0;
-  el.innerHTML = visibleMessages.map(({ message: m, index }, idx) => {
-    if (embeddedMode) return renderInjectedRequestCard(m, index);
-
+  el.innerHTML = messages.map((m, idx) => {
     const roleStyle = getRoleStyle(m.role);
     const speakerName = m.speaker_name || m.user_id || roleStyle.label;
     const content = m.content || '';
@@ -746,7 +844,7 @@ function renderMessages() {
     const conversationChain = buildConversationChain(m);
     const hasChain = m.role === 'assistant' && conversationChain.length > 0;
     const chainMsgId = `chain-${msgIdCounter++}`;
-    const entryId = m.entry_id || m.timestamp || `idx-${index}`;
+    const entryId = m.entry_id || m.timestamp || `idx-${idx}`;
     const tags = m.tags || [];
     const injectedToolNames = m.injected_tool_names || [];
 
@@ -760,7 +858,7 @@ function renderMessages() {
           </div>
           <div style="display:flex;align-items:center;gap:8px">
             <span style="font-size:11px;color:var(--text-3)">${formatTime(m.timestamp)}</span>
-            <button class="btn btn-sm btn-danger conversation-delete" data-delete-index="${index}" style="font-size:11px;padding:3px 8px">删除</button>
+            <button class="btn btn-sm btn-danger conversation-delete" data-delete-index="${idx}" style="font-size:11px;padding:3px 8px">删除</button>
           </div>
         </div>
         <div style="font-size:13px;color:var(--text-1);line-height:1.6;white-space:pre-wrap">${escapeHtml(truncate(content))}</div>
@@ -768,7 +866,7 @@ function renderMessages() {
         ${renderMemoryCompressionTags(m)}
         ${m.role === 'assistant' ? renderInjectedToolTags(injectedToolNames) : ''}
         ${renderIntentScores(m.intent_scores)}
-        ${hasChain ? renderConversationChainToggle(chainMsgId, conversationChain, entryId, index, openChainEntryIds.has(entryId), m) : ''}
+        ${hasChain ? renderConversationChainToggle(chainMsgId, conversationChain, entryId, idx, openChainEntryIds.has(entryId), m) : ''}
       </div>
     `;
   }).join('');
@@ -830,6 +928,10 @@ function chainMessageLength(message) {
       + formatToolPayload(call.function?.arguments ?? call.arguments).length, 0);
 }
 
+function renderChainDetail(chain, parentMessage = null) {
+  return `${renderInjectedRequestPanel(parentMessage, chain)}${renderChainMessages(chain, parentMessage)}`;
+}
+
 function renderConversationChainToggle(chainMsgId, chain, entryId = '', messageIndex = 0, isOpen = false, parentMessage = null) {
   const msgCount = chain.length;
   const totalChars = chain.reduce((sum, message) => sum + chainMessageLength(message), 0);
@@ -838,7 +940,7 @@ function renderConversationChainToggle(chainMsgId, chain, entryId = '', messageI
   const displayStyle = isOpen ? 'display:block' : 'display:none';
   const arrowTransform = isOpen ? 'transform:rotate(90deg)' : '';
   const chainHtml = isOpen
-    ? renderChainMessages(chain, parentMessage)
+    ? renderChainDetail(chain, parentMessage)
     : '<div style="padding:12px;color:var(--text-3);font-size:12px">点击后加载消息链详情</div>';
 
   // 统计各角色消息数
@@ -1275,7 +1377,7 @@ function renderChainDetailForButton(btn, target) {
   const idx = Number(btn.dataset.chainIndex);
   const message = messages[idx];
   const chain = buildConversationChain(message);
-  target.innerHTML = renderChainMessages(chain, message);
+  target.innerHTML = renderChainDetail(chain, message);
   target.dataset.loaded = 'true';
   bindChainSectionToggles(target);
 }
