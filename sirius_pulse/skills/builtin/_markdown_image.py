@@ -20,7 +20,7 @@ _FENCE_LINE_RE = re.compile(r"^\s{0,3}([`~]+)([^\r\n]*)$")
 _MARKDOWN_LABEL_RE = re.compile(r"^\s*(?:markdown|md)\s*[:：]\s*(.*)$", re.IGNORECASE)
 _MARKDOWN_LABEL_ONLY_RE = re.compile(r"^\s*(?:markdown|md)\s*$", re.IGNORECASE)
 _STRONG_ONLY_RE = re.compile(r"^\s*(?:\*\*.+\*\*|__.+__)\s*$")
-_HORIZONTAL_RULE_RE = re.compile(r"^(?:-{3,}|\*{3,}|_{3,})$")
+_HORIZONTAL_RULE_RE = re.compile(r"^(?:-{3,}|\*{3,}|_{3,}|—-+|—{2,}|－{3,}|＿{3,})$")
 _CUTE_FONT_PATH = Path(__file__).with_name("assets") / "ZCOOLKuaiLe-Regular.ttf"
 
 
@@ -127,7 +127,7 @@ def _split_unfenced_markdown(text: str) -> list[tuple[bool, str]]:
             parts.append((True, markdown))
         if after:
             parts.append((False, after))
-    return _remove_orphan_markdown_separators(parts)
+    return _remove_orphan_markdown_separators(_promote_markdown_sections(parts))
 
 
 def _is_markdown_structure_line(line: str) -> bool:
@@ -176,16 +176,47 @@ def _is_table_row_line(line: str) -> bool:
 def _remove_orphan_markdown_separators(
     parts: list[tuple[bool, str]],
 ) -> list[tuple[bool, str]]:
-    separators = {"---", "***", "___"}
     result: list[tuple[bool, str]] = []
     for index, (is_markdown, content) in enumerate(parts):
-        if not is_markdown and content.strip() in separators:
+        if not is_markdown and _is_horizontal_rule_line(content):
             previous_is_markdown = bool(result and result[-1][0])
             next_is_markdown = index + 1 < len(parts) and parts[index + 1][0]
             if previous_is_markdown or next_is_markdown:
                 continue
         result.append((is_markdown, content))
     return result
+
+
+def _promote_markdown_sections(parts: list[tuple[bool, str]]) -> list[tuple[bool, str]]:
+    result: list[tuple[bool, str]] = []
+    index = 0
+    while index < len(parts):
+        is_markdown, content = parts[index]
+        if not is_markdown:
+            result.append((is_markdown, content))
+            index += 1
+            continue
+
+        section = [content]
+        cursor = index + 1
+        while cursor < len(parts) and not parts[cursor][0]:
+            section.append(parts[cursor][1])
+            if _is_horizontal_rule_line(parts[cursor][1]):
+                cursor += 1
+                break
+            cursor += 1
+
+        if cursor > index + 1 and _is_horizontal_rule_line(section[-1]):
+            result.append((True, "\n\n".join(section)))
+            index = cursor
+        else:
+            result.append((True, content))
+            index += 1
+    return result
+
+
+def _is_horizontal_rule_line(line: str) -> bool:
+    return bool(_HORIZONTAL_RULE_RE.match(str(line or "").strip()))
 
 
 def _is_code_fence_line(line: str) -> bool:
