@@ -178,13 +178,13 @@ def test_basic_memory_entry_records_injected_tool_names():
         "assistant",
         "reply",
         injected_request=injected_request,
-        injected_tool_names=["lookup", "stop"],
+        injected_tool_names=["lookup", "extra_tool"],
     )
 
     injected_request["messages"][0]["content"] = "changed"
     assert entry.injected_request["messages"][0]["content"] == "question"
-    assert entry.injected_tool_names == ["lookup", "stop"]
-    assert entry.to_dict()["injected_tool_names"] == ["lookup", "stop"]
+    assert entry.injected_tool_names == ["lookup", "extra_tool"]
+    assert entry.to_dict()["injected_tool_names"] == ["lookup", "extra_tool"]
     assert entry.to_dict()["injected_request"]["system_prompt"] == "system"
 
 

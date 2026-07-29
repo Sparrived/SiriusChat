@@ -113,7 +113,7 @@ def test_style_adapter_clamps_sentence_limit_for_guidance():
 
 
 def test_reply_spec_no_newline_split_instruction():
-    """换行分割提示已移除，改为 stop 工具控制流程。"""
+    """换行分割提示已移除。"""
     spec = PromptFactory.build_reply_spec()
 
     assert "多句话可以用换行符分割" not in spec
@@ -141,16 +141,16 @@ def test_memory_context_marks_memories_as_candidates():
     assert "Alice dislikes repeated reminders." in context
 
 
-def test_reply_spec_when_function_call_enabled_then_includes_stop_only():
-    """启用 function call 时，回复规范包含 stop 工具使用说明。"""
+def test_reply_spec_when_function_call_enabled_then_has_no_completion_control_instruction():
+    """启用 function call 时，回复规范不包含完成控制工具说明。"""
     spec = PromptFactory.build_reply_spec(supports_function_call=True)
 
     assert "continue" not in spec
-    assert "stop" in spec
+    assert "stop" not in spec
 
 
-def test_reply_spec_when_function_call_disabled_then_no_continue_stop():
-    """未启用 function call 时，不包含 stop 说明。"""
+def test_reply_spec_when_function_call_disabled_then_no_completion_control_instruction():
+    """未启用 function call 时，不包含完成控制工具说明。"""
     spec = PromptFactory.build_reply_spec(supports_function_call=False)
 
     assert "continue" not in spec

@@ -454,7 +454,7 @@ async def test_delayed_queue_executes_high_risk_tool_without_confirmation():
 
 
 @pytest.mark.asyncio
-async def test_delayed_queue_when_chat_round_uses_stop_only_flow_control():
+async def test_delayed_queue_when_chat_round_has_no_completion_control_tool():
     queue = DelayedResponseQueue()
     item = queue.enqueue(
         "group-1",
@@ -522,7 +522,7 @@ async def test_delayed_queue_when_chat_round_uses_stop_only_flow_control():
     results = await tasks.tick_delayed_queue("group-1", on_partial_reply=AsyncMock())
 
     assert results[0]["reply"] == "One reply."
-    assert seen_extra_tools == [{"stop"}]
+    assert seen_extra_tools == [set()]
 
 
 @pytest.mark.asyncio

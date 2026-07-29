@@ -105,13 +105,13 @@ async def test_brain_chat_result_records_injected_tool_names():
             extra_tools=[
                 {
                     "type": "function",
-                    "function": {"name": "stop", "description": "stop", "parameters": {}},
+                    "function": {"name": "extra_tool", "description": "extra", "parameters": {}},
                 }
             ],
         )
     )
 
-    assert result.injected_tool_names == ["lookup", "stop"]
+    assert result.injected_tool_names == ["lookup", "extra_tool"]
     assert provider.last_request is not None
     assert result.injected_request == {
         "model": provider.last_request.model,

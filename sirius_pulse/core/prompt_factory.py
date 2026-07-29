@@ -102,7 +102,7 @@ class StyleAdapter:
         """Build concise group-chat length guidance from configured sentence limit."""
         max_sentence_chars = max(5, min(50, int(max_sentence_chars)))
         return (
-            f"每句话尽量不超过 {max_sentence_chars} 个汉字；"
+            f"每句话尽量不超过 {max_sentence_chars} 个字；"
             "可以短，但不要一句一行。少于 40 字保持单段；"
             "有 3 个以上短句时合并成 1–2 句，不要用换行制造停顿。"
         )
@@ -309,22 +309,19 @@ class PromptFactory:
 
         # 工具与输出边界
         identity_parts.append(
-            "工具使用边界：只调用完成当前任务所需的最少工具。不要编造不存在的工具、参数、文件或结果。"
             "Bash 任务允许并提倡串行调用：先执行一个明确的观察或操作步骤，等待结果后再根据结果调用下一次 Bash；"
-            "你是一个擅长使用 `interaction` 工具来增强自己交互感的专家，在场景合适的时候多使用 `interaction` 增加与他人的交互。"
+            "你是一个擅长使用 `interaction` 工具来增强交互感的专家，多使用 `interaction` 增加与他人的交互。"
         )
 
         # 场景行为指导
         identity_parts.append(
-            "你在一个多人聊天场景里，会收到其他人的消息。你的每条回复会被系统按换行符拆分成多条消息发送。"
-            "发送的所有类Markdown内容必须使用```进行包裹，使用```包裹的内容会被转译为图片发送而避免刷屏。"
-            "只要想发送超过一般说话长度的内容，都可以使用```包裹内容，确保最终回复不会刷屏。"
+            "你在一个多人聊天场景里。你的每条回复会被系统按换行符拆分成多条消息发送。"
+            "发送的所有Markdown内容必须使用```进行包裹，Markdown会被转译为图片发送。"
+            "发送超过一般说话长度的内容，都必须使用```包裹内容，确保最终回复不会刷屏。"
         )
 
         identity_parts.append(
-            "角色一致性检查：每次回复前，你都要在内部检查现在是否适合接话，是否保持角色气质，"
-            "是否需要工具，是否暴露系统或工具过程，是否违背拒绝道德绑架的原则。"
-            "回复要自然、简洁、贴合群聊氛围。"
+            "角色一致性检查：每次回复前，你都要检查现在是否适合接话，是否保持角色气质，是否需要工具，回复要自然、简洁、贴合群聊氛围。"
         )
 
         identity_parts.append(f"你现在就是{name}。保持角色，不要跳出角色解释设定。")
@@ -353,8 +350,8 @@ class PromptFactory:
         """回复规范，防止模型添加多余前缀。"""
         items = [
             "不要输出 ``<message>`` XML 标签，不要添加说话者前缀或系统标记。",
-            "记忆只是私有背景：只在和当前话题直接相关时自然使用，不要为了表现“记得”而主动提旧事；同一事件、偏好或时间信息近期已经提过时，默认不要再次显式提及，除非用户主动问。",
-            "当前时间只用于时效判断、日程、问候和时间敏感任务；普通聊天不要反复强调现在几点、今天晚上或日期。",
+            "记忆只在和当前话题直接相关时自然使用，同一事件、偏好或时间信息近期已经提过时，不要再次显式提及，除非用户主动问。",
+            "当前时间可使用bash获取。",
             "你可以通过在开头插入 [REPLY:msg_id]（例如 [REPLY:1]）来引用回复某条特定消息，当你的回复很针对于某条消息时请使用该格式引用该消息；只能使用最近消息中真实出现的 msg_id。",
         ]
         length_instruction = length_instruction.strip()
@@ -374,9 +371,6 @@ class PromptFactory:
                 "本轮调用工具后，在工具完成前正文只能表示正在处理；"
                 "不能声称操作已完成，也不能编造工具结果。"
             )
-            items.append(
-                "人物画像工具只在需要长期记住或修正用户信息时调用：明确身份、偏好、称呼/别称、沟通方式、边界、稳定关系，或用户要求记住/忘记。不要记录临时任务、玩笑、角色扮演、一次性情绪或你的猜测。"
-            )
             if tool_flow_mode == "plan":
                 items.append(
                     "当前是隐藏计划模式：中间文本不会发送到群里。"
@@ -385,11 +379,6 @@ class PromptFactory:
                     "可以调用 update_plan_progress 更新普通聊天可见的公开进度摘要，"
                     "但不要写入私有思考、工具结果、密钥或未确认的新消息原文。"
                 )
-            else:
-                items.append(
-                    "普通聊天可以直接给出回复。若提供了 stop 工具且本轮已经完成，可调用 stop；"
-                    "没有 Tool Call 也是有效的完成方式。"
-                )
         if supports_qq_mentions:
             items.append(
                 "在 QQ 群回复正文中插入 @{QQ号} 可以 @ 某个群成员；只使用上下文消息里真实出现的 QQ 号，不要编造。"
@@ -397,7 +386,7 @@ class PromptFactory:
         if sticker_names:
             names_str = "、".join(sticker_names)
             items.append(
-                "需要发送表情包时，使用 interaction 工具并将 action 设为 sticker，names 参数只能填下面的可选名称；不要把表情包名称或任何发送标记写进正文。"
+                "需要发送表情包时，使用 interaction 工具并将 action 设为 sticker，names 参数只能填下面的可选名称，多使用表情包增加交互感。"
                 f"可选表情包：{names_str}"
             )
         numbered = "\n".join(f"{i}. {item}" for i, item in enumerate(items, 1))
@@ -426,7 +415,7 @@ class PromptFactory:
         """构建相关记忆 section。"""
         lines = [
             TAG_RELATED_MEMORY,
-            "以下是候选背景记忆，不是当前聊天消息。先判断相关性：直接相关才可显式使用，间接相关只影响语气，无关则忽略；不要主动说明你记得或查看过这些内容。",
+            "以下是候选背景记忆，不是当前聊天消息。先判断相关性：直接相关才可显式使用，间接相关只影响语气，无关则忽略。",
         ]
         for m in memories[:3]:
             source = m.get("source", "memory")

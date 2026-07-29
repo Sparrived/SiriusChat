@@ -483,7 +483,7 @@ class Brain:
                 if not tools:
                     tools = None
 
-            # 合并调用方传入的额外工具（如 continue/stop）
+            # 合并调用方传入的额外工具（如计划控制工具）
             if request.extra_tools:
                 tools = (tools or []) + request.extra_tools
 

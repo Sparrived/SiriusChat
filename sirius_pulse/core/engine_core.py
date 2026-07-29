@@ -1294,7 +1294,7 @@ class _EmotionalGroupChatEngineBase:
             )
         )
 
-        # 4. Generate (unified path through delayed queue, model decides reply/stop)
+        # 4. Generate (unified path through delayed queue, model decides whether to reply)
         self.diary_manager.ensure_group_loaded(group_id)
         result = await self._generate(signal, message, group_id, user_id)
         await self.event_bus.emit(

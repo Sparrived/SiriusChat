@@ -61,25 +61,6 @@ def _is_sticker_tool_call(tool_call: ToolCall) -> bool:
 
 # ── 内置流程控制工具定义 ──────────────────────────────────────────────
 
-STOP_TOOL_DEF: dict[str, Any] = {
-    "type": "function",
-    "function": {
-        "name": "stop",
-        "description": ("结束本轮回复。你的最后一条文字消息会发送给用户，然后本轮回复结束。"),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "action": {
-                    "type": "string",
-                    "description": "固定为 stop",
-                    "enum": ["stop"],
-                }
-            },
-            "required": ["action"],
-        },
-    },
-}
-
 ENTER_PLAN_TOOL_DEF: dict[str, Any] = {
     "type": "function",
     "function": {
@@ -214,7 +195,6 @@ GET_PLAN_STATUS_TOOL_DEF: dict[str, Any] = {
     },
 }
 
-FLOW_CONTROL_TOOL_NAMES = {"stop"}
 PLAN_CONTROL_TOOL_NAMES = {
     "enter_plan",
     "exit_plan",
@@ -625,7 +605,7 @@ class DelayedQueueTasks:
                     )
 
             # 内置流程控制工具
-            _extra_tools = [STOP_TOOL_DEF]
+            _extra_tools = []
             if plan_mode_enabled:
                 if plan_mode:
                     _extra_tools = [
@@ -672,22 +652,20 @@ class DelayedQueueTasks:
             round_clean = chat_result.clean_text
             agent_turn.set_candidates(getattr(chat_result, "injected_tool_names", []))
 
-            # 分类工具调用：流程控制 vs 普通技能
+            # 分类工具调用：计划控制 vs 普通技能
             tool_calls = chat_result.tool_calls or []
-            flow_control = [tc for tc in tool_calls if tc.function_name in FLOW_CONTROL_TOOL_NAMES]
             plan_control = [tc for tc in tool_calls if tc.function_name in PLAN_CONTROL_TOOL_NAMES]
             regular_tools = [
                 tc
                 for tc in tool_calls
-                if tc.function_name not in FLOW_CONTROL_TOOL_NAMES
-                and tc.function_name not in PLAN_CONTROL_TOOL_NAMES
+                if tc.function_name not in PLAN_CONTROL_TOOL_NAMES
             ]
             agent_turn.advance(
                 AgentTurnPhase.PLAN if regular_tools or plan_control else AgentTurnPhase.RESPOND
             )
             await self._emit_agent_turn(engine, agent_turn)
 
-            # 没调用任何工具 → 隐式 stop，文本作为最终回复
+            # 没有调用任何工具 → 文本作为最终回复
             if not tool_calls:
                 agent_turn.advance(AgentTurnPhase.RESPOND)
                 await self._emit_agent_turn(engine, agent_turn)
@@ -772,16 +750,6 @@ class DelayedQueueTasks:
                         finish_plan_session(engine, group_id)
                 break
 
-            should_stop = False
-            for tc in flow_control:
-                try:
-                    fc_params = json.loads(tc.function_arguments) if tc.function_arguments else {}
-                except json.JSONDecodeError:
-                    fc_params = {}
-                action = fc_params.get("action", "stop")
-                if action == "stop":
-                    should_stop = True
-
             enter_plan_tc = next(
                 (tc for tc in plan_control if tc.function_name == "enter_plan"), None
             )
@@ -835,7 +803,7 @@ class DelayedQueueTasks:
                     f"{system_prompt}\n\n"
                     "【隐藏计划模式】你现在处于后台计划模式。中间文本不会发送到群里；"
                     "可以私下调用可用工具并处理计划事件。完成时必须调用 exit_plan，"
-                    "需要放弃或无法完成时调用 abort_plan。不要调用 continue 或 stop。"
+                    "需要放弃或无法完成时调用 abort_plan。不要发送计划过程中的中间文本。"
                 )
                 engine._log_inner_thought(f"进入计划模式: {goal[:60]}")
                 await self._maybe_send_plan_presence(
@@ -929,7 +897,7 @@ class DelayedQueueTasks:
                 engine._log_inner_thought(f"计划模式中止: {reason[:80]}")
                 break
 
-            # 1. 发送当前轮次的文字（排除 flow control 工具，只看普通技能是否全 silent）
+            # 1. 发送当前轮次的文字（排除计划控制工具，只看普通技能是否全 silent）
             update_progress_tc = next(
                 (tc for tc in plan_control if tc.function_name == "update_plan_progress"), None
             )
@@ -1003,7 +971,7 @@ class DelayedQueueTasks:
             last_round_had_partial = False
             if plan_mode and non_skill_text:
                 engine._log_inner_thought(f"计划模式中间文本已隐藏: {non_skill_text[:40]}...")
-            elif non_skill_text and not all_silent and not should_stop:
+            elif non_skill_text and not all_silent:
                 engine._log_inner_thought(f"先跟用户回一声：{non_skill_text[:40]}...")
                 last_round_had_partial = True
                 if on_partial_reply is None:
@@ -1013,7 +981,7 @@ class DelayedQueueTasks:
                 await on_partial_reply(non_skill_text)
                 last_partial_sent_at = time.monotonic()
 
-            # 2. 执行普通工具（stop 以外的技能）
+            # 2. 执行普通工具
             skill_multimodal: list[dict[str, Any]] = []
             if (
                 regular_tools
@@ -1225,29 +1193,6 @@ class DelayedQueueTasks:
                     # 链式调用中间增加延迟，避免回复过快
                     if idx < len(regular_tools) - 1:
                         await asyncio.sleep(2)
-
-            # 3. 处理 flow control：stop
-            stop_tc = next((tc for tc in flow_control if tc.function_name == "stop"), None)
-
-            # 注入 stop 的 assistant 消息并退出
-            if stop_tc:
-                messages.append(
-                    {
-                        "role": "assistant",
-                        "content": reply or None,
-                        "tool_calls": [
-                            {
-                                "id": stop_tc.id,
-                                "type": "function",
-                                "function": {
-                                    "name": "stop",
-                                    "arguments": '{"action":"stop"}',
-                                },
-                            }
-                        ],
-                    }
-                )
-                break
 
             # sticker-only 兜底：给模型一次纯文字重试机会
             if all_silent:

@@ -2,7 +2,7 @@
 
 Perception → Signal → PreFilter → Generate → BackgroundUpdate
 
-规则计算层产生信号，粗筛决定是否调用主模型，主模型用 stop 工具决定回不回。
+规则计算层产生信号，粗筛决定是否调用主模型，主模型决定是否回复。
 """
 
 from __future__ import annotations
@@ -375,7 +375,7 @@ class Pipeline:
         group_id: str,
         user_id: str,
     ) -> dict[str, Any]:
-        """统一生成路径：将消息入队延迟队列，由主模型决定回复或 stop。
+        """统一生成路径：将消息入队延迟队列，由主模型决定是否回复。
 
         所有通过 pre_filter 的消息都走这条路。
         """
