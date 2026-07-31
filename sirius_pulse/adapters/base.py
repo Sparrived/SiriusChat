@@ -238,6 +238,22 @@ class BaseAdapter(ABC):
         """上传私聊文件。"""
         return {}
 
+    async def get_group_file_list(
+        self, group_id: str, folder_id: str = "", file_count: int = 50
+    ) -> dict[str, Any]:
+        """获取群文件列表。"""
+        return {}
+
+    async def download_group_file(
+        self,
+        group_id: str,
+        file_id: str,
+        file_name: str = "",
+        destination_dir: str = "",
+    ) -> dict[str, Any]:
+        """下载群文件到本地。"""
+        return {}
+
     # ── 通用 API ──
 
     @abstractmethod

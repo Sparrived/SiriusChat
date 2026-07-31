@@ -229,7 +229,7 @@ def test_build_delayed_prompt_injects_configured_length_limit():
 
     assert "【回复规范】" in bundle.system_prompt
     assert "【回复长度】" not in bundle.system_prompt
-    assert "不超过 12 个汉字" in bundle.system_prompt
+    assert "每句话尽量不超过 12 个字" in bundle.system_prompt
     assert "少于 40 字保持单段" in bundle.system_prompt
     assert "不要用换行制造停顿" in bundle.system_prompt
 

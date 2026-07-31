@@ -181,7 +181,7 @@ def test_skill_registry_when_builtin_skills_load_then_composite_napcat_tools_are
     interaction = registry.get("interaction")
     bash = registry.get("bash")
     developer_status = registry.get("developer_status")
-    file_upload = registry.get("file_upload")
+    group_file_exec = registry.get("group_file_exec")
     group_management = registry.get("group_management")
     web_lookup = registry.get("web_lookup")
     tools = registry.build_tools_list(adapter_type="napcat")
@@ -214,7 +214,7 @@ def test_skill_registry_when_builtin_skills_load_then_composite_napcat_tools_are
         "timeout_seconds",
     ]
     assert "public_status_token" not in developer_status.to_tool_schema()["function"]["parameters"]["properties"]
-    assert file_upload is not None
+    assert group_file_exec is not None
     assert group_management is not None
     assert web_lookup is not None
     assert [param.name for param in web_lookup.config_parameters] == ["tavily_api_key"]
@@ -235,7 +235,7 @@ def test_skill_registry_when_builtin_skills_load_then_composite_napcat_tools_are
     assert web_lookup.side_effect is SkillSideEffect.READ_ONLY
     assert group_management.side_effect is SkillSideEffect.DESTRUCTIVE
     assert [tool["function"]["name"] for tool in tools].count("interaction") == 1
-    assert [tool["function"]["name"] for tool in tools].count("file_upload") == 1
+    assert [tool["function"]["name"] for tool in tools].count("group_file_exec") == 1
     assert not any(tool["function"]["name"] == "send_sticker" for tool in tools)
     assert not any(tool["function"]["name"] == "send_image" for tool in tools)
     assert not any(tool["function"]["name"] == "upload_file" for tool in tools)

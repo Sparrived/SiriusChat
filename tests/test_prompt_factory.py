@@ -99,7 +99,7 @@ def test_style_adapter_when_persona_preferences_exist_then_applies_overrides():
 def test_style_adapter_when_sentence_limit_present_then_builds_group_chat_guidance():
     params = StyleAdapter().adapt(pace="steady", persona=None, max_sentence_chars=12)
 
-    assert "每句话尽量不超过 12 个汉字" in params.length_instruction
+    assert "每句话尽量不超过 12 个字" in params.length_instruction
     assert "少于 40 字保持单段" in params.length_instruction
     assert "不要用换行制造停顿" in params.length_instruction
 
@@ -108,8 +108,8 @@ def test_style_adapter_clamps_sentence_limit_for_guidance():
     low = StyleAdapter().adapt(pace="steady", persona=None, max_sentence_chars=2)
     high = StyleAdapter().adapt(pace="steady", persona=None, max_sentence_chars=99)
 
-    assert "不超过 5 个汉字" in low.length_instruction
-    assert "不超过 50 个汉字" in high.length_instruction
+    assert "每句话尽量不超过 5 个字" in low.length_instruction
+    assert "每句话尽量不超过 50 个字" in high.length_instruction
 
 
 def test_reply_spec_no_newline_split_instruction():
@@ -124,10 +124,10 @@ def test_reply_spec_no_newline_split_instruction():
 def test_reply_spec_includes_memory_and_time_restraints():
     spec = PromptFactory.build_reply_spec()
 
-    assert "记忆只是私有背景" in spec
-    assert "不要为了表现“记得”" in spec
-    assert "当前时间只用于时效判断" in spec
-    assert "普通聊天不要反复强调" in spec
+    assert "记忆只在和当前话题直接相关时自然使用" in spec
+    assert "不要再次显式提及" in spec
+    assert "当前时间可使用bash获取" in spec
+    assert "除非用户主动问" in spec
 
 
 def test_memory_context_marks_memories_as_candidates():
@@ -203,9 +203,9 @@ def test_reply_spec_when_function_call_enabled_then_requires_task_driven_tool_us
 def test_persona_prompt_when_structured_response_is_needed_then_defines_fenced_delivery():
     spec = PromptFactory.build_persona_prompt(name="月白")
 
-    assert "类Markdown内容必须使用```进行包裹" in spec
+    assert "发送的所有Markdown内容必须使用```进行包裹" in spec
     assert "转译为图片发送" in spec
-    assert "file_upload" not in spec
+    assert "group_file_exec" not in spec
 
 
 def test_persona_prompt_uses_companion_template_fields():
@@ -228,8 +228,8 @@ def test_persona_prompt_uses_companion_template_fields():
     assert "创作者「临雀」" in prompt
     assert "天然亲近、信任和在意的人" in prompt
     assert "你的核心原则是：友善但不盲从，亲近但不卑微，拒绝道德绑架" in prompt
-    assert "只调用完成当前任务所需的最少工具" in prompt
-    assert "类Markdown内容必须使用```进行包裹" in prompt
+    assert "Bash 任务允许并提倡串行调用" in prompt
+    assert "发送的所有Markdown内容必须使用```进行包裹" in prompt
     assert "你现在就是月白。保持角色，不要跳出角色解释设定" in prompt
 
 
@@ -329,7 +329,7 @@ def test_assemble_chat_injects_configured_group_chat_length_guidance():
         other_ai_names=[],
     )
 
-    assert "每句话尽量不超过 12 个汉字" in bundle.system_prompt
+    assert "每句话尽量不超过 12 个字" in bundle.system_prompt
     assert "少于 40 字保持单段" in bundle.system_prompt
     assert "不要用换行制造停顿" in bundle.system_prompt
 

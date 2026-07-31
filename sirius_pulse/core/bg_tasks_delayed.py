@@ -46,7 +46,7 @@ _AUTONOMOUS_MESSAGE_SKILLS = {
 
 def _composite_action(tool_call: ToolCall) -> str:
     """Return the effective action for a legacy or unified tool call."""
-    if tool_call.function_name not in {"interaction", "file_upload"}:
+    if tool_call.function_name not in {"interaction", "group_file_exec"}:
         return ""
     try:
         params = json.loads(tool_call.function_arguments or "{}")
@@ -962,7 +962,7 @@ class DelayedQueueTasks:
                     return False
                 if tool_call.function_name == "interaction":
                     return _composite_action(tool_call) == "sticker"
-                if tool_call.function_name == "file_upload":
+                if tool_call.function_name == "group_file_exec":
                     return _composite_action(tool_call) == "image"
                 return skill.silent
 

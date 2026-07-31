@@ -22,7 +22,7 @@ _config.group("互动操作").add(
     description=(
         "操作类型：poke 戳一戳；sticker 发送表情包；recall 撤回指定消息。你正在以当前人格参与群聊，"
         "当角色想打招呼、轻轻提醒、催促、卖萌、安慰或接梗时，优先用这个工具表达动作；"
-        "图片和文件使用 file_upload；撤回只能用于最近真实存在且平台仍允许撤回的消息。"
+        "图片和文件使用 group_file_exec；撤回只能用于最近真实存在且平台仍允许撤回的消息。"
     ),
     required=True,
     choices=["poke", "sticker", "recall"],

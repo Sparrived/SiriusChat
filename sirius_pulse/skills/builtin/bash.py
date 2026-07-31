@@ -282,15 +282,15 @@ async def _send_inspect_status_cards(
         if registry is None or executor is None:
             record["error"] = "Skill 运行上下文未就绪，无法发送状态卡片"
             continue
-        file_upload = registry.get("file_upload")
-        if file_upload is None:
-            record["error"] = "未找到 file_upload Skill，无法发送状态卡片"
+        group_file_exec = registry.get("group_file_exec")
+        if group_file_exec is None:
+            record["error"] = "未找到 group_file_exec Skill，无法发送状态卡片"
             continue
         try:
             image_path = await _container_status_card.render_status_card(status, data_store)
             record["card_path"] = str(image_path)
             sent = await executor.execute_async(
-                file_upload,
+                group_file_exec,
                 {"action": "image", "image_path": str(image_path)},
                 invocation_context=invocation_context,
             )

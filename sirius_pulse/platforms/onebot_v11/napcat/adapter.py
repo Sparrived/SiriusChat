@@ -21,6 +21,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import quote, unquote, urlparse
+from urllib.request import Request, urlopen
 from uuid import uuid4
 
 import websockets
@@ -64,6 +65,25 @@ def _is_ws_closed(ws: Any) -> bool:
             return getattr(ws, "close_code", None) is not None
 
 
+def _safe_download_name(file_name: str) -> str:
+    name = str(file_name or "").replace("\\", "/").rsplit("/", 1)[-1].strip()
+    return "".join("_" if char in '<>:"|?*' or ord(char) < 32 else char for char in name)
+
+
+def _download_url(url: str, destination: Path) -> int:
+    request = Request(url, headers={"User-Agent": "SiriusChat/1.1"})
+    with urlopen(request, timeout=300) as response, destination.open("wb") as output:
+        shutil.copyfileobj(response, output, length=1024 * 1024)
+    return destination.stat().st_size
+
+
+def _remove_file_if_exists(path: Path) -> None:
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
+
+
 class NapCatAdapter(BaseAdapter):
     """NapCat OneBot v11 正向 WebSocket 客户端 + 平台集成。
 
@@ -101,6 +121,7 @@ class NapCatAdapter(BaseAdapter):
 
         # 图片缓存路径
         _wp = Path(work_path) if work_path else Path(".")
+        self._work_path = _wp
         self._image_cache_dir = _wp / "image_cache"
         self._sticker_cache_dir = _wp / "sticker_cache"
 
@@ -508,6 +529,58 @@ class NapCatAdapter(BaseAdapter):
             )
         finally:
             await self._cleanup_staged_upload(temporary_path)
+
+    async def get_group_file_list(
+        self, group_id: str | int, folder_id: str = "", file_count: int = 50
+    ) -> dict[str, Any]:
+        """获取群根目录或指定文件夹下的文件列表。"""
+        params: dict[str, Any] = {
+            "group_id": int(group_id),
+            "file_count": max(1, int(file_count)),
+        }
+        if folder_id:
+            params["folder_id"] = str(folder_id)
+            action = "get_group_files_by_folder"
+        else:
+            action = "get_group_root_files"
+        response = await self.call_api(action, params)
+        return response.get("data", {}) or {}
+
+    async def download_group_file(
+        self,
+        group_id: str | int,
+        file_id: str,
+        file_name: str = "",
+        destination_dir: str = "",
+    ) -> dict[str, Any]:
+        """获取群文件 URL 并下载到当前人格的 group_files 目录。"""
+        response = await self.call_api(
+            "get_group_file_url",
+            {"group_id": int(group_id), "file_id": str(file_id)},
+        )
+        url = str((response.get("data", {}) or {}).get("url", "")).strip()
+        if not url.startswith(("http://", "https://")):
+            raise RuntimeError("NapCat 未返回有效的群文件下载链接")
+
+        output_dir = (
+            Path(destination_dir).expanduser()
+            if destination_dir
+            else self._work_path / "group_files"
+        )
+        safe_name = _safe_download_name(file_name)
+        if safe_name in {".", ".."}:
+            safe_name = ""
+        safe_name = safe_name or str(file_id)
+        output_path = output_dir / safe_name
+        temporary_path = output_path.with_name(f".{output_path.name}.{uuid4().hex}.part")
+        await asyncio.to_thread(output_dir.mkdir, parents=True, exist_ok=True)
+        try:
+            size = await asyncio.to_thread(_download_url, url, temporary_path)
+            await asyncio.to_thread(temporary_path.replace, output_path)
+        except BaseException:
+            await asyncio.to_thread(_remove_file_if_exists, temporary_path)
+            raise
+        return {"path": str(output_path.resolve()), "file_name": safe_name, "size": size}
 
     async def get_group_member_info(
         self, group_id: str | int, user_id: str | int, no_cache: bool = False

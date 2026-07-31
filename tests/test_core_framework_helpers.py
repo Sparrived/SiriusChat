@@ -37,7 +37,7 @@ def test_prompt_factory_when_stickers_are_available_then_reply_spec_uses_tool_ca
 
     assert "interaction" in spec
     assert "action 设为 sticker" in spec
-    assert "任何发送标记" in spec
+    assert "不要添加说话者前缀或系统标记" in spec
 
 
 def test_orchestration_store_when_config_is_saved_then_json_round_trips_atomically(tmp_path):

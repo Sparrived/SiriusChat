@@ -107,6 +107,8 @@ async def test_base_adapter_when_optional_defaults_are_used_then_safe_empty_valu
     assert await adapter.get_login_info() == {}
     assert await adapter.upload_group_file("100", "file.txt") == {}
     assert await adapter.upload_private_file("200", "file.txt") == {}
+    assert await adapter.get_group_file_list("100") == {}
+    assert await adapter.download_group_file("100", "file-1") == {}
     assert await adapter.cache_image("file:///local/image.png") == "file:///local/image.png"
     assert "User-Agent" in adapter._cache_image_headers()
     assert old_file.exists() is False

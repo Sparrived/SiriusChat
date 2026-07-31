@@ -140,7 +140,7 @@ async def test_bash_docker_inspect_sends_a_status_card_and_hides_internal_marker
 
     class _Registry:
         def get(self, name):
-            return object() if name == "file_upload" else None
+            return object() if name == "group_file_exec" else None
 
     class _Executor:
         async def execute_async(self, skill, params, invocation_context=None):
