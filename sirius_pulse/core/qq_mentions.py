@@ -7,7 +7,9 @@ from typing import Any, Iterable
 
 from sirius_pulse.adapters.models import AtSegment, MessageGroup, TextSegment
 
-QQ_AT_PATTERN = re.compile(r"@\{(\d+)\}|@(qq_)?(\d{5,12})(?!\d)")
+QQ_AT_PATTERN = re.compile(
+    r"\[AT:\s*(?P<at_id>\d+)\s*\]|@\{(?P<braced_id>\d+)\}|@(?P<qq_prefix>qq_)?(?P<bare_id>\d{5,12})(?!\d)"
+)
 
 
 def normalize_qq_member(member: dict[str, Any]) -> dict[str, str]:
@@ -35,13 +37,13 @@ def build_qq_mention_section(
 ) -> str:
     """Build compact QQ at syntax guidance for output specs."""
     return (
-        "在回复正文中插入 @{QQ号} 可以 @ 某个群成员，发送前会自动转换成真正的 @。"
+        "在回复正文中插入 [AT:QQ号] 可以 @ 某个群成员，发送前会自动转换成真正的 @。"
         "从上下文消息中获取发送者的 QQ 号来使用，不要编造 QQ 号。"
     )
 
 
 def _matched_qq_id(match: re.Match[str]) -> str:
-    return match.group(1) or match.group(3)
+    return match.group("at_id") or match.group("braced_id") or match.group("bare_id")
 
 
 def parse_qq_at_mentions(
@@ -51,9 +53,9 @@ def parse_qq_at_mentions(
 ) -> MessageGroup | None:
     """Parse inline QQ mention markers into MessageGroup at segments.
 
-    Supports both the preferred ``@{123}`` form and common model output like
-    ``@123`` or ``@qq_123``. Unknown IDs are left as literal text when a valid
-    ID set is provided.
+    Supports the preferred ``[AT:123]`` form and legacy model output like
+    ``@{123}``, ``@123`` or ``@qq_123``. Unknown IDs are left as literal text
+    when a valid ID set is provided.
     Returns None when the text contains no mention marker.
     """
     if not text or QQ_AT_PATTERN.search(text) is None:

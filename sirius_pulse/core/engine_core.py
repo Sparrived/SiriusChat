@@ -678,7 +678,7 @@ class _EmotionalGroupChatEngineBase:
 
         优先级阶梯：
           0  = 对话深度追踪
-         20  = 表情包发送
+         20  = 正文交互标记解析
          30  = 回复去重（仅适用: response_generate）
          40  = 记忆记录
          50  = 回复时间戳+持久化
@@ -760,6 +760,7 @@ class _EmotionalGroupChatEngineBase:
                 conversation_chain=chain_msgs,
                 injected_request=injected_request,
                 injected_tool_names=_result.injected_tool_names,
+                reasoning_content=getattr(_result, "reasoning_content", ""),
             )
 
         # ── priority 50: 回复时间戳+持久化 ──
@@ -857,11 +858,87 @@ class _EmotionalGroupChatEngineBase:
             # 存储引用信息到 _result，adapter 直接读取
             _result.reply_references = refs
 
+        # ── priority 20: 正文交互标记解析 ──
+        def _hook_interaction_markers(
+            _brain: Any, _req: Any, _result: Any, ctx: dict[str, Any]
+        ) -> None:
+            """Parse model-emitted reply/poke/sticker markers before delivery."""
+            raw_text = str(getattr(_result, "raw_text", "") or "")
+            if not raw_text:
+                return
+
+            poke_pattern = re.compile(r"\[POKE:\s*(\d+)\s*\]", re.IGNORECASE)
+            sticker_pattern = re.compile(
+                r"\[STICKER:\s*([^\[\]\r\n]+?)\s*\]", re.IGNORECASE
+            )
+            legacy_sticker_pattern = re.compile(
+                r"\[STICKERS[：:]\s*([^\[\]\r\n]+?)\s*\]", re.IGNORECASE
+            )
+
+            available_stickers = set(getattr(_engine, "_sticker_names", []) or [])
+            sticker_names: list[str] = []
+            for match in sticker_pattern.findall(raw_text):
+                name = match.strip().strip("'\"“”‘’「」『』")
+                if name in available_stickers:
+                    sticker_names.append(name)
+            for match in legacy_sticker_pattern.findall(raw_text):
+                for name in re.split(r"[,，、]", match):
+                    name = name.strip().strip("'\"“”‘’「」『』")
+                    if name in available_stickers:
+                        sticker_names.append(name)
+
+            allowed_poke_ids: set[str] = set()
+            group_id = str(getattr(_req, "group_id", "") or "")
+            if group_id and not group_id.startswith("private_"):
+                for member in _engine.get_qq_group_members_for_prompt(group_id):
+                    if isinstance(member, dict):
+                        user_id = str(member.get("user_id", "")).strip()
+                        if user_id.isdigit():
+                            allowed_poke_ids.add(user_id)
+                current_user_id = str(getattr(_req, "user_id", "") or "").strip()
+                if current_user_id.isdigit():
+                    allowed_poke_ids.add(current_user_id)
+                try:
+                    entries = _engine.basic_memory.get_all(group_id)
+                except Exception:
+                    entries = []
+                for entry in entries:
+                    for field in ("channel_user_id", "user_id"):
+                        user_id = str(getattr(entry, field, "") or "").strip()
+                        if user_id.isdigit():
+                            allowed_poke_ids.add(user_id)
+
+            poke_user_ids = [
+                user_id for user_id in poke_pattern.findall(raw_text) if user_id in allowed_poke_ids
+            ]
+            marker_patterns = (poke_pattern, sticker_pattern, legacy_sticker_pattern)
+
+            def _strip_markers(text: str) -> str:
+                for pattern in marker_patterns:
+                    text = pattern.sub("", text)
+                return text.strip()
+
+            _result.raw_text = _strip_markers(raw_text)
+            _result.clean_text = _strip_markers(str(getattr(_result, "clean_text", "") or ""))
+            _result.sticker_names = list(
+                dict.fromkeys([*(getattr(_result, "sticker_names", []) or []), *sticker_names])
+            )[:3]
+            _result.poke_user_ids = list(
+                dict.fromkeys([*(getattr(_result, "poke_user_ids", []) or []), *poke_user_ids])
+            )[:1]
+            if sticker_names or poke_user_ids:
+                logger.info(
+                    "交互标记解析完成: stickers=%s pokes=%s",
+                    sticker_names,
+                    poke_user_ids,
+                )
+
         # task_filter 交给 Brain 调度时检查，hook 闭包不关心
         _CHAT = _TASKS_CHAT
         _ALL = _TASKS_CHAT_ALL
         self.brain.register_post_hook(_hook_depth, priority=0, task_filter=_ALL)
         self.brain.register_post_hook(_hook_reply_reference, priority=10, task_filter=_ALL)
+        self.brain.register_post_hook(_hook_interaction_markers, priority=20, task_filter=_ALL)
         self.brain.register_post_hook(_hook_dedup, priority=30, task_filter=_CHAT)
         self.brain.register_post_hook(_hook_memory, priority=40, task_filter=_ALL)
         self.brain.register_post_hook(_hook_timestamp, priority=50, task_filter=_ALL)
@@ -878,6 +955,7 @@ class _EmotionalGroupChatEngineBase:
         conversation_chain: list[dict[str, Any]] | None = None,
         injected_request: dict[str, Any] | None = None,
         injected_tool_names: list[str] | None = None,
+        reasoning_content: str = "",
         platform_message_id: str = "",
     ) -> None:
         """Persist text that was actually delivered to the chat platform."""
@@ -896,6 +974,7 @@ class _EmotionalGroupChatEngineBase:
             conversation_chain=conversation_chain,
             injected_request=injected_request,
             injected_tool_names=injected_tool_names,
+            reasoning_content=reasoning_content,
         )
         self.basic_store.append(entry)
         try:

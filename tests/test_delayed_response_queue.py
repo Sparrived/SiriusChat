@@ -7,7 +7,10 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from sirius_pulse.core.bg_tasks_delayed import DelayedQueueTasks
+from sirius_pulse.core.bg_tasks_delayed import (
+    DelayedQueueTasks,
+    _build_assistant_tool_message,
+)
 from sirius_pulse.core.delayed_response_queue import DelayedResponseQueue
 from sirius_pulse.core.plan_runtime import start_plan_session, update_plan_progress
 from sirius_pulse.core.prompt_factory import StyleAdapter
@@ -22,6 +25,18 @@ def _decision(strategy: ResponseStrategy, *, urgency: float = 50.0) -> StrategyD
 
 def _past(seconds: float) -> str:
     return (datetime.now(timezone.utc) - timedelta(seconds=seconds)).isoformat()
+
+
+def test_assistant_tool_message_when_reasoning_exists_then_keeps_it_private_to_message_chain():
+    message = _build_assistant_tool_message(
+        "visible progress",
+        [ToolCall(id="call-1", function_name="lookup", function_arguments='{"q":"x"}')],
+        "private reasoning",
+    )
+
+    assert message["content"] == "visible progress"
+    assert message["reasoning_content"] == "private reasoning"
+    assert message["tool_calls"][0]["function"]["name"] == "lookup"
 
 
 def _agent_tool_tasks(queue, skill, chat_results, execute_skill):
@@ -1063,7 +1078,7 @@ async def test_delayed_queue_when_normal_chat_requests_plan_status_then_reads_pu
 
 
 @pytest.mark.asyncio
-async def test_delayed_queue_when_interaction_sticker_tool_is_called_then_sticker_is_deferred():
+async def test_delayed_queue_when_text_sticker_marker_is_present_then_sticker_is_deferred():
     queue = DelayedResponseQueue()
     item = queue.enqueue(
         "group-1",
@@ -1073,12 +1088,6 @@ async def test_delayed_queue_when_interaction_sticker_tool_is_called_then_sticke
     )
     item.enqueue_time = _past(item.window_seconds + 1)
 
-    tool_call = ToolCall(
-        id="call-sticker",
-        function_name="interaction",
-        function_arguments='{"action": "sticker", "names": ["开心"]}',
-    )
-    skill = SimpleNamespace(name="interaction", silent=False, developer_only=False)
     profile = SimpleNamespace(name="Alice", is_developer=False)
     execute_skill = AsyncMock(return_value=SkillResult(success=True, data={"sent": True}))
     engine = SimpleNamespace(
@@ -1113,19 +1122,16 @@ async def test_delayed_queue_when_interaction_sticker_tool_is_called_then_sticke
         brain=SimpleNamespace(
             chat=AsyncMock(
                 return_value=SimpleNamespace(
-                    raw_text="先说正文",
+                    raw_text="[STICKER:开心] 先说正文",
                     clean_text="先说正文",
-                    tool_calls=[tool_call],
+                    tool_calls=[],
                     reply_references=[],
-                    sticker_names=[],
+                    sticker_names=["开心"],
                 )
             )
         ),
-        _skill_registry=SimpleNamespace(get=lambda name: skill),
-        _skill_executor=SimpleNamespace(
-            set_chat_context=lambda **kwargs: None,
-            execute_async=execute_skill,
-        ),
+        _skill_registry=None,
+        _skill_executor=None,
         _sticker_names=["开心"],
         _log_inner_thought=lambda text: None,
         event_bus=SimpleNamespace(emit=AsyncMock()),

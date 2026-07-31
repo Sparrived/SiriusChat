@@ -6,44 +6,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from sirius_pulse.core.events import SessionEvent, SessionEventType
-from sirius_pulse.core.sticker_delivery import collect_deferred_stickers_from_tool_calls
 from sirius_pulse.platforms.onebot_v11.napcat.adapter import NapCatAdapter
-from sirius_pulse.providers.base import ToolCall
-
-
-def test_collect_deferred_stickers_when_interaction_tool_called_then_returns_known_names():
-    tool_calls = [
-        ToolCall(
-            id="call-1",
-            function_name="interaction",
-            function_arguments='{"action": "sticker", "names": ["开心", "不存在", "开心"]}',
-        ),
-        ToolCall(
-            id="call-2",
-            function_name="poke",
-            function_arguments='{"user_id": "100"}',
-        ),
-    ]
-
-    assert collect_deferred_stickers_from_tool_calls(
-        tool_calls,
-        available_names=["开心"],
-    ) == ["开心"]
-
-
-def test_collect_deferred_stickers_when_interaction_sticker_tool_called_then_returns_known_names():
-    tool_calls = [
-        ToolCall(
-            id="call-1",
-            function_name="interaction",
-            function_arguments='{"action": "sticker", "names": ["开心"]}',
-        )
-    ]
-
-    assert collect_deferred_stickers_from_tool_calls(
-        tool_calls,
-        available_names=["开心"],
-    ) == ["开心"]
 
 
 @pytest.mark.asyncio
@@ -59,7 +22,12 @@ async def test_napcat_delayed_delivery_sends_text_before_sticker():
         order.append("sticker")
         return {"ok": True}
 
+    async def fake_send_poke(user_id, group_id):
+        order.append("poke")
+        return {"ok": True}
+
     adapter.send_group_msg = fake_send_group_msg  # type: ignore[method-assign]
+    adapter.send_poke = fake_send_poke  # type: ignore[method-assign]
     adapter._engine = SimpleNamespace(
         tick_delayed_queue=AsyncMock(
             return_value=[
@@ -67,6 +35,7 @@ async def test_napcat_delayed_delivery_sends_text_before_sticker():
                     "reply": "先说正文",
                     "reply_references": [],
                     "sticker_names": ["开心"],
+                    "poke_user_ids": ["1001"],
                 }
             ]
         ),
@@ -81,4 +50,4 @@ async def test_napcat_delayed_delivery_sends_text_before_sticker():
         )
     )
 
-    assert order == ["text", "sticker"]
+    assert order == ["text", "sticker", "poke"]

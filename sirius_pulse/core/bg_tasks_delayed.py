@@ -27,10 +27,7 @@ from sirius_pulse.core.plan_runtime import (
     update_plan_progress,
 )
 from sirius_pulse.core.prompt_factory import TAG_GLOSSARY, PromptFactory
-from sirius_pulse.core.sticker_delivery import (
-    dedupe_sticker_names,
-    defer_interaction_sticker_tool,
-)
+from sirius_pulse.core.sticker_delivery import dedupe_sticker_names
 from sirius_pulse.providers.base import ToolCall
 from sirius_pulse.skills.builtin import _markdown_image
 
@@ -45,8 +42,8 @@ _AUTONOMOUS_MESSAGE_SKILLS = {
 
 
 def _composite_action(tool_call: ToolCall) -> str:
-    """Return the effective action for a legacy or unified tool call."""
-    if tool_call.function_name not in {"interaction", "group_file_exec"}:
+    """Return the effective action for a composite tool call."""
+    if tool_call.function_name != "group_file_exec":
         return ""
     try:
         params = json.loads(tool_call.function_arguments or "{}")
@@ -55,9 +52,35 @@ def _composite_action(tool_call: ToolCall) -> str:
     return str(params.get("action", "")).strip().lower()
 
 
-def _is_sticker_tool_call(tool_call: ToolCall) -> bool:
-    return _composite_action(tool_call) == "sticker"
+def _build_assistant_tool_message(
+    reply: str,
+    tool_calls: list[ToolCall],
+    reasoning_content: str = "",
+) -> dict[str, Any]:
+    """Build the assistant message that precedes the matching tool results."""
+    message: dict[str, Any] = {
+        "role": "assistant",
+        "content": reply or None,
+        "tool_calls": [
+            {
+                "id": tool_call.id,
+                "type": tool_call.type or "function",
+                "function": {
+                    "name": tool_call.function_name,
+                    "arguments": tool_call.function_arguments,
+                },
+            }
+            for tool_call in tool_calls
+        ],
+    }
+    if reasoning_content:
+        message["reasoning_content"] = reasoning_content
+    return message
 
+
+def _reasoning_memory_kwargs(chat_result: Any) -> dict[str, str]:
+    reasoning_content = str(getattr(chat_result, "reasoning_content", "") or "").strip()
+    return {"reasoning_content": reasoning_content} if reasoning_content else {}
 
 # ── 内置流程控制工具定义 ──────────────────────────────────────────────
 
@@ -574,9 +597,9 @@ class DelayedQueueTasks:
         tool_calls: list[ToolCall] = []
         reply = ""
         chat_result: Any = None
-        deferred_sticker_names: list[str] = []
+        sticker_names_accumulated: list[str] = []
+        poke_user_ids_accumulated: list[str] = []
         pending_chat_result: Any = None
-        sticker_text_retry_used = False
         ended_because_max_rounds = False
         plan_mode_enabled = bool(engine.config.get("plan_mode_enabled", False))
         limit_normal_tools = bool(engine.config.get("plan_mode_limit_normal_tools", False))
@@ -650,6 +673,8 @@ class DelayedQueueTasks:
                 _round += 1
             reply = chat_result.raw_text.strip()
             round_clean = chat_result.clean_text
+            sticker_names_accumulated.extend(getattr(chat_result, "sticker_names", []) or [])
+            poke_user_ids_accumulated.extend(getattr(chat_result, "poke_user_ids", []) or [])
             agent_turn.set_candidates(getattr(chat_result, "injected_tool_names", []))
 
             # 分类工具调用：计划控制 vs 普通技能
@@ -707,6 +732,7 @@ class DelayedQueueTasks:
                                         injected_tool_names=getattr(
                                             chat_result, "injected_tool_names", []
                                         ),
+                                        **_reasoning_memory_kwargs(chat_result),
                                     )
                                     last_partial_sent_at = time.monotonic()
                                 else:
@@ -722,6 +748,7 @@ class DelayedQueueTasks:
                                         injected_tool_names=getattr(
                                             chat_result, "injected_tool_names", []
                                         ),
+                                        **_reasoning_memory_kwargs(chat_result),
                                         platform_message_id=message_id,
                                     )
                                 markdown_sent = True
@@ -738,6 +765,7 @@ class DelayedQueueTasks:
                                 system_prompt=getattr(chat_result, "system_prompt", ""),
                                 injected_request=getattr(chat_result, "injected_request", {}),
                                 injected_tool_names=getattr(chat_result, "injected_tool_names", []),
+                                **_reasoning_memory_kwargs(chat_result),
                             )
                             last_partial_sent_at = time.monotonic()
                     chat_result.clean_text = ""
@@ -773,20 +801,11 @@ class DelayedQueueTasks:
                 )
                 plan_mode = True
                 messages.append(
-                    {
-                        "role": "assistant",
-                        "content": reply or None,
-                        "tool_calls": [
-                            {
-                                "id": enter_plan_tc.id,
-                                "type": "function",
-                                "function": {
-                                    "name": "enter_plan",
-                                    "arguments": enter_plan_tc.function_arguments or "{}",
-                                },
-                            }
-                        ],
-                    }
+                    _build_assistant_tool_message(
+                        reply,
+                        [enter_plan_tc],
+                        getattr(chat_result, "reasoning_content", ""),
+                    )
                 )
                 messages.append(
                     {
@@ -826,20 +845,11 @@ class DelayedQueueTasks:
                     else "No active hidden planning session in this group."
                 )
                 messages.append(
-                    {
-                        "role": "assistant",
-                        "content": reply or None,
-                        "tool_calls": [
-                            {
-                                "id": get_plan_status_tc.id,
-                                "type": "function",
-                                "function": {
-                                    "name": "get_plan_status",
-                                    "arguments": get_plan_status_tc.function_arguments or "{}",
-                                },
-                            }
-                        ],
-                    }
+                    _build_assistant_tool_message(
+                        reply,
+                        [get_plan_status_tc],
+                        getattr(chat_result, "reasoning_content", ""),
+                    )
                 )
                 messages.append(
                     {
@@ -928,20 +938,11 @@ class DelayedQueueTasks:
                 else:
                     tool_content = "No active hidden planning session to update."
                 messages.append(
-                    {
-                        "role": "assistant",
-                        "content": reply or None,
-                        "tool_calls": [
-                            {
-                                "id": update_progress_tc.id,
-                                "type": "function",
-                                "function": {
-                                    "name": "update_plan_progress",
-                                    "arguments": update_progress_tc.function_arguments or "{}",
-                                },
-                            }
-                        ],
-                    }
+                    _build_assistant_tool_message(
+                        reply,
+                        [update_progress_tc],
+                        getattr(chat_result, "reasoning_content", ""),
+                    )
                 )
                 messages.append(
                     {
@@ -960,8 +961,6 @@ class DelayedQueueTasks:
                 )
                 if skill is None:
                     return False
-                if tool_call.function_name == "interaction":
-                    return _composite_action(tool_call) == "sticker"
                 if tool_call.function_name == "group_file_exec":
                     return _composite_action(tool_call) == "image"
                 return skill.silent
@@ -1007,21 +1006,11 @@ class DelayedQueueTasks:
                 )
 
                 # 构造 assistant 消息（含普通工具的 tool_calls）
-                assistant_msg: dict[str, Any] = {
-                    "role": "assistant",
-                    "content": reply or None,
-                    "tool_calls": [
-                        {
-                            "id": tc.id,
-                            "type": "function",
-                            "function": {
-                                "name": tc.function_name,
-                                "arguments": tc.function_arguments,
-                            },
-                        }
-                        for tc in regular_tools
-                    ],
-                }
+                assistant_msg = _build_assistant_tool_message(
+                    reply,
+                    regular_tools,
+                    getattr(chat_result, "reasoning_content", ""),
+                )
                 messages.append(assistant_msg)
 
                 try:
@@ -1052,34 +1041,6 @@ class DelayedQueueTasks:
                         continue
 
                     side_effect = self._side_effect_name(skill)
-
-                    if _is_sticker_tool_call(tc):
-                        if not agent_turn.begin_action(
-                            tool_call_id=tc.id,
-                            skill_name=skill_name,
-                            params=params,
-                            side_effect=side_effect,
-                            deduplicate=side_effect != "read_only",
-                        ):
-                            err_msg = f"Skill '{skill_name}' 被拒绝：本轮相同副作用动作已经执行过。"
-                            messages.append(
-                                {"role": "tool", "tool_call_id": tc.id, "content": err_msg}
-                            )
-                            continue
-                        agent_turn.advance(AgentTurnPhase.ACT)
-                        await self._emit_agent_turn(engine, agent_turn)
-                        names, tool_content = defer_interaction_sticker_tool(
-                            params,
-                            available_names=getattr(engine, "_sticker_names", []) or [],
-                        )
-                        deferred_sticker_names.extend(names)
-                        agent_turn.finish_action(tc.id, success=True, summary=tool_content)
-                        agent_turn.advance(AgentTurnPhase.VERIFY)
-                        await self._emit_agent_turn(engine, agent_turn)
-                        messages.append(
-                            {"role": "tool", "tool_call_id": tc.id, "content": tool_content}
-                        )
-                        continue
 
                     # Engagement-based permission
                     if (
@@ -1194,29 +1155,7 @@ class DelayedQueueTasks:
                     if idx < len(regular_tools) - 1:
                         await asyncio.sleep(2)
 
-            # sticker-only 兜底：给模型一次纯文字重试机会
             if all_silent:
-                only_sticker_calls = all(_is_sticker_tool_call(tc) for tc in regular_tools)
-                if only_sticker_calls and not non_skill_text and not sticker_text_retry_used:
-                    sticker_text_retry_used = True
-                    pending_chat_result = await engine.brain.chat(
-                        ChatRequest(
-                            group_id=group_id,
-                            user_id=item.user_id or "",
-                            system_prompt=(
-                                system_prompt + "\n\nYou already selected a sticker for this turn. "
-                                "Now write the text reply only. Do not call the sticker interaction again."
-                            ),
-                            messages=messages,
-                            task_name="response_generate",
-                            enable_skills=True,
-                            caller_is_developer=caller_is_developer,
-                            post_process=True,
-                            extra_tools=_extra_tools,
-                            tool_choice="none",
-                        )
-                    )
-                    continue
                 break
 
             # 如果有多模态内容，作为 user 消息注入
@@ -1271,7 +1210,8 @@ class DelayedQueueTasks:
 
         # 获取引用回复信息
         reply_references = chat_result.reply_references if chat_result else []
-        sticker_names = dedupe_sticker_names(deferred_sticker_names)
+        sticker_names = dedupe_sticker_names(sticker_names_accumulated)
+        poke_user_ids = list(dict.fromkeys(poke_user_ids_accumulated))[:1]
 
         # Emit event with full reply data for external delivery
         agent_turn.advance(AgentTurnPhase.RESPOND)
@@ -1287,6 +1227,7 @@ class DelayedQueueTasks:
                     "reply": final_reply,
                     "partial_replies": partial_replies,
                     "sticker_names": sticker_names,
+                    "poke_user_ids": poke_user_ids,
                     "agent_turn_id": agent_turn.turn_id,
                 },
             )
@@ -1300,6 +1241,7 @@ class DelayedQueueTasks:
                 "partial_replies": partial_replies,
                 "reply_references": reply_references,
                 "sticker_names": sticker_names,
+                "poke_user_ids": poke_user_ids,
                 "agent_turn_id": agent_turn.turn_id,
             }
         ]
@@ -1421,12 +1363,8 @@ class DelayedQueueTasks:
     def _is_autonomous_message_skill(skill: Any, params: dict[str, Any] | None = None) -> bool:
         """Return True for package built-ins that replace legacy prompt tags."""
         skill_name = getattr(skill, "name", "")
-        if skill_name == "interaction":
-            if str((params or {}).get("action", "")).strip().lower() != "sticker":
-                return False
         if skill_name not in _AUTONOMOUS_MESSAGE_SKILLS:
-            if skill_name != "interaction":
-                return False
+            return False
         source_path = getattr(skill, "source_path", None)
         if source_path is None:
             return False

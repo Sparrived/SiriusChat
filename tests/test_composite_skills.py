@@ -6,20 +6,12 @@ from typing import Any
 
 import pytest
 
-from sirius_pulse.skills.builtin import group_file_exec, interaction
+from sirius_pulse.skills.builtin import group_file_exec
 
 
 class _Adapter:
     def __init__(self) -> None:
         self.calls: list[tuple[str, tuple[Any, ...]]] = []
-
-    async def send_poke(self, user_id: str, group_id: str) -> dict[str, Any]:
-        self.calls.append(("send_poke", (user_id, group_id)))
-        return {"ok": True}
-
-    async def delete_message(self, message_id: str) -> dict[str, Any]:
-        self.calls.append(("delete_message", (message_id,)))
-        return {"ok": True}
 
     async def send_group_msg(self, group_id: str, message: Any) -> dict[str, Any]:
         self.calls.append(("send_group_msg", (group_id, message)))
@@ -66,55 +58,6 @@ def test_group_file_exec_schema_exposes_group_file_actions():
 
     assert parameters["action"]["choices"] == ["image", "file", "list", "download"]
     assert {"folder_id", "file_count", "file_id", "download_dir"} <= set(parameters)
-
-
-class _StickerContext:
-    def list_sticker_names(self) -> list[str]:
-        return ["开心"]
-
-    async def send_sticker_by_names(self, group_id: str, names: list[str]) -> dict[str, Any]:
-        return {"success": True, "sticker_name": names[0], "group_id": group_id}
-
-
-@pytest.mark.asyncio
-async def test_interaction_runs_poke_and_records_action():
-    adapter = _Adapter()
-
-    result = await interaction.run(
-        action="poke",
-        user_id=1001,
-        bridge=adapter,
-        chat_context={"chat_type": "group", "chat_id": "9001"},
-    )
-
-    assert result["success"] is True
-    assert result["internal_metadata"]["interaction_action"] == "poke"
-    assert adapter.calls == [("send_poke", ("1001", "9001"))]
-
-
-@pytest.mark.asyncio
-async def test_interaction_runs_sticker_with_engine_context():
-    result = await interaction.run(
-        action="sticker",
-        names=["开心"],
-        chat_context={"group_id": "9001"},
-        engine_context=_StickerContext(),
-    )
-
-    assert result["success"] is True
-    assert result["internal_metadata"]["interaction_action"] == "sticker"
-    assert result["summary"] == "已发送表情包：开心"
-
-
-@pytest.mark.asyncio
-async def test_interaction_runs_recall_and_records_action():
-    adapter = _Adapter()
-
-    result = await interaction.run(action="recall", message_id=42, bridge=adapter)
-
-    assert result["success"] is True
-    assert result["internal_metadata"]["interaction_action"] == "recall"
-    assert adapter.calls == [("delete_message", ("42",))]
 
 
 @pytest.mark.asyncio
@@ -249,10 +192,3 @@ async def test_group_file_exec_group_file_actions_reject_private_chat():
 
     assert result["success"] is False
     assert "群聊" in result["error"]
-
-
-@pytest.mark.asyncio
-async def test_composite_skill_when_action_is_unknown_then_does_not_execute():
-    result = await interaction.run(action="unknown")
-
-    assert result["success"] is False

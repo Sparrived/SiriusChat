@@ -8,7 +8,7 @@ from sirius_pulse.platforms.onebot_v11.napcat.adapter import NapCatAdapter
 
 
 def test_parse_qq_at_mentions_when_id_is_known_then_builds_at_segment():
-    group = parse_qq_at_mentions("hi @{123} and @{999}", valid_user_ids={"123"})
+    group = parse_qq_at_mentions("hi [AT:123] and [AT:999]", valid_user_ids={"123"})
 
     assert group is not None
     assert isinstance(group[0], TextSegment)
@@ -18,7 +18,15 @@ def test_parse_qq_at_mentions_when_id_is_known_then_builds_at_segment():
     assert isinstance(group[2], TextSegment)
     assert group[2].text == " and "
     assert isinstance(group[3], TextSegment)
-    assert group[3].text == "@{999}"
+    assert group[3].text == "[AT:999]"
+
+
+def test_parse_qq_at_mentions_accepts_legacy_braced_marker():
+    group = parse_qq_at_mentions("hi @{123}")
+
+    assert group is not None
+    assert isinstance(group[1], AtSegment)
+    assert group[1].user_id == "123"
 
 
 def test_parse_qq_at_mentions_accepts_bare_numeric_model_output():
@@ -53,7 +61,7 @@ def test_build_qq_mention_section_lists_member_ids_and_syntax():
         ]
     )
 
-    assert "@{QQ号}" in section
+    assert "[AT:QQ号]" in section
     assert "不要编造" in section
     assert "【QQ @提及】" not in section
 
@@ -73,7 +81,7 @@ async def test_napcat_group_text_sender_converts_inline_at_marker():
 
     adapter.send_group_msg = fake_send_group_msg  # type: ignore[method-assign]
 
-    ok = await adapter._send_group_text("100", "hi @{123} @{999}")
+    ok = await adapter._send_group_text("100", "hi [AT:123] [AT:999]")
 
     assert ok is True
     assert sent == [
@@ -83,7 +91,7 @@ async def test_napcat_group_text_sender_converts_inline_at_marker():
                 {"type": "text", "data": {"text": "hi "}},
                 {"type": "at", "data": {"qq": "123"}},
                 {"type": "text", "data": {"text": " "}},
-                {"type": "text", "data": {"text": "@{999}"}},
+                {"type": "text", "data": {"text": "[AT:999]"}},
             ],
         )
     ]

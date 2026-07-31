@@ -47,7 +47,7 @@ class _RetryingProvider:
 async def test_brain_chat_when_skills_are_enabled_then_all_available_schemas_are_sent():
     provider = _Provider()
     registry = SkillRegistry()
-    registry.register(_skill("interaction"))
+    registry.register(_skill("social_tool"))
     registry.register(_skill("lookup"))
     brain = Brain(
         provider_async=provider,
@@ -74,7 +74,7 @@ async def test_brain_chat_when_skills_are_enabled_then_all_available_schemas_are
 
     assert provider.last_request is not None
     tool_names = [tool["function"]["name"] for tool in (provider.last_request.tools or [])]
-    assert tool_names == ["interaction", "lookup"]
+    assert tool_names == ["social_tool", "lookup"]
 
 
 @pytest.mark.asyncio
@@ -124,6 +124,7 @@ async def test_brain_chat_result_records_injected_tool_names():
         "timeout_seconds": provider.last_request.timeout_seconds,
         "purpose": provider.last_request.purpose,
         "response_format": provider.last_request.response_format,
+        "reasoning_effort": provider.last_request.reasoning_effort,
     }
     provider.last_request.messages[0]["content"] = "mutated"
     assert result.injected_request["messages"][0]["content"] != "mutated"
@@ -255,7 +256,6 @@ async def test_brain_chat_injects_current_time_into_user_message_not_system_prom
     assert provider.last_request.messages[0]["role"] == "user"
     assert "【当前时间】" in provider.last_request.messages[0]["content"]
     assert "请记住你tester的身份" not in provider.last_request.messages[0]["content"]
-    assert "多使用interaction工具" not in provider.last_request.messages[0]["content"]
     assert "hello" in provider.last_request.messages[0]["content"]
 
 

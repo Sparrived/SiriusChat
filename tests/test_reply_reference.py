@@ -34,6 +34,20 @@ def _reply_reference_hook() -> tuple[Any, Any]:
     raise AssertionError("reply reference hook was not registered")
 
 
+def _interaction_marker_hook() -> tuple[Any, Any]:
+    engine = SimpleNamespace(
+        brain=RecordingBrain(),
+        basic_memory=BasicMemoryManager(),
+        _sticker_names=["开心", "疑惑"],
+        get_qq_group_members_for_prompt=lambda group_id: [{"user_id": "1001"}],
+    )
+    _EmotionalGroupChatEngineBase._register_engine_hooks(engine)
+    for hook, priority, _task_filter in engine.brain.post_hooks:
+        if priority == 20:
+            return hook, engine
+    raise AssertionError("interaction marker hook was not registered")
+
+
 @pytest.mark.parametrize(
     "marker",
     [
@@ -80,3 +94,38 @@ def test_reply_reference_when_marker_is_present_then_extracts_ref_and_strips_mar
     assert "[REPLY:" not in result.raw_text
     assert "[REPLY:" not in result.clean_text
     assert result.clean_text.strip() == "reply body"
+
+
+def test_interaction_markers_when_valid_then_extract_actions_and_strip_controls() -> None:
+    hook, _engine = _interaction_marker_hook()
+    req = SimpleNamespace(group_id="group_a", user_id="caller")
+    result = SimpleNamespace(
+        raw_text="[POKE:1001] [STICKER:开心] 正文",
+        clean_text="[POKE:1001] [STICKER:开心] 正文",
+        sticker_names=[],
+        poke_user_ids=[],
+    )
+
+    hook(None, req, result, {})
+
+    assert result.clean_text == "正文"
+    assert result.raw_text == "正文"
+    assert result.sticker_names == ["开心"]
+    assert result.poke_user_ids == ["1001"]
+
+
+def test_interaction_markers_when_unknown_values_then_strip_without_sending() -> None:
+    hook, _engine = _interaction_marker_hook()
+    req = SimpleNamespace(group_id="group_a", user_id="caller")
+    result = SimpleNamespace(
+        raw_text="[POKE:9999][STICKER:不存在] 正文",
+        clean_text="[POKE:9999][STICKER:不存在] 正文",
+        sticker_names=[],
+        poke_user_ids=[],
+    )
+
+    hook(None, req, result, {})
+
+    assert result.clean_text == "正文"
+    assert result.sticker_names == []
+    assert result.poke_user_ids == []

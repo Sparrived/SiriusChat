@@ -1115,6 +1115,7 @@ class NapCatAdapter(BaseAdapter):
                         if clean_reply:
                             await self._send_private_text(parsed.user_id, clean_reply)
             await self._send_stickers_after_reply(group_id, result.get("sticker_names", []))
+            await self._send_pokes_after_reply(group_id, result.get("poke_user_ids", []))
         except asyncio.CancelledError:
             raise
         except RuntimeError as exc:
@@ -1179,6 +1180,7 @@ class NapCatAdapter(BaseAdapter):
                         reply = result.get("reply", "")
                         reply_refs = result.get("reply_references", [])
                         sticker_names = result.get("sticker_names", [])
+                        poke_user_ids = result.get("poke_user_ids", [])
                         if gid.startswith("private_"):
                             uid = gid.replace("private_", "").replace("qq_", "")
                             if reply:
@@ -1189,6 +1191,7 @@ class NapCatAdapter(BaseAdapter):
                                 if reply:
                                     await self._send_private_text(uid, reply, reply_refs)
                             await self._send_stickers_after_reply(gid, sticker_names)
+                            await self._send_pokes_after_reply(gid, poke_user_ids)
                         elif gid in self._get_allowed_group_ids():
                             if reply:
                                 if partial_sent_count > 0:
@@ -1196,6 +1199,7 @@ class NapCatAdapter(BaseAdapter):
                                 if reply:
                                     await self._send_group_text(gid, reply, reply_refs)
                             await self._send_stickers_after_reply(gid, sticker_names)
+                            await self._send_pokes_after_reply(gid, poke_user_ids)
                 finally:
                     self._end_reply_send(send_key)
             elif event.type == SessionEventType.REMINDER_TRIGGERED:
@@ -1331,7 +1335,7 @@ class NapCatAdapter(BaseAdapter):
         return self._message_group_to_onebot(message_group)
 
     def _convert_fake_at_mentions(self, group_id: str, text: str) -> str:
-        """将模型输出的 @昵称/@别称/@QQ号 转换为 @{QQ号} 格式。"""
+        """将模型输出的 @昵称/@别称/@QQ号 转换为 [AT:QQ号] 格式。"""
         import re
 
         cached = self._group_member_cache.get(str(group_id))
@@ -1367,11 +1371,11 @@ class NapCatAdapter(BaseAdapter):
             raw = m.group(1).strip()
             # 纯数字：校验是否为合法群成员 QQ 号
             if raw.isdigit():
-                return f"@{{{raw}}}" if raw in valid_ids else m.group(0)
+                return f"[AT:{raw}]" if raw in valid_ids else m.group(0)
             # 文字：匹配昵称/群名片/别称
             for known in sorted_names:
                 if raw == known:
-                    return f"@{{{name_to_id[known]}}}"
+                    return f"[AT:{name_to_id[known]}]"
             return m.group(0)
 
         return pattern.sub(_replace, text)
@@ -1448,6 +1452,19 @@ class NapCatAdapter(BaseAdapter):
                 )
         except Exception as exc:
             LOG.warning("发送回复后的表情包失败: %s", exc)
+
+    async def _send_pokes_after_reply(self, group_id: str, user_ids: Any) -> None:
+        if not user_ids or self._engine is None or group_id.startswith("private_"):
+            return
+        if isinstance(user_ids, str):
+            poke_user_ids = [user_ids.strip()] if user_ids.strip() else []
+        else:
+            poke_user_ids = [str(user_id).strip() for user_id in user_ids if str(user_id).strip()]
+        for user_id in dict.fromkeys(poke_user_ids):
+            try:
+                await self.send_poke(user_id, group_id)
+            except Exception as exc:
+                LOG.warning("发送回复后的戳一戳失败: group=%s user=%s error=%s", group_id, user_id, exc)
 
     async def _send_group_image(self, group_id: str, image_path: str) -> None:
         """发送群聊图片。"""

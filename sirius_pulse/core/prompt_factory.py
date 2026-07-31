@@ -35,6 +35,7 @@ TAG_IDENTITY_ANCHOR = "【身份锚定】"
 TAG_SCENE_LOCATION = "【场景定位】"
 TAG_IDENTITY_VERIFY = "【身份识别】"
 TAG_REPLY_SPEC = "【回复规范】"
+TAG_INTERACTION_SPEC = "【交互提示词】"
 TAG_RELATED_MEMORY = "【相关记忆】"
 TAG_CROSS_GROUP = "【跨群认知】"
 TAG_GROUP_MEMBERS = "【群成员区分】"
@@ -309,8 +310,7 @@ class PromptFactory:
 
         # 工具与输出边界
         identity_parts.append(
-            "Bash 任务允许并提倡串行调用：先执行一个明确的观察或操作步骤，等待结果后再根据结果调用下一次 Bash；"
-            "你是一个擅长使用 `interaction` 工具来增强交互感的专家，多使用 `interaction` 增加与他人的交互。"
+            "Bash 任务允许并提倡串行调用：先执行一个明确的观察或操作步骤，等待结果后再根据结果调用下一次 Bash。"
         )
 
         # 场景行为指导
@@ -340,11 +340,9 @@ class PromptFactory:
 
     @staticmethod
     def build_reply_spec(
-        sticker_names: list[str] | None = None,
         *,
         length_instruction: str = "",
         supports_function_call: bool = False,
-        supports_qq_mentions: bool = False,
         tool_flow_mode: str = "chat",
     ) -> str:
         """回复规范，防止模型添加多余前缀。"""
@@ -352,7 +350,6 @@ class PromptFactory:
             "不要输出 ``<message>`` XML 标签，不要添加说话者前缀或系统标记。",
             "记忆只在和当前话题直接相关时自然使用，同一事件、偏好或时间信息近期已经提过时，不要再次显式提及，除非用户主动问。",
             "当前时间可使用bash获取。",
-            "你可以通过在开头插入 [REPLY:msg_id]（例如 [REPLY:1]）来引用回复某条特定消息，当你的回复很针对于某条消息时请使用该格式引用该消息；只能使用最近消息中真实出现的 msg_id。",
         ]
         length_instruction = length_instruction.strip()
         if length_instruction:
@@ -379,34 +376,50 @@ class PromptFactory:
                     "可以调用 update_plan_progress 更新普通聊天可见的公开进度摘要，"
                     "但不要写入私有思考、工具结果、密钥或未确认的新消息原文。"
                 )
-        if supports_qq_mentions:
-            items.append(
-                "在 QQ 群回复正文中插入 @{QQ号} 可以 @ 某个群成员；只使用上下文消息里真实出现的 QQ 号，不要编造。"
-            )
-        if sticker_names:
-            names_str = "、".join(sticker_names)
-            items.append(
-                "需要发送表情包时，使用 interaction 工具并将 action 设为 sticker，names 参数只能填下面的可选名称，多使用表情包增加交互感。"
-                f"可选表情包：{names_str}"
-            )
         numbered = "\n".join(f"{i}. {item}" for i, item in enumerate(items, 1))
         return f"{TAG_REPLY_SPEC}\n{numbered}"
 
     @staticmethod
-    def build_output_spec(
+    def build_interaction_spec(
+        *,
         sticker_names: list[str] | None = None,
+        supports_poke: bool = False,
+        supports_qq_mentions: bool = False,
+    ) -> str:
+        """Build the single system section for model-emitted interaction markers."""
+        items = [
+            "下面的交互标记是系统控制语法，不是要展示给用户的正文。只使用这里定义的 ASCII 格式；不要改成 JSON、XML、函数调用、中文括号、中文冒号、自然语言说明或自创标签。",
+            "交互标记必须写在正文最前面，标记与正文之间用空格或换行分隔；不要放进 Markdown 代码块，不要在标记中添加引号、参数名或额外文字。没有对应交互时不要输出标记。",
+            "引用回复使用 [REPLY:msg_id]，例如 [REPLY:123]；msg_id 必须是最近消息中真实出现的消息 ID，只在确实针对某条消息时使用，最多使用一个。",
+        ]
+        if supports_poke:
+            items.append(
+                "群聊戳一戳使用 [POKE:QQ号]，例如 [POKE:123456]；QQ号必须来自最近消息或群成员上下文中的真实 QQ 号，只在确实想戳对方时使用，最多使用一个。"
+            )
+        if sticker_names:
+            names_str = "、".join(sticker_names)
+            items.append(
+                "发送表情包使用 [STICKER:名称]，例如 [STICKER:开心]；名称必须逐字使用下列可选名称，最多输出 3 个标记，不要输出名称列表、引号或其他 STICKER 变体。"
+                f"可选表情包：{names_str}"
+            )
+        if supports_qq_mentions:
+            items.append(
+                "在 QQ 群正文中 @成员只使用 [AT:QQ号]，例如 [AT:123456]；QQ号必须来自上下文中真实出现的成员，不要使用 @昵称、@qq_号码、@{QQ号} 或自创格式。"
+            )
+        numbered = "\n".join(f"{i}. {item}" for i, item in enumerate(items, 1))
+        return f"{TAG_INTERACTION_SPEC}\n{numbered}"
+
+    @staticmethod
+    def build_output_spec(
         *,
         length_instruction: str = "",
         supports_function_call: bool = False,
-        supports_qq_mentions: bool = False,
         tool_flow_mode: str = "chat",
     ) -> str:
         """Backward-compatible alias for build_reply_spec()."""
         return PromptFactory.build_reply_spec(
-            sticker_names=sticker_names,
             length_instruction=length_instruction,
             supports_function_call=supports_function_call,
-            supports_qq_mentions=supports_qq_mentions,
             tool_flow_mode=tool_flow_mode,
         )
 
@@ -699,13 +712,18 @@ class PromptFactory:
             _add(other_ai, "identity")
         length_instruction = str(getattr(style_params, "length_instruction", "") or "").strip()
         output_spec_text = PromptFactory.build_reply_spec(
-            sticker_names=sticker_names,
             length_instruction=length_instruction,
             supports_function_call=skill_registry is not None,
-            supports_qq_mentions=adapter_type == "napcat" and bool(qq_mention_members),
             tool_flow_mode=tool_flow_mode,
         )
         _add(output_spec_text, "output_constraint")
+
+        interaction_spec_text = PromptFactory.build_interaction_spec(
+            sticker_names=sticker_names,
+            supports_poke=adapter_type == "napcat",
+            supports_qq_mentions=adapter_type == "napcat" and bool(qq_mention_members),
+        )
+        _add(interaction_spec_text, "output_constraint")
 
         if memories:
             _add(PromptFactory.build_memory_context(memories), "memory", target="dynamic")

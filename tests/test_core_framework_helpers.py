@@ -32,12 +32,20 @@ def test_core_utils_when_history_xml_is_present_then_only_conversation_history_b
     assert "T" in now_iso()
 
 
-def test_prompt_factory_when_stickers_are_available_then_reply_spec_uses_tool_call_only():
-    spec = PromptFactory.build_reply_spec(sticker_names=["开心"])
+def test_prompt_factory_when_interaction_markers_are_available_then_spec_is_explicit():
+    spec = PromptFactory.build_interaction_spec(
+        sticker_names=["开心"],
+        supports_poke=True,
+        supports_qq_mentions=True,
+    )
 
-    assert "interaction" in spec
-    assert "action 设为 sticker" in spec
-    assert "不要添加说话者前缀或系统标记" in spec
+    assert "【交互提示词】" in spec
+    assert "[REPLY:123]" in spec
+    assert "[POKE:123456]" in spec
+    assert "[STICKER:开心]" in spec
+    assert "[AT:123456]" in spec
+    assert "interaction" not in spec
+    assert "不要添加说话者前缀或系统标记" in PromptFactory.build_reply_spec()
 
 
 def test_orchestration_store_when_config_is_saved_then_json_round_trips_atomically(tmp_path):

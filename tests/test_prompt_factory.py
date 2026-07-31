@@ -280,7 +280,7 @@ def test_assemble_chat_when_atmosphere_history_exists_then_does_not_inject_trend
     assert "群聊氛围正在" not in bundle.system_prompt
 
 
-def test_assemble_chat_puts_function_call_and_qq_mentions_in_reply_spec():
+def test_assemble_chat_puts_function_call_and_qq_mentions_in_interaction_spec():
     group_profile = SimpleNamespace(atmosphere_history=[])
     style_params = StyleAdapter().adapt(pace="steady", persona=None)
 
@@ -295,8 +295,9 @@ def test_assemble_chat_puts_function_call_and_qq_mentions_in_reply_spec():
     )
 
     assert "【回复规范】" in bundle.system_prompt
+    assert "【交互提示词】" in bundle.system_prompt
     assert "Tool Call" in bundle.system_prompt
-    assert "@{QQ号}" in bundle.system_prompt
+    assert "[AT:QQ号]" in bundle.system_prompt
     assert "【Function Call】" not in bundle.system_prompt
     assert "【QQ @提及】" not in bundle.system_prompt
 
@@ -334,7 +335,7 @@ def test_assemble_chat_injects_configured_group_chat_length_guidance():
     assert "不要用换行制造停顿" in bundle.system_prompt
 
 
-def test_assemble_chat_does_not_inject_interaction_guidance():
+def test_assemble_chat_injects_interaction_spec_without_legacy_guidance():
     group_profile = SimpleNamespace(atmosphere_history=[])
     style_params = StyleAdapter().adapt(pace="steady", persona=None)
 
@@ -348,6 +349,9 @@ def test_assemble_chat_does_not_inject_interaction_guidance():
         speaker_name="Alice",
     )
 
+    assert "【交互提示词】" in bundle.system_prompt
+    assert "[REPLY:123]" in bundle.system_prompt
+    assert "interaction" not in bundle.system_prompt
     assert "【互动指导】" not in bundle.system_prompt
     assert "【互动指导】" not in bundle.dynamic_context
     assert "经常回应你的消息" not in bundle.dynamic_context

@@ -122,15 +122,15 @@ def test_skill_registry_when_adapter_is_unknown_then_adapter_limited_skills_are_
 
 def test_skill_registry_when_skill_is_not_model_visible_then_tool_is_hidden():
     registry = SkillRegistry()
-    registry.register(_skill("interaction"))
+    registry.register(_skill("social_tool"))
     registry.register(_skill("list_stickers", model_visible=False))
 
     descriptions = registry.build_tool_descriptions()
     tools = registry.build_tools_list()
 
-    assert "interaction" in descriptions
+    assert "social_tool" in descriptions
     assert "list_stickers" not in descriptions
-    assert [tool["function"]["name"] for tool in tools] == ["interaction"]
+    assert [tool["function"]["name"] for tool in tools] == ["social_tool"]
 
 
 def test_skill_registry_when_workspace_hot_reloads_then_removed_skills_disappear():
@@ -167,7 +167,7 @@ def test_skill_registry_when_skill_requires_admin_then_visible_only_for_admin_gr
     assert [tool["function"]["name"] for tool in tools] == ["group_management"]
 
 
-def test_skill_registry_when_builtin_skills_load_then_composite_napcat_tools_are_visible(
+def test_skill_registry_when_builtin_skills_load_then_napcat_tools_are_visible(
     tmp_path: Path,
 ):
     registry = SkillRegistry()
@@ -178,7 +178,6 @@ def test_skill_registry_when_builtin_skills_load_then_composite_napcat_tools_are
         include_builtin=True,
     )
     skill = registry.get("chat_with_developer")
-    interaction = registry.get("interaction")
     bash = registry.get("bash")
     developer_status = registry.get("developer_status")
     group_file_exec = registry.get("group_file_exec")
@@ -197,7 +196,6 @@ def test_skill_registry_when_builtin_skills_load_then_composite_napcat_tools_are
     assert skill.silent is True
     assert skill.adapter_types == ["napcat"]
     assert "私聊" in skill.description
-    assert interaction is not None
     assert bash is not None
     assert [param.name for param in bash.config_parameters] == [
         "max_timeout_seconds",
@@ -234,7 +232,7 @@ def test_skill_registry_when_builtin_skills_load_then_composite_napcat_tools_are
     assert web_lookup.retry_safe is True
     assert web_lookup.side_effect is SkillSideEffect.READ_ONLY
     assert group_management.side_effect is SkillSideEffect.DESTRUCTIVE
-    assert [tool["function"]["name"] for tool in tools].count("interaction") == 1
+    assert not any(tool["function"]["name"] == "interaction" for tool in tools)
     assert [tool["function"]["name"] for tool in tools].count("group_file_exec") == 1
     assert not any(tool["function"]["name"] == "send_sticker" for tool in tools)
     assert not any(tool["function"]["name"] == "send_image" for tool in tools)
