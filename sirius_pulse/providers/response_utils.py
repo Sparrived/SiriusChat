@@ -25,14 +25,19 @@ def _normalize_text(value: Any) -> str:
     return ""
 
 
-def extract_assistant_text(message: dict[str, Any]) -> str:
+def extract_assistant_text(
+    message: dict[str, Any], *, include_reasoning: bool = True
+) -> str:
     """Extract assistant-visible text from heterogeneous provider payloads.
 
     Providers may return message.content as string/list/object, or place usable text
     in fallback fields such as reasoning_content/refusal.
     """
 
-    for key in ("content", "reasoning_content", "output_text", "refusal", "reasoning"):
+    keys = ("content", "reasoning_content", "output_text", "refusal", "reasoning")
+    if not include_reasoning:
+        keys = tuple(key for key in keys if key not in {"reasoning_content", "reasoning"})
+    for key in keys:
         text = _normalize_text(message.get(key))
         if text:
             return text

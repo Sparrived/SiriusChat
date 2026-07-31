@@ -188,6 +188,20 @@ def test_basic_memory_entry_records_injected_tool_names():
     assert entry.to_dict()["injected_request"]["system_prompt"] == "system"
 
 
+def test_basic_memory_entry_records_reasoning_without_changing_visible_content():
+    entry = BasicMemoryManager().add_entry(
+        "group_a",
+        "assistant",
+        "assistant",
+        "reply",
+        reasoning_content="private reasoning",
+    )
+
+    assert entry.content == "reply"
+    assert entry.reasoning_content == "private reasoning"
+    assert entry.to_dict()["reasoning_content"] == "private reasoning"
+
+
 def test_basic_memory_store_when_entry_is_updated_then_archive_keeps_intent_scores(
     tmp_path,
 ):

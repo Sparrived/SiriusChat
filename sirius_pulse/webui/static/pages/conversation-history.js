@@ -529,6 +529,7 @@ function renderInjectedRequestPanel(message, chain = []) {
   const metadata = [
     ['模型', request.model],
     ['用途', request.purpose],
+    ['思考强度', request.reasoning_effort],
     ['消息', `${requestMessages.length} 条 · 约 ${inputTokens} tokens`],
     ['工具', `${tools.length} 个`],
     ['选择', request.tool_choice],
@@ -765,6 +766,17 @@ function renderInjectedToolTags(toolNames) {
   return badges ? `<div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:6px">${badges}</div>` : '';
 }
 
+function renderReasoningBlock(value, title = '思维链') {
+  const content = normalizeChainContent(value);
+  if (!content) return '';
+  return `
+    <details style="margin-top:8px;border:1px solid #9c27b044;background:#9c27b208">
+      <summary style="cursor:pointer;padding:6px 8px;font-size:10px;color:#ce93d8">${title}</summary>
+      <pre style="margin:0;padding:8px;font-size:11px;color:var(--text-2);line-height:1.5;white-space:pre-wrap;word-break:break-word;max-height:300px;overflow-y:auto;font-family:monospace">${escapeHtml(content)}</pre>
+    </details>
+  `;
+}
+
 function renderIntentScores(intentScores) {
   if (!intentScores || typeof intentScores !== 'object') return '';
 
@@ -874,6 +886,7 @@ function renderMessages() {
         ${renderMessageTags(tags)}
         ${renderMemoryCompressionTags(m)}
         ${m.role === 'assistant' ? renderInjectedToolTags(injectedToolNames) : ''}
+        ${m.role === 'assistant' ? renderReasoningBlock(m.reasoning_content) : ''}
         ${renderIntentScores(m.intent_scores)}
         ${hasChain ? renderConversationChainToggle(chainMsgId, conversationChain, entryId, idx, openChainEntryIds.has(entryId), m) : ''}
       </div>
@@ -1034,7 +1047,9 @@ function renderMemoryToolResultMessage(item) {
 }
 
 function chainMessageLength(message) {
-  return normalizeChainContent(message?.content).length + getToolCalls(message)
+  return normalizeChainContent(message?.content).length
+    + normalizeChainContent(message?.reasoning_content).length
+    + getToolCalls(message)
     .reduce((total, call) => total + getToolName(call).length
       + formatToolPayload(call.function?.arguments ?? call.arguments).length, 0);
 }
@@ -1115,7 +1130,13 @@ function renderChainMessages(chain, parentMessage = null) {
 
     const toolCalls = getToolCalls(msg);
     if (toolCalls.length) {
-      return renderChainToolCallMessage(content, toolCalls, style, idx);
+      return renderChainToolCallMessage(
+        content,
+        toolCalls,
+        style,
+        idx,
+        msg.reasoning_content,
+      );
     }
 
     // assistant 消息：直接展示
@@ -1125,13 +1146,14 @@ function renderChainMessages(chain, parentMessage = null) {
           <span style="font-size:11px;font-weight:600;color:${style.color}">#${idx + 1} ${style.label}</span>
           <span style="font-size:10px;color:var(--text-3);margin-left:auto">${estimateTokens(content)} tokens</span>
         </div>
+        ${renderReasoningBlock(msg.reasoning_content)}
         <div style="padding:8px 12px;font-size:11px;color:var(--text-2);line-height:1.5;white-space:pre-wrap;max-height:300px;overflow-y:auto;font-family:monospace">${escapeHtml(content)}</div>
       </div>
     `;
   }).join('');
 }
 
-function renderChainToolCallMessage(content, toolCalls, style, idx) {
+function renderChainToolCallMessage(content, toolCalls, style, idx, reasoningContent = '') {
   const callsHtml = toolCalls.map(toolCall => {
     const name = getToolName(toolCall);
     const argumentsText = formatToolPayload(toolCall.function?.arguments ?? toolCall.arguments);
@@ -1156,6 +1178,7 @@ function renderChainToolCallMessage(content, toolCalls, style, idx) {
         <span style="font-size:11px;font-weight:600;color:${style.color}">#${idx + 1} 工具调用</span>
         <span style="font-size:10px;color:var(--text-3);margin-left:auto">${toolCalls.length} 个调用</span>
       </div>
+      ${renderReasoningBlock(reasoningContent)}
       ${textHtml}
       ${callsHtml}
     </div>

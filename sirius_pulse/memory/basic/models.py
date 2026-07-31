@@ -31,6 +31,7 @@ class BasicMemoryEntry(JsonSerializable):
     conversation_chain: list[dict[str, Any]] = field(default_factory=list)  # LLM 消息链
     injected_request: dict[str, Any] = field(default_factory=dict)  # 最终发送给 provider 的请求快照
     injected_tool_names: list[str] = field(default_factory=list)  # 本轮回复注入的 tools 名称
+    reasoning_content: str = ""  # 模型私有思维链，仅供 WebUI 观测
     intent_scores: dict[str, Any] = field(default_factory=dict)
 
 

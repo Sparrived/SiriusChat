@@ -171,6 +171,7 @@ class GenerationResult:
     """LLM 生成结果，支持普通文本和 tool_calls。"""
 
     content: str | None = None
+    reasoning_content: str = ""
     tool_calls: list[ToolCall] | None = None
     finish_reason: str = "stop"
 
@@ -192,6 +193,9 @@ class GenerationRequest:
     timeout_seconds: float | None = None
     purpose: str = "chat_main"
     response_format: dict[str, object] | None = None
+    # Provider-neutral intent. Each adapter decides whether/how it maps this
+    # to its wire format; None keeps raw/provider-specific calls unchanged.
+    reasoning_effort: str | None = None
 
 
 def estimate_generation_request_input_tokens(request: GenerationRequest) -> int:
@@ -256,6 +260,7 @@ def build_generation_debug_context(
         "model": request.model,
         "temperature": request.temperature,
         "max_tokens": request.max_tokens,
+        "reasoning_effort": request.reasoning_effort,
         "input_message_count": len(request.messages),
         "total_message_count": len(request.messages) + (1 if request.system_prompt else 0),
         "multimodal_message_count": multimodal_message_count,
@@ -268,11 +273,21 @@ def build_generation_debug_context(
     }
 
 
-def _build_thinking_disabled_defaults(provider_name: str) -> dict[str, object]:
+def _build_thinking_defaults(
+    request: GenerationRequest,
+    provider_name: str,
+) -> dict[str, object]:
     normalized_name = provider_name.strip().lower()
     if normalized_name in {"aliyun-bailian", "siliconflow"}:
         return {"enable_thinking": False}
-    if normalized_name in {"deepseek", "bigmodel", "volcengine-ark"}:
+    if normalized_name == "deepseek":
+        if request.reasoning_effort:
+            return {
+                "thinking": {"type": "enabled"},
+                "reasoning_effort": request.reasoning_effort,
+            }
+        return {"thinking": {"type": "disabled"}}
+    if normalized_name in {"bigmodel", "volcengine-ark"}:
         return {"thinking": {"type": "disabled"}}
     return {}
 
@@ -297,7 +312,7 @@ def build_chat_completion_payload(
         payload["tools"] = request.tools
     if request.tool_choice is not None:
         payload["tool_choice"] = request.tool_choice
-    payload.update(_build_thinking_disabled_defaults(provider_name))
+    payload.update(_build_thinking_defaults(request, provider_name))
     return payload
 
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import json
 
 import pytest
 
@@ -17,6 +18,7 @@ from sirius_pulse.providers.base import (
     set_last_generation_usage,
 )
 from sirius_pulse.providers.response_utils import extract_assistant_text
+from sirius_pulse.providers.openai_compatible import OpenAICompatibleProvider
 from sirius_pulse.providers.routing import AutoRoutingProvider, ProviderConfig
 
 
@@ -58,7 +60,7 @@ def test_prompt_cache_usage_when_provider_shapes_vary_then_normalizes_hit_and_mi
     )["uncached_prompt_tokens"] == 8
 
 
-def test_chat_payload_when_provider_disables_thinking_then_includes_provider_defaults():
+def test_chat_payload_when_deepseek_request_uses_defaults_then_enables_low_reasoning():
     request = GenerationRequest(
         model="deepseek-chat",
         system_prompt="system",
@@ -68,6 +70,7 @@ def test_chat_payload_when_provider_disables_thinking_then_includes_provider_def
         tools=[{"type": "function", "function": {"name": "lookup"}}],
         tool_choice="auto",
         response_format={"type": "json_object"},
+        reasoning_effort="low",
     )
 
     payload = build_chat_completion_payload(
@@ -80,6 +83,21 @@ def test_chat_payload_when_provider_disables_thinking_then_includes_provider_def
     assert payload["tools"] == request.tools
     assert payload["tool_choice"] == "auto"
     assert payload["response_format"] == {"type": "json_object"}
+    assert payload["thinking"] == {"type": "enabled"}
+    assert payload["reasoning_effort"] == "low"
+
+
+def test_chat_payload_when_deepseek_reasoning_is_disabled_then_preserves_disabled_mode():
+    payload = build_chat_completion_payload(
+        GenerationRequest(
+            model="deepseek-chat",
+            system_prompt="",
+            messages=[],
+            reasoning_effort=None,
+        ),
+        provider_name="deepseek",
+    )
+
     assert payload["thinking"] == {"type": "disabled"}
 
 
@@ -208,6 +226,73 @@ def test_extract_assistant_text_when_provider_uses_nested_content_then_returns_f
     )
     assert extract_assistant_text({"reasoning_content": {"text": "thought"}}) == "thought"
     assert extract_assistant_text({"refusal": "blocked"}) == "blocked"
+    assert (
+        extract_assistant_text(
+            {"content": "", "reasoning_content": "private"}, include_reasoning=False
+        )
+        == ""
+    )
+
+
+@pytest.mark.asyncio
+async def test_openai_compatible_provider_when_tool_round_has_reasoning_then_does_not_expose_it_as_content(
+    monkeypatch,
+):
+    class _Response:
+        status_code = 200
+        headers = {"Content-Type": "application/json"}
+        text = json.dumps(
+            {
+                "choices": [
+                    {
+                        "finish_reason": "tool_calls",
+                        "message": {
+                            "role": "assistant",
+                            "content": None,
+                            "reasoning_content": "private reasoning",
+                            "tool_calls": [
+                                {
+                                    "id": "call-1",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "lookup",
+                                        "arguments": '{"q":"x"}',
+                                    },
+                                }
+                            ],
+                        },
+                    }
+                ]
+            }
+        )
+
+    class _Client:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def post(self, *args, **kwargs):
+            return _Response()
+
+    monkeypatch.setattr("sirius_pulse.providers.openai_compatible.httpx.AsyncClient", _Client)
+    provider = OpenAICompatibleProvider(base_url="https://example.test", api_key="key")
+
+    result = await provider.generate_async(
+        GenerationRequest(
+            model="deepseek-chat",
+            system_prompt="",
+            messages=[{"role": "user", "content": "lookup"}],
+        )
+    )
+
+    assert result.content == ""
+    assert result.reasoning_content == "private reasoning"
+    assert result.tool_calls[0].id == "call-1"
 
 
 class _CapturingAsyncProvider:

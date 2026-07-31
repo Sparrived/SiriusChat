@@ -61,6 +61,7 @@ class ChatRequest:
     temperature: float | None = None
     max_tokens: int | None = None
     style_params: StyleParams | None = None
+    reasoning_effort: str | None = "low"
 
     # ── SKILL 控制 ──
     enable_skills: bool = True
@@ -92,7 +93,9 @@ class ChatResult:
     system_prompt: str = ""  # 存储本次对话使用的完整 system prompt
     injected_request: dict[str, Any] = field(default_factory=dict)
     sticker_names: list[str] = field(default_factory=list)
+    poke_user_ids: list[str] = field(default_factory=list)
     injected_tool_names: list[str] = field(default_factory=list)
+    reasoning_content: str = ""
     has_tool_call: bool = False
     tool_calls: list[ToolCall] = field(default_factory=list)
     # 兼容旧接口
@@ -197,7 +200,7 @@ class Brain:
       上下文感知的对话生成。内置默认处理链：
         pre:  人格注入 → 当前时间入消息链 → 模型路由 → 风格覆盖 → 构建请求
         call: provider.generate_async()
-        post: XML 剥离 → SKIP 检测 → SKILL 解析 → 表情包解析 → token 记录
+        post: XML 剥离 → SKIP 检测 → Tool Call 解析 → 交互标记后处理 → token 记录
       可通过 register_pre_hook / register_post_hook 扩展。
     """
 
@@ -331,7 +334,7 @@ class Brain:
         task_filter: None = 对所有 task_name 生效；非 None = 仅对集合中的 task_name 生效。
         签名: hook(brain, request, result, ctx) -> None
         - request: 原始 ChatRequest
-        - result: ChatResult（可修改 clean_text、sticker_names 等）
+        - result: ChatResult（可修改 clean_text、sticker_names、poke_user_ids 等）
         - ctx: 跨 hook 共享的字典
         """
         self._post_hooks.append(
@@ -500,6 +503,7 @@ class Brain:
                 max_tokens=effective_max_tokens,
                 timeout_seconds=cfg.timeout,
                 purpose=request.task_name,
+                reasoning_effort=request.reasoning_effort,
             )
 
             # 估算输入 token
@@ -528,6 +532,7 @@ class Brain:
                     max_tokens=effective_max_tokens,
                     timeout_seconds=cfg.timeout,
                     purpose=request.task_name,
+                    reasoning_effort=request.reasoning_effort,
                 )
 
             # 调试日志
@@ -622,9 +627,12 @@ class Brain:
                     "timeout_seconds": gen_request.timeout_seconds,
                     "purpose": gen_request.purpose,
                     "response_format": deepcopy(gen_request.response_format),
+                    "reasoning_effort": gen_request.reasoning_effort,
                 },
                 sticker_names=[],
+                poke_user_ids=[],
                 injected_tool_names=_tool_names_from_schemas(gen_request.tools),
+                reasoning_content=gen_result.reasoning_content,
                 has_tool_call=bool(tool_calls),
                 tool_calls=tool_calls,
             )

@@ -143,7 +143,12 @@ class OpenAICompatibleProvider(AsyncLLMProvider):
                     )
                 )
 
-        content = extract_assistant_text(message)
+        # reasoning_content is private model output and must never become the
+        # assistant-visible reply when content is empty (for example on a tool round).
+        content = extract_assistant_text(message, include_reasoning=False)
+        reasoning_content = extract_assistant_text(
+            {"content": message.get("reasoning_content")}, include_reasoning=False
+        )
         finish_reason = str(choice.get("finish_reason", "stop"))
 
         # 如果没有 tool_calls 且内容为空，检查是否为错误
@@ -162,6 +167,7 @@ class OpenAICompatibleProvider(AsyncLLMProvider):
 
         result = GenerationResult(
             content=content,
+            reasoning_content=reasoning_content,
             tool_calls=tool_calls,
             finish_reason=finish_reason,
         )
@@ -173,8 +179,7 @@ class OpenAICompatibleProvider(AsyncLLMProvider):
             f"[模型输出] {request.model} | Provider: {self._provider_name} | URL: {url} | 响应内容:\n{content}"
         )
         if return_reasoning:
-            reasoning = message.get("reasoning_content", "") if isinstance(message, dict) else ""
-            return (reasoning, result)
+            return (reasoning_content, result)
         return result
 
     async def generate_stream(self, request: GenerationRequest):

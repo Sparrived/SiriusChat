@@ -107,6 +107,7 @@ class BasicMemoryManager:
         conversation_chain: list[dict[str, Any]] | None = None,
         injected_request: dict[str, Any] | None = None,
         injected_tool_names: list[str] | None = None,
+        reasoning_content: str = "",
     ) -> BasicMemoryEntry:
         """Add an entry to a group's basic memory window."""
         gid = group_id or "default"
@@ -132,6 +133,7 @@ class BasicMemoryManager:
                 deepcopy(injected_request) if isinstance(injected_request, dict) else {}
             ),
             injected_tool_names=list(injected_tool_names) if injected_tool_names else [],
+            reasoning_content=str(reasoning_content or ""),
         )
 
         window = self._windows.setdefault(gid, deque())
