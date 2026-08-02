@@ -20,6 +20,10 @@ _FENCE_LINE_RE = re.compile(r"^\s{0,3}([`~]+)([^\r\n]*)$")
 _MARKDOWN_LABEL_RE = re.compile(r"^\s*(?:markdown|md)\s*[:：]\s*(.*)$", re.IGNORECASE)
 _MARKDOWN_LABEL_ONLY_RE = re.compile(r"^\s*(?:markdown|md)\s*$", re.IGNORECASE)
 _STRONG_ONLY_RE = re.compile(r"^\s*(?:\*\*.+\*\*|__.+__)\s*$")
+_INLINE_MARKDOWN_RE = re.compile(
+    r"(?<!\\)(?:\*\*[^*\r\n]+\*\*|__[^_\r\n]+__|`[^`\r\n]+`|"
+    r"(?<!\*)\*[^*\r\n]+\*(?!\*))"
+)
 _HORIZONTAL_RULE_RE = re.compile(r"^(?:-{3,}|\*{3,}|_{3,}|—-+|—{2,}|－{3,}|＿{3,})$")
 _CUTE_FONT_PATH = Path(__file__).with_name("assets") / "ZCOOLKuaiLe-Regular.ttf"
 
@@ -82,6 +86,16 @@ def merge_markdown_blocks(blocks: Iterable[str]) -> str:
     return "\n\n---\n\n".join(clean_blocks)
 
 
+def should_render_markdown_card(blocks: Iterable[str]) -> bool:
+    """Require a substantive Markdown reply before creating an image card."""
+    clean_blocks = [str(block or "").strip() for block in blocks if str(block or "").strip()]
+    if not clean_blocks:
+        return False
+    content = "\n".join(clean_blocks)
+    nonempty_lines = [line for line in content.splitlines() if line.strip()]
+    return len(nonempty_lines) > 2 or len(content) > 40
+
+
 def _normalize_fence_chars(text: str) -> str:
     return str(text or "").replace("｀", "`").replace("～", "~")
 
@@ -139,6 +153,7 @@ def _is_markdown_structure_line(line: str) -> bool:
         or clean_line.startswith(">")
         or _is_table_row_line(clean_line)
         or _STRONG_ONLY_RE.match(clean_line)
+        or _INLINE_MARKDOWN_RE.search(clean_line)
         or _HORIZONTAL_RULE_RE.match(clean_line)
     )
 
@@ -154,6 +169,7 @@ def _looks_like_unfenced_markdown(text: str) -> bool:
     table_rows = sum(_is_table_row_line(line) for line in lines)
     quotes = sum(line.startswith(">") for line in lines)
     strong_lines = sum(bool(_STRONG_ONLY_RE.match(line)) for line in lines)
+    inline_lines = sum(bool(_INLINE_MARKDOWN_RE.search(line)) for line in lines)
     horizontal_rules = sum(bool(_HORIZONTAL_RULE_RE.match(line)) for line in lines)
     score = 2 * headings
     score += 2 if bullets >= 2 else 0
@@ -162,10 +178,17 @@ def _looks_like_unfenced_markdown(text: str) -> bool:
     score += 2 if strong_lines else 0
     score += min(quotes, 1)
     score += min(horizontal_rules, 1)
+    score += 2 if inline_lines else 0
     score += 1 if re.search(r"[`*_]{2}", source) else 0
     score += 1 if len(source) >= 160 else 0
     return score >= 2 and bool(
-        headings or bullets >= 2 or ordered >= 2 or table_rows >= 2 or quotes or strong_lines
+        headings
+        or bullets >= 2
+        or ordered >= 2
+        or table_rows >= 2
+        or quotes
+        or strong_lines
+        or inline_lines
     )
 
 
@@ -225,7 +248,8 @@ def _is_code_fence_line(line: str) -> bool:
 
 
 def has_fenced_markdown(text: str) -> bool:
-    return any(is_markdown for is_markdown, _ in split_fenced_markdown(text))
+    parts = split_fenced_markdown(text)
+    return should_render_markdown_card(content for is_markdown, content in parts if is_markdown)
 
 
 async def render_markdown_image(content: str, title: str, data_store: Any) -> Path:
@@ -448,14 +472,15 @@ def _markdown_body_html(content: str) -> str:
             flush_list()
             continue
 
-        if line.strip() in {"---", "***", "___"}:
+        clean_line = line.strip()
+        if _is_horizontal_rule_line(clean_line):
             flush_table()
             flush_paragraph()
             flush_list()
             blocks.append("<hr>")
             continue
 
-        heading_match = _HEADING_RE.match(line)
+        heading_match = _HEADING_RE.match(clean_line)
         if heading_match:
             flush_table()
             flush_paragraph()
@@ -463,15 +488,15 @@ def _markdown_body_html(content: str) -> str:
             level = min(4, len(heading_match.group(1)) + 1)
             blocks.append(f"<h{level}>{_inline_html(heading_match.group(2))}</h{level}>")
             continue
-        if line.startswith(">"):
+        if clean_line.startswith(">"):
             flush_table()
             flush_paragraph()
             flush_list()
-            blocks.append(f"<blockquote>{_inline_html(line[1:].lstrip())}</blockquote>")
+            blocks.append(f"<blockquote>{_inline_html(clean_line[1:].lstrip())}</blockquote>")
             continue
 
-        ordered_match = _ORDERED_ITEM_RE.match(line)
-        bullet_match = _BULLET_ITEM_RE.match(line)
+        ordered_match = _ORDERED_ITEM_RE.match(clean_line)
+        bullet_match = _BULLET_ITEM_RE.match(clean_line)
         if ordered_match or bullet_match:
             flush_table()
             flush_paragraph()

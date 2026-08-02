@@ -39,7 +39,14 @@ from sirius_pulse.skills.builtin import _docker_cli
             },
         ),
         (
-            ["ps", "-a", "--filter", "name=mc", "--format", "table {{.Names}}\\t{{.Status}}\\t{{.Ports}}"],
+            [
+                "ps",
+                "-a",
+                "--filter",
+                "name=mc",
+                "--format",
+                "table {{.Names}}\\t{{.Status}}\\t{{.Ports}}",
+            ],
             {
                 "action": "list",
                 "container": "",
@@ -60,10 +67,8 @@ from sirius_pulse.skills.builtin import _docker_cli
         (
             ["exec", "minecraft", "tail", "-n", "200", "/data/logs/latest.log"],
             {
-                "action": "exec_readonly",
-                "container": "minecraft",
-                "tail_lines": 100,
-                "command": ["tail", "-n", "200", "/data/logs/latest.log"],
+                "action": "docker",
+                "arguments": ["exec", "minecraft", "tail", "-n", "200", "/data/logs/latest.log"],
             },
         ),
         (
@@ -93,9 +98,8 @@ def test_docker_cli_translates_native_safe_commands_to_fixed_proxy_requests(argu
         ["network", "rm", "bridge"],
     ],
 )
-def test_docker_cli_rejects_destructive_or_unbounded_commands(arguments):
-    with pytest.raises(_docker_cli.DockerCommandError, match="不允许 Docker 操作"):
-        _docker_cli.build_request(arguments)
+def test_docker_cli_preserves_general_commands_for_proxy_policy(arguments):
+    assert _docker_cli.build_request(arguments) == {"action": "docker", "arguments": arguments}
 
 
 @pytest.mark.parametrize(
@@ -105,12 +109,15 @@ def test_docker_cli_rejects_destructive_or_unbounded_commands(arguments):
         ["logs", "--follow", "nginx"],
         ["start", "nginx", "postgres"],
         ["ps", "--format", "{{json .}}"],
-        ["inspect", "../../host"],
     ],
 )
-def test_docker_cli_rejects_unsupported_options_and_targets(arguments):
+def test_docker_cli_preserves_nonstandard_options_for_proxy_policy(arguments):
+    assert _docker_cli.build_request(arguments) == {"action": "docker", "arguments": arguments}
+
+
+def test_docker_cli_still_rejects_invalid_common_inspect_target():
     with pytest.raises(_docker_cli.DockerCommandError):
-        _docker_cli.build_request(arguments)
+        _docker_cli.build_request(["inspect", "../../host"])
 
 
 def test_docker_cli_prints_proxy_output(monkeypatch, capsys):
@@ -119,9 +126,7 @@ def test_docker_cli_prints_proxy_output(monkeypatch, capsys):
         "request_host_proxy",
         lambda request: {
             "success": True,
-            "containers": [
-                {"name": "nginx", "status": "Up 1 hour", "image": "nginx:latest"}
-            ],
+            "containers": [{"name": "nginx", "status": "Up 1 hour", "image": "nginx:latest"}],
         },
     )
 
@@ -169,9 +174,14 @@ def test_docker_cli_emits_inspect_status_as_an_internal_marker(monkeypatch, caps
     assert captured.err == _docker_cli.format_inspect_status_marker(status) + "\n"
 
 
-def test_docker_cli_returns_nonzero_for_rejected_commands(capsys):
+def test_docker_cli_returns_nonzero_for_proxy_rejected_commands(monkeypatch, capsys):
+    monkeypatch.setattr(
+        _docker_cli,
+        "request_host_proxy",
+        lambda request: {"success": False, "error": "拒绝不可逆 Docker 删除操作"},
+    )
     exit_code = _docker_cli.main(["rm", "nginx"])
 
     captured = capsys.readouterr()
-    assert exit_code == 2
-    assert "不允许 Docker 操作" in captured.err
+    assert exit_code == 1
+    assert "拒绝不可逆 Docker 删除操作" in captured.err

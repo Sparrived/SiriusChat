@@ -1,5 +1,5 @@
 [Unit]
-Description=Sirius restricted container administration proxy
+Description=Sirius Docker administration proxy
 Requires=docker.service
 After=docker.service
 

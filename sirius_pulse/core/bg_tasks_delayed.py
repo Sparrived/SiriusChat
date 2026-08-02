@@ -699,7 +699,7 @@ class DelayedQueueTasks:
                     content for is_markdown, content in fenced_parts if is_markdown
                 ]
                 merged_markdown = _markdown_image.merge_markdown_blocks(markdown_contents)
-                if not plan_mode and markdown_contents:
+                if not plan_mode and _markdown_image.should_render_markdown_card(markdown_contents):
                     markdown_sent = False
                     for is_markdown, content in fenced_parts:
                         if is_markdown:

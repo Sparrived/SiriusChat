@@ -3,6 +3,8 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 
+import pytest
+
 
 def _load_proxy_module():
     path = Path(__file__).parents[1] / "scripts" / "container_admin_proxy.py"
@@ -41,6 +43,106 @@ def test_proxy_blocks_mutations_until_host_policy_allows_them(tmp_path, monkeypa
     result = proxy.handle({"action": "restart", "container": "nginx"})
 
     assert result == {"success": False, "error": "宿主机策略未允许变更容器状态"}
+
+
+def test_proxy_passes_general_docker_commands_to_the_host_cli(tmp_path, monkeypatch):
+    module, proxy = _proxy(tmp_path)
+    seen = {}
+
+    def fake_run(arguments, config):
+        seen["arguments"] = arguments
+        return "container output"
+
+    monkeypatch.setattr(proxy, "_run_docker", fake_run)
+
+    result = proxy.handle(
+        {"action": "docker", "arguments": ["exec", "minecraft", "bash", "-lc", "id"]}
+    )
+
+    assert result == {"success": True, "output": "container output"}
+    assert seen["arguments"] == ["exec", "minecraft", "bash", "-lc", "id"]
+
+
+def test_proxy_blocks_generic_mutations_when_host_policy_disables_them(tmp_path, monkeypatch):
+    module, proxy = _proxy(tmp_path, allow_mutations=False)
+    monkeypatch.setattr(proxy, "_run_docker", lambda *_: (_ for _ in ()).throw(AssertionError()))
+
+    result = proxy.handle(
+        {"action": "docker", "arguments": ["exec", "minecraft", "bash", "-lc", "touch /tmp/x"]}
+    )
+
+    assert result == {"success": False, "error": "宿主机策略未允许 Docker 变更操作"}
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["rm", "minecraft"],
+        ["container", "prune"],
+        ["image", "rm", "old:image"],
+        ["volume", "prune", "-f"],
+        ["network", "rm", "frontend"],
+        ["system", "prune", "-a", "--volumes"],
+        ["compose", "down", "-v"],
+    ],
+)
+def test_proxy_rejects_only_explicitly_irreversible_docker_operations(
+    tmp_path, monkeypatch, arguments
+):
+    module, proxy = _proxy(tmp_path)
+    monkeypatch.setattr(proxy, "_run_docker", lambda *_: (_ for _ in ()).throw(AssertionError()))
+
+    result = proxy.handle({"action": "docker", "arguments": arguments})
+
+    assert result["success"] is False
+    assert "拒绝" in result["error"]
+
+
+def test_proxy_allows_mutating_container_exec_without_the_old_readonly_data_limit(
+    tmp_path, monkeypatch
+):
+    module, proxy = _proxy(tmp_path)
+    seen = {}
+
+    def fake_run(arguments, config):
+        seen["arguments"] = arguments
+        return "changed"
+
+    monkeypatch.setattr(proxy, "_run_docker", fake_run)
+
+    result = proxy.handle(
+        {
+            "action": "docker",
+            "arguments": ["exec", "minecraft", "bash", "-lc", "printf ok > /etc/example.conf"],
+        }
+    )
+
+    assert result == {"success": True, "output": "changed"}
+    assert seen["arguments"][-1] == "printf ok > /etc/example.conf"
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["exec", "minecraft", "rm", "-rf", "/"],
+        ["exec", "minecraft", "sh", "-lc", "rm -rf /data"],
+        ["exec", "minecraft", "find", "/data", "-delete"],
+        ["exec", "minecraft", "dd", "if=/dev/zero", "of=/dev/sda"],
+        ["run", "--privileged", "alpine"],
+        ["run", "--privileged=true", "alpine"],
+        ["run", "-v", "/:/host", "alpine"],
+        ["run", "--volume=/:/host", "alpine"],
+        ["run", "--mount=type=bind,src=/,dst=/host", "alpine"],
+    ],
+)
+def test_proxy_rejects_high_risk_exec_and_host_escape_arguments(tmp_path, monkeypatch, arguments):
+    module, proxy = _proxy(tmp_path)
+    monkeypatch.setattr(proxy, "_run_docker", lambda *_: (_ for _ in ()).throw(AssertionError()))
+
+    result = proxy.handle({"action": "docker", "arguments": arguments})
+
+    assert result["success"] is False
+    assert "高危" in result["error"] or "逃逸" in result["error"]
 
 
 def test_proxy_allows_mutations_by_default_with_fixed_docker_arguments(tmp_path, monkeypatch):

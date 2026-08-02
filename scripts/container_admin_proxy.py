@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Host-side restricted Docker proxy for the Sirius Bash Docker bridge."""
+"""Host-side Docker proxy for the Sirius Bash Docker bridge."""
 
 from __future__ import annotations
 
@@ -19,6 +19,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 _ACTIONS = {
+    "docker",
     "list",
     "inspect",
     "logs",
@@ -37,14 +38,40 @@ _PS_FORMAT_TOKEN = re.compile(
 )
 _READONLY_EXEC_TOOLS = {"ls", "cat", "head", "tail", "grep", "find"}
 _DATA_ROOT = PurePosixPath("/data")
-_MAX_REQUEST_BYTES = 4096
+_MAX_REQUEST_BYTES = 16_384
 _MAX_OUTPUT_CHARS = 50_000
+_MAX_DOCKER_ARGUMENTS = 128
+_MAX_DOCKER_ARGUMENT_LENGTH = 4_000
 _STATUS_FORMAT = (
     "{{.Config.Image}}\t{{.State.Status}}\t{{.State.Running}}\t{{.State.ExitCode}}\t"
     "{{.State.StartedAt}}\t{{.State.FinishedAt}}\t{{if .State.Health}}{{.State.Health.Status}}{{end}}\t"
     "{{.HostConfig.RestartPolicy.Name}}"
 )
 _STATS_FORMAT = "{{.CPUPerc}}\t{{.MemUsage}}\t{{.MemPerc}}\t{{.NetIO}}\t{{.BlockIO}}\t{{.PIDs}}"
+_READONLY_DOCKER_COMMANDS = {
+    "diff",
+    "events",
+    "help",
+    "history",
+    "images",
+    "info",
+    "inspect",
+    "logs",
+    "port",
+    "ps",
+    "stats",
+    "top",
+    "version",
+    "wait",
+}
+_IRREVERSIBLE_EXEC_PATTERNS = (
+    re.compile(
+        r"(?i)\b(?:rm|shred)\b[^;&|\n]*\s-[^;&|\s]*r[^;&|\s]*[^;&|\n]*\s+/(?:\s|$|data(?:/|\s|$))"
+    ),
+    re.compile(r"(?i)\bfind\s+/(?:[^;&|\n]*)\s-delete\b"),
+    re.compile(r"(?i)\bdd\b[^;&|\n]*\bof=/dev/(?:[^\s;&|]+)"),
+    re.compile(r"(?i)\b(?:mkfs|wipefs|fdisk|parted)\b"),
+)
 
 
 class ProxyError(Exception):
@@ -65,6 +92,13 @@ class ContainerAdminProxy:
                 raise ProxyError("不支持的容器操作")
             if action in _MUTATIONS and not config["allow_mutations"]:
                 raise ProxyError("宿主机策略未允许变更容器状态")
+
+            if action == "docker":
+                arguments = self._docker_arguments(payload.get("arguments"))
+                self._validate_docker_arguments(arguments)
+                if not config["allow_mutations"] and self._is_mutating_docker(arguments):
+                    raise ProxyError("宿主机策略未允许 Docker 变更操作")
+                return {"success": True, "output": self._run_docker(arguments, config)}
 
             target = str(payload.get("container") or "").strip()
             if action == "list":
@@ -114,6 +148,140 @@ class ContainerAdminProxy:
         }
 
     @staticmethod
+    def _docker_arguments(value: Any) -> list[str]:
+        if (
+            not isinstance(value, list)
+            or not value
+            or len(value) > _MAX_DOCKER_ARGUMENTS
+            or not all(isinstance(item, str) for item in value)
+        ):
+            raise ProxyError("Docker 参数无效")
+        arguments = list(value)
+        if any("\0" in item or len(item) > _MAX_DOCKER_ARGUMENT_LENGTH for item in arguments):
+            raise ProxyError("Docker 参数无效或过长")
+        if arguments[0].startswith("-"):
+            raise ProxyError("不允许修改 Docker 主机连接参数")
+        return arguments
+
+    def _validate_docker_arguments(self, arguments: list[str]) -> None:
+        command = arguments[0]
+        subcommand = arguments[1] if len(arguments) > 1 else ""
+        if command in {"rm", "rmi"}:
+            raise ProxyError("拒绝不可逆 Docker 删除操作")
+        if command in {"container", "image", "volume", "network"} and subcommand in {
+            "rm",
+            "prune",
+        }:
+            raise ProxyError("拒绝不可逆 Docker 删除或清理操作")
+        if command == "system" and subcommand == "prune":
+            raise ProxyError("拒绝不可逆 Docker 系统清理操作")
+        if (
+            command == "compose"
+            and subcommand in {"down", "rm"}
+            and any(
+                value in {"-v", "--volumes", "--remove-orphans"} or value.startswith("--volumes=")
+                for value in arguments[2:]
+            )
+        ):
+            raise ProxyError("拒绝 Compose 删除卷或批量清理操作")
+        if command in {"stack", "service"} and subcommand == "rm":
+            raise ProxyError("拒绝不可逆 Docker 编排资源删除操作")
+        if command == "swarm" and subcommand == "leave" and "--force" in arguments[2:]:
+            raise ProxyError("拒绝强制退出 Docker Swarm 操作")
+        if command in {"create", "run"}:
+            self._validate_run_isolation(arguments[1:])
+        if command == "exec":
+            self._validate_exec_command(arguments[1:])
+
+    @staticmethod
+    def _validate_run_isolation(arguments: list[str]) -> None:
+        blocked = {
+            "--privileged",
+            "--pid=host",
+            "--network=host",
+            "--net=host",
+            "--ipc=host",
+            "--uts=host",
+            "--userns=host",
+            "--cap-add=ALL",
+            "--security-opt=apparmor=unconfined",
+            "--security-opt=seccomp=unconfined",
+            "--security-opt=label=disable",
+        }
+        for index, value in enumerate(arguments):
+            if value in blocked or value.startswith(
+                (
+                    "--privileged=",
+                    "--pid=host",
+                    "--network=host",
+                    "--net=host",
+                    "--ipc=host",
+                    "--uts=host",
+                    "--userns=host",
+                )
+            ):
+                raise ProxyError("拒绝 Docker run 的宿主机逃逸参数")
+            if value in {"--pid", "--network", "--net", "--ipc", "--uts", "--userns"}:
+                if index + 1 < len(arguments) and arguments[index + 1] == "host":
+                    raise ProxyError("拒绝 Docker run 的宿主机命名空间参数")
+            if value in {"--cap-add", "--device", "--security-opt"} or value.startswith(
+                ("--cap-add=", "--device=", "--security-opt=")
+            ):
+                raise ProxyError("拒绝 Docker run 的高危权限参数")
+            if value.startswith(("--volume=", "--mount=")):
+                mount = value.split("=", 1)[1]
+                source = (
+                    mount.split(":", 1)[0]
+                    if value.startswith("--volume=")
+                    else _mount_source(mount)
+                )
+            elif value.startswith("-v") and len(value) > 2:
+                source = value[2:].split(":", 1)[0]
+            elif value in {"-v", "--volume", "--mount"} and index + 1 < len(arguments):
+                mount = arguments[index + 1]
+                source = mount.split(":", 1)[0] if value != "--mount" else _mount_source(mount)
+            else:
+                source = ""
+            if source in {"/", "/var/run/docker.sock", "/var/lib/docker"}:
+                raise ProxyError("拒绝 Docker run 的宿主机逃逸：根目录或 Docker Socket 挂载")
+
+    @staticmethod
+    def _validate_exec_command(arguments: list[str]) -> None:
+        if not arguments:
+            raise ProxyError("docker exec 必须指定容器和命令")
+        index = 0
+        while index < len(arguments) and arguments[index].startswith("-"):
+            option = arguments[index]
+            if option in {"-e", "--env", "-w", "--workdir", "--detach-keys"}:
+                index += 2
+            else:
+                index += 1
+        if index >= len(arguments) or not _CONTAINER_NAME.fullmatch(arguments[index]):
+            raise ProxyError("docker exec 的容器名称无效")
+        nested_command = " ".join(arguments[index + 1 :])
+        if any(pattern.search(nested_command) for pattern in _IRREVERSIBLE_EXEC_PATTERNS):
+            raise ProxyError("拒绝跨容器不可逆高危命令")
+
+    @staticmethod
+    def _is_mutating_docker(arguments: list[str]) -> bool:
+        command = arguments[0]
+        if command in _READONLY_DOCKER_COMMANDS:
+            return False
+        if command in {"container", "image", "volume", "network", "system"}:
+            return (
+                arguments[1] not in {"diff", "events", "inspect", "ls", "top"}
+                if len(arguments) > 1
+                else True
+            )
+        if command == "compose":
+            return (
+                arguments[1] not in {"config", "events", "images", "logs", "ps", "top", "version"}
+                if len(arguments) > 1
+                else True
+            )
+        return command not in {"config"}
+
+    @staticmethod
     def _bounded_int(value: Any, minimum: int, maximum: int) -> int:
         try:
             number = int(value)
@@ -150,7 +318,11 @@ class ContainerAdminProxy:
         return value
 
     def _readonly_exec_command(self, value: Any, *, maximum_lines: int) -> list[str]:
-        if not isinstance(value, list) or len(value) < 2 or not all(isinstance(item, str) for item in value):
+        if (
+            not isinstance(value, list)
+            or len(value) < 2
+            or not all(isinstance(item, str) for item in value)
+        ):
             raise ProxyError("只读 exec 请求必须指定日志命令和 /data 路径")
         tool, *args = value
         if tool not in _READONLY_EXEC_TOOLS:
@@ -245,17 +417,31 @@ class ContainerAdminProxy:
         return paths
 
     def _list_containers(
-        self, config: dict[str, Any], *, all_containers: bool, name_filters: list[str], list_format: str
+        self,
+        config: dict[str, Any],
+        *,
+        all_containers: bool,
+        name_filters: list[str],
+        list_format: str,
     ) -> dict[str, Any]:
         arguments = ["ps"]
         if all_containers:
             arguments.append("-a")
         if list_format:
             if not name_filters:
-                return {"success": True, "output": self._run_docker([*arguments, "--format", list_format], config)}
+                return {
+                    "success": True,
+                    "output": self._run_docker([*arguments, "--format", list_format], config),
+                }
             containers = self._listed_containers(arguments, config, name_filters)
-            return {"success": True, "output": self._format_containers(arguments, containers, list_format, config)}
-        return {"success": True, "containers": self._listed_containers(arguments, config, name_filters)}
+            return {
+                "success": True,
+                "output": self._format_containers(arguments, containers, list_format, config),
+            }
+        return {
+            "success": True,
+            "containers": self._listed_containers(arguments, config, name_filters),
+        }
 
     def _listed_containers(
         self, arguments: list[str], config: dict[str, Any], name_filters: list[str]
@@ -278,14 +464,19 @@ class ContainerAdminProxy:
         return query in candidate or all(character in characters for character in query)
 
     def _format_containers(
-        self, arguments: list[str], containers: list[dict[str, str]], list_format: str, config: dict[str, Any]
+        self,
+        arguments: list[str],
+        containers: list[dict[str, str]],
+        list_format: str,
+        config: dict[str, Any],
     ) -> str:
         if not containers:
             return "未找到匹配容器；请执行 docker ps -a 查看全部容器。"
         outputs: list[str] = []
         for index, container in enumerate(containers):
             output = self._run_docker(
-                [*arguments, "--filter", f"name={container['name']}", "--format", list_format], config
+                [*arguments, "--filter", f"name={container['name']}", "--format", list_format],
+                config,
             )
             if index and list_format.startswith("table "):
                 output = output.partition("\n")[2]
@@ -371,6 +562,13 @@ def _unavailable_container_resources() -> dict[str, str]:
         "block_io": "未上报",
         "pids": "未上报",
     }
+
+
+def _mount_source(value: str) -> str:
+    for item in value.split(","):
+        if item.startswith(("src=", "source=")):
+            return item.split("=", 1)[1]
+    return value.split(":", 1)[0]
 
 
 def _host_status() -> dict[str, str]:

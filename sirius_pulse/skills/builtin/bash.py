@@ -30,7 +30,7 @@ _DOCKER_FUNCTION_TEMPLATE = """docker() {{
     {python_executable} -m sirius_pulse.skills.builtin._docker_cli \"$@\"
 }}
 docker-compose() {{
-    docker compose \"$@\"
+    {python_executable} -m sirius_pulse.skills.builtin._docker_cli compose \"$@\"
 }}
 """
 
@@ -63,16 +63,15 @@ _config.group("Bash 执行").add(
 SKILL_META = {
     "name": "bash",
     "description": (
-        "在容器中启动 Bash，用于文件处理、系统状态查询和自动化。"
-        "支持标准 Bash 语法与容器内任意工作目录，也支持受控的原生 Docker 命令："
-        "docker ps（支持 --format 容器列表字段）、inspect、logs、stats、top、port、start、stop、restart。Docker 删除、清理、重建及镜像、卷、网络、exec 操作会被拒绝；"
-        "读取 Minecraft 崩溃报告时可使用 docker exec <容器> 的只读 ls、cat、head、tail、grep、find 命令访问 /data；"
+        "在当前容器中启动真正的 Bash，用于文件处理、系统状态查询和自动化；当前进程可拥有的容器内权限不再经过命令白名单限制。"
+        "支持标准 Bash 语法与容器内任意工作目录。访问其他容器时，docker/docker-compose 仍经宿主机 Unix Socket 代理，支持常规 Docker 命令和完整 docker exec；"
+        "代理只拒绝不可逆高危删除、清理和宿主机逃逸参数，allow_mutations=false 仍可关闭变更操作。"
         "容器或 Minecraft 故障请依次执行 docker ps -a、docker inspect <容器>、docker logs --tail 200 <容器>，"
         "再读取 /data/logs/latest.log 或 /data/crash-reports；Bash 不在宿主机，不能使用 systemctl 或宿主机 /var/log；"
         "docker inspect 会在当前 QQ 会话发送容器状态卡片；"
         "每个人格可在技能配置中调整执行时限和输出上限。"
     ),
-    "version": "1.2.0",
+    "version": "1.3.0",
     "side_effect": "unknown",
     "tags": ["bash", "shell", "file", "system", "container"],
     "parameters": _config.build(),
@@ -104,7 +103,7 @@ async def run(
     invocation_context: SkillInvocationContext | None = None,
     **kwargs: Any,
 ) -> dict[str, Any]:
-    """Execute one Bash command with a restricted native Docker function."""
+    """Execute one Bash command with a Docker proxy function for other containers."""
     if data_store is not None and data_store.get("_enabled", True) is False:
         return {"success": False, "error": "bash Skill 已被当前人格禁用"}
 
@@ -181,7 +180,11 @@ async def run(
     sent_count = sum(1 for item in cards if item["sent"])
     card_errors = [str(item["error"]) for item in cards if item["error"]]
     text_parts = [output or "命令执行成功，但没有输出。"]
-    text_parts.extend(_container_status_card.status_summary(item["status"]) for item in cards if item.get("status"))
+    text_parts.extend(
+        _container_status_card.status_summary(item["status"])
+        for item in cards
+        if item.get("status")
+    )
     if card_errors:
         text_parts.append("状态卡片未发送：" + "；".join(card_errors))
     summary = f"Bash 执行完成（退出码 0，工作目录 {cwd_path}）"
@@ -358,7 +361,9 @@ def _decode_output(raw: bytes, limit: int) -> str:
     return _truncate_text(raw.decode("utf-8", errors="replace"), limit)[0]
 
 
-def _decode_output_with_inspect_status(raw: bytes, limit: int) -> tuple[str, list[dict[str, Any]], bool]:
+def _decode_output_with_inspect_status(
+    raw: bytes, limit: int
+) -> tuple[str, list[dict[str, Any]], bool]:
     statuses: list[dict[str, Any]] = []
     kept_lines: list[str] = []
     for line in raw.decode("utf-8", errors="replace").splitlines(keepends=True):

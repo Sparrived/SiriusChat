@@ -42,7 +42,9 @@ def _fake_bash(
 
 
 @pytest.mark.asyncio
-async def test_bash_skill_runs_standard_shell_syntax_anywhere_in_container(monkeypatch, tmp_path: Path):
+async def test_bash_skill_runs_standard_shell_syntax_anywhere_in_container(
+    monkeypatch, tmp_path: Path
+):
     calls = _fake_bash(monkeypatch)
     store = _Store(tmp_path)
     container_cwd = tmp_path.parent
@@ -99,6 +101,19 @@ async def test_bash_skill_makes_the_restricted_docker_cli_available(monkeypatch,
     )
     assert calls["args"][-1].endswith("docker logs --tail 20 nginx | grep error")
     assert result["internal_metadata"]["docker_bridge_enabled"] is True
+
+
+@pytest.mark.asyncio
+async def test_bash_skill_routes_docker_compose_through_the_same_proxy(monkeypatch, tmp_path: Path):
+    calls = _fake_bash(monkeypatch)
+
+    result = await bash.run("docker-compose ps", data_store=_Store(tmp_path))
+
+    assert result["success"] is True
+    assert (
+        f'{shlex.quote(sys.executable)} -m sirius_pulse.skills.builtin._docker_cli compose "$@"'
+        in calls["args"][-1]
+    )
 
 
 @pytest.mark.asyncio
@@ -176,7 +191,9 @@ def test_bash_preserves_an_invalid_status_marker_as_regular_output():
 
 
 @pytest.mark.asyncio
-async def test_bash_container_failures_provide_a_recovery_command_sequence(monkeypatch, tmp_path: Path):
+async def test_bash_container_failures_provide_a_recovery_command_sequence(
+    monkeypatch, tmp_path: Path
+):
     _fake_bash(monkeypatch, stdout=b"systemctl unavailable\n", returncode=1)
 
     result = await bash.run("systemctl list-units | grep minecraft", data_store=_Store(tmp_path))

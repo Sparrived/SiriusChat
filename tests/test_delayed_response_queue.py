@@ -1277,6 +1277,45 @@ async def test_delayed_queue_when_fenced_markdown_has_context_then_sends_text_im
 
 
 @pytest.mark.asyncio
+async def test_delayed_queue_when_short_inline_markdown_stays_text(monkeypatch):
+    queue = DelayedResponseQueue()
+    item = queue.enqueue(
+        "group-1",
+        "u1",
+        "show status",
+        _decision(ResponseStrategy.IMMEDIATE),
+    )
+    item.enqueue_time = _past(item.window_seconds + 1)
+
+    execute_skill = AsyncMock()
+    tasks, engine = _agent_tool_tasks(
+        queue,
+        SimpleNamespace(name="lookup", silent=False, developer_only=False),
+        [
+            SimpleNamespace(
+                raw_text="执行 `docker ps` 查看状态。",
+                clean_text="执行 `docker ps` 查看状态。",
+                tool_calls=[],
+                reply_references=[],
+                injected_request={},
+            )
+        ],
+        execute_skill,
+    )
+    engine._adapter = SimpleNamespace()
+    render_markdown = AsyncMock()
+    monkeypatch.setattr(
+        "sirius_pulse.core.bg_tasks_delayed._markdown_image.render_and_send_markdown_image",
+        render_markdown,
+    )
+
+    results = await tasks.tick_delayed_queue("group-1", on_partial_reply=AsyncMock())
+
+    render_markdown.assert_not_awaited()
+    assert results[0]["reply"] == "执行 `docker ps` 查看状态。"
+
+
+@pytest.mark.asyncio
 async def test_delayed_queue_when_markdown_card_render_fails_then_falls_back_to_text(
     monkeypatch,
 ):
@@ -1298,8 +1337,8 @@ async def test_delayed_queue_when_markdown_card_render_fails_then_falls_back_to_
         SimpleNamespace(name="lookup", silent=False, developer_only=False),
         [
             SimpleNamespace(
-                raw_text="```markdown\n# 状态\n- healthy\n```",
-                clean_text="```markdown\n# 状态\n- healthy\n```",
+                raw_text="```markdown\n# 状态\n- healthy\n- service ok\n```",
+                clean_text="```markdown\n# 状态\n- healthy\n- service ok\n```",
                 tool_calls=[],
                 reply_references=[],
                 injected_request={
@@ -1326,7 +1365,7 @@ async def test_delayed_queue_when_markdown_card_render_fails_then_falls_back_to_
 
     results = await tasks.tick_delayed_queue("group-1", on_partial_reply=capture_partial)
 
-    assert partials == ["# 状态\n- healthy"]
+    assert partials == ["# 状态\n- healthy\n- service ok"]
     assert results[0]["reply"] == ""
-    assert delivered[0]["content"] == "# 状态\n- healthy"
+    assert delivered[0]["content"] == "# 状态\n- healthy\n- service ok"
     assert "tags" not in delivered[0]

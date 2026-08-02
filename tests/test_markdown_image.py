@@ -7,7 +7,9 @@ import pytest
 from sirius_pulse.skills.builtin import _markdown_image
 from sirius_pulse.skills.builtin._markdown_image import (
     build_markdown_card_html,
+    has_fenced_markdown,
     merge_markdown_blocks,
+    should_render_markdown_card,
     split_fenced_markdown,
 )
 
@@ -94,6 +96,24 @@ def test_split_fenced_markdown_keeps_ordinary_text_unwrapped():
     assert split_fenced_markdown(text) == [(False, text)]
 
 
+def test_split_unfenced_markdown_detects_inline_formatting_from_group_history():
+    text = "看起来是**只读模式**，可以执行 `/op Sparrived`。"
+
+    assert split_fenced_markdown(text) == [(True, text)]
+    assert split_fenced_markdown("执行 `docker ps` 查看状态。") == [
+        (True, "执行 `docker ps` 查看状态。")
+    ]
+
+
+def test_markdown_card_requires_more_than_two_lines_or_forty_chars():
+    assert should_render_markdown_card(["**标题**\n- 一项"]) is False
+    assert should_render_markdown_card(["**标题**\n- 一项\n- 二项"]) is True
+    assert should_render_markdown_card(
+        ["执行 `docker ps` 查看当前服务器状态是否正常，并确认容器、端口和日志都没有异常。"]
+    ) is True
+    assert has_fenced_markdown("执行 `docker ps` 查看状态。") is False
+
+
 @pytest.mark.asyncio
 async def test_render_and_send_markdown_image_sends_base64_and_removes_artifact(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -159,3 +179,10 @@ def test_markdown_card_renders_pipe_tables_as_html_tables():
     assert '<th align="center">状态</th>' in rendered
     assert '<td align="left">WebUI</td>' in rendered
     assert '<p class="table-line">' not in rendered
+
+
+def test_markdown_card_renders_supported_horizontal_rule_variants():
+    rendered = build_markdown_card_html("前一段\n\n—-\n\n后一段")
+
+    assert "<hr>" in rendered
+    assert "—-" not in rendered

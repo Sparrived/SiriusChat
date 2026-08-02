@@ -1,4 +1,4 @@
-"""Restricted Docker CLI bridge used by the built-in Bash skill."""
+"""Docker CLI bridge used by the built-in Bash skill."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ _REQUEST_TIMEOUT = 15.0
 _MAX_RESPONSE_BYTES = 256_000
 _MAX_LOG_LINES = 200
 _CONTAINER_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
-_ALLOWED_COMMANDS = "ps、inspect、logs、stats、top、port、start、stop、restart，以及只读 exec 日志查询"
+_ALLOWED_COMMANDS = "常规 Docker 操作；仅拒绝不可逆高危删除、清理和宿主机逃逸"
 INSPECT_STATUS_MARKER = "__SIRIUS_DOCKER_INSPECT_STATUS__:"
 
 
@@ -24,40 +24,51 @@ class DockerCommandError(ValueError):
 
 
 def build_request(arguments: Sequence[str]) -> dict[str, Any]:
-    """Convert a small safe subset of Docker CLI syntax into a proxy request."""
+    """Preserve ordinary Docker argv and keep inspect cards for the common case."""
     args = [str(arg) for arg in arguments]
     if not args:
         raise DockerCommandError(f"未指定 Docker 子命令；只允许 {_ALLOWED_COMMANDS}")
 
-    command = args.pop(0)
-    if command == "container":
-        if not args:
-            raise DockerCommandError(f"未指定 docker container 子命令；只允许 {_ALLOWED_COMMANDS}")
-        command = args.pop(0)
-        if command == "ls":
-            command = "ps"
+    command = args[0]
+    subargs = args[1:]
+    if command == "container" and subargs and subargs[0] == "ls":
+        try:
+            return _parse_ps(subargs[1:])
+        except DockerCommandError:
+            pass
+    elif command == "ps":
+        try:
+            return _parse_ps(subargs)
+        except DockerCommandError:
+            pass
+    elif command == "inspect" and len(subargs) == 1:
+        return _parse_single_container(command, subargs)
+    elif command in {"start", "stop", "restart"}:
+        try:
+            return _parse_single_container(command, subargs)
+        except DockerCommandError:
+            pass
+    elif command == "logs":
+        try:
+            return _parse_logs(subargs)
+        except DockerCommandError:
+            pass
+    elif command in {"top", "port"}:
+        try:
+            return _parse_single_container(command, subargs)
+        except DockerCommandError:
+            pass
+    elif command == "stats":
+        try:
+            return _parse_stats(subargs)
+        except DockerCommandError:
+            pass
 
-    if command == "ps":
-        return _parse_ps(args)
-    if command in {"inspect", "start", "stop", "restart"}:
-        return _parse_single_container(command, args)
-    if command == "logs":
-        return _parse_logs(args)
-    if command in {"top", "port"}:
-        return _parse_single_container(command, args)
-    if command == "stats":
-        return _parse_stats(args)
-    if command == "exec":
-        return _parse_readonly_exec(args)
-
-    raise DockerCommandError(
-        f"不允许 Docker 操作: {command}。容器删除、清理、重建、镜像、卷、网络和任意 exec 操作均被拒绝；"
-        f"只允许 {_ALLOWED_COMMANDS}。"
-    )
+    return _parse_passthrough(args)
 
 
 def request_host_proxy(request: dict[str, Any]) -> dict[str, Any]:
-    """Submit one fixed request to the host-side restricted Docker proxy."""
+    """Submit one validated Docker request to the host-side proxy."""
     socket_path = os.environ.get("SIRIUS_CONTAINER_ADMIN_SOCKET", _SOCKET_PATH)
     encoded = (json.dumps(request, ensure_ascii=False) + "\n").encode("utf-8")
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
@@ -204,15 +215,12 @@ def _parse_logs(args: list[str]) -> dict[str, Any]:
     return {"action": "logs", "container": container, "tail_lines": tail_lines}
 
 
-def _parse_readonly_exec(args: list[str]) -> dict[str, Any]:
-    if len(args) < 2:
-        raise DockerCommandError("docker exec 必须指定容器和只读日志命令")
-    return {
-        "action": "exec_readonly",
-        "container": _validated_container(args[0]),
-        "tail_lines": 100,
-        "command": args[1:],
-    }
+def _parse_passthrough(args: list[str]) -> dict[str, Any]:
+    if len(args) > 128:
+        raise DockerCommandError("Docker 参数过多")
+    if any("\0" in value or len(value) > 4_000 for value in args):
+        raise DockerCommandError("Docker 参数无效或过长")
+    return {"action": "docker", "arguments": args}
 
 
 def _parse_stats(args: list[str]) -> dict[str, Any]:
