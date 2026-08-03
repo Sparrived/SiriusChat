@@ -95,7 +95,8 @@ async function loadPersonaStatus(name) {
   try {
     const personas = store.personas || [];
     const persona = personas.find(p => p.name === name);
-    const isRunning = persona?.running || false;
+    const status = await get(`/personas/${encodeURIComponent(name)}/status`).catch(() => null);
+    const isRunning = status?.running ?? persona?.running ?? false;
 
     const statusDot = $('statusDot');
     const statusText = $('statusText');
@@ -127,7 +128,7 @@ function setupStatusButtons(name) {
     try {
       startBtn.disabled = true;
       startBtn.textContent = '启动中...';
-      const res = await post(`/persona/start`, {});
+      const res = await post(`/personas/${encodeURIComponent(name)}/start`, {});
       if (res.success) {
         toast(`${name} 已启动`, 'success');
         await loadPersonaStatus(name);
@@ -152,7 +153,7 @@ function setupStatusButtons(name) {
     try {
       stopBtn.disabled = true;
       stopBtn.textContent = '停止中...';
-      const res = await post(`/persona/stop`, {});
+      const res = await post(`/personas/${encodeURIComponent(name)}/stop`, {});
       if (res.success) {
         toast(`${name} 已停止`, 'success');
         await loadPersonaStatus(name);

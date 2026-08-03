@@ -214,6 +214,7 @@ _GLOBAL_PERSONA_HANDLERS = {
     "api_persona_active_get",
     "api_persona_activate",
     "api_persona_delete",
+    "api_monitoring_overview",
 }
 
 
@@ -254,6 +255,26 @@ class WebUIServer(_WebUIServer):
 
     async def api_persona_start(self, request):
         target_dir = self.persona_dir
+        response = await api_persona_start(request, target_dir)
+        if response.status < 400:
+            self._active_persona_name = target_dir.name
+        return response
+
+    def _named_persona_dir(self, request) -> Path | None:
+        """Resolve a named persona without depending on the global selection."""
+        name = str(request.match_info.get("name", "")).strip()
+        if not name:
+            return None
+        personas_dir = (self.data_dir / "personas").resolve()
+        target_dir = (personas_dir / name).resolve()
+        if target_dir.parent != personas_dir or not (target_dir / "persona.json").is_file():
+            return None
+        return target_dir
+
+    async def api_persona_named_start(self, request):
+        target_dir = self._named_persona_dir(request)
+        if target_dir is None:
+            return _json_response({"error": "人格不存在或配置无效"}, 404)
         response = await api_persona_start(request, target_dir)
         if response.status < 400:
             self._active_persona_name = target_dir.name
@@ -304,6 +325,23 @@ class WebUIServer(_WebUIServer):
         if response.status < 400 and self._shutdown_persona_manager(target_dir):
             LOG.info("已请求停止人格 worker: %s", target_dir.name)
         return response
+
+    async def api_persona_named_stop(self, request):
+        target_dir = self._named_persona_dir(request)
+        if target_dir is None:
+            return _json_response({"error": "人格不存在或配置无效"}, 404)
+        response = await api_persona_stop(request, target_dir)
+        if response.status < 400 and target_dir.name == getattr(self, "_active_persona_name", ""):
+            self._active_persona_name = ""
+        if response.status < 400 and self._shutdown_persona_manager(target_dir):
+            LOG.info("已请求停止人格 worker: %s", target_dir.name)
+        return response
+
+    async def api_persona_named_status(self, request):
+        target_dir = self._named_persona_dir(request)
+        if target_dir is None:
+            return _json_response({"error": "人格不存在或配置无效"}, 404)
+        return await api_persona_status(request, target_dir)
 
     async def api_shutdown(self, request):
         """关闭整个程序（WebUI + 引擎 + 所有服务）。"""

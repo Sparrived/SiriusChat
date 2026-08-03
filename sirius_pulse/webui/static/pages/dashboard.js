@@ -550,12 +550,13 @@ function bindEvents() {
     startBtn.addEventListener('click', async () => {
       if (!currentPersona) return;
       try {
-        const res = await post(`/persona/start`, {});
+        const targetName = currentPersona.name;
+        const res = await post(`/personas/${encodeURIComponent(targetName)}/start`, {});
         if (res.success) {
-          toast(`${currentPersona.name} 已启动`, 'success');
+          toast(`${targetName} 已启动`, 'success');
           await loadPersonas();
           panelPersonaIndex = -1;
-          updatePersonaPanel(personasData.findIndex(p => p.name === currentPersona.name));
+          updatePersonaPanel(personasData.findIndex(p => p.name === targetName));
         } else {
           toast(res.error || '启动失败', 'error');
         }
@@ -570,12 +571,13 @@ function bindEvents() {
     stopBtn.addEventListener('click', async () => {
       if (!currentPersona) return;
       try {
-        const res = await post(`/persona/stop`, {});
+        const targetName = currentPersona.name;
+        const res = await post(`/personas/${encodeURIComponent(targetName)}/stop`, {});
         if (res.success) {
-          toast(`${currentPersona.name} 已停止`, 'success');
+          toast(`${targetName} 已停止`, 'success');
           await loadPersonas();
           panelPersonaIndex = -1;
-          updatePersonaPanel(personasData.findIndex(p => p.name === currentPersona.name));
+          updatePersonaPanel(personasData.findIndex(p => p.name === targetName));
         } else {
           toast(res.error || '停止失败', 'error');
         }

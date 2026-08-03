@@ -293,6 +293,90 @@ async def test_persona_start_when_previous_spawn_is_starting_then_does_not_spawn
 
 
 @pytest.mark.asyncio
+async def test_persona_start_when_two_personas_are_requested_then_spawns_both_workers(tmp_path, monkeypatch):
+    first_dir = tmp_path / "personas" / "first"
+    second_dir = tmp_path / "personas" / "second"
+    for persona_dir in (first_dir, second_dir):
+        persona_dir.mkdir(parents=True)
+        atomic_write_json(persona_dir / "persona.json", {"name": persona_dir.name})
+    atomic_write_json(tmp_path / "global_config.json", {"active_persona": ""})
+    monkeypatch.setattr(persona_manager, "_pid_exists", lambda pid: False)
+    calls = []
+
+    class FakeProcess:
+        def __init__(self, pid):
+            self.pid = pid
+
+    def fake_popen(command, stdout, stderr, **kwargs):
+        calls.append(command)
+        return FakeProcess(30000 + len(calls))
+
+    monkeypatch.setattr(persona_manager.subprocess, "Popen", fake_popen)
+
+    first_response = await persona_manager.api_persona_start(SimpleNamespace(), first_dir)
+    second_response = await persona_manager.api_persona_start(SimpleNamespace(), second_dir)
+
+    assert json.loads(first_response.text)["started"] is True
+    assert json.loads(second_response.text)["started"] is True
+    assert len(calls) == 2
+    assert str(first_dir) in calls[0]
+    assert str(second_dir) in calls[1]
+    assert json.loads((first_dir / "engine_state" / "worker_status.json").read_text())["pid"] == 30001
+    assert json.loads((second_dir / "engine_state" / "worker_status.json").read_text())["pid"] == 30002
+
+
+@pytest.mark.asyncio
+async def test_webui_named_persona_start_targets_requested_persona(tmp_path, monkeypatch):
+    first_dir = tmp_path / "personas" / "first"
+    second_dir = tmp_path / "personas" / "second"
+    for persona_dir in (first_dir, second_dir):
+        persona_dir.mkdir(parents=True)
+        atomic_write_json(persona_dir / "persona.json", {"name": persona_dir.name})
+    atomic_write_json(tmp_path / "global_config.json", {"active_persona": "first"})
+    monkeypatch.setattr(persona_manager, "_pid_exists", lambda pid: False)
+    calls = []
+
+    class FakeProcess:
+        pid = 24681
+
+    def fake_popen(command, stdout, stderr, **kwargs):
+        calls.append(command)
+        return FakeProcess()
+
+    monkeypatch.setattr(persona_manager.subprocess, "Popen", fake_popen)
+    server = WebUIServer(data_dir=tmp_path)
+    request = SimpleNamespace(match_info={"name": "second"})
+
+    response = await server.api_persona_named_start(request)
+    payload = json.loads(response.text)
+
+    assert response.status == 200
+    assert payload["active"] == "second"
+    assert str(second_dir) in calls[0]
+    assert not (first_dir / "engine_state" / "worker_status.json").exists()
+
+
+@pytest.mark.asyncio
+async def test_webui_monitoring_overview_includes_all_personas(tmp_path):
+    for name, pid in (("first", 31001), ("second", 31002)):
+        persona_dir = tmp_path / "personas" / name
+        persona_dir.mkdir(parents=True)
+        atomic_write_json(persona_dir / "persona.json", {"name": name})
+        atomic_write_json(
+            persona_dir / "engine_state" / "worker_status.json",
+            {"status": "running", "pid": pid},
+        )
+
+    server = WebUIServer(data_dir=tmp_path)
+    response = await server.api_monitoring_overview(SimpleNamespace())
+    payload = json.loads(response.text)
+
+    assert payload["total_personas"] == 2
+    assert payload["running_personas"] == 2
+    assert {item["name"] for item in payload["personas"]} == {"first", "second"}
+
+
+@pytest.mark.asyncio
 async def test_persona_stop_when_external_worker_is_running_then_sends_sigterm(tmp_path, monkeypatch):
     persona_dir = tmp_path / "personas" / "sirius"
     persona_dir.mkdir(parents=True)

@@ -37,6 +37,26 @@ def _read_worker_status(persona_dir: Path) -> dict[str, Any] | None:
         return None
 
 
+def _worker_is_running(status: dict[str, Any] | None) -> bool:
+    """Accept both the current status field and the legacy boolean field."""
+    if not status:
+        return False
+    return status.get("status") in {"starting", "running"} or status.get("running") is True
+
+
+def _iter_persona_dirs(data_dir: Path) -> list[Path]:
+    personas_dir = data_dir / "personas"
+    if personas_dir.is_dir():
+        return [
+            path
+            for path in sorted(personas_dir.iterdir())
+            if path.is_dir() and (path / "persona.json").is_file()
+        ]
+    if (data_dir / "persona.json").is_file():
+        return [data_dir]
+    return []
+
+
 def _calc_uptime_seconds(status: dict[str, Any] | None) -> float:
     """根据 worker_status 中的 started_at 计算运行时长（秒）。"""
     if not status:
@@ -196,25 +216,26 @@ async def api_monitoring_overview(
 ) -> web.Response:
     """GET /api/monitoring/overview -- 全局概览。
 
-    返回当前人格的运行状态，用于监控面板首页。
+    返回所有人格的运行状态，用于监控面板首页。
     """
-    persona_dir = data_dir
-    status_data = _read_worker_status(persona_dir)
-    running = status_data.get("running", False) if status_data else False
-    pid = status_data.get("pid") if status_data else None
+    personas = []
+    for persona_dir in _iter_persona_dirs(data_dir):
+        status_data = _read_worker_status(persona_dir)
+        running = _worker_is_running(status_data)
+        personas.append(
+            {
+                "name": persona_dir.name,
+                "running": running,
+                "pid": status_data.get("pid") if status_data else None,
+                "uptime_seconds": _calc_uptime_seconds(status_data) if running else 0.0,
+            }
+        )
 
     return _json_response(
         {
-            "total_personas": 1,
-            "running_personas": 1 if running else 0,
-            "personas": [
-                {
-                    "name": data_dir.name,
-                    "running": running,
-                    "pid": pid,
-                    "uptime_seconds": _calc_uptime_seconds(status_data) if running else 0.0,
-                }
-            ],
+            "total_personas": len(personas),
+            "running_personas": sum(1 for persona in personas if persona["running"]),
+            "personas": personas,
             "total_connections": 0,
         }
     )
@@ -230,7 +251,7 @@ async def api_monitoring_persona_metrics(
     persona_dir = paths.dir
 
     status_data = _read_worker_status(persona_dir)
-    running = status_data.get("running", False) if status_data else False
+    running = _worker_is_running(status_data)
     pid = status_data.get("pid") if status_data else None
 
     token_usage = _read_token_usage(persona_dir)
@@ -266,7 +287,7 @@ async def api_monitoring_health(
     persona_dir = paths.dir
 
     status_data = _read_worker_status(persona_dir)
-    running = status_data.get("running", False) if status_data else False
+    running = _worker_is_running(status_data)
     pid = status_data.get("pid") if status_data else None
 
     # 进程检查
