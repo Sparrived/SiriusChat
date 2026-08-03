@@ -1,7 +1,7 @@
 import { store, setState, subscribe } from './store.js';
 import { get as apiGet, post as apiPost, put as apiPut, del as apiDel, setToken, clearToken, getToken } from './api.js';
 export { setToken, clearToken, getToken };
-import { initTheme, applyTheme, getThemes, getModes, applyMode } from './theme.js';
+import { initTheme, applyTheme, getThemes } from './theme.js';
 import { wsConnect } from './ws.js';
 import { toast, formatHeartbeat, $ } from './components.js';
 import { createPageContext } from './page-context.js';
@@ -22,6 +22,7 @@ const PAGE_META = {
   'skills-tracker': { title: 'Skill 追踪', breadcrumb: 'Analytics / Skills', icon: '⟠' },
   'conversation-history': { title: '对话分析', breadcrumb: 'Analytics / Conversations', icon: '◧' },
   'logs': { title: '实时日志', breadcrumb: 'Operations / Logs', icon: '▣' },
+  'dispatcher': { title: '群聊调度', breadcrumb: 'Operations / Dispatcher', icon: '⇄' },
   'memory-viz': { title: '记忆管理', breadcrumb: 'Memory / Workbench', icon: '◲' },
   'plugins': { title: '插件', breadcrumb: 'Extensions / Plugins', icon: '⬡' },
 };
@@ -39,11 +40,14 @@ const NAV_GROUPS = [
     { page: 'experience', icon: '◇', label: '体验参数' },
     { page: 'adapters', icon: '⟐', label: 'Adapter' },
   ]},
+  { id: 'operations', label: '运行', items: [
+    { page: 'dispatcher', icon: '⇄', label: '群聊调度' },
+    { page: 'logs', icon: '▣', label: '实时日志' },
+  ]},
   { id: 'analytics', label: '分析', items: [
     { page: 'token-tracker', icon: '△', label: 'Token 追踪' },
     { page: 'cognition', icon: '◎', label: '认知分析' },
     { page: 'skills-tracker', icon: '⟠', label: 'Skill 追踪' },
-    { page: 'logs', icon: '▣', label: '实时日志' },
   ]},
   { id: 'memory', label: '记忆', items: [
     { page: 'memory-viz', icon: '◲', label: '记忆管理' },
@@ -183,10 +187,6 @@ export async function navTo(page, name) {
       <span class="header-breadcrumb">${meta.breadcrumb || ''}</span>
     </div>
     <div class="header-right">
-      <div class="mode-toggle" id="modeToggle">
-        <div class="mode-toggle-slider${(store.mode || 'butler') === 'assistant' ? ' right' : ''}" id="modeSlider"></div>
-        ${getModes().map(m => `<button class="mode-option${m.id === (store.mode || 'butler') ? ' active' : ''}" data-mode="${m.id}">${m.icon} ${m.label}</button>`).join('')}
-      </div>
       <div class="theme-dropdown">
         <button class="theme-btn" id="themeBtn">${ti?.icon || '🌙'} ${ti?.label || '暗色'}</button>
         <div class="theme-dropdown-list" id="themeList">
@@ -195,7 +195,6 @@ export async function navTo(page, name) {
       </div>
     </div>
   `;
-  setupModeToggle();
   setupThemeDropdown();
   setupPersonaHeaderDropdown();
 
@@ -254,23 +253,6 @@ function setupThemeDropdown() {
     };
   });
   document.addEventListener('click', () => list.classList.remove('open'));
-}
-
-function setupModeToggle() {
-  const toggle = document.getElementById('modeToggle');
-  const slider = document.getElementById('modeSlider');
-  if (!toggle) return;
-  toggle.querySelectorAll('.mode-option').forEach(opt => {
-    opt.onclick = () => {
-      const newMode = opt.dataset.mode;
-      if (newMode === store.mode) return;
-      // Update toggle UI immediately
-      toggle.querySelectorAll('.mode-option').forEach(o => o.classList.toggle('active', o.dataset.mode === newMode));
-      if (slider) slider.classList.toggle('right', newMode === 'assistant');
-      // Apply mode with transition
-      applyMode(newMode, toggle);
-    };
-  });
 }
 
 function setupPersonaHeaderDropdown() {
@@ -402,10 +384,7 @@ function renderSidebarFooter() {
   const footer = document.getElementById('sidebarFooter');
   const personas = store.personas || [];
   const running = personas.filter(p => p.running).length;
-  const mode = store.mode || 'butler';
-  const modeInfo = (getModes().find(m => m.id === mode)) || { icon: '◈', label: '管家' };
   footer.innerHTML = `
-    <div class="footer-row"><span>${modeInfo.icon} ${modeInfo.label}模式</span></div>
     <div class="footer-row"><span>人格</span><span class="text-mono">${personas.length}</span></div>
     <div class="footer-row"><span><span class="status-dot${running > 0 ? ' running' : ''}"></span> 运行中</span><span class="text-mono">${running}</span></div>
     <div class="footer-row"><span><span class="status-dot" id="wsDot"></span> WS</span><span id="wsStatus">—</span></div>
@@ -462,6 +441,11 @@ function setupSidebarToggle() {
   const toggle = document.getElementById('sidebarToggle');
   if (!sidebar || !toggle) return;
 
+  if (localStorage.getItem('sidebar-collapsed') === null
+      && window.matchMedia('(max-width: 720px)').matches) {
+    sidebarCollapsed = true;
+  }
+
   // 应用保存的折叠状态
   if (sidebarCollapsed) {
     sidebar.classList.add('collapsed');
@@ -517,8 +501,6 @@ async function init() {
     wsConnect();
     personasRealtime.start();
   }
-
-  subscribe('mode', () => renderSidebarFooter());
 
   window.addEventListener('hashchange', () => {
     const hashPage = window.location.hash.slice(1);
