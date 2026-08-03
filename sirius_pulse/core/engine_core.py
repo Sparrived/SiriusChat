@@ -277,10 +277,9 @@ class _EmotionalGroupChatEngineBase:
 
         self._state_store = EngineStateStore(work_path)
 
-        baseline = self.persona.emotional_baseline
         self.assistant_emotion = AssistantEmotionState(
-            valence=baseline.get("valence", 0.2),
-            arousal=baseline.get("arousal", 0.3),
+            valence=0.2,
+            arousal=0.3,
         )
 
         self.event_bus = SessionEventBus()

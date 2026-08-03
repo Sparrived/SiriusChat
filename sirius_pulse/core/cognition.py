@@ -822,11 +822,6 @@ class CognitionAnalyzer:
                 persona_keywords.update(self.persona.interests)
             if getattr(self.persona, "traits", None):
                 persona_keywords.update(self.persona.traits)
-            if getattr(self.persona, "personality_traits", None):
-                persona_keywords.update(self.persona.personality_traits)
-            if getattr(self.persona, "social_role", None):
-                persona_keywords.add(self.persona.social_role)
-
             if persona_keywords:
                 text_words = set(re.findall(r"[\u4e00-\u9fff]+", text)) | set(
                     re.findall(r"[a-zA-Z]+", text_lower)
@@ -873,7 +868,7 @@ class CognitionAnalyzer:
             for name in [self.ai_name] + self.ai_aliases:
                 if not name:
                     continue
-                pattern = rf"@\s*{re.escape(name)}"
+                pattern = rf"@\s*{re.escape(name.lower())}"
                 if re.search(pattern, text_lower):
                     mention = 1.0
                     break

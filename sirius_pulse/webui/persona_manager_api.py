@@ -99,7 +99,11 @@ async def api_persona_create(
     # 创建默认配置文件
     display_name = body.get("display_name", name)
     (persona_dir / "persona.json").write_text(
-        json.dumps({"name": display_name, "aliases": []}, ensure_ascii=False, indent=2),
+        json.dumps(
+            {"name": display_name, "aliases": [], "full_system_prompt": ""},
+            ensure_ascii=False,
+            indent=2,
+        ),
         encoding="utf-8",
     )
     (persona_dir / "experience.json").write_text(

@@ -225,8 +225,6 @@ def test_build_delayed_prompt_injects_configured_length_limit():
         persona=SimpleNamespace(
             max_tokens_preference=None,
             temperature_preference=None,
-            communication_style="",
-            emoji_preference="",
         ),
         _other_ai_names=[],
         _tool_registry=None,

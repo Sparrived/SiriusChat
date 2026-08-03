@@ -526,7 +526,12 @@ def _cmd_persona_create(args: argparse.Namespace) -> None:
         (persona_dir / subdir).mkdir(exist_ok=True)
 
     (persona_dir / "persona.json").write_text(
-        json.dumps({"name": name, "aliases": []}, ensure_ascii=False, indent=2), encoding="utf-8"
+        json.dumps(
+            {"name": name, "aliases": [], "full_system_prompt": ""},
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
     )
     (persona_dir / "experience.json").write_text(
         json.dumps({}, ensure_ascii=False, indent=2), encoding="utf-8"

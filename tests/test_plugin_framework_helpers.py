@@ -239,9 +239,7 @@ def test_engine_proxy_when_unbound_or_bound_then_persona_and_lookup_defaults_are
         user_manager=None,
         persona=SimpleNamespace(
             name="Yue",
-            persona_summary="summary",
-            personality_traits=["warm"],
-            communication_style="casual",
+            full_system_prompt="Yue 的完整身份设定。",
         ),
     )
     bound = PluginContext.create(engine=engine, plugin_name="demo")
@@ -250,9 +248,7 @@ def test_engine_proxy_when_unbound_or_bound_then_persona_and_lookup_defaults_are
     assert bound.engine.get_persona_name() == "Yue"
     assert bound.engine.get_persona_info() == {
         "name": "Yue",
-        "persona_summary": "summary",
-        "personality_traits": ["warm"],
-        "communication_style": "casual",
+        "full_system_prompt": "Yue 的完整身份设定。",
     }
 
 

@@ -18,8 +18,6 @@ from sirius_pulse.persona_config import (
     PersonaConfigPaths,
     PersonaExperienceConfig,
 )
-from sirius_pulse.platforms.persona_utils import generate_persona_from_interview
-from sirius_pulse.providers.routing import WorkspaceProviderManager
 from sirius_pulse.webui.app_keys import DATA_DIR_KEY
 from sirius_pulse.webui.model_catalog import build_model_catalog
 from sirius_pulse.webui.server_utils import _json_response, handle_api_errors
@@ -196,30 +194,7 @@ async def api_persona_get(request: web.Request, data_dir: Path) -> web.Response:
         {
             "name": profile.name,
             "aliases": profile.aliases,
-            "persona_summary": profile.persona_summary,
             "full_system_prompt": profile.full_system_prompt,
-            "personality_traits": profile.personality_traits,
-            "backstory": profile.backstory,
-            "core_values": profile.core_values,
-            "flaws": profile.flaws,
-            "motivations": profile.motivations,
-            "communication_style": profile.communication_style,
-            "speech_rhythm": profile.speech_rhythm,
-            "emoji_preference": profile.emoji_preference,
-            "typical_greetings": profile.typical_greetings,
-            "typical_signoffs": profile.typical_signoffs,
-            "emotional_baseline": profile.emotional_baseline,
-            "emotional_range": profile.emotional_range,
-            "stress_response": profile.stress_response,
-            "boundaries": profile.boundaries,
-            "preferred_topics": profile.preferred_topics,
-            "social_role": profile.social_role,
-            "max_tokens_preference": profile.max_tokens_preference,
-            "temperature_preference": profile.temperature_preference,
-            "reply_frequency": profile.reply_frequency,
-            "version": profile.version,
-            "created_at": profile.created_at,
-            "source": profile.source,
         }
     )
 
@@ -240,33 +215,7 @@ async def api_persona_post(request: web.Request, data_dir: Path) -> web.Response
     for key in (
         "name",
         "aliases",
-        "identity_kind",
-        "creator_name",
-        "creator_relationship",
-        "persona_summary",
         "full_system_prompt",
-        "personality_traits",
-        "backstory",
-        "core_values",
-        "flaws",
-        "motivations",
-        "communication_style",
-        "speech_rhythm",
-        "emoji_preference",
-        "typical_greetings",
-        "typical_signoffs",
-        "emotional_baseline",
-        "emotional_range",
-        "stress_response",
-        "boundaries",
-        "preferred_topics",
-        "social_role",
-        "max_tokens_preference",
-        "temperature_preference",
-        "reply_frequency",
-        "version",
-        "created_at",
-        "source",
     ):
         if key in persona_data:
             setattr(profile, key, persona_data[key])
@@ -274,68 +223,6 @@ async def api_persona_post(request: web.Request, data_dir: Path) -> web.Response
     PersonaStore.save(paths.dir, profile)
     _request_config_reload("persona", data_dir)
     return _json_response({"success": True})
-
-
-async def api_persona_interview_get(request: web.Request, data_dir: Path) -> web.Response:
-    """读取已保存的 interview 问卷答案。"""
-    paths = PersonaConfigPaths(data_dir)
-    record_path = paths.dir / "engine_state" / "persona_interview_record.json"
-    pending_path = paths.dir / "engine_state" / "pending_persona_interview.json"
-    try:
-        if record_path.exists():
-            data = json.loads(record_path.read_text(encoding="utf-8"))
-            return _json_response(
-                {
-                    "answers": data.get("answers", {}),
-                    "name": data.get("name", ""),
-                    "aliases": data.get("aliases", []),
-                }
-            )
-        if pending_path.exists():
-            data = json.loads(pending_path.read_text(encoding="utf-8"))
-            return _json_response(
-                {
-                    "answers": data.get("answers", {}),
-                    "name": data.get("name", ""),
-                    "aliases": data.get("aliases", []),
-                }
-            )
-        return _json_response({"answers": {}, "name": "", "aliases": []})
-    except Exception as exc:
-        LOG.warning("读取 interview 记录失败: %s", exc)
-        return _json_response({"answers": {}, "name": "", "aliases": []})
-
-
-@handle_api_errors
-async def api_persona_interview(request: web.Request, data_dir: Path) -> web.Response:
-    """根据问卷答案生成人格。"""
-    try:
-        body = await request.json()
-    except Exception:
-        return _json_response({"error": "Invalid JSON"}, 400)
-    p_name = str(body.get("name", "小星")).strip()
-    answers = body.get("answers", {})
-    aliases = [a.strip() for a in body.get("aliases", []) if isinstance(a, str) and a.strip()]
-    model = str(body.get("model", "gpt-4o-mini")).strip()
-    paths = PersonaConfigPaths(data_dir)
-
-    from sirius_pulse.providers.routing import AutoRoutingProvider
-
-    provider_mgr = WorkspaceProviderManager(request.app.get(DATA_DIR_KEY, data_dir))
-    providers = provider_mgr.load()
-    provider = None
-    if providers:
-        provider = AutoRoutingProvider(providers)
-    persona = await generate_persona_from_interview(
-        work_path=paths.dir,
-        provider=provider,
-        name=p_name,
-        answers=answers,
-        aliases=aliases,
-        model=model,
-    )
-    PersonaStore.save(paths.dir, persona)
-    return _json_response({"success": True, "persona": persona.to_dict()})
 
 
 async def api_orchestration_get(request: web.Request, data_dir: Path) -> web.Response:

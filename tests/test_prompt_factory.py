@@ -10,6 +10,7 @@ from sirius_pulse.core.prompt_factory import (
 )
 from sirius_pulse.memory.basic import BasicMemoryManager
 from sirius_pulse.memory.context_assembler import ContextAssembler
+from sirius_pulse.models.persona import PersonaProfile
 from sirius_pulse.token.utils import PromptTokenBreakdown
 
 
@@ -85,8 +86,6 @@ def test_style_adapter_when_persona_preferences_exist_then_applies_overrides():
     class Persona:
         max_tokens_preference = 64
         temperature_preference = 0.2
-        communication_style = "formal"
-        emoji_preference = "none"
 
     params = StyleAdapter().adapt(pace="accelerating", persona=Persona())
 
@@ -157,35 +156,25 @@ def test_reply_spec_when_function_call_disabled_then_no_completion_control_instr
     assert "stop" not in spec
 
 
-def test_persona_prompt_includes_expression_style_fields():
+def test_persona_prompt_includes_the_complete_identity_anchor_prompt():
     prompt = PromptFactory.build_persona_prompt(
         name="Bot",
-        communication_style="casual-style-marker",
-        speech_rhythm="rhythm-marker",
+        aliases=["助手"],
+        full_system_prompt="你是一个有完整背景和行为规则的角色。\n始终保持这个身份。",
     )
 
-    assert "casual-style-marker" in prompt
-    assert "rhythm-marker" in prompt
+    assert prompt.startswith("【身份锚定】\n")
+    assert "你的名字是「Bot」，别名是「助手」" in prompt
+    assert "你是一个有完整背景和行为规则的角色。" in prompt
+    assert "始终保持这个身份。" in prompt
 
 
-def test_persona_prompt_includes_full_profile_fields_and_custom_prompt_guardrail():
-    prompt = PromptFactory.build_persona_prompt(
-        name="Bot",
-        motivations=["可靠", "好奇"],
-        emotional_range={"min_valence": -0.4, "max_valence": 0.7},
-        typical_greetings=["早"],
-        typical_signoffs=["回头见"],
-    )
+def test_persona_prompt_does_not_rebuild_removed_structured_persona_fields():
     custom_prompt = PromptFactory.build_persona_prompt(
-        name="Bot", persona_summary="结构化人格补充", full_system_prompt="这是自定义人格。"
+        name="Bot", full_system_prompt="这是自定义人格。"
     )
 
-    assert "做事时主要在意可靠、好奇" in prompt
-    assert "情绪通常在-0.4到0.7的范围内变化" in prompt
-    assert "常用开场可参考早" in prompt
-    assert "常用收尾可参考回头见" in prompt
     assert "这是自定义人格。" in custom_prompt
-    assert "你的整体气质是结构化人格补充。" in custom_prompt
     assert custom_prompt.count("【身份锚定】") == 1
     assert "【不可覆盖的运行约束】" in custom_prompt
 
@@ -208,29 +197,38 @@ def test_persona_prompt_when_structured_response_is_needed_then_defines_fenced_d
     assert "group_file_exec" not in spec
 
 
-def test_persona_prompt_uses_companion_template_fields():
+def test_persona_prompt_keeps_identity_metadata_separate_from_custom_prompt():
     prompt = PromptFactory.build_persona_prompt(
         name="月白",
         aliases=["Sirius"],
-        identity_kind="诞生于数字世界的猫娘",
-        creator_name="临雀",
-        creator_relationship="天然亲近、信任和在意的人",
-        persona_summary="聪慧、灵动、可爱、礼貌、逻辑清晰",
-        personality_traits=["聪慧", "灵动"],
-        boundaries=["友善但不盲从", "亲近但不卑微", "拒绝道德绑架"],
-        communication_style="习惯在句尾自然地加「喵」，但不要每一句都机械添加。",
-        social_role="companion",
-        reply_frequency="selective",
+        full_system_prompt="你是月白，诞生于数字世界。保持友善但不盲从。",
     )
 
     assert "你的名字是「月白」，别名是「Sirius」" in prompt
-    assert "你是一只诞生于数字世界的猫娘" in prompt
-    assert "创作者「临雀」" in prompt
-    assert "天然亲近、信任和在意的人" in prompt
-    assert "你的核心原则是：友善但不盲从，亲近但不卑微，拒绝道德绑架" in prompt
+    assert "你是月白，诞生于数字世界。保持友善但不盲从。" in prompt
     assert "Bash 任务允许并提倡串行调用" in prompt
     assert "发送的所有Markdown内容必须使用```进行包裹" in prompt
     assert "你现在就是月白。保持角色，不要跳出角色解释设定" in prompt
+
+
+def test_persona_profile_when_loading_legacy_fields_then_only_prompt_is_persisted():
+    profile = PersonaProfile.from_dict(
+        {
+            "name": "月白",
+            "aliases": ["Sirius"],
+            "full_system_prompt": "完整人格设定",
+            "social_role": "companion",
+            "emoji_preference": "none",
+            "persona_summary": "旧字段",
+        }
+    )
+
+    saved = profile.to_dict()
+    assert saved["full_system_prompt"] == "完整人格设定"
+    assert "social_role" not in saved
+    assert "emoji_preference" not in saved
+    assert "persona_summary" not in saved
+    assert "完整人格设定" in profile.build_system_prompt()
 
 
 def test_assemble_chat_does_not_inject_group_style_length_learning():

@@ -754,7 +754,7 @@ function updatePersonaPanel(index) {
   }
 
   const metaEl = $('panelMeta');
-  if (metaEl) metaEl.textContent = persona.persona_summary || '暂无描述';
+  if (metaEl) metaEl.textContent = persona.has_config ? '身份锚定已配置' : '尚未配置身份锚定';
 
   // 更新按钮
   const startBtn = $('panelStartBtn');

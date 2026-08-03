@@ -209,9 +209,7 @@ class BackgroundTasks:
                     group_id=group_id,
                     candidates=checkpoint_batch,
                     persona_name=engine.persona.name,
-                    persona_description=(
-                        engine.persona.persona_summary or engine.persona.backstory or ""
-                    ),
+                    persona_description=getattr(engine.persona, "full_system_prompt", ""),
                     brain=engine.brain,
                     model_name=cfg.model_name,
                     min_candidate_count=volume_threshold,

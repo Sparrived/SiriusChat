@@ -117,21 +117,12 @@ class EngineProxy:
         if inject_persona:
             persona = getattr(self._engine, "persona", None)
             if persona:
-                persona_lines = []
+                persona_prompt = getattr(persona, "full_system_prompt", "").strip()
                 name = getattr(persona, "name", "")
-                if name:
-                    persona_lines.append(f"你当前的角色身份是「{name}」。")
-                summary = getattr(persona, "persona_summary", "")
-                if summary:
-                    persona_lines.append(f"角色简介：{summary}")
-                traits = getattr(persona, "personality_traits", [])
-                if traits:
-                    persona_lines.append(f"性格特征：{'、'.join(traits[:3])}")
-                style = getattr(persona, "communication_style", "")
-                if style:
-                    persona_lines.append(f"沟通风格：{style}")
-                if persona_lines:
-                    persona_block = "\n".join(persona_lines)
+                persona_block = "\n".join(
+                    item for item in (f"你当前的角色身份是「{name}」。" if name else "", persona_prompt) if item
+                )
+                if persona_block:
                     system_prompt = (
                         f"{persona_block}\n\n{system_prompt}" if system_prompt else persona_block
                     )
@@ -275,9 +266,7 @@ class EngineProxy:
             return {}
         return {
             "name": getattr(persona, "name", ""),
-            "persona_summary": getattr(persona, "persona_summary", ""),
-            "personality_traits": getattr(persona, "personality_traits", []),
-            "communication_style": getattr(persona, "communication_style", ""),
+            "full_system_prompt": getattr(persona, "full_system_prompt", ""),
         }
 
     def get_engine(self) -> Any:

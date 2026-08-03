@@ -127,7 +127,7 @@ def test_checkpoint_pass_prunes_covered_sources_and_consolidates_old_active_arch
         memory_unit_manager=manager,
         cold_detector=ColdDetector(),
         model_router=SimpleNamespace(resolve=lambda _: SimpleNamespace(model_name="memory-model")),
-        persona=SimpleNamespace(name="Sirius", persona_summary="", backstory=""),
+            persona=SimpleNamespace(name="Sirius", full_system_prompt=""),
         brain=object(),
         _bg_running=False,
     )
@@ -177,7 +177,7 @@ def test_checkpoint_pass_repeats_active_batches_until_token_target():
         memory_unit_manager=manager,
         cold_detector=ColdDetector(),
         model_router=SimpleNamespace(resolve=lambda _: SimpleNamespace(model_name="memory-model")),
-        persona=SimpleNamespace(name="Sirius", persona_summary="", backstory=""),
+            persona=SimpleNamespace(name="Sirius", full_system_prompt=""),
         brain=object(),
         _bg_running=False,
     )
@@ -225,7 +225,7 @@ def test_checkpoint_uses_latest_conversation_chain_tokens_for_trigger():
         memory_unit_manager=manager,
         cold_detector=ColdDetector(),
         model_router=SimpleNamespace(resolve=lambda _: SimpleNamespace(model_name="memory-model")),
-        persona=SimpleNamespace(name="Sirius", persona_summary="", backstory=""),
+            persona=SimpleNamespace(name="Sirius", full_system_prompt=""),
         brain=object(),
         _bg_running=False,
     )

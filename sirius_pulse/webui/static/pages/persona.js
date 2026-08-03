@@ -55,82 +55,22 @@ export async function init(container, params = {}) {
       <div class="card-header">
         <div>
           <div class="card-title">人格配置</div>
-          <div class="card-subtitle">编辑 ${name} 的基础人格设定</div>
+          <div class="card-subtitle">编辑 ${name} 的身份锚定</div>
         </div>
         <span id="personaAutoSaveStatus" style="color:var(--text-3);font-size:12px"></span>
       </div>
       <form id="personaForm" style="display:grid;gap:16px">
-        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px">
-          <div class="form-group">
-            <label>名称</label>
-            <input type="text" name="name" readonly>
-          </div>
-          <div class="form-group">
-            <label>别名</label>
-            <input type="text" name="aliases" placeholder="多个别名用空格分隔">
-          </div>
-          <div class="form-group">
-            <label>数字身份</label>
-            <input type="text" name="identity_kind" placeholder="诞生于数字世界的猫娘">
-          </div>
-          <div class="form-group">
-            <label>创作者</label>
-            <input type="text" name="creator_name" placeholder="临雀">
-          </div>
-          <div class="form-group">
-            <label>与创作者关系</label>
-            <input type="text" name="creator_relationship" placeholder="天然亲近、信任和在意的人">
-          </div>
-          <div class="form-group">
-            <label>社交角色</label>
-            <div class="select-wrap">
-              <select name="social_role">
-                <option value="caregiver">照顾者</option>
-                <option value="companion">陪伴者</option>
-                <option value="entertainer">活跃气氛者</option>
-                <option value="mentor">导师</option>
-                <option value="confidant">知心朋友</option>
-                <option value="observer">旁观者</option>
-              </select>
-            </div>
-          </div>
+        <div class="form-group">
+          <label>名称</label>
+          <input type="text" name="name" readonly>
         </div>
         <div class="form-group">
-          <label>人格概述</label>
-          <textarea name="persona_summary" rows="3"></textarea>
-        </div>
-        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px">
-          <div class="form-group">
-            <label>性格特征</label>
-            <input type="text" name="personality_traits" placeholder="多个特征用逗号分隔">
-          </div>
+          <label>别名</label>
+          <input type="text" name="aliases" placeholder="多个别名用空格分隔">
         </div>
         <div class="form-group">
-          <label>沟通风格</label>
-          <textarea name="communication_style" rows="2"></textarea>
-        </div>
-        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px">
-          <div class="form-group">
-            <label>表情偏好</label>
-            <div class="select-wrap">
-              <select name="emoji_preference">
-                <option value="none">不使用</option>
-                <option value="subtle">偶尔使用</option>
-                <option value="moderate">适度使用</option>
-                <option value="excessive">频繁使用</option>
-              </select>
-            </div>
-          </div>
-        </div>
-        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px">
-          <div class="form-group">
-            <label>边界设定</label>
-            <input type="text" name="boundaries" placeholder="多个边界用逗号分隔">
-          </div>
-        </div>
-        <div class="form-group">
-          <label>背景故事</label>
-          <textarea name="backstory" rows="4"></textarea>
+          <label>身份锚定（完整人格提示词）</label>
+          <textarea name="full_system_prompt" rows="20" placeholder="直接编写完整的人格设定、行为边界、表达方式和回应原则。这里的内容会放入【身份锚定】。"></textarea>
         </div>
       </form>
     </div>
@@ -242,16 +182,7 @@ async function loadPersonaData(name) {
 
     form.name.value = data.name || name;
     form.aliases.value = (data.aliases || []).join(' ');
-    form.identity_kind.value = data.identity_kind || '';
-    form.creator_name.value = data.creator_name || '';
-    form.creator_relationship.value = data.creator_relationship || '';
-    form.social_role.value = data.social_role || 'companion';
-    form.persona_summary.value = data.persona_summary || '';
-    form.personality_traits.value = (data.personality_traits || []).join(', ');
-    form.communication_style.value = data.communication_style || '';
-    form.emoji_preference.value = data.emoji_preference || 'none';
-    form.boundaries.value = (data.boundaries || []).join(', ');
-    form.backstory.value = data.backstory || '';
+    form.full_system_prompt.value = data.full_system_prompt || '';
   } catch (e) {
     if (e?.name === 'AbortError') return;
     toast('加载人格数据失败: ' + e.message, 'error');
@@ -265,16 +196,7 @@ async function savePersona(name) {
   const persona = {
     name: form.name.value,
     aliases: form.aliases.value.split(/\s+/).filter(Boolean),
-    identity_kind: form.identity_kind.value,
-    creator_name: form.creator_name.value,
-    creator_relationship: form.creator_relationship.value,
-    social_role: form.social_role.value,
-    persona_summary: form.persona_summary.value,
-    personality_traits: form.personality_traits.value.split(',').map(s => s.trim()).filter(Boolean),
-    communication_style: form.communication_style.value,
-    emoji_preference: form.emoji_preference.value,
-    boundaries: form.boundaries.value.split(',').map(s => s.trim()).filter(Boolean),
-    backstory: form.backstory.value,
+    full_system_prompt: form.full_system_prompt.value,
   };
 
   try {

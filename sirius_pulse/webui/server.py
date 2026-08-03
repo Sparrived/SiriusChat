@@ -7,7 +7,7 @@
 
 实现已拆分到：
   - server_core   : WebUIServer 类定义、路由、生命周期、全局 API
-  - persona_api   : 人格列表/创建/删除/状态/启停/配置/访谈/模型编排/体验/Adapter/引擎重载
+  - persona_api   : 人格列表/创建/删除/状态/启停/配置/模型编排/体验/Adapter/引擎重载
   - memory_api    : Token 统计（全局+人格）、认知事件、日记、向量存储状态
   - server_tool_api: Tool 管理（已存在）
 
@@ -78,8 +78,6 @@ from sirius_pulse.webui.persona_api import (
     api_orchestration_post,
     api_persona_get,
     api_persona_get_single,
-    api_persona_interview,
-    api_persona_interview_get,
     api_persona_logs_get,
     api_persona_post,
     api_persona_status_get,
@@ -122,8 +120,6 @@ DELEGATED_HANDLERS: dict[str, DelegatedHandler] = {
     "api_persona_logs_get": api_persona_logs_get,
     "api_persona_get": api_persona_get,
     "api_persona_post": api_persona_post,
-    "api_persona_interview_get": api_persona_interview_get,
-    "api_persona_interview": api_persona_interview,
     "api_orchestration_get": api_orchestration_get,
     "api_orchestration_post": api_orchestration_post,
     "api_task_params_get": api_task_params_get,
