@@ -63,6 +63,35 @@ def test_proxy_passes_general_docker_commands_to_the_host_cli(tmp_path, monkeypa
     assert seen["arguments"] == ["exec", "minecraft", "bash", "-lc", "id"]
 
 
+def test_proxy_allows_inspect_format_and_shell_exec_commands(tmp_path, monkeypatch):
+    module, proxy = _proxy(tmp_path)
+    seen = []
+
+    def fake_run(arguments, config):
+        seen.append(arguments)
+        return "ok"
+
+    monkeypatch.setattr(proxy, "_run_docker", fake_run)
+    commands = [
+        ["inspect", "--format", "{{json .NetworkSettings.Ports}}", "napcat-2372447549"],
+        [
+            "exec",
+            "napcat-2372447549",
+            "sh",
+            "-c",
+            "cat /app/config/onebot11_*.json 2>/dev/null | grep -E 'port|host'; echo ok",
+        ],
+    ]
+
+    for arguments in commands:
+        assert proxy.handle({"action": "docker", "arguments": arguments}) == {
+            "success": True,
+            "output": "ok",
+        }
+
+    assert seen == commands
+
+
 def test_proxy_blocks_generic_mutations_when_host_policy_disables_them(tmp_path, monkeypatch):
     module, proxy = _proxy(tmp_path, allow_mutations=False)
     monkeypatch.setattr(proxy, "_run_docker", lambda *_: (_ for _ in ()).throw(AssertionError()))

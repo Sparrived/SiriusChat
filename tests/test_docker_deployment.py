@@ -27,6 +27,7 @@ def test_update_script_refuses_to_replace_an_unmigrated_container_data_directory
     assert "export SIRIUS_ENV_CACHE_IMAGE=sirius-pulse:latest" in script
     assert '\\"org.sirius-pulse.environment-cache-key\\"' not in script
     assert "exit 2" in script
+    assert "systemctl restart sirius-container-admin" in script
     assert script.index("docker compose config -q") < script.index("docker compose up -d")
 
 

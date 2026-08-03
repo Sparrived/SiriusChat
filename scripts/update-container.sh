@@ -65,6 +65,9 @@ restore_system_packages() {
 
 git pull --ff-only origin master
 git submodule update --init --recursive
+if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet sirius-container-admin; then
+  systemctl restart sirius-container-admin
+fi
 docker compose config -q
 export SIRIUS_ENV_CACHE_KEY="$(sha256sum Dockerfile | awk '{print $1}')"
 unset SIRIUS_ENV_CACHE_IMAGE
