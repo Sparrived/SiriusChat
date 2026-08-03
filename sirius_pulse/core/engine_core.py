@@ -70,7 +70,6 @@ class _EmotionalGroupChatEngineBase:
         vector_store: Any | None = None,
         embedding_client: Any | None = None,
         persona_db_conn: Any | None = None,
-        remote_bridge: Any | None = None,
     ) -> None:
         self.config = dict(config or {})
         self.provider_async = provider_async
@@ -79,7 +78,6 @@ class _EmotionalGroupChatEngineBase:
         self._embedding_client = embedding_client
         self._adapter: Any = None  # 由 add_skill_bridge() 注入，plugin 直接取用
         self._persona_db_conn = persona_db_conn
-        self._remote_bridge = remote_bridge
 
         self._init_expressiveness()
         self._init_persona(persona)
@@ -178,7 +176,7 @@ class _EmotionalGroupChatEngineBase:
         self.semantic_memory = SemanticMemoryManager(self.work_path, storage=self._memory_storage)
 
         self.basic_memory = BasicMemoryManager()
-        self.basic_store = BasicMemoryFileStore(self.work_path, remote_bridge=self._remote_bridge)
+        self.basic_store = BasicMemoryFileStore(self.work_path)
         self.diary_manager = DiaryManager(
             self.work_path,
             vector_store=self._vector_store,
@@ -564,9 +562,18 @@ class _EmotionalGroupChatEngineBase:
         user_id: str,
         group_id: str,
         sender_type: str = "human",
+        *,
+        coordinated: bool = False,
     ) -> str:
         """Pre-filter layer: hard guards + threshold check."""
-        return self._pipeline.pre_filter(signal, content, user_id, group_id, sender_type)
+        return self._pipeline.pre_filter(
+            signal,
+            content,
+            user_id,
+            group_id,
+            sender_type,
+            coordinated=coordinated,
+        )
 
     async def _generate(
         self,
@@ -992,6 +999,16 @@ class _EmotionalGroupChatEngineBase:
     # Public API
     # ==================================================================
 
+    def observe_message(
+        self,
+        message: Message,
+        participants: list[UnifiedUser],
+        group_id: str,
+    ) -> None:
+        """Record a group message without running cognition or generation."""
+        self._current_adapter_type = message.adapter_type or ""
+        self._perception(group_id, message, participants)
+
     async def process_message(
         self,
         message: Message,
@@ -1017,7 +1034,7 @@ class _EmotionalGroupChatEngineBase:
         speaker = message.speaker or "有人"
 
         # 多 AI 互动抑制：其他 AI 发言且未 @ 自己时
-        if message.sender_type == "other_ai":
+        if message.sender_type == "other_ai" and not message.dispatch_coordinated:
             names = [self.persona.name.lower()] + [a.lower() for a in self.persona.aliases]
             text = (message.content or "").lower()
             is_mentioned = any(name in text for name in names if name)
@@ -1111,7 +1128,7 @@ class _EmotionalGroupChatEngineBase:
                         "intent": {},
                     }
 
-        if getattr(message, "received_during_bot_send", False):
+        if getattr(message, "received_during_bot_send", False) and not message.dispatch_coordinated:
             self._background_update(group_id, message, None, None, user_id)
             if self._message_explicitly_mentions_current_bot(message):
                 decision = StrategyDecision(
@@ -1349,7 +1366,12 @@ class _EmotionalGroupChatEngineBase:
 
         # 3. Pre-filter (hard guards + threshold)
         filter_result = self._pre_filter(
-            signal, content, user_id, group_id, message.sender_type or "human"
+            signal,
+            content,
+            user_id,
+            group_id,
+            message.sender_type or "human",
+            coordinated=message.dispatch_coordinated,
         )
 
         if filter_result == "reject":

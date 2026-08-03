@@ -26,18 +26,15 @@ class BasicMemoryFileStore:
     Layout:
         {work_path}/archive/{group_id}.jsonl
 
-    支持可选的 remote_bridge：助手模式下，新消息同时推送到管家端。
     """
 
     def __init__(
         self,
         work_path: Path | WorkspaceLayout,
-        remote_bridge: Any = None,
     ) -> None:
         layout = work_path if isinstance(work_path, WorkspaceLayout) else WorkspaceLayout(work_path)
         self._base_dir = layout.work_path / "archive"
         self._base_dir.mkdir(parents=True, exist_ok=True)
-        self._remote_bridge = remote_bridge
         self._locks_guard = threading.Lock()
         self._locks: dict[Path, threading.RLock] = {}
 
@@ -80,9 +77,6 @@ class BasicMemoryFileStore:
         with self._lock_for(path):
             with path.open("a", encoding="utf-8") as f:
                 f.write(line)
-        # 助手模式：实时推送到管家端
-        if self._remote_bridge is not None:
-            self._remote_bridge.push_message(entry.group_id, entry.to_dict())
 
     def append_batch(self, group_id: str, entries: list[BasicMemoryEntry]) -> None:
         """Atomically append multiple entries."""

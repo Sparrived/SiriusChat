@@ -37,6 +37,13 @@ class NapCatAdapterConfig:
     allowed_group_ids: list[str] = field(default_factory=list)
     allowed_private_user_ids: list[str] = field(default_factory=list)
     peer_ai_ids: list[str] = field(default_factory=list)
+    group_dispatch_enabled: bool = True
+    dispatch_db_path: str = ""
+    dispatch_priority: float = 0.0
+    dispatch_min_reply_interval_seconds: float = 3.0
+    dispatch_lease_seconds: float = 120.0
+    dispatch_peer_cooldown_seconds: float = 60.0
+    dispatch_max_peer_turns: int = 1
     enable_group_chat: bool = True
     enable_private_chat: bool = True
     root: str = ""
@@ -51,6 +58,13 @@ class NapCatAdapterConfig:
             "allowed_group_ids": list(self.allowed_group_ids),
             "allowed_private_user_ids": list(self.allowed_private_user_ids),
             "peer_ai_ids": list(self.peer_ai_ids),
+            "group_dispatch_enabled": self.group_dispatch_enabled,
+            "dispatch_db_path": self.dispatch_db_path,
+            "dispatch_priority": self.dispatch_priority,
+            "dispatch_min_reply_interval_seconds": self.dispatch_min_reply_interval_seconds,
+            "dispatch_lease_seconds": self.dispatch_lease_seconds,
+            "dispatch_peer_cooldown_seconds": self.dispatch_peer_cooldown_seconds,
+            "dispatch_max_peer_turns": self.dispatch_max_peer_turns,
             "enable_group_chat": self.enable_group_chat,
             "enable_private_chat": self.enable_private_chat,
             "root": self.root,
@@ -67,6 +81,17 @@ class NapCatAdapterConfig:
             allowed_group_ids=[str(v) for v in data.get("allowed_group_ids", [])],
             allowed_private_user_ids=[str(v) for v in data.get("allowed_private_user_ids", [])],
             peer_ai_ids=[str(v) for v in data.get("peer_ai_ids", [])],
+            group_dispatch_enabled=bool(data.get("group_dispatch_enabled", True)),
+            dispatch_db_path=str(data.get("dispatch_db_path", "")),
+            dispatch_priority=float(data.get("dispatch_priority", 0.0)),
+            dispatch_min_reply_interval_seconds=max(
+                0.0, float(data.get("dispatch_min_reply_interval_seconds", 3.0))
+            ),
+            dispatch_lease_seconds=max(5.0, float(data.get("dispatch_lease_seconds", 120.0))),
+            dispatch_peer_cooldown_seconds=max(
+                0.0, float(data.get("dispatch_peer_cooldown_seconds", 60.0))
+            ),
+            dispatch_max_peer_turns=max(0, int(data.get("dispatch_max_peer_turns", 1))),
             enable_group_chat=bool(data.get("enable_group_chat", True)),
             enable_private_chat=bool(data.get("enable_private_chat", True)),
             root=str(data.get("root", "")),

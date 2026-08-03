@@ -29,6 +29,10 @@ class Message(JsonSerializable):
     # 平台层在消息到达时记录的运行态信号；用于避免 bot 多段发送时被插话打断。
     received_during_bot_send: bool = False
     mentions_current_bot: bool = False
+    # Cross-persona group dispatcher metadata. A granted message bypasses the
+    # local participation gate; the lease itself is finalized by the adapter.
+    dispatch_coordinated: bool = False
+    dispatch_lease_id: str = ""
 
     @staticmethod
     def _trim_content_tail(content: str) -> str:

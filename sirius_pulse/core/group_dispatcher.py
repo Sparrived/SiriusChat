@@ -1,0 +1,623 @@
+"""Cross-persona group turn arbitration.
+
+The persona workers are separate OS processes, so an in-memory asyncio lock
+cannot prevent two accounts from replying to the same group.  This small
+SQLite-backed coordinator owns one active turn per group and gives workers a
+short-lived lease before they enter the response pipeline.
+"""
+
+from __future__ import annotations
+
+import sqlite3
+import time
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Callable
+from uuid import uuid4
+
+
+@dataclass(frozen=True, slots=True)
+class DispatchDecision:
+    action: str
+    event_id: str
+    worker_id: str = ""
+    lease_id: str = ""
+    reason: str = ""
+
+    @property
+    def granted(self) -> bool:
+        return self.action == "grant" and bool(self.lease_id)
+
+
+class GroupDispatcher:
+    """Coordinate one public persona turn per group across worker processes."""
+
+    # ponytail: SQLite is sufficient for same-host workers; use a service if
+    # persona workers move to different hosts.
+
+    def __init__(
+        self,
+        db_path: str | Path,
+        *,
+        worker_id: str,
+        account_id: str = "",
+        priority: float = 0.0,
+        min_reply_interval_seconds: float = 3.0,
+        lease_seconds: float = 120.0,
+        peer_cooldown_seconds: float = 60.0,
+        max_peer_turns: int = 1,
+        registry_ttl_seconds: float = 180.0,
+        clock: Callable[[], float] | None = None,
+    ) -> None:
+        self.db_path = Path(db_path)
+        self.worker_id = str(worker_id).strip()
+        self.account_id = str(account_id).strip()
+        self.priority = float(priority)
+        self.min_reply_interval_seconds = max(0.0, float(min_reply_interval_seconds))
+        self.lease_seconds = max(5.0, float(lease_seconds))
+        self.peer_cooldown_seconds = max(0.0, float(peer_cooldown_seconds))
+        self.max_peer_turns = max(0, int(max_peer_turns))
+        self.registry_ttl_seconds = max(30.0, float(registry_ttl_seconds))
+        self._clock = clock or time.time
+        if not self.worker_id:
+            raise ValueError("GroupDispatcher requires a worker_id")
+        self._initialize()
+        self.register()
+
+    def _connect(self) -> sqlite3.Connection:
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(str(self.db_path), timeout=5.0)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA busy_timeout = 5000")
+        conn.execute("PRAGMA journal_mode = WAL")
+        return conn
+
+    def _initialize(self) -> None:
+        with self._connect() as conn:
+            conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS dispatcher_workers (
+                    worker_id TEXT PRIMARY KEY,
+                    account_id TEXT NOT NULL DEFAULT '',
+                    priority REAL NOT NULL DEFAULT 0,
+                    last_seen REAL NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS dispatcher_groups (
+                    group_id TEXT PRIMARY KEY,
+                    last_reply_at REAL NOT NULL DEFAULT 0,
+                    last_human_at REAL NOT NULL DEFAULT 0,
+                    peer_turns INTEGER NOT NULL DEFAULT 0,
+                    peer_window_started_at REAL NOT NULL DEFAULT 0,
+                    active_lease_id TEXT NOT NULL DEFAULT '',
+                    active_worker_id TEXT NOT NULL DEFAULT '',
+                    active_event_id TEXT NOT NULL DEFAULT '',
+                    active_expires_at REAL NOT NULL DEFAULT 0
+                );
+                CREATE TABLE IF NOT EXISTS dispatcher_worker_stats (
+                    group_id TEXT NOT NULL,
+                    worker_id TEXT NOT NULL,
+                    last_reply_at REAL NOT NULL DEFAULT 0,
+                    reply_count INTEGER NOT NULL DEFAULT 0,
+                    PRIMARY KEY (group_id, worker_id)
+                );
+                CREATE TABLE IF NOT EXISTS dispatcher_events (
+                    event_id TEXT PRIMARY KEY,
+                    group_id TEXT NOT NULL,
+                    worker_id TEXT NOT NULL DEFAULT '',
+                    lease_id TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL,
+                    reason TEXT NOT NULL DEFAULT '',
+                    created_at REAL NOT NULL,
+                    updated_at REAL NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS dispatcher_events_updated_idx
+                    ON dispatcher_events(updated_at);
+                """
+            )
+            # Older dispatcher databases predate the explanation field. Keep
+            # them readable while allowing the WebUI to explain decisions.
+            columns = {
+                str(row[1])
+                for row in conn.execute("PRAGMA table_info(dispatcher_events)").fetchall()
+            }
+            if "reason" not in columns:
+                conn.execute(
+                    "ALTER TABLE dispatcher_events ADD COLUMN reason TEXT NOT NULL DEFAULT ''"
+                )
+
+    def register(self) -> None:
+        now = self._clock()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO dispatcher_workers(worker_id, account_id, priority, last_seen)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(worker_id) DO UPDATE SET
+                    account_id=excluded.account_id,
+                    priority=excluded.priority,
+                    last_seen=excluded.last_seen
+                """,
+                (self.worker_id, self.account_id, self.priority, now),
+            )
+
+    def set_account_id(self, account_id: str) -> None:
+        account_id = str(account_id or "").strip()
+        if not account_id or account_id == self.account_id:
+            return
+        self.account_id = account_id
+        self.register()
+
+    def close(self) -> None:
+        """Expire this worker and release a lease it owns."""
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                "UPDATE dispatcher_workers SET last_seen = 0 WHERE worker_id = ?",
+                (self.worker_id,),
+            )
+            conn.execute(
+                """
+                UPDATE dispatcher_groups
+                SET active_lease_id='', active_worker_id='', active_event_id='', active_expires_at=0
+                WHERE active_worker_id=?
+                """,
+                (self.worker_id,),
+            )
+
+    def admit(
+        self,
+        *,
+        event_id: str,
+        group_id: str,
+        sender_type: str = "human",
+        sender_account_id: str = "",
+        target_account_ids: tuple[str, ...] | list[str] = (),
+        preferred_worker_id: str = "",
+    ) -> DispatchDecision:
+        """Return a grant for the selected worker, or observe for everyone else."""
+        event_id = str(event_id or "").strip()
+        group_id = str(group_id or "").strip()
+        if not event_id or not group_id:
+            return DispatchDecision("observe", event_id, reason="missing_identity")
+
+        now = self._clock()
+        target_accounts = {str(value).strip() for value in target_account_ids if str(value).strip()}
+        sender_account_id = str(sender_account_id or "").strip()
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                "UPDATE dispatcher_workers SET last_seen=? WHERE worker_id=?",
+                (now, self.worker_id),
+            )
+            conn.execute(
+                "INSERT OR IGNORE INTO dispatcher_groups(group_id) VALUES (?)", (group_id,)
+            )
+            self._expire_active_lease(conn, group_id, now)
+            self._prune_events(conn, now)
+
+            existing = conn.execute(
+                "SELECT worker_id, lease_id, status FROM dispatcher_events WHERE event_id=?",
+                (event_id,),
+            ).fetchone()
+            if existing is not None:
+                if (
+                    existing["worker_id"] == self.worker_id
+                    and existing["status"] == "granted"
+                    and existing["lease_id"]
+                ):
+                    return DispatchDecision(
+                        "grant",
+                        event_id,
+                        worker_id=self.worker_id,
+                        lease_id=existing["lease_id"],
+                        reason="idempotent_claim",
+                    )
+                return DispatchDecision(
+                    "observe",
+                    event_id,
+                    worker_id=existing["worker_id"],
+                    reason=f"event_{existing['status']}",
+                )
+
+            state = conn.execute(
+                "SELECT * FROM dispatcher_groups WHERE group_id=?", (group_id,)
+            ).fetchone()
+            assert state is not None
+            active_worker = str(state["active_worker_id"] or "")
+            if active_worker:
+                self._record_event(
+                    conn, event_id, group_id, "", "observed", now, reason="group_busy"
+                )
+                return DispatchDecision("observe", event_id, worker_id=active_worker, reason="group_busy")
+
+            workers = conn.execute(
+                """
+                SELECT w.worker_id, w.account_id, w.priority,
+                       COALESCE(s.last_reply_at, 0) AS last_worker_reply_at
+                FROM dispatcher_workers AS w
+                LEFT JOIN dispatcher_worker_stats AS s
+                  ON s.worker_id=w.worker_id AND s.group_id=?
+                WHERE w.last_seen > ?
+                ORDER BY last_worker_reply_at ASC, w.priority DESC, w.worker_id ASC
+                """,
+                (group_id, now - self.registry_ttl_seconds),
+            ).fetchall()
+            if not workers:
+                self._record_event(
+                    conn, event_id, group_id, "", "observed", now, reason="no_workers"
+                )
+                return DispatchDecision("observe", event_id, reason="no_workers")
+
+            known_accounts = {str(row["account_id"] or "") for row in workers}
+            known_targets = target_accounts & known_accounts
+            eligible = [
+                row
+                for row in workers
+                if not known_targets or str(row["account_id"] or "") in known_targets
+            ]
+            if preferred_worker_id:
+                preferred = [row for row in eligible if row["worker_id"] == preferred_worker_id]
+                if preferred:
+                    eligible = preferred + [row for row in eligible if row not in preferred]
+
+            is_peer = sender_type == "other_ai" or (
+                sender_account_id
+                and sender_account_id in known_accounts
+                and sender_account_id != self.account_id
+            )
+            is_human = sender_type not in {"other_ai", "system"}
+            if is_peer:
+                if self.max_peer_turns <= 0:
+                    self._record_event(
+                        conn, event_id, group_id, "", "observed", now, reason="peer_disabled"
+                    )
+                    return DispatchDecision("observe", event_id, reason="peer_disabled")
+                last_human_at = float(state["last_human_at"] or 0)
+                if last_human_at and now - last_human_at < self.peer_cooldown_seconds:
+                    self._record_event(
+                        conn,
+                        event_id,
+                        group_id,
+                        "",
+                        "observed",
+                        now,
+                        reason="peer_waiting_for_humans",
+                    )
+                    return DispatchDecision("observe", event_id, reason="peer_waiting_for_humans")
+                peer_started = float(state["peer_window_started_at"] or 0)
+                peer_turns = int(state["peer_turns"] or 0)
+                if peer_started and now - peer_started >= self.peer_cooldown_seconds:
+                    peer_turns = 0
+                    conn.execute(
+                        "UPDATE dispatcher_groups SET peer_turns=0, peer_window_started_at=0 WHERE group_id=?",
+                        (group_id,),
+                    )
+                if peer_turns >= self.max_peer_turns:
+                    self._record_event(
+                        conn,
+                        event_id,
+                        group_id,
+                        "",
+                        "observed",
+                        now,
+                        reason="peer_budget_exhausted",
+                    )
+                    return DispatchDecision("observe", event_id, reason="peer_budget_exhausted")
+            elif is_human:
+                conn.execute(
+                    """
+                    UPDATE dispatcher_groups
+                    SET last_human_at=?, peer_turns=0, peer_window_started_at=0
+                    WHERE group_id=?
+                    """,
+                    (now, group_id),
+                )
+                if (
+                    not known_targets
+                    and float(state["last_reply_at"] or 0)
+                    and now - float(state["last_reply_at"]) < self.min_reply_interval_seconds
+                ):
+                    self._record_event(
+                        conn, event_id, group_id, "", "observed", now, reason="reply_cooldown"
+                    )
+                    return DispatchDecision("observe", event_id, reason="reply_cooldown")
+
+            if not eligible:
+                self._record_event(
+                    conn, event_id, group_id, "", "observed", now, reason="target_unavailable"
+                )
+                return DispatchDecision("observe", event_id, reason="target_unavailable")
+
+            selected = eligible[0]
+            selected_worker = str(selected["worker_id"])
+            lease_id = f"dl_{uuid4().hex}"
+            expires_at = now + self.lease_seconds
+            self._record_event(
+                conn,
+                event_id,
+                group_id,
+                selected_worker,
+                "granted",
+                now,
+                lease_id,
+                reason="selected",
+            )
+            conn.execute(
+                """
+                UPDATE dispatcher_groups
+                SET active_lease_id=?, active_worker_id=?, active_event_id=?, active_expires_at=?
+                WHERE group_id=?
+                """,
+                (lease_id, selected_worker, event_id, expires_at, group_id),
+            )
+            if is_peer:
+                conn.execute(
+                    """
+                    UPDATE dispatcher_groups
+                    SET peer_turns=peer_turns+1,
+                        peer_window_started_at=CASE WHEN peer_window_started_at=0 THEN ? ELSE peer_window_started_at END
+                    WHERE group_id=?
+                    """,
+                    (now, group_id),
+                )
+            action = "grant" if selected_worker == self.worker_id else "observe"
+            return DispatchDecision(
+                action,
+                event_id,
+                worker_id=selected_worker,
+                lease_id=lease_id if action == "grant" else "",
+                reason="selected" if action == "grant" else "another_worker_selected",
+            )
+
+    def finish(self, lease_id: str, *, sent: bool) -> bool:
+        """Release a lease and record a public reply when one was delivered."""
+        lease_id = str(lease_id or "").strip()
+        if not lease_id:
+            return False
+        now = self._clock()
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT group_id, active_worker_id FROM dispatcher_groups WHERE active_lease_id=?",
+                (lease_id,),
+            ).fetchone()
+            if row is None or row["active_worker_id"] != self.worker_id:
+                return False
+            group_id = str(row["group_id"])
+            status = "sent" if sent else "silent"
+            conn.execute(
+                "UPDATE dispatcher_events SET status=?, updated_at=? WHERE lease_id=?",
+                (status, now, lease_id),
+            )
+            conn.execute(
+                """
+                UPDATE dispatcher_groups
+                SET last_reply_at=CASE WHEN ? THEN ? ELSE last_reply_at END,
+                    active_lease_id='', active_worker_id='', active_event_id='', active_expires_at=0
+                WHERE group_id=? AND active_lease_id=?
+                """,
+                (1 if sent else 0, now, group_id, lease_id),
+            )
+            if sent:
+                conn.execute(
+                    """
+                    INSERT INTO dispatcher_worker_stats(group_id, worker_id, last_reply_at, reply_count)
+                    VALUES (?, ?, ?, 1)
+                    ON CONFLICT(group_id, worker_id) DO UPDATE SET
+                        last_reply_at=excluded.last_reply_at,
+                        reply_count=reply_count+1
+                    """,
+                    (group_id, self.worker_id, now),
+                )
+            return True
+
+    def active_lease(self, group_id: str) -> str:
+        now = self._clock()
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT active_lease_id FROM dispatcher_groups
+                WHERE group_id=? AND active_worker_id=? AND active_expires_at>?
+                """,
+                (str(group_id), self.worker_id, now),
+            ).fetchone()
+            return str(row["active_lease_id"] or "") if row else ""
+
+    @classmethod
+    def read_snapshot(
+        cls,
+        db_path: str | Path,
+        *,
+        now: float | None = None,
+        event_limit: int = 80,
+    ) -> dict[str, object]:
+        """Read coordinator state without registering a WebUI worker."""
+        path = Path(db_path)
+        if not path.exists():
+            return {"available": False, "db_path": str(path)}
+
+        current = time.time() if now is None else float(now)
+        try:
+            conn = sqlite3.connect(str(path), timeout=1.0)
+            conn.row_factory = sqlite3.Row
+            tables = {
+                str(row[0])
+                for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                ).fetchall()
+            }
+            required = {
+                "dispatcher_workers",
+                "dispatcher_groups",
+                "dispatcher_worker_stats",
+                "dispatcher_events",
+            }
+            if not required.issubset(tables):
+                conn.close()
+                return {"available": False, "db_path": str(path), "reason": "schema_missing"}
+
+            event_columns = {
+                str(row[1])
+                for row in conn.execute("PRAGMA table_info(dispatcher_events)").fetchall()
+            }
+            reason_sql = "reason" if "reason" in event_columns else "'' AS reason"
+            workers = [
+                {
+                    "worker_id": str(row["worker_id"] or ""),
+                    "account_id": str(row["account_id"] or ""),
+                    "priority": float(row["priority"] or 0),
+                    "last_seen": float(row["last_seen"] or 0),
+                    "online": float(row["last_seen"] or 0) > current - 180.0,
+                    "last_reply_at": float(row["last_reply_at"] or 0),
+                    "reply_count": int(row["reply_count"] or 0),
+                }
+                for row in conn.execute(
+                    """
+                    SELECT w.worker_id, w.account_id, w.priority, w.last_seen,
+                           COALESCE(MAX(s.last_reply_at), 0) AS last_reply_at,
+                           COALESCE(SUM(s.reply_count), 0) AS reply_count
+                    FROM dispatcher_workers AS w
+                    LEFT JOIN dispatcher_worker_stats AS s ON s.worker_id=w.worker_id
+                    GROUP BY w.worker_id, w.account_id, w.priority, w.last_seen
+                    ORDER BY w.last_seen DESC, w.priority DESC, w.worker_id ASC
+                    """
+                ).fetchall()
+            ]
+            groups = []
+            for row in conn.execute(
+                """
+                SELECT * FROM dispatcher_groups
+                ORDER BY CASE WHEN active_worker_id <> '' THEN 0 ELSE 1 END,
+                         COALESCE(last_reply_at, 0) DESC, group_id ASC
+                LIMIT 200
+                """
+            ).fetchall():
+                expires_at = float(row["active_expires_at"] or 0)
+                active = bool(row["active_worker_id"] and expires_at > current)
+                groups.append(
+                    {
+                        "group_id": str(row["group_id"] or ""),
+                        "last_reply_at": float(row["last_reply_at"] or 0),
+                        "last_human_at": float(row["last_human_at"] or 0),
+                        "peer_turns": int(row["peer_turns"] or 0),
+                        "peer_window_started_at": float(row["peer_window_started_at"] or 0),
+                        "active": active,
+                        "active_worker_id": str(row["active_worker_id"] or "") if active else "",
+                        "active_event_id": str(row["active_event_id"] or "") if active else "",
+                        "active_lease_id": str(row["active_lease_id"] or "") if active else "",
+                        "active_expires_at": expires_at if active else 0,
+                        "active_remaining_seconds": max(0.0, expires_at - current) if active else 0,
+                    }
+                )
+
+            limit = max(1, min(int(event_limit), 200))
+            events = [
+                {
+                    "event_id": str(row["event_id"] or ""),
+                    "group_id": str(row["group_id"] or ""),
+                    "worker_id": str(row["worker_id"] or ""),
+                    "lease_id": str(row["lease_id"] or ""),
+                    "status": str(row["status"] or ""),
+                    "reason": str(row["reason"] or ""),
+                    "created_at": float(row["created_at"] or 0),
+                    "updated_at": float(row["updated_at"] or 0),
+                }
+                for row in conn.execute(
+                    f"""
+                    SELECT event_id, group_id, worker_id, lease_id, status,
+                           {reason_sql}, created_at, updated_at
+                    FROM dispatcher_events
+                    ORDER BY updated_at DESC
+                    LIMIT ?
+                    """,
+                    (limit,),
+                ).fetchall()
+            ]
+            since = current - 86400.0
+            counts = conn.execute(
+                """
+                SELECT
+                    COUNT(*) AS decisions,
+                    SUM(CASE WHEN status IN ('granted', 'sent', 'silent', 'expired') THEN 1 ELSE 0 END) AS granted,
+                    SUM(CASE WHEN status='sent' THEN 1 ELSE 0 END) AS sent,
+                    SUM(CASE WHEN status='observed' THEN 1 ELSE 0 END) AS observed
+                FROM dispatcher_events
+                WHERE updated_at >= ?
+                """,
+                (since,),
+            ).fetchone()
+            conn.close()
+            return {
+                "available": True,
+                "db_path": str(path),
+                "updated_at": current,
+                "workers": workers,
+                "groups": groups,
+                "events": events,
+                "summary": {
+                    "workers_total": len(workers),
+                    "workers_online": sum(1 for item in workers if item["online"]),
+                    "groups_total": len(groups),
+                    "active_turns": sum(1 for item in groups if item["active"]),
+                    "decisions_24h": int(counts["decisions"] or 0),
+                    "granted_24h": int(counts["granted"] or 0),
+                    "sent_24h": int(counts["sent"] or 0),
+                    "observed_24h": int(counts["observed"] or 0),
+                },
+            }
+        except (OSError, sqlite3.Error) as exc:
+            return {"available": False, "db_path": str(path), "reason": str(exc)}
+
+    def _expire_active_lease(self, conn: sqlite3.Connection, group_id: str, now: float) -> None:
+        row = conn.execute(
+            """
+            SELECT active_lease_id FROM dispatcher_groups
+            WHERE group_id=? AND active_lease_id<>'' AND active_expires_at<=?
+            """,
+            (group_id, now),
+        ).fetchone()
+        if row is None:
+            return
+        conn.execute(
+            "UPDATE dispatcher_events SET status='expired', updated_at=? WHERE lease_id=?",
+            (now, row["active_lease_id"]),
+        )
+        conn.execute(
+            """
+            UPDATE dispatcher_groups
+            SET active_lease_id='', active_worker_id='', active_event_id='', active_expires_at=0
+            WHERE group_id=?
+            """,
+            (group_id,),
+        )
+
+    @staticmethod
+    def _record_event(
+        conn: sqlite3.Connection,
+        event_id: str,
+        group_id: str,
+        worker_id: str,
+        status: str,
+        now: float,
+        lease_id: str = "",
+        reason: str = "",
+    ) -> None:
+        conn.execute(
+            """
+            INSERT INTO dispatcher_events(
+                event_id, group_id, worker_id, lease_id, status, reason, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (event_id, group_id, worker_id, lease_id, status, reason, now, now),
+        )
+
+    @staticmethod
+    def _prune_events(conn: sqlite3.Connection, now: float) -> None:
+        conn.execute(
+            "DELETE FROM dispatcher_events WHERE updated_at < ?",
+            (now - 86400.0,),
+        )
+
+
+__all__ = ["DispatchDecision", "GroupDispatcher"]

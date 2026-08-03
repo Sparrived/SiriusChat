@@ -242,6 +242,8 @@ class Pipeline:
         user_id: str,
         group_id: str,
         sender_type: str = "human",
+        *,
+        coordinated: bool = False,
     ) -> str:
         """粗筛：决定是否调用主模型。
 
@@ -258,6 +260,9 @@ class Pipeline:
             if any(text_stripped.startswith(p) for p in prefixes if p):
                 logger.debug("消息以配置前缀开头，跳过回复流程: %s", text_stripped[:50])
                 return "reject"
+
+        if coordinated:
+            return "pass"
 
         # 2. 极短消息过滤
         if len(content or "") <= 2 and not __import__("re").search(r"[一-鿿]", content or ""):
@@ -403,6 +408,12 @@ class Pipeline:
         else:
             delay_seconds = float(participation.get("delay_seconds", 30.0))
 
+        if message.dispatch_coordinated:
+            # The shared dispatcher already owns admission and pacing. Keep
+            # the local queue only as the existing generation runner.
+            strategy = ResponseStrategy.IMMEDIATE
+            delay_seconds = 0.0
+
         is_private = group_id.startswith("private_")
         reason = str(participation.get("reason") or "signal_passed")
         hard_immediate = bool(
@@ -431,7 +442,7 @@ class Pipeline:
         decision.estimated_delay_seconds = delay_seconds
 
         # 入队延迟队列
-        engine.delayed_queue.enqueue(
+        item = engine.delayed_queue.enqueue(
             group_id=group_id,
             user_id=user_id,
             message_content=message.content,
@@ -446,6 +457,8 @@ class Pipeline:
             speaker_name=message.speaker or "",
             platform_message_id=message.message_id or "",
         )
+        if message.dispatch_coordinated:
+            item.window_seconds = 0.0
         engine._persist_group_state(group_id)
 
         # 更新 assistant emotion 和语义记忆

@@ -236,6 +236,15 @@ class DelayedResponseQueue:
         """检查指定 group 是否有等待中的队列项。"""
         return any(i.status == "pending" for i in self._queues.get(group_id, []))
 
+    def cancel_item(self, item_id: str) -> bool:
+        """Cancel one stale item that lost its group-level dispatch lease."""
+        for queue in self._queues.values():
+            for item in queue:
+                if item.item_id == item_id and item.status == "pending":
+                    item.status = "cancelled"
+                    return True
+        return False
+
     def promote_pending(
         self,
         group_id: str,

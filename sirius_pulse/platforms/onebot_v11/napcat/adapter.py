@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import html
 import json
 import logging
@@ -44,6 +45,7 @@ from sirius_pulse.adapters.models import (
     VoiceSegment,
 )
 from sirius_pulse.core.events import SessionEvent, SessionEventType
+from sirius_pulse.core.group_dispatcher import GroupDispatcher
 from sirius_pulse.core.qq_mentions import parse_qq_at_mentions
 from sirius_pulse.models.models import Message, UnifiedUser
 
@@ -146,6 +148,9 @@ class NapCatAdapter(BaseAdapter):
 
         # 消息处理锁：防止并发进入引擎 process_message 导致字典迭代时修改错误
         self._process_lock = asyncio.Lock()
+        self._dispatcher: GroupDispatcher | None = None
+        self._dispatch_leases: dict[str, str] = {}
+        self._dispatch_delivery_active: set[str] = set()
 
     # ─── 生命周期 ─────────────────────────────────────────
 
@@ -156,6 +161,7 @@ class NapCatAdapter(BaseAdapter):
         此方法注册 _on_event 处理器并开始监听引擎事件总线。
         """
         self._engine = engine
+        self._get_dispatcher()
         if self._event_bus_task is None or self._event_bus_task.done():
             self._event_bus_task = asyncio.create_task(self._event_bus_listener())
         self.on_event(self._on_event)
@@ -171,6 +177,10 @@ class NapCatAdapter(BaseAdapter):
             except asyncio.CancelledError:
                 pass
             self._event_bus_task = None
+        if self._dispatcher is not None:
+            self._dispatcher.close()
+            self._dispatcher = None
+        self._dispatch_leases.clear()
         self._engine = None
         LOG.info("NapCatAdapter 平台集成已停止")
 
@@ -196,6 +206,35 @@ class NapCatAdapter(BaseAdapter):
                 pass
             self._reconnect_task = None
         await self._disconnect()
+
+    def _get_dispatcher(self) -> GroupDispatcher | None:
+        if self._dispatcher is not None:
+            return self._dispatcher
+        if not bool(self.plugin_config.get("group_dispatch_enabled", True)):
+            return None
+        worker_id = str(self.plugin_config.get("persona_name", "") or "").strip()
+        if not worker_id:
+            # Standalone adapter tests and legacy direct users have no stable
+            # worker identity; leave their historical behavior unchanged.
+            return None
+        db_path = str(self.plugin_config.get("dispatch_db_path", "") or "").strip()
+        if not db_path:
+            db_path = str(self._work_path.parent.parent / "dispatcher" / "dispatcher.db")
+        self._dispatcher = GroupDispatcher(
+            db_path,
+            worker_id=worker_id,
+            account_id=str(self.plugin_config.get("qq_number", "") or ""),
+            priority=float(self.plugin_config.get("dispatch_priority", 0.0)),
+            min_reply_interval_seconds=float(
+                self.plugin_config.get("dispatch_min_reply_interval_seconds", 3.0)
+            ),
+            lease_seconds=float(self.plugin_config.get("dispatch_lease_seconds", 120.0)),
+            peer_cooldown_seconds=float(
+                self.plugin_config.get("dispatch_peer_cooldown_seconds", 60.0)
+            ),
+            max_peer_turns=int(self.plugin_config.get("dispatch_max_peer_turns", 1)),
+        )
+        return self._dispatcher
 
     async def _connect_once(self) -> bool:
         headers: dict[str, str] = {}
@@ -998,6 +1037,15 @@ class NapCatAdapter(BaseAdapter):
             return
         await self._process_event(event)
 
+    @staticmethod
+    def _dispatch_event_id(parsed: "ParsedEvent") -> str:
+        if parsed.message_id:
+            return f"qq:{parsed.group_id}:{parsed.message_id}"
+        raw = "|".join(
+            (parsed.group_id, parsed.user_id, parsed.prompt, parsed.message_type)
+        )
+        return f"qq:{parsed.group_id}:hash:{hashlib.sha256(raw.encode('utf-8')).hexdigest()[:24]}"
+
     async def _process_event(self, event: dict[str, Any]) -> None:
         """统一消息处理：解析 → 引擎 → 发送。"""
         async with self._process_lock:
@@ -1060,6 +1108,35 @@ class NapCatAdapter(BaseAdapter):
             mentions_current_bot=mentions_current_bot,
         )
 
+        dispatcher = self._get_dispatcher() if parsed.message_type == "group" else None
+        dispatch_lease_id = ""
+        if dispatcher is not None:
+            dispatcher.set_account_id(parsed.self_id or qq_number)
+            event_id = self._dispatch_event_id(parsed)
+            decision = dispatcher.admit(
+                event_id=event_id,
+                group_id=group_id,
+                sender_type=message.sender_type,
+                sender_account_id=parsed.user_id,
+                target_account_ids=tuple(parsed.at_user_ids),
+            )
+            if not decision.granted:
+                observe = getattr(self._engine, "observe_message", None)
+                if callable(observe):
+                    observe(message, [participant], group_id)
+                LOG.info(
+                    "[群调度] observe group=%s worker=%s selected=%s reason=%s",
+                    group_id,
+                    dispatcher.worker_id,
+                    decision.worker_id,
+                    decision.reason,
+                )
+                return
+            dispatch_lease_id = decision.lease_id
+            message.dispatch_coordinated = True
+            message.dispatch_lease_id = dispatch_lease_id
+            self._dispatch_leases[group_id] = dispatch_lease_id
+
         msg_preview = (parsed.prompt or "")[:200].replace("\n", " ")
         LOG.info(
             "[收到消息] %s | sender=%s(%s) uid=%s | content=%s",
@@ -1070,6 +1147,8 @@ class NapCatAdapter(BaseAdapter):
             msg_preview,
         )
 
+        dispatch_sent = False
+        dispatch_deferred = False
         try:
             result = await self._engine.process_message(
                 message=message,
@@ -1082,13 +1161,16 @@ class NapCatAdapter(BaseAdapter):
                     if parsed.message_type == "group":
                         if partial_sent_count > 0:
                             await self._sleep_before_reply_sequence_part(group_id, partial)
-                        await self._send_group_text(group_id, partial)
+                        dispatch_sent = bool(await self._send_group_text(group_id, partial)) or dispatch_sent
                     else:
                         if partial_sent_count > 0:
                             await self._sleep_before_reply_sequence_part(
                                 f"private_{parsed.user_id}", partial
                             )
-                        await self._send_private_text(parsed.user_id, partial)
+                        dispatch_sent = (
+                            bool(await self._send_private_text(parsed.user_id, partial))
+                            or dispatch_sent
+                        )
                     partial_sent_count += 1
 
             reply = result.get("reply")
@@ -1099,6 +1181,7 @@ class NapCatAdapter(BaseAdapter):
                     await self.send_group_message(group_id, message_group)
                 else:
                     await self.send_private_message(parsed.user_id, message_group)
+                dispatch_sent = True
             elif reply:
                 clean_reply = reply.strip()
                 if clean_reply:
@@ -1106,22 +1189,43 @@ class NapCatAdapter(BaseAdapter):
                         if partial_sent_count > 0:
                             await self._sleep_before_reply_sequence_part(group_id, clean_reply)
                         if clean_reply:
-                            await self._send_group_text(group_id, clean_reply)
+                            dispatch_sent = (
+                                bool(await self._send_group_text(group_id, clean_reply))
+                                or dispatch_sent
+                            )
                     else:
                         if partial_sent_count > 0:
                             await self._sleep_before_reply_sequence_part(
                                 f"private_{parsed.user_id}", clean_reply
                             )
                         if clean_reply:
-                            await self._send_private_text(parsed.user_id, clean_reply)
-            await self._send_stickers_after_reply(group_id, result.get("sticker_names", []))
-            await self._send_pokes_after_reply(group_id, result.get("poke_user_ids", []))
+                            dispatch_sent = (
+                                bool(await self._send_private_text(parsed.user_id, clean_reply))
+                                or dispatch_sent
+                            )
+            sticker_names = result.get("sticker_names", [])
+            poke_user_ids = result.get("poke_user_ids", [])
+            await self._send_stickers_after_reply(group_id, sticker_names)
+            await self._send_pokes_after_reply(group_id, poke_user_ids)
+            dispatch_sent = bool(sticker_names or poke_user_ids) or dispatch_sent
+            if dispatch_lease_id and not dispatch_sent and result.get("strategy") in {
+                "immediate",
+                "delayed",
+            }:
+                # The existing queue will deliver the generated reply later;
+                # keep the group lease until its delivery event completes.
+                dispatch_deferred = True
         except asyncio.CancelledError:
             raise
         except RuntimeError as exc:
             LOG.exception("引擎处理错误 (%s/%s): %s", group_id, parsed.user_id, exc)
         except Exception as exc:
             LOG.exception("消息处理异常 (%s/%s): %s", group_id, parsed.user_id, exc)
+        finally:
+            if dispatch_lease_id and not dispatch_deferred and dispatcher is not None:
+                dispatcher.finish(dispatch_lease_id, sent=dispatch_sent)
+                if self._dispatch_leases.get(group_id) == dispatch_lease_id:
+                    self._dispatch_leases.pop(group_id, None)
 
     # ─── 事件总线监听 ────────────────────────────────────
 
@@ -1146,14 +1250,39 @@ class NapCatAdapter(BaseAdapter):
         try:
             if event.type == SessionEventType.DELAYED_RESPONSE_TRIGGERED:
                 gid = str(event.data.get("group_id", ""))
+                if gid in self._dispatch_delivery_active:
+                    return
+                self._dispatch_delivery_active.add(gid)
+                dispatcher = self._get_dispatcher() if not gid.startswith("private_") else None
+                dispatch_lease_id = self._dispatch_leases.get(gid, "")
+                if dispatcher is not None and dispatch_lease_id != dispatcher.active_lease(gid):
+                    dispatch_lease_id = ""
+                    self._dispatch_leases.pop(gid, None)
+                if dispatcher is not None and not dispatch_lease_id:
+                    item_id = str(event.data.get("item_id", "") or event.data.get("agent_turn_id", ""))
+                    decision = dispatcher.admit(
+                        event_id=f"delayed:{gid}:{item_id or 'unknown'}",
+                        group_id=gid,
+                        sender_type="system",
+                        preferred_worker_id=dispatcher.worker_id,
+                    )
+                    if not decision.granted:
+                        cancel_item = getattr(engine.delayed_queue, "cancel_item", None)
+                        if callable(cancel_item) and item_id:
+                            cancel_item(item_id)
+                        self._dispatch_delivery_active.discard(gid)
+                        return
+                    dispatch_lease_id = decision.lease_id
+                    self._dispatch_leases[gid] = dispatch_lease_id
                 send_key = gid
                 if gid.startswith("private_"):
                     uid = gid.replace("private_", "").replace("qq_", "")
                     send_key = f"private_{uid}"
                 partial_sent_count = 0
+                dispatch_sent = False
 
                 async def _send_partial(text: str) -> None:
-                    nonlocal partial_sent_count
+                    nonlocal dispatch_sent, partial_sent_count
                     if partial_sent_count > 0:
                         await self._sleep_before_reply_sequence_part(send_key, text)
                     if gid.startswith("private_"):
@@ -1165,6 +1294,7 @@ class NapCatAdapter(BaseAdapter):
                         raise RuntimeError(f"Partial reply target is not allowed: {gid}")
                     if not sent:
                         raise RuntimeError(f"Failed to send partial reply: {gid}")
+                    dispatch_sent = True
                     partial_sent_count += 1
 
                 self._begin_reply_send(send_key)
@@ -1190,33 +1320,65 @@ class NapCatAdapter(BaseAdapter):
                                     )
                                 if reply:
                                     await self._send_private_text(uid, reply, reply_refs)
+                                    dispatch_sent = True
                             await self._send_stickers_after_reply(gid, sticker_names)
                             await self._send_pokes_after_reply(gid, poke_user_ids)
+                            dispatch_sent = bool(sticker_names or poke_user_ids) or dispatch_sent
                         elif gid in self._get_allowed_group_ids():
                             if reply:
                                 if partial_sent_count > 0:
                                     await self._sleep_before_reply_sequence_part(gid, reply)
                                 if reply:
                                     await self._send_group_text(gid, reply, reply_refs)
+                                    dispatch_sent = True
                             await self._send_stickers_after_reply(gid, sticker_names)
                             await self._send_pokes_after_reply(gid, poke_user_ids)
                 finally:
                     self._end_reply_send(send_key)
+                    if dispatch_lease_id and dispatcher is not None:
+                        dispatcher.finish(dispatch_lease_id, sent=dispatch_sent)
+                        if self._dispatch_leases.get(gid) == dispatch_lease_id:
+                            self._dispatch_leases.pop(gid, None)
+                    self._dispatch_delivery_active.discard(gid)
             elif event.type == SessionEventType.REMINDER_TRIGGERED:
                 gid = str(event.data.get("group_id", ""))
                 reply = event.data.get("reply", "")
                 adapter_type = event.data.get("adapter_type", "")
                 image_path = str(event.data.get("image_path", "")).strip()
                 if reply and adapter_type == self.adapter_type:
-                    if gid.startswith("private_"):
-                        uid = gid.replace("private_", "").replace("qq_", "")
-                        await self._send_private_text(uid, reply)
-                        if image_path:
-                            await self._send_private_image(uid, image_path)
-                    elif gid in self._get_allowed_group_ids():
-                        await self._send_group_text(gid, reply)
-                        if image_path:
-                            await self._send_group_image(gid, image_path)
+                    dispatcher = self._get_dispatcher() if not gid.startswith("private_") else None
+                    dispatch_lease_id = ""
+                    dispatch_sent = False
+                    if dispatcher is not None:
+                        reminder_id = str(event.data.get("reminder_id", "") or event.data.get("id", ""))
+                        if not reminder_id:
+                            reminder_id = hashlib.sha256(
+                                f"{gid}|{reply}|{image_path}".encode("utf-8")
+                            ).hexdigest()[:24]
+                        decision = dispatcher.admit(
+                            event_id=f"reminder:{gid}:{reminder_id}",
+                            group_id=gid,
+                            sender_type="system",
+                            preferred_worker_id=dispatcher.worker_id,
+                        )
+                        if not decision.granted:
+                            return
+                        dispatch_lease_id = decision.lease_id
+                    try:
+                        if gid.startswith("private_"):
+                            uid = gid.replace("private_", "").replace("qq_", "")
+                            await self._send_private_text(uid, reply)
+                            dispatch_sent = True
+                            if image_path:
+                                await self._send_private_image(uid, image_path)
+                        elif gid in self._get_allowed_group_ids():
+                            await self._send_group_text(gid, reply)
+                            dispatch_sent = True
+                            if image_path:
+                                await self._send_group_image(gid, image_path)
+                    finally:
+                        if dispatch_lease_id and dispatcher is not None:
+                            dispatcher.finish(dispatch_lease_id, sent=dispatch_sent)
         except Exception as exc:
             LOG.warning("事件处理异常: %s", exc)
 
