@@ -38,7 +38,8 @@ async def api_personas_list(
     if not personas_dir.exists():
         return _json_response({"personas": []})
 
-    active = _get_active_persona_name(data_dir)
+    active_names = _get_active_persona_names(data_dir)
+    active = active_names[0] if active_names else ""
     result = []
     for d in sorted(personas_dir.iterdir()):
         if not d.is_dir():
@@ -62,11 +63,13 @@ async def api_personas_list(
             "pid": worker_status.get("pid"),
             "heartbeat_at": worker_status.get("heartbeat_at"),
             "started_at": worker_status.get("started_at"),
-            "active": d.name == active,
+            "active": d.name in active_names,
             "has_config": has_config,
         })
 
-    return _json_response({"personas": result, "active": active})
+    return _json_response(
+        {"personas": result, "active": active, "active_personas": active_names}
+    )
 
 
 @handle_api_errors
@@ -125,8 +128,10 @@ async def api_persona_active_get(
     data_dir: Path,
 ) -> web.Response:
     """获取当前活跃人格。"""
-    active = _get_active_persona_name(data_dir)
-    return _json_response({"active": active})
+    active_names = _get_active_persona_names(data_dir)
+    return _json_response(
+        {"active": active_names[0] if active_names else "", "active_personas": active_names}
+    )
 
 
 @handle_api_errors
@@ -162,10 +167,15 @@ async def api_persona_start(
     root_dir = _find_root_dir(data_dir)
     if not (data_dir / "persona.json").exists():
         return _json_response({"error": f"无效的人格目录: {data_dir.name}"}, 400)
-    _set_active_persona_name(root_dir, data_dir.name)
+    active_names = _get_active_persona_names(root_dir)
+    if data_dir.name not in active_names:
+        active_names.append(data_dir.name)
+    _set_active_persona_names(root_dir, active_names)
     start_result = _start_persona_process(root_dir, data_dir)
     LOG.info("人格已启动: %s pid=%s", data_dir.name, start_result.get("pid"))
-    return _json_response({"success": True, "active": data_dir.name, **start_result})
+    return _json_response(
+        {"success": True, "active": data_dir.name, "active_personas": active_names, **start_result}
+    )
 
 
 @handle_api_errors
@@ -178,10 +188,12 @@ async def api_persona_stop(
     前端调用 POST /api/persona/stop。
     """
     root_dir = _find_root_dir(data_dir)
-    active = _get_active_persona_name(root_dir)
     stop_result = _stop_persona_process(data_dir)
-    if active == data_dir.name:
-        _set_active_persona_name(root_dir, "")
+    active_names = [
+        name for name in _get_active_persona_names(root_dir) if name != data_dir.name
+    ]
+    _set_active_persona_names(root_dir, active_names)
+    if not active_names:
         LOG.info("人格已停用: %s", data_dir.name)
     return _json_response({"success": True, **stop_result})
 
@@ -196,13 +208,13 @@ async def api_persona_status(
     前端调用 GET /api/persona/status。
     """
     root_dir = _find_root_dir(data_dir)
-    active = _get_active_persona_name(root_dir)
+    active_names = _get_active_persona_names(root_dir)
     worker_status = _read_worker_status(data_dir)
     running = _is_persona_running(data_dir, worker_status)
 
     return _json_response({
         "name": data_dir.name,
-        "active": data_dir.name == active,
+        "active": data_dir.name in active_names,
         "running": running,
         "pid": worker_status.get("pid"),
         "heartbeat_at": worker_status.get("heartbeat_at"),
@@ -220,9 +232,8 @@ async def api_persona_delete(
     if not name:
         return _json_response({"error": "人格名称不能为空"}, 400)
 
-    active = _get_active_persona_name(data_dir)
-    if name == active:
-        return _json_response({"error": "不能删除当前活跃的人格"}, 400)
+    if name in _get_active_persona_names(data_dir):
+        return _json_response({"error": "不能删除正在运行的人格"}, 400)
 
     persona_dir = data_dir / "personas" / name
     if not persona_dir.exists():
@@ -364,20 +375,31 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _get_active_persona_name(data_dir: Path) -> str:
-    """从 global_config.json 读取活跃人格名。"""
+def _get_active_persona_names(data_dir: Path) -> list[str]:
+    """从 global_config.json 读取运行人格列表，兼容旧单人格字段。"""
     config_path = data_dir / "global_config.json"
     if config_path.exists():
         try:
             data = json.loads(config_path.read_text(encoding="utf-8"))
-            return data.get("active_persona", "")
+            configured = data.get("active_personas")
+            if isinstance(configured, list):
+                names = [str(name).strip() for name in configured if str(name).strip()]
+                if names:
+                    return list(dict.fromkeys(names))
+            active = str(data.get("active_persona", "")).strip()
+            return [active] if active else []
         except Exception:
             pass
-    return ""
+    return []
 
 
-def _set_active_persona_name(data_dir: Path, name: str) -> None:
-    """写入活跃人格名到 global_config.json。"""
+def _get_active_persona_name(data_dir: Path) -> str:
+    names = _get_active_persona_names(data_dir)
+    return names[0] if names else ""
+
+
+def _set_active_persona_names(data_dir: Path, names: list[str]) -> None:
+    """写入运行人格列表，并同步旧单人格字段作为主选人格。"""
     config_path = data_dir / "global_config.json"
     data: dict[str, Any] = {}
     if config_path.exists():
@@ -385,5 +407,12 @@ def _set_active_persona_name(data_dir: Path, name: str) -> None:
             data = json.loads(config_path.read_text(encoding="utf-8"))
         except Exception:
             data = {}
-    data["active_persona"] = name
+    selected = list(dict.fromkeys(str(name).strip() for name in names if str(name).strip()))
+    data["active_personas"] = selected
+    data["active_persona"] = selected[0] if selected else ""
     config_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _set_active_persona_name(data_dir: Path, name: str) -> None:
+    """切换到单个人格，保留旧 API 的替换语义。"""
+    _set_active_persona_names(data_dir, [name] if name else [])

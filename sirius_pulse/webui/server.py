@@ -297,6 +297,10 @@ class WebUIServer(_WebUIServer):
         manager = self.persona_manager
         if manager is None:
             return False
+        if isinstance(manager, dict):
+            manager = manager.get(persona_dir.name)
+            if manager is None:
+                return False
 
         manager_dir = getattr(manager, "persona_dir", None)
         if manager_dir is not None:

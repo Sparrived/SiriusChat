@@ -323,6 +323,9 @@ async def test_persona_start_when_two_personas_are_requested_then_spawns_both_wo
     assert str(second_dir) in calls[1]
     assert json.loads((first_dir / "engine_state" / "worker_status.json").read_text())["pid"] == 30001
     assert json.loads((second_dir / "engine_state" / "worker_status.json").read_text())["pid"] == 30002
+    config = json.loads((tmp_path / "global_config.json").read_text())
+    assert config["active_personas"] == ["first", "second"]
+    assert config["active_persona"] == "first"
 
 
 @pytest.mark.asyncio
@@ -354,6 +357,27 @@ async def test_webui_named_persona_start_targets_requested_persona(tmp_path, mon
     assert payload["active"] == "second"
     assert str(second_dir) in calls[0]
     assert not (first_dir / "engine_state" / "worker_status.json").exists()
+
+
+def test_webui_shutdown_persona_manager_targets_the_matching_worker(tmp_path):
+    first_dir = tmp_path / "personas" / "first"
+    second_dir = tmp_path / "personas" / "second"
+
+    class Worker:
+        def __init__(self, persona_dir):
+            self.persona_dir = persona_dir
+            self.shutdown_calls = 0
+
+        def shutdown(self):
+            self.shutdown_calls += 1
+
+    first = Worker(first_dir)
+    second = Worker(second_dir)
+    server = WebUIServer(data_dir=tmp_path, persona_manager={"first": first, "second": second})
+
+    assert server._shutdown_persona_manager(second_dir)
+    assert second.shutdown_calls == 1
+    assert first.shutdown_calls == 0
 
 
 @pytest.mark.asyncio

@@ -98,6 +98,7 @@ def _paint(text: str, *styles: str) -> str:
 def _default_global_config() -> dict:
     return {
         "active_persona": "default",
+        "active_personas": ["default"],
         "webui_host": "0.0.0.0",
         "webui_port": 8080,
         "napcat_install_dir": str(REPO_ROOT / "napcat"),
@@ -125,9 +126,19 @@ def _save_global_config(config: dict) -> None:
     )
 
 
+def _get_active_persona_names(config: dict[str, Any]) -> list[str]:
+    configured = config.get("active_personas")
+    if isinstance(configured, list):
+        names = [str(name).strip() for name in configured if str(name).strip()]
+        if names:
+            return list(dict.fromkeys(names))
+    name = str(config.get("active_persona", "default")).strip()
+    return [name] if name else []
+
+
 def _get_active_persona_dir() -> Path:
-    config = _load_global_config()
-    name = config.get("active_persona", "default")
+    names = _get_active_persona_names(_load_global_config())
+    name = names[0] if names else "default"
     return DATA_DIR / "personas" / name
 
 
@@ -309,6 +320,7 @@ def _migrate_flat_to_personas() -> None:
     if migrated:
         config = _load_global_config()
         config["active_persona"] = "default"
+        config["active_personas"] = ["default"]
         _save_global_config(config)
         print(_paint(f"数据迁移完成: {', '.join(migrated)} → personas/default/", _Ansi.GREEN))
 
@@ -323,16 +335,20 @@ async def _cmd_run(args: argparse.Namespace) -> None:
     _migrate_flat_to_personas()
 
     config = _load_global_config()
-    persona_dir = _get_active_persona_dir()
-
-    if not persona_dir.exists():
-        print(_paint(f"活跃人格目录不存在: {persona_dir}", _Ansi.RED))
+    persona_names = _get_active_persona_names(config)
+    persona_dirs = [DATA_DIR / "personas" / name for name in persona_names]
+    missing_dirs = [persona_dir for persona_dir in persona_dirs if not persona_dir.exists()]
+    if missing_dirs:
+        print(_paint(f"活跃人格目录不存在: {missing_dirs[0]}", _Ansi.RED))
         print("请运行 `python main.py persona list` 查看可用人格")
+        raise SystemExit(1)
+    if not persona_dirs:
+        print(_paint("未配置活跃人格", _Ansi.RED))
         raise SystemExit(1)
 
     log_level = str(config.get("log_level", "INFO")).upper()
     webui_log_file = DATA_DIR / "logs" / "webui.log"
-    persona_log_file = persona_dir / "logs" / "persona.log"
+    persona_log_file = persona_dirs[0] / "logs" / "persona.log"
     configure_logging(
         level=log_level,
         format_type="console",
@@ -387,15 +403,16 @@ async def _cmd_run(args: argparse.Namespace) -> None:
 
     from sirius_pulse.persona_worker import PersonaWorker
 
-    worker = PersonaWorker(persona_dir)
-    webui.persona_manager = worker
-    LOG.info("活跃人格: %s (%s)", config.get("active_persona", "default"), persona_dir)
+    workers = {persona_dir.name: PersonaWorker(persona_dir) for persona_dir in persona_dirs}
+    webui.persona_manager = workers
+    LOG.info("活跃人格: %s", ", ".join(persona_names))
 
     stop_all_event = asyncio.Event()
 
     def _request_shutdown() -> None:
         stop_all_event.set()
-        worker.shutdown()
+        for worker in workers.values():
+            worker.shutdown()
 
     if sys.platform == "win32":
         import signal as _signal
@@ -412,12 +429,28 @@ async def _cmd_run(args: argparse.Namespace) -> None:
 
     LOG.info("按 Ctrl+C 停止所有服务")
 
+    worker_tasks = [
+        asyncio.create_task(worker.run(), name=f"persona-worker:{name}")
+        for name, worker in workers.items()
+    ]
+    workers_done = asyncio.gather(*worker_tasks, return_exceptions=True)
+    stop_task = asyncio.create_task(stop_all_event.wait())
     try:
-        await worker.run()
-        if not stop_all_event.is_set():
-            LOG.info("Persona worker stopped; WebUI remains running")
+        done, _pending = await asyncio.wait(
+            {workers_done, stop_task}, return_when=asyncio.FIRST_COMPLETED
+        )
+        if workers_done in done and not stop_all_event.is_set():
+            for name, result in zip(workers, workers_done.result(), strict=True):
+                if isinstance(result, Exception):
+                    LOG.error("人格 Worker 异常退出: %s: %s", name, result)
+            LOG.info("所有 Persona worker 已停止；WebUI 保持运行")
             await stop_all_event.wait()
     finally:
+        _request_shutdown()
+        await workers_done
+        if not stop_task.done():
+            stop_task.cancel()
+        await asyncio.gather(stop_task, return_exceptions=True)
         await webui.stop()
         LOG.info("所有服务已停止")
 
@@ -480,20 +513,20 @@ def _cmd_webui_stop(args: argparse.Namespace) -> None:
 
 def _cmd_persona_list(args: argparse.Namespace) -> None:
     config = _load_global_config()
-    active = config.get("active_persona", "")
+    active_names = set(_get_active_persona_names(config))
     personas_dir = DATA_DIR / "personas"
 
     if not personas_dir.exists():
         print("暂无人格。运行 `python main.py persona create <名称>` 创建。")
         return
 
-    print(f"人格列表（当前活跃: {active or '无'}）\n")
+    print(f"人格列表（当前活跃: {', '.join(sorted(active_names)) or '无'}）\n")
     found = False
     for d in sorted(personas_dir.iterdir()):
         if not d.is_dir():
             continue
         found = True
-        marker = _paint(" ● ", _Ansi.GREEN) if d.name == active else "   "
+        marker = _paint(" ● ", _Ansi.GREEN) if d.name in active_names else "   "
         persona_file = d / "persona.json"
         display = d.name
         if persona_file.exists():
@@ -557,6 +590,7 @@ def _cmd_persona_activate(args: argparse.Namespace) -> None:
 
     config = _load_global_config()
     config["active_persona"] = name
+    config["active_personas"] = [name]
     _save_global_config(config)
     print(_paint(f"已切换活跃人格: {name}", _Ansi.GREEN))
 
@@ -564,9 +598,8 @@ def _cmd_persona_activate(args: argparse.Namespace) -> None:
 def _cmd_persona_delete(args: argparse.Namespace) -> None:
     name = args.name
     config = _load_global_config()
-    active = config.get("active_persona", "")
 
-    if name == active:
+    if name in _get_active_persona_names(config):
         print(_paint("不能删除当前活跃的人格。请先切换到其他人格。", _Ansi.RED))
         return
 
