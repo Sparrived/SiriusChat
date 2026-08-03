@@ -253,7 +253,8 @@ async def _poll_github_events(ctx: Any) -> None:
         last_ts: dict[str, str] = dict(store.get("last_event_timestamps", {}) or {})
         last_poll: dict[str, float] = dict(store.get("_last_poll_at", {}) or {})
 
-        now = time.monotonic()
+        # This value is persisted, so it must remain comparable after a restart.
+        now = time.time()
 
         async with GitHubClient(timeout=30.0) as client:
             for repo_cfg in repos:
@@ -503,7 +504,7 @@ async def _poll_github_events(ctx: Any) -> None:
                             )
 
                 # 本轮 API 调用完成，保存调用时间戳
-                last_poll[repo_key] = time.monotonic()
+                last_poll[repo_key] = time.time()
                 store.set("_last_poll_at", last_poll)
                 store.save()
     except Exception as exc:
