@@ -157,3 +157,5 @@ class ParsedEvent:
     # 平台级 @ 提及元数据（从原始 segments 提取，不依赖渲染文本）
     at_user_ids: list[str] = field(default_factory=list)
     mention_all: bool = False
+    # OneBot notify/poke 的目标 QQ 号；普通消息为空。
+    poke_target_id: str = ""

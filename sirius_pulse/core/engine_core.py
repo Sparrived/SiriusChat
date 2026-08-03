@@ -544,6 +544,8 @@ class _EmotionalGroupChatEngineBase:
         *,
         sender_type: str = "human",
         caller_is_developer: bool = False,
+        explicitly_addressed: bool = False,
+        persist: bool = True,
     ) -> Any:
         """Signal computation layer: pure rule-based analysis."""
         return self._pipeline.compute_signal(
@@ -552,6 +554,8 @@ class _EmotionalGroupChatEngineBase:
             group_id,
             sender_type=sender_type,
             caller_is_developer=caller_is_developer,
+            explicitly_addressed=explicitly_addressed,
+            persist=persist,
         )
 
     def _pre_filter(
@@ -998,6 +1002,70 @@ class _EmotionalGroupChatEngineBase:
     # Public API
     # ==================================================================
 
+    def preview_dispatch(
+        self,
+        message: Message,
+        participants: list[UnifiedUser],
+        group_id: str,
+    ) -> dict[str, Any]:
+        """Compute a side-effect-light candidate score before taking a lease."""
+        content = message.content or ""
+        explicitly_mentioned = bool(
+            message.mentions_current_bot or self._message_explicitly_mentions_current_bot(message)
+        )
+        if message.received_during_bot_send and not explicitly_mentioned:
+            return {"should_reply": False, "score": 0.0, "reason": "reply_send_window"}
+        if message.sender_type == "other_ai" and not explicitly_mentioned and len(content) < 30:
+            return {"should_reply": False, "score": 0.0, "reason": "short_peer_message"}
+        if content.lstrip().startswith("/"):
+            return {
+                "should_reply": True,
+                "score": 1.5,
+                "threshold": 0.0,
+                "reason": "plugin_candidate",
+                "urgency_score": 100.0,
+            }
+
+        user_id = (
+            participants[0].user_id
+            if participants and participants[0].user_id
+            else message.channel_user_id or ""
+        )
+        caller_is_developer = participants[0].is_developer if participants else False
+        signal = self._compute_signal(
+            content,
+            user_id,
+            group_id,
+            sender_type=message.sender_type,
+            caller_is_developer=caller_is_developer,
+            explicitly_addressed=explicitly_mentioned,
+            persist=False,
+        )
+        filter_result = self._pre_filter(
+            signal,
+            content,
+            user_id,
+            group_id,
+            message.sender_type or "human",
+            coordinated=False,
+        )
+        participation = signal.participation or {}
+        score = float(participation.get("score", 0.0))
+        should_reply = filter_result == "pass" or explicitly_mentioned
+        if explicitly_mentioned:
+            score = max(score, 1.0)
+            if filter_result != "pass":
+                participation = {**participation, "reason": "explicit_mention"}
+        return {
+            "should_reply": should_reply,
+            "score": score,
+            "threshold": float(participation.get("threshold", 0.5)),
+            "reason": str(participation.get("reason") or filter_result),
+            "urgency_score": float(signal.urgency_score),
+            "directed_score": float(signal.directed_score),
+            "is_mentioned": bool(signal.is_mentioned or explicitly_mentioned),
+        }
+
     def observe_message(
         self,
         message: Message,
@@ -1346,6 +1414,7 @@ class _EmotionalGroupChatEngineBase:
             group_id,
             sender_type=message.sender_type,
             caller_is_developer=caller_is_developer,
+            explicitly_addressed=message.mentions_current_bot,
         )
         self._record_intent_scores_for_latest_message(group_id, message, user_id, signal)
 

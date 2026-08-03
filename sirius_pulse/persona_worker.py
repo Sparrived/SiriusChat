@@ -130,6 +130,10 @@ class PersonaWorker:
                     "dispatch_lease_seconds": adapter_cfg.dispatch_lease_seconds,
                     "dispatch_peer_cooldown_seconds": adapter_cfg.dispatch_peer_cooldown_seconds,
                     "dispatch_max_peer_turns": adapter_cfg.dispatch_max_peer_turns,
+                    "dispatch_score_collection_seconds": adapter_cfg.dispatch_score_collection_seconds,
+                    "dispatch_activity_window_seconds": adapter_cfg.dispatch_activity_window_seconds,
+                    "dispatch_activity_penalty_per_reply": adapter_cfg.dispatch_activity_penalty_per_reply,
+                    "dispatch_max_activity_penalty": adapter_cfg.dispatch_max_activity_penalty,
                 },
             )
             if self._runtime is not None and self._runtime.engine is not None:

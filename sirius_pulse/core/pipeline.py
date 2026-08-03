@@ -161,6 +161,8 @@ class Pipeline:
         *,
         sender_type: str = "human",
         caller_is_developer: bool = False,
+        explicitly_addressed: bool = False,
+        persist: bool = True,
     ) -> SignalAnalysis:
         """纯规则信号计算。替代原 cognition() + decision()。
 
@@ -191,43 +193,54 @@ class Pipeline:
             rhythm=rhythm,
         )
 
-        # 话题窗口维护
-        try:
-            msg_kw = extract_keywords(content)
-            window = engine._topic_window.setdefault(group_id or "", [])
-            window.append(msg_kw)
-            max_size = getattr(engine, "_topic_window_max_size", 10)
-            if len(window) > max_size:
-                window[:] = window[-max_size:]
-        except Exception:
-            logger.warning("裁剪话题窗口失败", exc_info=True)
+        # Platform metadata (for example a poke targeting this persona) is
+        # stronger and more reliable than reconstructing an @ mention from text.
+        if explicitly_addressed:
+            signal.directed_score = 1.0
+            signal.is_mentioned = True
+            if signal.social_intent == "silent":
+                signal.social_intent = "social"
+            signal.urgency_score = max(signal.urgency_score, 70.0)
+            signal.relevance_score = max(signal.relevance_score, 0.65)
 
-        # 持久化认知事件
-        try:
-            emotion = signal.emotion
-            engine.cognition_store.add(
-                group_id=group_id or "",
-                user_id=user_id or "",
-                valence=getattr(emotion, "valence", 0.0) if emotion else 0.0,
-                arousal=getattr(emotion, "arousal", 0.3) if emotion else 0.3,
-                basic_emotion=(
-                    getattr(getattr(emotion, "basic_emotion", None), "name", "")
-                    if emotion and getattr(emotion, "basic_emotion", None)
-                    else ""
-                ),
-                intensity=getattr(emotion, "intensity", 0.5) if emotion else 0.5,
-                social_intent=signal.social_intent,
-                urgency_score=signal.urgency_score,
-                relevance_score=signal.relevance_score,
-                confidence=0.8,
-                directed_score=signal.directed_score,
-                sarcasm_score=signal.sarcasm_score,
-                entitlement_score=signal.entitlement_score,
-                turn_gap_readiness=signal.turn_gap_readiness,
-                directed_signals={},
-            )
-        except Exception:
-            pass
+        if persist:
+            # 话题窗口维护
+            try:
+                msg_kw = extract_keywords(content)
+                window = engine._topic_window.setdefault(group_id or "", [])
+                window.append(msg_kw)
+                max_size = getattr(engine, "_topic_window_max_size", 10)
+                if len(window) > max_size:
+                    window[:] = window[-max_size:]
+            except Exception:
+                logger.warning("裁剪话题窗口失败", exc_info=True)
+
+            # 持久化认知事件
+            try:
+                emotion = signal.emotion
+                engine.cognition_store.add(
+                    group_id=group_id or "",
+                    user_id=user_id or "",
+                    valence=getattr(emotion, "valence", 0.0) if emotion else 0.0,
+                    arousal=getattr(emotion, "arousal", 0.3) if emotion else 0.3,
+                    basic_emotion=(
+                        getattr(getattr(emotion, "basic_emotion", None), "name", "")
+                        if emotion and getattr(emotion, "basic_emotion", None)
+                        else ""
+                    ),
+                    intensity=getattr(emotion, "intensity", 0.5) if emotion else 0.5,
+                    social_intent=signal.social_intent,
+                    urgency_score=signal.urgency_score,
+                    relevance_score=signal.relevance_score,
+                    confidence=0.8,
+                    directed_score=signal.directed_score,
+                    sarcasm_score=signal.sarcasm_score,
+                    entitlement_score=signal.entitlement_score,
+                    turn_gap_readiness=signal.turn_gap_readiness,
+                    directed_signals={},
+                )
+            except Exception:
+                pass
 
         return signal
 

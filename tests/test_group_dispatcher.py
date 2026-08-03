@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 from sirius_pulse.core.group_dispatcher import GroupDispatcher
@@ -138,3 +139,78 @@ def test_group_dispatcher_read_snapshot_does_not_register_a_webui_worker(tmp_pat
     assert snapshot["events"][0]["reason"] == "selected"
     assert all(worker["worker_id"] != "webui" for worker in snapshot["workers"])
     second.close()
+
+
+def test_group_dispatcher_final_score_selects_highest_candidate(tmp_path: Path):
+    async def run() -> None:
+        clock = _Clock()
+        db_path = tmp_path / "dispatcher.db"
+        first = _dispatcher(db_path, clock, "alpha", "100")
+        second = _dispatcher(db_path, clock, "beta", "200")
+
+        alpha, beta = await asyncio.gather(
+            first.coordinate(
+                event_id="scored-1",
+                group_id="g1",
+                base_score=0.55,
+                should_reply=True,
+            ),
+            second.coordinate(
+                event_id="scored-1",
+                group_id="g1",
+                base_score=0.90,
+                should_reply=True,
+            ),
+        )
+        assert not alpha.granted
+        assert beta.granted
+        assert beta.base_score == 0.9
+        assert beta.final_score == 0.9
+
+    asyncio.run(run())
+
+
+def test_group_dispatcher_penalizes_recently_active_worker(tmp_path: Path):
+    async def run() -> None:
+        clock = _Clock()
+        db_path = tmp_path / "dispatcher.db"
+        first = _dispatcher(db_path, clock, "alpha", "100")
+        second = _dispatcher(db_path, clock, "beta", "200")
+
+        alpha, beta = await asyncio.gather(
+            first.coordinate(
+                event_id="active-1",
+                group_id="g1",
+                base_score=0.90,
+                should_reply=True,
+            ),
+            second.coordinate(
+                event_id="active-1",
+                group_id="g1",
+                base_score=0.20,
+                should_reply=True,
+            ),
+        )
+        assert alpha.granted
+        assert first.finish(alpha.lease_id, sent=True)
+
+        clock.value += 4
+        next_alpha, next_beta = await asyncio.gather(
+            first.coordinate(
+                event_id="active-2",
+                group_id="g1",
+                base_score=0.80,
+                should_reply=True,
+            ),
+            second.coordinate(
+                event_id="active-2",
+                group_id="g1",
+                base_score=0.75,
+                should_reply=True,
+            ),
+        )
+        assert not next_alpha.granted
+        assert next_beta.granted
+        assert next_beta.activity_penalty == 0.0
+
+    asyncio.run(run())

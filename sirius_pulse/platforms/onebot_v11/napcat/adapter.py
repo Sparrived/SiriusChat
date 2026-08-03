@@ -230,9 +230,21 @@ class NapCatAdapter(BaseAdapter):
             ),
             lease_seconds=float(self.plugin_config.get("dispatch_lease_seconds", 120.0)),
             peer_cooldown_seconds=float(
-                self.plugin_config.get("dispatch_peer_cooldown_seconds", 60.0)
+                self.plugin_config.get("dispatch_peer_cooldown_seconds", 10.0)
             ),
             max_peer_turns=int(self.plugin_config.get("dispatch_max_peer_turns", 1)),
+            score_collection_seconds=float(
+                self.plugin_config.get("dispatch_score_collection_seconds", 0.15)
+            ),
+            activity_window_seconds=float(
+                self.plugin_config.get("dispatch_activity_window_seconds", 300.0)
+            ),
+            activity_penalty_per_reply=float(
+                self.plugin_config.get("dispatch_activity_penalty_per_reply", 0.12)
+            ),
+            max_activity_penalty=float(
+                self.plugin_config.get("dispatch_max_activity_penalty", 0.6)
+            ),
         )
         return self._dispatcher
 
@@ -331,6 +343,14 @@ class NapCatAdapter(BaseAdapter):
             return True
         self._seen_message_ids[key] = now
         return False
+
+    @staticmethod
+    def _is_poke_event(event: dict[str, Any]) -> bool:
+        return (
+            event.get("post_type") == "notice"
+            and event.get("notice_type") == "notify"
+            and event.get("sub_type") == "poke"
+        )
 
     async def _listen_loop(self) -> None:
         """WebSocket 消息监听与分发。"""
@@ -702,10 +722,13 @@ class NapCatAdapter(BaseAdapter):
         from sirius_pulse.adapters.models import ParsedEvent
 
         post_type = raw_event.get("post_type")
-        if post_type != "message":
+        is_poke = self._is_poke_event(raw_event)
+        if post_type != "message" and not is_poke:
             return None
 
         msg_type = raw_event.get("message_type", "")
+        if is_poke:
+            msg_type = "group" if raw_event.get("group_id") else "private"
         uid = str(raw_event.get("user_id", ""))
         self_id = str(raw_event.get("self_id", ""))
 
@@ -718,7 +741,9 @@ class NapCatAdapter(BaseAdapter):
 
         nickname, card = self.extract_sender_names(raw_event)
 
-        if msg_type == "group":
+        if is_poke:
+            prompt = self._render_poke_prompt(raw_event, self_id)
+        elif msg_type == "group":
             prompt = await self._render_group_prompt(raw_event, self_id, gid)
         elif msg_type == "private":
             prompt = await self._render_private_prompt(raw_event)
@@ -757,6 +782,11 @@ class NapCatAdapter(BaseAdapter):
 
         # 提取平台消息 ID（用于引用回复）
         msg_id = str(raw_event.get("message_id", ""))
+        poke_target_id = str(raw_event.get("target_id", "")) if is_poke else ""
+        if is_poke and not msg_id:
+            msg_id = "poke-{}-{}-{}".format(
+                raw_event.get("time", ""), uid, poke_target_id
+            )
 
         return ParsedEvent(
             group_id=gid,
@@ -770,7 +800,14 @@ class NapCatAdapter(BaseAdapter):
             multimodal_inputs=multimodal_inputs,
             at_user_ids=at_user_ids,
             mention_all=mention_all,
+            poke_target_id=poke_target_id,
         )
+
+    def _render_poke_prompt(self, event: dict[str, Any], self_id: str) -> str:
+        """Render a OneBot poke notice as normal model-readable text."""
+        target_id = str(event.get("target_id", ""))
+        target_name = self._persona_name if target_id == self_id else f"qq_{target_id}"
+        return f"戳了一下 {target_name}"
 
     async def _render_group_prompt(self, event: dict[str, Any], self_id: str, group_id: str) -> str:
         """将群聊 OneBot 消息段渲染为引擎可读的 prompt 文本。"""
@@ -999,13 +1036,16 @@ class NapCatAdapter(BaseAdapter):
 
     async def _on_event(self, event: dict[str, Any]) -> None:
         post_type = event.get("post_type")
-        if post_type != "message":
+        is_poke = self._is_poke_event(event)
+        if post_type != "message" and not is_poke:
             return
-        if self._is_duplicate_message_event(event):
+        if post_type == "message" and self._is_duplicate_message_event(event):
             return
         self._event_queue.put_nowait(event)
 
         msg_type = event.get("message_type")
+        if is_poke:
+            msg_type = "group" if event.get("group_id") else "private"
         if msg_type == "group":
             await self._on_group_message(event)
         elif msg_type == "private":
@@ -1071,10 +1111,16 @@ class NapCatAdapter(BaseAdapter):
         is_peer_ai = str(parsed.user_id) in [str(v) for v in peer_ai_ids]
         qq_number = str(self.plugin_config.get("qq_number", "") or "").strip()
         mentions_current_bot = bool(
-            parsed.message_type == "group"
-            and (
-                (parsed.self_id and parsed.self_id in parsed.at_user_ids)
-                or (qq_number and qq_number in parsed.at_user_ids)
+            (
+                parsed.message_type == "group"
+                and (
+                    (parsed.self_id and parsed.self_id in parsed.at_user_ids)
+                    or (qq_number and qq_number in parsed.at_user_ids)
+                )
+            )
+            or (
+                parsed.poke_target_id
+                and parsed.poke_target_id in {parsed.self_id, qq_number}
             )
         )
 
@@ -1113,12 +1159,26 @@ class NapCatAdapter(BaseAdapter):
         if dispatcher is not None:
             dispatcher.set_account_id(parsed.self_id or qq_number)
             event_id = self._dispatch_event_id(parsed)
-            decision = dispatcher.admit(
+            preview_dispatch = getattr(self._engine, "preview_dispatch", None)
+            if callable(preview_dispatch):
+                try:
+                    candidate = preview_dispatch(message, [participant], group_id)
+                except Exception:
+                    LOG.warning("[群调度] 预判失败，按静默候选处理", exc_info=True)
+                    candidate = {"should_reply": False, "score": 0.0, "reason": "preview_failed"}
+            else:
+                candidate = {"should_reply": True, "score": 1.0, "reason": "legacy_engine"}
+            decision = await dispatcher.coordinate(
                 event_id=event_id,
                 group_id=group_id,
+                base_score=float(candidate.get("score", 0.0)),
+                should_reply=bool(candidate.get("should_reply", False)),
                 sender_type=message.sender_type,
                 sender_account_id=parsed.user_id,
-                target_account_ids=tuple(parsed.at_user_ids),
+                target_account_ids=tuple(
+                    dict.fromkeys([*parsed.at_user_ids, parsed.poke_target_id])
+                ),
+                reason=str(candidate.get("reason", "")),
             )
             if not decision.granted:
                 observe = getattr(self._engine, "observe_message", None)

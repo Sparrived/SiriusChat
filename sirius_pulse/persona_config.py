@@ -42,8 +42,12 @@ class NapCatAdapterConfig:
     dispatch_priority: float = 0.0
     dispatch_min_reply_interval_seconds: float = 3.0
     dispatch_lease_seconds: float = 120.0
-    dispatch_peer_cooldown_seconds: float = 60.0
+    dispatch_peer_cooldown_seconds: float = 10.0
     dispatch_max_peer_turns: int = 1
+    dispatch_score_collection_seconds: float = 0.15
+    dispatch_activity_window_seconds: float = 300.0
+    dispatch_activity_penalty_per_reply: float = 0.12
+    dispatch_max_activity_penalty: float = 0.6
     enable_group_chat: bool = True
     enable_private_chat: bool = True
     root: str = ""
@@ -65,6 +69,10 @@ class NapCatAdapterConfig:
             "dispatch_lease_seconds": self.dispatch_lease_seconds,
             "dispatch_peer_cooldown_seconds": self.dispatch_peer_cooldown_seconds,
             "dispatch_max_peer_turns": self.dispatch_max_peer_turns,
+            "dispatch_score_collection_seconds": self.dispatch_score_collection_seconds,
+            "dispatch_activity_window_seconds": self.dispatch_activity_window_seconds,
+            "dispatch_activity_penalty_per_reply": self.dispatch_activity_penalty_per_reply,
+            "dispatch_max_activity_penalty": self.dispatch_max_activity_penalty,
             "enable_group_chat": self.enable_group_chat,
             "enable_private_chat": self.enable_private_chat,
             "root": self.root,
@@ -89,9 +97,21 @@ class NapCatAdapterConfig:
             ),
             dispatch_lease_seconds=max(5.0, float(data.get("dispatch_lease_seconds", 120.0))),
             dispatch_peer_cooldown_seconds=max(
-                0.0, float(data.get("dispatch_peer_cooldown_seconds", 60.0))
+                0.0, float(data.get("dispatch_peer_cooldown_seconds", 10.0))
             ),
             dispatch_max_peer_turns=max(0, int(data.get("dispatch_max_peer_turns", 1))),
+            dispatch_score_collection_seconds=max(
+                0.05, float(data.get("dispatch_score_collection_seconds", 0.15))
+            ),
+            dispatch_activity_window_seconds=max(
+                30.0, float(data.get("dispatch_activity_window_seconds", 300.0))
+            ),
+            dispatch_activity_penalty_per_reply=max(
+                0.0, float(data.get("dispatch_activity_penalty_per_reply", 0.12))
+            ),
+            dispatch_max_activity_penalty=max(
+                0.0, float(data.get("dispatch_max_activity_penalty", 0.6))
+            ),
             enable_group_chat=bool(data.get("enable_group_chat", True)),
             enable_private_chat=bool(data.get("enable_private_chat", True)),
             root=str(data.get("root", "")),

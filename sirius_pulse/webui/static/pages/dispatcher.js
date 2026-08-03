@@ -14,6 +14,9 @@ const REASONS = {
   peer_budget_exhausted: 'Peer 轮次已用尽',
   peer_disabled: 'Peer 交互已关闭',
   target_unavailable: '目标人格不可用',
+  all_candidates_silent: '所有人格判断为静默',
+  preview_failed: '基础评分失败',
+  reply_send_window: '当前有人格正在发送',
   no_workers: '没有在线人格',
   event_granted: '事件已被其他人格接管',
 };
@@ -116,6 +119,10 @@ function renderPolicy(policy) {
     ['租约时长', formatPolicyValue(values.dispatch_lease_seconds, '秒')],
     ['Peer 冷却窗口', formatPolicyValue(values.dispatch_peer_cooldown_seconds, '秒')],
     ['最大 Peer 轮次', formatPolicyValue(values.dispatch_max_peer_turns, '轮')],
+    ['分数收集窗口', formatPolicyValue(values.dispatch_score_collection_seconds, '秒')],
+    ['活跃度窗口', formatPolicyValue(values.dispatch_activity_window_seconds, '秒')],
+    ['单次活跃惩罚', formatPolicyValue(values.dispatch_activity_penalty_per_reply, '分')],
+    ['最大活跃惩罚', formatPolicyValue(values.dispatch_max_activity_penalty, '分')],
   ];
   $('dispatcherPolicy').innerHTML = rows.map(([label, value]) => `
     <div class="dispatcher-policy-row"><span>${label}</span><strong>${value}</strong></div>
@@ -149,12 +156,15 @@ function renderEvents(events) {
     const status = STATUS_LABELS[event.status] || event.status || '未知';
     const reason = REASONS[event.reason] || event.reason || '历史记录未保存原因';
     const granted = ['granted', 'sent'].includes(event.status);
+    const score = event.final_score
+      ? `最终 ${Number(event.final_score).toFixed(2)} · 基础 ${Number(event.base_score || 0).toFixed(2)}`
+      : '';
     return `
       <div class="dispatcher-event-row">
         <span class="dispatcher-event-mark ${granted ? 'is-granted' : 'is-observed'}"></span>
         <div class="dispatcher-event-main">
           <div><strong>${escapeHtml(event.group_id)}</strong><span class="dispatcher-event-status ${granted ? 'is-granted' : ''}">${status}</span></div>
-          <div class="dispatcher-event-reason">${escapeHtml(reason)} · ${escapeHtml(event.worker_id || '未指定')}</div>
+          <div class="dispatcher-event-reason">${escapeHtml(reason)} · ${escapeHtml(event.worker_id || '未指定')}${score ? ` · ${escapeHtml(score)}` : ''}</div>
         </div>
         <time>${formatRelative(event.updated_at)}</time>
       </div>
@@ -184,7 +194,7 @@ function renderWorkers(workers, groups) {
           <span>${worker.account_id ? `QQ ${escapeHtml(worker.account_id)}` : '未绑定 QQ'} · 优先级 ${Number(worker.priority || 0).toFixed(1)}</span>
         </div>
         <div class="dispatcher-worker-load"><span style="width:${width}%"></span></div>
-        <div class="dispatcher-worker-count"><strong>${worker.reply_count || 0}</strong><span>回复</span></div>
+        <div class="dispatcher-worker-count"><strong>${worker.reply_count || 0}</strong><span>回复 · 近5分 ${worker.recent_reply_count || 0}</span></div>
         <div class="dispatcher-worker-active">${active ? `${active} 群占用` : '空闲'}</div>
         <div class="dispatcher-worker-seen">${worker.online ? '在线' : formatRelative(worker.last_seen)}</div>
       </div>

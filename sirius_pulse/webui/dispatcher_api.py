@@ -18,6 +18,10 @@ _POLICY_KEYS = (
     "dispatch_lease_seconds",
     "dispatch_peer_cooldown_seconds",
     "dispatch_max_peer_turns",
+    "dispatch_score_collection_seconds",
+    "dispatch_activity_window_seconds",
+    "dispatch_activity_penalty_per_reply",
+    "dispatch_max_activity_penalty",
 )
 
 
@@ -94,6 +98,10 @@ def _merge_snapshots(snapshots: list[dict[str, object]], paths: list[Path]) -> d
                         float(item.get("last_reply_at") or 0),
                     ),
                     "reply_count": max(int(previous.get("reply_count") or 0), int(item.get("reply_count") or 0)),
+                    "recent_reply_count": max(
+                        int(previous.get("recent_reply_count") or 0),
+                        int(item.get("recent_reply_count") or 0),
+                    ),
                 }
         for item in snapshot.get("groups", []):
             if isinstance(item, dict):

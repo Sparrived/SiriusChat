@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 from datetime import time
+from types import SimpleNamespace
 
 import pytest
 
+from sirius_pulse.core.cognition import CognitionAnalyzer
 from sirius_pulse.core.participation import get_reply_time_coefficient
 from sirius_pulse.core.participation import ParticipationPolicy
+from sirius_pulse.core.pipeline import Pipeline
+from sirius_pulse.core.rhythm import RhythmAnalyzer
 from sirius_pulse.models.emotion import EmotionState
 from sirius_pulse.models.response_strategy import ResponseStrategy
 from sirius_pulse.models.signal import SignalAnalysis
@@ -13,6 +17,49 @@ from sirius_pulse.models.signal import SignalAnalysis
 
 def _policy() -> ParticipationPolicy:
     return ParticipationPolicy()
+
+
+def test_platform_direct_address_has_same_score_as_at_persona():
+    engine = SimpleNamespace(
+        _helpers=SimpleNamespace(get_recent_messages=lambda group_id, n: []),
+        rhythm_analyzer=RhythmAnalyzer(),
+        cognition_analyzer=CognitionAnalyzer(ai_name="Luna"),
+    )
+    pipeline = Pipeline(engine)
+
+    at_signal = pipeline.compute_signal(
+        "@Luna",
+        "u1",
+        "g1",
+        persist=False,
+    )
+    poke_signal = pipeline.compute_signal(
+        "戳了一下 Luna",
+        "u1",
+        "g1",
+        explicitly_addressed=True,
+        persist=False,
+    )
+
+    at_decision = _policy().evaluate(
+        signal=at_signal,
+        content="@Luna",
+        is_private=False,
+        directed_gate=0.55,
+    )
+    poke_decision = _policy().evaluate(
+        signal=poke_signal,
+        content="戳了一下 Luna",
+        is_private=False,
+        directed_gate=0.55,
+    )
+
+    assert at_signal.is_mentioned is True
+    assert poke_signal.is_mentioned is True
+    assert at_signal.directed_score == pytest.approx(1.0)
+    assert poke_signal.directed_score == pytest.approx(at_signal.directed_score)
+    assert poke_decision.score == pytest.approx(at_decision.score)
+    assert poke_decision.strategy == at_decision.strategy == ResponseStrategy.IMMEDIATE
 
 
 def test_participation_when_mentioned_question_then_immediate():
