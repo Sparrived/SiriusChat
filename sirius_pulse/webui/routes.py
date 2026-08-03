@@ -30,6 +30,7 @@ WEBUI_ROUTES: tuple[RouteSpec, ...] = (
     RouteSpec("GET", "/api/monitoring/overview", "api_monitoring_overview"),
     RouteSpec("GET", "/api/monitoring/metrics", "api_monitoring_persona_metrics"),
     RouteSpec("GET", "/api/monitoring/health", "api_monitoring_health"),
+    RouteSpec("GET", "/api/dispatcher/overview", "api_dispatcher_overview"),
     RouteSpec("POST", "/api/shutdown", "api_shutdown"),
     # ── 人格管理 API ──
     RouteSpec("GET", "/api/personas", "api_personas_list"),
@@ -40,13 +41,6 @@ WEBUI_ROUTES: tuple[RouteSpec, ...] = (
     RouteSpec("POST", "/api/persona/start", "api_persona_start"),
     RouteSpec("POST", "/api/persona/stop", "api_persona_stop"),
     RouteSpec("GET", "/api/persona/status", "api_persona_status"),
-    # ── 数据同步 API（供助手端调用） ──
-    RouteSpec("GET", "/api/data/snapshot", "api_data_snapshot_get"),
-    RouteSpec("POST", "/api/data/snapshot", "api_data_snapshot_post"),
-    RouteSpec("POST", "/api/data/messages", "api_data_messages_post"),
-    RouteSpec("POST", "/api/data/users", "api_data_users_post"),
-    RouteSpec("POST", "/api/data/glossary", "api_data_glossary_post"),
-    RouteSpec("POST", "/api/data/batch", "api_data_batch_post"),
     # ── 单人格 API（/api/persona/*） ──
     RouteSpec("GET", "/api/persona", "api_persona_get_single"),
     RouteSpec("GET", "/api/persona/logs", "api_persona_logs_get"),

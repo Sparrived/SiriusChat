@@ -56,14 +56,7 @@ from sirius_pulse.webui.monitoring_api import api_monitoring_overview as _api_mo
 from sirius_pulse.webui.monitoring_api import (
     api_monitoring_persona_metrics as _api_monitoring_persona_metrics,
 )
-from sirius_pulse.network.data_sync_api import (
-    api_data_batch_post,
-    api_data_glossary_post,
-    api_data_messages_post,
-    api_data_snapshot_get,
-    api_data_snapshot_post,
-    api_data_users_post,
-)
+from sirius_pulse.webui.dispatcher_api import api_dispatcher_overview as _api_dispatcher_overview
 from sirius_pulse.webui.persona_manager_api import (
     api_persona_activate,
     api_persona_active_get,
@@ -185,12 +178,7 @@ DELEGATED_HANDLERS: dict[str, DelegatedHandler] = {
     "api_monitoring_overview": _api_monitoring_overview,
     "api_monitoring_persona_metrics": _api_monitoring_persona_metrics,
     "api_monitoring_health": _api_monitoring_health,
-    "api_data_snapshot_get": api_data_snapshot_get,
-    "api_data_snapshot_post": api_data_snapshot_post,
-    "api_data_messages_post": api_data_messages_post,
-    "api_data_users_post": api_data_users_post,
-    "api_data_glossary_post": api_data_glossary_post,
-    "api_data_batch_post": api_data_batch_post,
+    "api_dispatcher_overview": _api_dispatcher_overview,
     "api_personas_list": api_personas_list,
     "api_persona_create": api_persona_create,
     "api_persona_active_get": api_persona_active_get,
@@ -205,7 +193,6 @@ DELEGATED_HANDLERS: dict[str, DelegatedHandler] = {
 _PERSONA_SCOPED_PREFIXES = (
     "api_persona_",
     "api_monitoring_",
-    "api_data_",
     "api_memory_",
     "api_config_",
     "api_engine_",
