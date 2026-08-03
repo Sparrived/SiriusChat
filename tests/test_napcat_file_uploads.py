@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 from pathlib import Path
 from urllib.parse import quote
 
@@ -89,6 +90,29 @@ async def test_napcat_upload_preserves_remote_file_reference(monkeypatch: pytest
             "name": "report.txt",
         },
     }
+
+
+@pytest.mark.asyncio
+async def test_napcat_group_image_encodes_local_file_for_api(tmp_path: Path):
+    source = tmp_path / "github_update.png"
+    source.write_bytes(b"png-bytes")
+    adapter = NapCatAdapter("ws://example.invalid")
+    captured: dict[str, object] = {}
+
+    async def fake_send_group_msg(group_id: str, message: list[dict[str, object]]):
+        captured["group_id"] = group_id
+        captured["message"] = message
+        return {"data": {"message_id": 1}}
+
+    adapter.send_group_msg = fake_send_group_msg  # type: ignore[method-assign]
+    await adapter._send_group_image("9001", str(source))
+
+    message = captured["message"]
+    assert isinstance(message, list)
+    image_reference = message[0]["data"]["file"]
+    assert isinstance(image_reference, str)
+    assert image_reference.startswith("base64://")
+    assert base64.b64decode(image_reference.removeprefix("base64://")) == b"png-bytes"
 
 
 @pytest.mark.asyncio

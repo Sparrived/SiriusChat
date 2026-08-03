@@ -48,6 +48,7 @@ from sirius_pulse.core.events import SessionEvent, SessionEventType
 from sirius_pulse.core.group_dispatcher import GroupDispatcher
 from sirius_pulse.core.qq_mentions import parse_qq_at_mentions
 from sirius_pulse.models.models import Message, UnifiedUser
+from sirius_pulse.tools.builtin._markdown_image import to_image_reference
 
 LOG = logging.getLogger("sirius.platforms.napcat")
 
@@ -1690,7 +1691,10 @@ class NapCatAdapter(BaseAdapter):
 
     async def _send_group_image(self, group_id: str, image_path: str) -> None:
         """发送群聊图片。"""
-        segment: list[dict[str, Any]] = [{"type": "image", "data": {"file": image_path}}]
+        image_reference = to_image_reference(image_path)
+        segment: list[dict[str, Any]] = [
+            {"type": "image", "data": {"file": image_reference}}
+        ]
         async with self._get_reply_lock(group_id):
             try:
                 await self.send_group_msg(group_id, segment)
@@ -1700,7 +1704,10 @@ class NapCatAdapter(BaseAdapter):
 
     async def _send_private_image(self, user_id: str, image_path: str) -> None:
         """发送私聊图片。"""
-        segment: list[dict[str, Any]] = [{"type": "image", "data": {"file": image_path}}]
+        image_reference = to_image_reference(image_path)
+        segment: list[dict[str, Any]] = [
+            {"type": "image", "data": {"file": image_reference}}
+        ]
         async with self._get_reply_lock(user_id):
             try:
                 await self.send_private_msg(user_id, segment)
