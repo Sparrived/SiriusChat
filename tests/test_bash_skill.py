@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import shlex
 import subprocess
 import sys
@@ -86,6 +87,29 @@ async def test_bash_skill_allows_commands_not_present_in_old_whitelist(monkeypat
 
     assert result["success"] is True
     assert calls["args"][-1].endswith("free -h | head -3")
+
+
+@pytest.mark.asyncio
+async def test_bash_skill_injects_a_persistent_persona_runtime_environment(
+    monkeypatch, tmp_path: Path
+):
+    calls = _fake_bash(monkeypatch)
+
+    result = await bash.run("python -c 'import example'", data_store=_Store(tmp_path))
+
+    runtime = tmp_path / "runtime"
+    assert result["success"] is True
+    assert calls["env"]["SIRIUS_RUNTIME_ROOT"] == str(runtime)
+    assert calls["env"]["SIRIUS_RUNTIME_BIN"] == str(runtime / "bin")
+    assert calls["env"]["PIP_TARGET"] == str(runtime / "python")
+    assert calls["env"]["NPM_CONFIG_PREFIX"] == str(runtime / "node")
+    assert calls["env"]["PATH"].split(os.pathsep)[:2] == [
+        str(runtime / "bin"),
+        str(runtime / "node" / "bin"),
+    ]
+    assert calls["env"]["PYTHONPATH"].startswith(str(runtime / "python"))
+    assert (runtime / "cache" / "pip").is_dir()
+    assert (runtime / "cache" / "npm").is_dir()
 
 
 @pytest.mark.asyncio

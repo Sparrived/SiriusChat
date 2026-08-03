@@ -26,6 +26,11 @@ _DEFAULT_MAX_TIMEOUT = 15.0
 _DEFAULT_MAX_OUTPUT = 12_000
 _MAX_COMMAND_LENGTH = 4_000
 _MIN_OUTPUT = 256
+_RUNTIME_DIR_NAME = "runtime"
+_RUNTIME_BIN_DIR = "bin"
+_RUNTIME_PYTHON_DIR = "python"
+_RUNTIME_NODE_DIR = "node"
+_RUNTIME_CACHE_DIR = "cache"
 _DOCKER_FUNCTION_TEMPLATE = """docker() {{
     {python_executable} -m sirius_pulse.skills.builtin._docker_cli \"$@\"
 }}
@@ -63,15 +68,12 @@ _config.group("Bash 执行").add(
 SKILL_META = {
     "name": "bash",
     "description": (
-        "在当前容器中启动真正的 Bash，用于文件处理、系统状态查询和自动化；当前进程可拥有的容器内权限不再经过命令白名单限制。"
+        "在当前容器中启动 Bash，用于文件处理、系统状态查询和自动化。优先使用该工具操作系统。"
         "支持标准 Bash 语法与容器内任意工作目录。访问其他容器时，docker/docker-compose 仍经宿主机 Unix Socket 代理，支持常规 Docker 命令和完整 docker exec；"
-        "代理只拒绝不可逆高危删除、清理和宿主机逃逸参数，allow_mutations=false 仍可关闭变更操作。"
-        "容器或 Minecraft 故障请依次执行 docker ps -a、docker inspect <容器>、docker logs --tail 200 <容器>，"
-        "再读取 /data/logs/latest.log 或 /data/crash-reports；Bash 不在宿主机，不能使用 systemctl 或宿主机 /var/log；"
-        "docker inspect 会在当前 QQ 会话发送容器状态卡片；"
-        "每个人格可在技能配置中调整执行时限和输出上限。"
+        "Bash 不在宿主机，不能使用 systemctl 或宿主机 /var/log；"
+        "docker inspect 会在当前 QQ 会话发送容器状态卡片。"
     ),
-    "version": "1.3.0",
+    "version": "1.4.0",
     "side_effect": "unknown",
     "tags": ["bash", "shell", "file", "system", "container"],
     "parameters": _config.build(),
@@ -133,11 +135,16 @@ async def run(
         }
 
     try:
+        environment = _runtime_environment(data_store)
+    except OSError as exc:
+        return {"success": False, "error": f"准备人格运行时目录失败: {exc}"}
+
+    try:
         completed = await asyncio.to_thread(
             subprocess.run,
             [bash, "-o", "pipefail", "-lc", f"{_docker_function()}\n{command_text}"],
             cwd=str(cwd_path),
-            env=_safe_environment(),
+            env=environment,
             capture_output=True,
             timeout=timeout,
             check=False,
@@ -347,6 +354,59 @@ def _safe_environment() -> dict[str, str]:
         for key, value in os.environ.items()
         if key.upper() in keep and not _SENSITIVE_ENV.search(key)
     }
+
+
+def _runtime_environment(data_store: Any) -> dict[str, str]:
+    environment = _safe_environment()
+    runtime_root = _runtime_root(data_store)
+    if runtime_root is None:
+        return environment
+
+    runtime_bin = runtime_root / _RUNTIME_BIN_DIR
+    runtime_python = runtime_root / _RUNTIME_PYTHON_DIR
+    runtime_node = runtime_root / _RUNTIME_NODE_DIR
+    runtime_cache = runtime_root / _RUNTIME_CACHE_DIR
+    for directory in (
+        runtime_bin,
+        runtime_python,
+        runtime_node,
+        runtime_node / "bin",
+        runtime_cache,
+        runtime_cache / "pip",
+        runtime_cache / "npm",
+        runtime_cache / "go",
+    ):
+        directory.mkdir(parents=True, exist_ok=True)
+
+    environment["SIRIUS_RUNTIME_ROOT"] = str(runtime_root)
+    environment["SIRIUS_RUNTIME_BIN"] = str(runtime_bin)
+    environment["PIP_TARGET"] = str(runtime_python)
+    environment["PIP_CACHE_DIR"] = str(runtime_cache / "pip")
+    environment["NPM_CONFIG_PREFIX"] = str(runtime_node)
+    environment["NPM_CONFIG_CACHE"] = str(runtime_cache / "npm")
+    environment["GOBIN"] = str(runtime_bin)
+    environment["GOMODCACHE"] = str(runtime_cache / "go")
+    environment["PATH"] = os.pathsep.join(
+        [str(runtime_bin), str(runtime_node / "bin"), environment.get("PATH", "")]
+    )
+    environment["PYTHONPATH"] = _prepend_environment_path(
+        str(runtime_python), environment.get("PYTHONPATH", "")
+    )
+    return environment
+
+
+def _runtime_root(data_store: Any) -> Path | None:
+    store_path = getattr(data_store, "store_path", None)
+    if not store_path:
+        return None
+    path = Path(store_path).expanduser().resolve()
+    if path.parent.name != "skill_data":
+        return None
+    return path.parent.parent / _RUNTIME_DIR_NAME
+
+
+def _prepend_environment_path(value: str, existing: str) -> str:
+    return os.pathsep.join(item for item in (value, existing) if item)
 
 
 def _bounded_number(value: Any, *, default: float, minimum: float, maximum: float) -> float:
