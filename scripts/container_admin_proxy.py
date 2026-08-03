@@ -252,7 +252,15 @@ class ContainerAdminProxy:
         index = 0
         while index < len(arguments) and arguments[index].startswith("-"):
             option = arguments[index]
-            if option in {"-e", "--env", "-w", "--workdir", "--detach-keys"}:
+            if option in {
+                "-e",
+                "--env",
+                "-w",
+                "--workdir",
+                "--detach-keys",
+                "-u",
+                "--user",
+            }:
                 index += 2
             else:
                 index += 1

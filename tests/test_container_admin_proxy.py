@@ -121,6 +121,33 @@ def test_proxy_allows_mutating_container_exec_without_the_old_readonly_data_limi
     assert seen["arguments"][-1] == "printf ok > /etc/example.conf"
 
 
+def test_proxy_accepts_docker_exec_user_option(tmp_path, monkeypatch):
+    module, proxy = _proxy(tmp_path)
+    seen = {}
+
+    def fake_run(arguments, config):
+        seen["arguments"] = arguments
+        return "root"
+
+    monkeypatch.setattr(proxy, "_run_docker", fake_run)
+
+    result = proxy.handle(
+        {
+            "action": "docker",
+            "arguments": ["exec", "--user", "root", "sirius-pulse-v2-test", "id"],
+        }
+    )
+
+    assert result == {"success": True, "output": "root"}
+    assert seen["arguments"] == [
+        "exec",
+        "--user",
+        "root",
+        "sirius-pulse-v2-test",
+        "id",
+    ]
+
+
 @pytest.mark.parametrize(
     "arguments",
     [

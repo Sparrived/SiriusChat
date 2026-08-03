@@ -13,9 +13,9 @@ def test_dockerfile_reuses_the_complete_environment_before_application_source():
         "sirius_pulse ./sirius_pulse"
     )
     assert "chown sirius:sirius /app" in dockerfile
-    assert dockerfile.index("rm -rf /app/sirius_pulse /app/sirius_pulse.egg-info") < dockerfile.index(
-        "sirius_pulse ./sirius_pulse"
-    )
+    assert dockerfile.index(
+        "rm -rf /app/sirius_pulse /app/sirius_pulse.egg-info"
+    ) < dockerfile.index("sirius_pulse ./sirius_pulse")
 
 
 def test_update_script_refuses_to_replace_an_unmigrated_container_data_directory():
@@ -28,6 +28,19 @@ def test_update_script_refuses_to_replace_an_unmigrated_container_data_directory
     assert '\\"org.sirius-pulse.environment-cache-key\\"' not in script
     assert "exit 2" in script
     assert script.index("docker compose config -q") < script.index("docker compose up -d")
+
+
+def test_update_script_restores_persistent_system_package_manifests():
+    script = (ROOT / "scripts" / "update-container.sh").read_text(encoding="utf-8")
+
+    assert "data/runtime-packages/apt.txt" in script
+    assert "data/runtime-packages/yum.txt" in script
+    assert "docker compose exec -T --user root sirius-pulse" in script
+    assert "apt-get update" in script
+    assert "apt-get install -y --no-install-recommends" in script
+    assert "yum install -y" in script
+    assert "无效的系统包名" in script
+    assert script.index("docker compose up -d") < script.index("if ! restore_system_packages")
 
 
 def test_deployment_guide_uses_the_single_update_script_path():
