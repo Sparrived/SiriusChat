@@ -23,7 +23,7 @@ class AgentTurnPhase(Enum):
 @dataclass(slots=True)
 class AgentToolAttempt:
     tool_call_id: str
-    skill_name: str
+    tool_name: str
     side_effect: str
     status: str = "planned"
     summary: str = ""
@@ -55,21 +55,21 @@ class AgentTurn:
         self,
         *,
         tool_call_id: str,
-        skill_name: str,
+        tool_name: str,
         params: dict[str, Any],
         side_effect: str,
         deduplicate: bool,
     ) -> bool:
-        fingerprint = _action_fingerprint(skill_name, params)
+        fingerprint = _action_fingerprint(tool_name, params)
         if deduplicate and fingerprint in self._action_fingerprints:
             self.tool_attempts.append(
-                AgentToolAttempt(tool_call_id, skill_name, side_effect, "duplicate")
+                AgentToolAttempt(tool_call_id, tool_name, side_effect, "duplicate")
             )
             return False
         if deduplicate:
             self._action_fingerprints.add(fingerprint)
         self.tool_attempts.append(
-            AgentToolAttempt(tool_call_id, skill_name, side_effect, "running")
+            AgentToolAttempt(tool_call_id, tool_name, side_effect, "running")
         )
         return True
 
@@ -81,10 +81,10 @@ class AgentTurn:
                 return
 
     def deny_action(
-        self, tool_call_id: str, skill_name: str, side_effect: str, summary: str
+        self, tool_call_id: str, tool_name: str, side_effect: str, summary: str
     ) -> None:
         self.tool_attempts.append(
-            AgentToolAttempt(tool_call_id, skill_name, side_effect, "denied", summary[:500])
+            AgentToolAttempt(tool_call_id, tool_name, side_effect, "denied", summary[:500])
         )
 
     def to_event_data(self) -> dict[str, Any]:
@@ -98,7 +98,7 @@ class AgentTurn:
             "tool_attempts": [
                 {
                     "tool_call_id": attempt.tool_call_id,
-                    "skill_name": attempt.skill_name,
+                    "tool_name": attempt.tool_name,
                     "side_effect": attempt.side_effect,
                     "status": attempt.status,
                     "summary": attempt.summary,
@@ -108,9 +108,9 @@ class AgentTurn:
         }
 
 
-def _action_fingerprint(skill_name: str, params: dict[str, Any]) -> str:
+def _action_fingerprint(tool_name: str, params: dict[str, Any]) -> str:
     try:
         rendered = json.dumps(params, ensure_ascii=False, sort_keys=True, default=str)
     except (TypeError, ValueError):
         rendered = repr(params)
-    return hashlib.sha256(f"{skill_name}\0{rendered}".encode()).hexdigest()
+    return hashlib.sha256(f"{tool_name}\0{rendered}".encode()).hexdigest()

@@ -48,7 +48,7 @@ description: "当需要让外部项目正确接入 Sirius Pulse 时使用，覆�
 - 外部系统若为 asyncio 程序，但又不需要 runtime 的文件所有权，也可直接使用 `create_emotional_engine()` 创建引擎并手动管理生命周期。
 - 外部系统是非 Python：优先通过 CLI 调用并读取输出文件。
 - 每个 `EmotionalGroupChatEngine` 实例可处理多个群的对话，通过 `process_message()` 传入不同 `group_id` 实现群隔离。
-- `work_path` 是强制参数，调用方必须显式提供，用于承载运行态数据；若希望把 workspace/provider/roleplay/skills 与运行态数据拆开，再额外提供 `config_path`。
+- `work_path` 是强制参数，调用方必须显式提供，用于承载运行态数据；若希望把 workspace/provider/roleplay/tools 与运行态数据拆开，再额外提供 `config_path`。
 - 双根模式下：`SessionConfig.work_path` 表示配置根，`SessionConfig.data_path` 表示运行根；provider 配置保存在 config root 下的 `providers/provider_keys.json`，会话/记忆/token 则保存在 data root。
 - `WorkspaceBootstrap` 是默认值注入通道，不是“每次启动强制覆盖”的同步通道。runtime 会把 bootstrap payload 的签名写入 `workspace.json`；同一份 bootstrap 后续重启不会再次覆盖用户手改的 workspace/config/provider 文件。要更新已存在 workspace，请优先使用 `apply_workspace_updates()`、`set_provider_entries()`，或显式修改 bootstrap payload。
 - `session.json` 与 `config/session_config.json` 都支持 JSONC 风格注释；若让用户直接编辑配置，推荐提示其沿用 `--init-config` 生成的带注释模板。
@@ -109,19 +109,19 @@ description: "当需要让外部项目正确接入 Sirius Pulse 时使用，覆�
   - @profile_sync/@profile_async：装饰器用于函数级性能追踪
   - Benchmark：支持同步/异步/并发性能基准测试
   - 示例：`from sirius_pulse.performance import PerformanceProfiler; with PerformanceProfiler("task"): ...`
-- ✨ **SKILL 系统**：通过 `skills/` 模块让 AI 在运行时调用外部 Python 代码
-  - 默认：`enable_skills=True`；框架会先加载包内置 SKILL（当前包含 `system_info`、`learn_term`、`url_content_reader`、`bing_search` 与 developer-only 的 `desktop_screenshot`），再加载 workspace `skills/` 目录。SKILL 文件默认放在 `{work_path}/skills/`，双根布局时位于 `config_root/skills/`。若只想保留目录结构、不执行 SKILL，可显式设置 `enable_skills=False`
-  - 加载时机：框架启动时预加载，`skills/` 目录变化时自动全量重载；不再在每条 message 路径上扫描 SKILL
-  - 覆盖规则：如果 workspace 中存在同名文件（如 `skills/system_info.py`），则以 workspace 版本覆盖内置实现
+- ✨ **SKILL 系统**：通过 `tools/` 模块让 AI 在运行时调用外部 Python 代码
+  - 默认：`enable_tools=True`；框架会先加载包内置 SKILL（当前包含 `system_info`、`learn_term`、`url_content_reader`、`bing_search` 与 developer-only 的 `desktop_screenshot`），再加载 workspace `tools/` 目录。SKILL 文件默认放在 `{work_path}/tools/`，双根布局时位于 `config_root/tools/`。若只想保留目录结构、不执行 SKILL，可显式设置 `enable_tools=False`
+  - 加载时机：框架启动时预加载，`tools/` 目录变化时自动全量重载；不再在每条 message 路径上扫描 SKILL
+  - 覆盖规则：如果 workspace 中存在同名文件（如 `tools/system_info.py`），则以 workspace 版本覆盖内置实现
   - 权限模型：developer-only SKILL 只会在 developer 当前轮次出现在提示词中，执行时 runtime 会再次校验当前调用者是否被显式标记为 developer
-  - SKILL 文件需导出 `SKILL_META` 字典（含 name, description, parameters, 可选 dependencies、`developer_only` 与 `silent`）和 `run(**kwargs)` 函数；如需审计调用者，可显式接收 `invocation_context`。`silent=True` 时 SKILL 结果不追加到回复文本，仅保留在内部元数据中
-  - 依赖自动安装：加载 SKILL 前自动扫描 `SKILL_META["dependencies"]` 和 import 语句，用 `uv pip install`（回退 `pip`）安装缺失包。内置 SKILL 与 workspace SKILL 共用这条流程，可通过 `auto_install_skill_deps=False` 关闭
-  - 持久化：每个 SKILL 自动获得独立的 JSON 键值存储（`SkillDataStore`），通过 `data_store` 参数注入
-  - 超时：`skill_execution_timeout`（默认 30 秒），超时返回 `SkillResult(success=False)`
-  - 引擎自动检测 AI 回复中的内置 `[SKILL_CALL: name | {params}]` 标记并执行，结果会先规范化为内部文本/多模态通道后再重新生成
+  - SKILL 文件需导出 `TOOL_META` 字典（含 name, description, parameters, 可选 dependencies、`developer_only` 与 `silent`）和 `run(**kwargs)` 函数；如需审计调用者，可显式接收 `invocation_context`。`silent=True` 时 SKILL 结果不追加到回复文本，仅保留在内部元数据中
+  - 依赖自动安装：加载 SKILL 前自动扫描 `TOOL_META["dependencies"]` 和 import 语句，用 `uv pip install`（回退 `pip`）安装缺失包。内置 SKILL 与 workspace SKILL 共用这条流程，可通过 `auto_install_tool_deps=False` 关闭
+  - 持久化：每个 SKILL 自动获得独立的 JSON 键值存储（`ToolDataStore`），通过 `data_store` 参数注入
+  - 超时：`tool_execution_timeout`（默认 30 秒），超时返回 `ToolResult(success=False)`
+  - 引擎自动检测 AI 回复中的内置 `[TOOL_CALL: name | {params}]` 标记并执行，结果会先规范化为内部文本/多模态通道后再重新生成
   - 若 SKILL 返回 `text_blocks`、`multimodal_blocks`、`internal_metadata`，模型只会看到内部推理通道；最终回复会被约束为只输出用户有用的结论，不复述字段名、`mime_type`、`label`、路径或 URL
-  - 导入：`from sirius_pulse import SkillRegistry, SkillExecutor, SkillDataStore, SkillInvocationContext, resolve_skill_dependencies`
-  - 示例 SKILL：`examples/skills/system_info.py`
+  - 导入：`from sirius_pulse import ToolRegistry, ToolExecutor, ToolDataStore, ToolInvocationContext, resolve_tool_dependencies`
+  - 示例 SKILL：`examples/tools/system_info.py`
 - 任何情况下，不应在编排核心中写入 provider 细节（provider 抽象优先原则）。
   - 所有 provider 特定逻辑都应在 `sirius_pulse/providers/` 目录下实现。
   - `sirius_pulse/core/emotional_engine.py`（v1.0 唯一引擎）通过 `LLMProvider`/`AsyncLLMProvider` 抽象与 provider 交互，不依赖任何具体实现。

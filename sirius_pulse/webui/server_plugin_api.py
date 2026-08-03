@@ -143,7 +143,7 @@ async def api_plugin_monitor_repos_get(request: web.Request, manager: Any) -> we
     for persona_dir in sorted(data_path.glob("personas/*")):
         if not persona_dir.is_dir():
             continue
-        monitor_path = persona_dir / "skill_data" / "github_monitor.json"
+        monitor_path = persona_dir / "tool_data" / "github_monitor.json"
         if not monitor_path.exists():
             continue
         try:

@@ -4,8 +4,8 @@ from typing import Any
 
 import pytest
 
-from sirius_pulse.skills.builtin import _markdown_image
-from sirius_pulse.skills.builtin._markdown_image import (
+from sirius_pulse.tools.builtin import _markdown_image
+from sirius_pulse.tools.builtin._markdown_image import (
     build_markdown_card_html,
     has_fenced_markdown,
     merge_markdown_blocks,

@@ -12,7 +12,7 @@ export function dispose() {
 const $ = scopedPage.$;
 
 const BOOLEAN_FIELDS = [
-  'enable_skills',
+  'enable_tools',
   'plan_mode_enabled',
   'plan_mode_limit_normal_tools',
   'plan_mode_allow_light_chat',
@@ -305,8 +305,8 @@ export async function init(container, params = {}) {
 
         ${section('工具与计划', '集中管理工具能力、计划流程和计划状态表现。', `
           <div class="exp-grid">
-            ${toggleInput('enable_skills', '启用技能', '允许模型在需要时调用已启用技能。', 'exp-card-wide')}
-            ${fieldCard('最大技能轮数', '限制单次回复中工具调用和模型续写的循环次数。', numberInput('max_skill_rounds', 0))}
+            ${toggleInput('enable_tools', '启用工具', '允许模型在需要时调用已启用工具。', 'exp-card-wide')}
+            ${fieldCard('最大工具轮数', '限制单次回复中工具调用和模型续写的循环次数。', numberInput('max_tool_rounds', 0))}
             ${toggleInput('plan_mode_enabled', '启用计划模式', '允许模型进入多步骤计划流程。', 'exp-card-tall')}
             ${toggleInput('plan_mode_limit_normal_tools', '普通聊天限制工具', '计划模式开启时，普通聊天不主动使用常规工具。')}
             ${toggleInput('plan_mode_allow_light_chat', '计划中允许轻量闲聊', '计划执行期间允许少量自然聊天，不完全静默。', 'exp-card-wide')}
@@ -588,13 +588,13 @@ async function loadExperience(name, autoSave) {
       replyTimeCurvePoints = [{ time: '00:00', coefficient: 1 }, { time: '24:00', coefficient: 1 }];
     }
     form.max_sentence_chars.value = data.max_sentence_chars ?? 20;
-    form.max_skill_rounds.value = data.max_skill_rounds ?? 3;
+    form.max_tool_rounds.value = data.max_tool_rounds ?? 3;
     form.plan_mode_presence_min_interval_seconds.value = data.plan_mode_presence_min_interval_seconds ?? 45;
     form.diary_top_k.value = data.diary_top_k ?? 5;
     form.memory_unit_top_k.value = data.memory_unit_top_k ?? data.diary_top_k ?? 5;
     form.diary_token_budget.value = data.diary_token_budget ?? 2000;
 
-    setBooleanField('enable_skills', data.enable_skills ?? true);
+    setBooleanField('enable_tools', data.enable_tools ?? true);
     setBooleanField('plan_mode_enabled', data.plan_mode_enabled ?? false);
     setBooleanField('plan_mode_limit_normal_tools', data.plan_mode_limit_normal_tools ?? false);
     setBooleanField('plan_mode_allow_light_chat', data.plan_mode_allow_light_chat ?? true);
@@ -634,7 +634,7 @@ async function saveExperience(name) {
     main_model_reply_cooldown_seconds: parseFloat(form.main_model_reply_cooldown_seconds.value),
     reply_time_curve_points: normalizeCurvePoints(replyTimeCurvePoints),
     max_sentence_chars: parseInt(form.max_sentence_chars.value, 10),
-    max_skill_rounds: parseInt(form.max_skill_rounds.value, 10),
+    max_tool_rounds: parseInt(form.max_tool_rounds.value, 10),
     plan_mode_presence_min_interval_seconds: parseInt(
       form.plan_mode_presence_min_interval_seconds.value,
       10

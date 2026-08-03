@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from sirius_pulse.github.events import fetch_compare_commit_count
-from sirius_pulse.skills.builtin import github_monitor
+from sirius_pulse.tools.builtin import github_monitor
 
 
 class _Client:

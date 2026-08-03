@@ -250,11 +250,11 @@ class OrchestrationPolicy:
     # Set to 0 to disable (unlimited). Recommended: 1~3.
     max_concurrent_llm_calls: int = 1
 
-    # Skill system: allow AI to invoke external code via function_call (tools)
-    enable_skills: bool = True
-    max_skill_rounds: int = 3  # max consecutive skill call rounds per turn
-    skill_execution_timeout: float = 30.0  # max seconds per SKILL execution, 0 = no limit
-    auto_install_skill_deps: bool = True  # auto-install missing SKILL dependencies via uv/pip
+    # Tool system: allow AI to invoke external code via function_call (tools)
+    enable_tools: bool = True
+    max_tool_rounds: int = 3  # max consecutive tool call rounds per turn
+    tool_execution_timeout: float = 30.0  # max seconds per TOOL execution, 0 = no limit
+    auto_install_tool_deps: bool = True  # auto-install missing TOOL dependencies via uv/pip
 
     # Hidden planning mode: normal chat can stay lightweight while plan runs privately.
     plan_mode_enabled: bool = False
@@ -322,9 +322,9 @@ class OrchestrationPolicy:
 
 @dataclass(slots=True)
 class ConfigParameter:
-    """通用配置参数定义 —— Plugin 和 Skill 系统共享。
+    """通用配置参数定义 —— Plugin 和 Tool 系统共享。
 
-    被 PluginParameterDef 和 SkillParameter 继承或引用，
+    被 PluginParameterDef 和 ToolParameter 继承或引用，
     提供统一的前端表单渲染与参数校验契约。
     """
 

@@ -16,10 +16,10 @@ const PAGE_META = {
   'orchestration': { title: '模型编排', breadcrumb: 'Configuration / Orchestration', icon: '⧉' },
   'experience': { title: '体验参数', breadcrumb: 'Configuration / Experience', icon: '◇' },
   'adapters': { title: '适配器', breadcrumb: 'Configuration / Adapters', icon: '⟐' },
-  'skills': { title: 'Skills', breadcrumb: 'Extensions / Skills', icon: '⏣' },
+  'tools': { title: 'Tools', breadcrumb: 'Extensions / Tools', icon: '⏣' },
   'token-tracker': { title: 'Token 追踪', breadcrumb: 'Analytics / Tokens', icon: '△' },
   'cognition': { title: '认知分析', breadcrumb: 'Analytics / Cognition', icon: '◎' },
-  'skills-tracker': { title: 'Skill 追踪', breadcrumb: 'Analytics / Skills', icon: '⟠' },
+  'tools-tracker': { title: 'Tool 追踪', breadcrumb: 'Analytics / Tools', icon: '⟠' },
   'conversation-history': { title: '对话分析', breadcrumb: 'Analytics / Conversations', icon: '◧' },
   'logs': { title: '实时日志', breadcrumb: 'Operations / Logs', icon: '▣' },
   'dispatcher': { title: '群聊调度', breadcrumb: 'Operations / Dispatcher', icon: '⇄' },
@@ -47,20 +47,20 @@ const NAV_GROUPS = [
   { id: 'analytics', label: '分析', items: [
     { page: 'token-tracker', icon: '△', label: 'Token 追踪' },
     { page: 'cognition', icon: '◎', label: '认知分析' },
-    { page: 'skills-tracker', icon: '⟠', label: 'Skill 追踪' },
+    { page: 'tools-tracker', icon: '⟠', label: 'Tool 追踪' },
   ]},
   { id: 'memory', label: '记忆', items: [
     { page: 'memory-viz', icon: '◲', label: '记忆管理' },
   ]},
   { id: 'extensions', label: '扩展', items: [
-    { page: 'skills', icon: '⏣', label: 'Skills' },
+    { page: 'tools', icon: '⏣', label: 'Tools' },
     { page: 'plugins', icon: '⬡', label: '插件' },
   ]},
 ];
 
 const PERSONA_PAGES = new Set([
-  'persona', 'orchestration', 'experience', 'adapters', 'skills',
-  'token-tracker', 'cognition', 'skills-tracker', 'conversation-history',
+  'persona', 'orchestration', 'experience', 'adapters', 'tools',
+  'token-tracker', 'cognition', 'tools-tracker', 'conversation-history',
   'logs',
   'memory-viz', 'create-persona',
 ]);

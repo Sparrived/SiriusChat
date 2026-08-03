@@ -6,7 +6,7 @@ def test_agent_turn_tracks_lifecycle_and_deduplicates_side_effects():
 
     assert turn.begin_action(
         tool_call_id="call-1",
-        skill_name="group_management",
+        tool_name="group_management",
         params={"user_id": "42", "duration": 60},
         side_effect="destructive",
         deduplicate=True,
@@ -14,7 +14,7 @@ def test_agent_turn_tracks_lifecycle_and_deduplicates_side_effects():
     turn.finish_action("call-1", success=True, summary="muted")
     assert not turn.begin_action(
         tool_call_id="call-2",
-        skill_name="group_management",
+        tool_name="group_management",
         params={"duration": 60, "user_id": "42"},
         side_effect="destructive",
         deduplicate=True,

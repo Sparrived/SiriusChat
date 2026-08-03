@@ -1,7 +1,7 @@
 """Session-level event bus for real-time message delivery.
 
 Provides a pub/sub mechanism so external consumers can subscribe to session
-events (new messages, SKILL execution status, errors) without being blocked
+events (new messages, TOOL execution status, errors) without being blocked
 by the request-response cycle of ``run_live_message``.
 """
 
@@ -39,7 +39,7 @@ class SessionEvent:
     Attributes:
         type: The category of the event.
         message: The ``Message`` object, present for message-related events.
-        data: Arbitrary metadata (e.g. skill name, error details).
+        data: Arbitrary metadata (e.g. tool name, error details).
         timestamp: Unix timestamp when the event was created.
     """
 

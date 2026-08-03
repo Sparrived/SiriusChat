@@ -4,7 +4,7 @@
     - raw_call(): 原生 API 调用，不组装上下文，不注入人格。
                   用于 Cognition（情感/意图分析）。
     - chat():     全上下文组装 + 人格注入 + 前/后处理 hook。
-                  用于回复生成、Plugin 风格化、SKILL 反馈循环等。
+                  用于回复生成、Plugin 风格化、TOOL 反馈循环等。
 
 Hook 机制：
     chat() 内置默认的前处理和后处理步骤。外部可以通过
@@ -13,7 +13,7 @@ Hook 机制：
 
 设计原则：
     项目本质 = 组装消息 → 喂给 API → 拿到原生文本。
-    SKILL 调用通过 function_call (tools) 机制实现，不在文本中嵌入标记。
+    TOOL 调用通过 function_call (tools) 机制实现，不在文本中嵌入标记。
     Brain 是这一流程的唯一入口，任何外部只能通过有限的参数类来调控。
 """
 
@@ -63,8 +63,8 @@ class ChatRequest:
     style_params: StyleParams | None = None
     reasoning_effort: str | None = "low"
 
-    # ── SKILL 控制 ──
-    enable_skills: bool = True
+    # ── TOOL 控制 ──
+    enable_tools: bool = True
     caller_is_developer: bool = False
     extra_tools: list[dict[str, Any]] | None = None
     tool_choice: str | None = None
@@ -99,8 +99,8 @@ class ChatResult:
     has_tool_call: bool = False
     tool_calls: list[ToolCall] = field(default_factory=list)
     # 兼容旧接口
-    has_skill_call: bool = False
-    skill_calls: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
+    has_tool_call: bool = False
+    tool_calls: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
     # 引用回复信息（由 _hook_reply_reference 填充）
     reply_references: list[dict[str, str]] = field(default_factory=list)
 
@@ -193,7 +193,7 @@ class Brain:
 
     两条通道：
     - raw_call(request: RawRequest) → str
-      原生 API 调用，不组装上下文，不注入人格，不解析 SKILL。
+      原生 API 调用，不组装上下文，不注入人格，不解析 TOOL。
       用于 Cognition（情感/意图分析）等纯分析类任务。
 
     - chat(request: ChatRequest) → ChatResult
@@ -217,7 +217,7 @@ class Brain:
         token_usage_records: list[Any] | None = None,
         sticker_names: list[str] | None = None,
         other_ai_names: list[str] | None = None,
-        skill_registry: Any | None = None,
+        tool_registry: Any | None = None,
     ) -> None:
         self.provider_async = provider_async
         self.router = model_router
@@ -229,7 +229,7 @@ class Brain:
         self.token_usage_records: list[Any] = list(token_usage_records or [])
         self.sticker_names = list(sticker_names or [])
         self.other_ai_names = list(other_ai_names or [])
-        self.skill_registry = skill_registry
+        self.tool_registry = tool_registry
 
         # 上下文函数（延迟注入，避免循环导入）
         self._recent_messages_fn: Callable[[str, int], list[dict[str, Any]]] | None = None
@@ -355,7 +355,7 @@ class Brain:
         3. 基础 token 统计
         4. 返回原始文本
 
-        不做：人格注入、上下文组装、SKILL 解析、表情包解析。
+        不做：人格注入、上下文组装、TOOL 解析、表情包解析。
         """
         from sirius_pulse.providers.base import GenerationRequest
 
@@ -398,10 +398,10 @@ class Brain:
         1. 用户 pre-hooks（按注册顺序）
         2. 默认 pre: 人格注入 → 当前时间入消息链 → 模型路由 → 风格覆盖
         3. provider.generate_async()（带 transport 级重试，重试时刷新上下文）
-        4. 默认 post: XML 剥离 → SKIP 检测 → SKILL 解析 → 表情包解析 → token 记录
+        4. 默认 post: XML 剥离 → SKIP 检测 → TOOL 解析 → 表情包解析 → token 记录
         5. 用户 post-hooks（按注册顺序）
 
-        SKILL 反馈循环由调用方管理，chat() 只负责单轮生成。
+        TOOL 反馈循环由调用方管理，chat() 只负责单轮生成。
         """
         async with self._chat_lock:
             ctx: dict[str, Any] = {}
@@ -457,16 +457,16 @@ class Brain:
 
             # ── 构建 tools 参数 ──
             tools = None
-            if request.enable_skills and self.skill_registry is not None:
+            if request.enable_tools and self.tool_registry is not None:
                 from sirius_pulse.memory.user.unified_models import UnifiedUser
-                from sirius_pulse.skills.models import SkillInvocationContext
+                from sirius_pulse.tools.models import ToolInvocationContext
 
                 caller = UnifiedUser(
                     user_id=request.user_id or "caller",
                     name="caller",
                     metadata={"is_developer": request.caller_is_developer},
                 )
-                inv_ctx = SkillInvocationContext(caller=caller)
+                inv_ctx = ToolInvocationContext(caller=caller)
                 adapter_type = (
                     self.current_adapter_type_fn()
                     if self.current_adapter_type_fn is not None
@@ -482,7 +482,7 @@ class Brain:
                         else False
                     ),
                 }
-                tools = self.skill_registry.build_tools_list(**tool_kwargs)
+                tools = self.tool_registry.build_tools_list(**tool_kwargs)
                 if not tools:
                     tools = None
 
@@ -655,12 +655,12 @@ class Brain:
         style_params: StyleParams | None = None,
         task_name: str = "response_generate",
         urgency: int = 0,
-        enable_skills: bool = False,
+        enable_tools: bool = False,
         post_process: bool = False,
     ) -> str:
         """便捷方法：单轮 chat() → 返回 raw_text。
 
-        供外部模块（plugins、skill context、dispatcher）使用，
+        供外部模块（plugins、tool context、dispatcher）使用，
         无需处理 ChatResult 对象。默认不启用引擎 post-hooks。
         """
         result = await self.chat(
@@ -672,7 +672,7 @@ class Brain:
                 task_name=task_name,
                 urgency=urgency,
                 style_params=style_params,
-                enable_skills=enable_skills,
+                enable_tools=enable_tools,
                 post_process=post_process,
             )
         )

@@ -29,14 +29,14 @@ from sirius_pulse.core.plan_runtime import (
 from sirius_pulse.core.prompt_factory import TAG_GLOSSARY, PromptFactory
 from sirius_pulse.core.sticker_delivery import dedupe_sticker_names
 from sirius_pulse.providers.base import ToolCall
-from sirius_pulse.skills.builtin import _markdown_image
+from sirius_pulse.tools.builtin import _markdown_image
 
 if TYPE_CHECKING:
     from sirius_pulse.core.engine_core import _EmotionalGroupChatEngineBase
 
 logger = logging.getLogger(__name__)
 
-_AUTONOMOUS_MESSAGE_SKILLS = {
+_AUTONOMOUS_MESSAGE_TOOLS = {
     "interaction_with_master",
 }
 
@@ -247,30 +247,30 @@ class DelayedQueueTasks:
         )
 
     @staticmethod
-    def _side_effect_name(skill: Any, params: dict[str, Any] | None = None) -> str:
+    def _side_effect_name(tool: Any, params: dict[str, Any] | None = None) -> str:
         if (
-            getattr(skill, "name", "") == "interaction_with_master"
+            getattr(tool, "name", "") == "interaction_with_master"
             and str((params or {}).get("action", "")).strip().lower() == "status"
         ):
             return "read_only"
-        value = getattr(skill, "side_effect", "unknown")
+        value = getattr(tool, "side_effect", "unknown")
         return str(getattr(value, "value", value) or "unknown")
 
     @staticmethod
-    def _retry_safe(skill: Any, params: dict[str, Any] | None = None) -> bool:
-        if getattr(skill, "name", "") == "interaction_with_master":
+    def _retry_safe(tool: Any, params: dict[str, Any] | None = None) -> bool:
+        if getattr(tool, "name", "") == "interaction_with_master":
             return str((params or {}).get("action", "")).strip().lower() == "status"
-        return bool(getattr(skill, "retry_safe", False))
+        return bool(getattr(tool, "retry_safe", False))
 
     @staticmethod
-    def _tool_is_silent(skill: Any, tool_call: ToolCall) -> bool:
-        if skill is None:
+    def _tool_is_silent(tool: Any, tool_call: ToolCall) -> bool:
+        if tool is None:
             return False
         if tool_call.function_name == "group_file_exec":
             return _composite_action(tool_call) == "image"
         if tool_call.function_name == "interaction_with_master":
             return _tool_action(tool_call) == "message"
-        return bool(getattr(skill, "silent", False))
+        return bool(getattr(tool, "silent", False))
 
     async def delayed_queue_ticker(self) -> None:
         """Smart-sleep ticker for the delayed queue.
@@ -387,7 +387,7 @@ class DelayedQueueTasks:
                     system_prompt=system_prompt,
                     messages=[{"role": "user", "content": prompt}],
                     task_name="response_generate",
-                    enable_skills=False,
+                    enable_tools=False,
                     post_process=True,
                     max_tokens=48,
                 )
@@ -414,12 +414,12 @@ class DelayedQueueTasks:
 
         If multiple items trigger in the same tick, merge them into a single
         prompt so the model generates only one consolidated reply.
-        Supports multi-round SKILL execution similar to immediate responses.
+        Supports multi-round TOOL execution similar to immediate responses.
 
         Args:
             group_id: The group / private chat to tick.
             on_partial_reply: Optional async callable invoked immediately
-                when non-skill text is extracted *before* skills are executed.
+                when non-tool text is extracted *before* tools are executed.
         """
         engine = self._engine
         recent = engine._helpers.get_recent_messages(group_id, n=10)
@@ -505,7 +505,7 @@ class DelayedQueueTasks:
                 caller_profile = engine.user_manager.get_user(resolved_uid, group_id)
         caller_is_developer = bool(caller_profile and caller_profile.is_developer)
 
-        # Engagement rate for SKILL permission control
+        # Engagement rate for TOOL permission control
         caller_engagement = 0.0
         if resolved_uid:
             semantic_profile = engine.semantic_memory.get_user_profile(group_id, resolved_uid)
@@ -517,7 +517,7 @@ class DelayedQueueTasks:
         plan_mode_enabled = bool(engine.config.get("plan_mode_enabled", False))
         limit_normal_tools = bool(engine.config.get("plan_mode_limit_normal_tools", False))
         initial_lane = getattr(triggered[0], "lane", "chat") if triggered else "chat"
-        expose_skills_in_prompt = not (
+        expose_tools_in_prompt = not (
             plan_mode_enabled and limit_normal_tools and initial_lane != "plan"
         )
         bundle = self._build_delayed_prompt(
@@ -525,7 +525,7 @@ class DelayedQueueTasks:
             group_id,
             caller_is_developer=caller_is_developer,
             adapter_type=adapter_type,
-            expose_skills=expose_skills_in_prompt,
+            expose_tools=expose_tools_in_prompt,
             tool_flow_mode="plan" if initial_lane == "plan" else "chat",
         )
         active_plan_for_chat = (
@@ -615,9 +615,9 @@ class DelayedQueueTasks:
 
         # Multi-round generation with function_call support
         from sirius_pulse.core.brain import ChatRequest
-        from sirius_pulse.skills.models import SkillInvocationContext, SkillResult
+        from sirius_pulse.tools.models import ToolInvocationContext, ToolResult
 
-        max_skill_rounds = engine.config.get("max_skill_rounds", 8)
+        max_tool_rounds = engine.config.get("max_tool_rounds", 8)
         partial_replies: list[str] = []
         last_round_had_partial = False
         last_partial_sent_at: float | None = None
@@ -668,19 +668,19 @@ class DelayedQueueTasks:
                     _extra_tools.append(ENTER_PLAN_TOOL_DEF)
                 else:
                     _extra_tools.append(GET_PLAN_STATUS_TOOL_DEF)
-            enable_skills_for_round = bool(engine.config.get("enable_skills", True))
+            enable_tools_for_round = bool(engine.config.get("enable_tools", True))
             if plan_mode_enabled and limit_normal_tools and not plan_mode:
-                enable_skills_for_round = False
+                enable_tools_for_round = False
 
             if pending_chat_result is not None:
                 chat_result = pending_chat_result
                 pending_chat_result = None
             else:
-                if _round > max_skill_rounds:
+                if _round > max_tool_rounds:
                     ended_because_max_rounds = bool(
                         tool_calls
-                        and engine._skill_registry is not None
-                        and engine._skill_executor is not None
+                        and engine._tool_registry is not None
+                        and engine._tool_executor is not None
                     )
                     break
                 agent_turn.advance(AgentTurnPhase.DECIDE)
@@ -692,7 +692,7 @@ class DelayedQueueTasks:
                         system_prompt=system_prompt,
                         messages=messages,
                         task_name="response_generate",
-                        enable_skills=enable_skills_for_round,
+                        enable_tools=enable_tools_for_round,
                         caller_is_developer=caller_is_developer,
                         post_process=True,
                         extra_tools=_extra_tools,
@@ -705,7 +705,7 @@ class DelayedQueueTasks:
             poke_user_ids_accumulated.extend(getattr(chat_result, "poke_user_ids", []) or [])
             agent_turn.set_candidates(getattr(chat_result, "injected_tool_names", []))
 
-            # 分类工具调用：计划控制 vs 普通技能
+            # 分类工具调用：计划控制 vs 普通工具
             tool_calls = chat_result.tool_calls or []
             plan_control = [tc for tc in tool_calls if tc.function_name in PLAN_CONTROL_TOOL_NAMES]
             regular_tools = [
@@ -935,7 +935,7 @@ class DelayedQueueTasks:
                 engine._log_inner_thought(f"计划模式中止: {reason[:80]}")
                 break
 
-            # 1. 发送当前轮次的文字（排除计划控制工具，只看普通技能是否全 silent）
+            # 1. 发送当前轮次的文字（排除计划控制工具，只看普通工具是否全 silent）
             update_progress_tc = next(
                 (tc for tc in plan_control if tc.function_name == "update_plan_progress"), None
             )
@@ -982,39 +982,39 @@ class DelayedQueueTasks:
                 continue
 
             def _tool_is_silent(tool_call: ToolCall) -> bool:
-                skill = (
-                    engine._skill_registry.get(tool_call.function_name)
-                    if engine._skill_registry is not None
+                tool = (
+                    engine._tool_registry.get(tool_call.function_name)
+                    if engine._tool_registry is not None
                     else None
                 )
-                return self._tool_is_silent(skill, tool_call)
+                return self._tool_is_silent(tool, tool_call)
 
-            non_skill_text = round_clean
+            non_tool_text = round_clean
             all_silent = bool(regular_tools) and all(_tool_is_silent(tc) for tc in regular_tools)
             last_round_had_partial = False
-            if plan_mode and non_skill_text:
-                engine._log_inner_thought(f"计划模式中间文本已隐藏: {non_skill_text[:40]}...")
-            elif non_skill_text and not all_silent:
-                engine._log_inner_thought(f"先跟用户回一声：{non_skill_text[:40]}...")
+            if plan_mode and non_tool_text:
+                engine._log_inner_thought(f"计划模式中间文本已隐藏: {non_tool_text[:40]}...")
+            elif non_tool_text and not all_silent:
+                engine._log_inner_thought(f"先跟用户回一声：{non_tool_text[:40]}...")
                 last_round_had_partial = True
                 if on_partial_reply is None:
                     raise RuntimeError(
                         "Tool execution requires on_partial_reply when partial text is present"
                     )
-                await on_partial_reply(non_skill_text)
+                await on_partial_reply(non_tool_text)
                 last_partial_sent_at = time.monotonic()
 
             # 2. 执行普通工具
-            skill_multimodal: list[dict[str, Any]] = []
+            tool_multimodal: list[dict[str, Any]] = []
             if (
                 regular_tools
-                and engine._skill_registry is not None
-                and engine._skill_executor is not None
+                and engine._tool_registry is not None
+                and engine._tool_executor is not None
             ):
                 from sirius_pulse.memory.user.unified_models import UnifiedUser
 
                 caller_user_id = item.user_id
-                skill_caller = UnifiedUser(
+                tool_caller = UnifiedUser(
                     user_id=caller_user_id,
                     name=caller_profile.name if caller_profile else caller_user_id,
                     metadata={"is_developer": caller_is_developer},
@@ -1025,7 +1025,7 @@ class DelayedQueueTasks:
                     if profile.is_developer:
                         developer_profiles.append(profile)
 
-                engine._skill_executor.set_chat_context(
+                engine._tool_executor.set_chat_context(
                     group_id=group_id, user_id=caller_user_id or ""
                 )
 
@@ -1038,59 +1038,59 @@ class DelayedQueueTasks:
                 messages.append(assistant_msg)
 
                 try:
-                    skill_timeout = max(
-                        0.0, float(engine.config.get("skill_execution_timeout", 30.0))
+                    tool_timeout = max(
+                        0.0, float(engine.config.get("tool_execution_timeout", 30.0))
                     )
                 except (TypeError, ValueError):
-                    skill_timeout = 30.0
+                    tool_timeout = 30.0
 
                 # 逐个执行 tool_call 并收集结果
                 for idx, tc in enumerate(regular_tools):
-                    skill_name = tc.function_name
+                    tool_name = tc.function_name
                     try:
                         params = json.loads(tc.function_arguments) if tc.function_arguments else {}
                     except json.JSONDecodeError:
                         params = {}
                         logger.warning(
                             "tool_call 参数解析失败: %s, arguments=%s",
-                            skill_name,
+                            tool_name,
                             tc.function_arguments,
                         )
 
-                    skill = engine._skill_registry.get(skill_name)
-                    if skill is None:
-                        err_msg = f"Skill '{skill_name}' not found"
+                    tool = engine._tool_registry.get(tool_name)
+                    if tool is None:
+                        err_msg = f"Tool '{tool_name}' not found"
                         logger.warning(err_msg)
                         messages.append({"role": "tool", "tool_call_id": tc.id, "content": err_msg})
                         continue
 
-                    side_effect = self._side_effect_name(skill, params)
+                    side_effect = self._side_effect_name(tool, params)
 
                     # Engagement-based permission
                     if (
                         caller_engagement < 0.1
                         and not caller_is_developer
-                        and not self._is_autonomous_message_skill(skill, params)
+                        and not self._is_autonomous_message_tool(tool, params)
                     ):
-                        err_msg = f"Skill '{skill_name}' 被拒绝：互动不足 (engagement={caller_engagement:.2f})"
+                        err_msg = f"Tool '{tool_name}' 被拒绝：互动不足 (engagement={caller_engagement:.2f})"
                         logger.warning(err_msg)
                         messages.append({"role": "tool", "tool_call_id": tc.id, "content": err_msg})
                         continue
 
-                    if skill.developer_only and not caller_is_developer:
-                        err_msg = f"Skill '{skill_name}' 被拒绝：caller 不是 developer"
+                    if tool.developer_only and not caller_is_developer:
+                        err_msg = f"Tool '{tool_name}' 被拒绝：caller 不是 developer"
                         logger.warning(err_msg)
                         messages.append({"role": "tool", "tool_call_id": tc.id, "content": err_msg})
                         continue
 
                     if not agent_turn.begin_action(
                         tool_call_id=tc.id,
-                        skill_name=skill_name,
+                        tool_name=tool_name,
                         params=params,
                         side_effect=side_effect,
                         deduplicate=side_effect != "read_only",
                     ):
-                        err_msg = f"Skill '{skill_name}' 被拒绝：本轮相同副作用动作已经执行过。"
+                        err_msg = f"Tool '{tool_name}' 被拒绝：本轮相同副作用动作已经执行过。"
                         await self._emit_agent_turn(engine, agent_turn)
                         messages.append({"role": "tool", "tool_call_id": tc.id, "content": err_msg})
                         continue
@@ -1098,24 +1098,24 @@ class DelayedQueueTasks:
                     agent_turn.advance(AgentTurnPhase.ACT)
                     await self._emit_agent_turn(engine, agent_turn)
 
-                    ctx = SkillInvocationContext(  # type: ignore[assignment]
-                        caller=skill_caller,
+                    ctx = ToolInvocationContext(  # type: ignore[assignment]
+                        caller=tool_caller,
                         developer_profiles=developer_profiles,
                     )
                     logger.info(
-                        "Skill execute: %s(params=%s, caller=%s, group=%s)",
-                        skill_name,
+                        "Tool execute: %s(params=%s, caller=%s, group=%s)",
+                        tool_name,
                         params,
                         caller_user_id,
                         group_id,
                     )
                     try:
-                        result = await engine._skill_executor.execute_async(
-                            skill,
+                        result = await engine._tool_executor.execute_async(
+                            tool,
                             params,
-                            timeout=skill_timeout,
+                            timeout=tool_timeout,
                             invocation_context=ctx,
-                            max_retries=2 if self._retry_safe(skill, params) else 0,
+                            max_retries=2 if self._retry_safe(tool, params) else 0,
                         )
                         agent_turn.finish_action(
                             tc.id,
@@ -1127,19 +1127,19 @@ class DelayedQueueTasks:
                         agent_turn.advance(AgentTurnPhase.VERIFY)
                         await self._emit_agent_turn(engine, agent_turn)
                         logger.info(
-                            "Skill execute success: %s -> %s",
-                            skill_name,
+                            "Tool execute success: %s -> %s",
+                            tool_name,
                             "success" if result.success else "failed",
                         )
                         tool_content = result.to_model_text()
                         if result.success:
                             # 收集多模态内容
                             for block in result.multimodal_blocks:
-                                skill_multimodal.append(
+                                tool_multimodal.append(
                                     {"type": "image_url", "image_url": {"url": block.value}}
                                 )
                             # Auto-persist glossary terms from learn_term
-                            if skill_name == "learn_term":
+                            if tool_name == "learn_term":
                                 term = params.get("term", "")
                                 definition = params.get("definition", "")
                                 if term and definition:
@@ -1148,27 +1148,27 @@ class DelayedQueueTasks:
                                     engine.glossary_manager.add_or_update(
                                         group_id,
                                         GlossaryTerm(
-                                            term=term, definition=definition, source="skill"
+                                            term=term, definition=definition, source="tool"
                                         ),
                                     )
                             # Inject group_id into newly created reminders
                             if (
-                                skill_name == "reminder"
+                                tool_name == "reminder"
                                 and params.get("action", "").strip().lower() == "create"
                             ):
                                 self._inject_group_id_into_latest_reminder(group_id)
                         else:
                             logger.warning(
-                                "SKILL '%s' 执行失败: %s",
-                                skill_name,
+                                "TOOL '%s' 执行失败: %s",
+                                tool_name,
                                 result.error or "Unknown error",
                             )
                     except Exception as exc:
-                        tool_content = SkillResult(success=False, error=str(exc)).to_model_text()
+                        tool_content = ToolResult(success=False, error=str(exc)).to_model_text()
                         agent_turn.finish_action(tc.id, success=False, summary=str(exc))
                         agent_turn.advance(AgentTurnPhase.VERIFY)
                         await self._emit_agent_turn(engine, agent_turn)
-                        logger.error("SKILL '%s' 执行异常: %s", skill_name, exc)
+                        logger.error("TOOL '%s' 执行异常: %s", tool_name, exc)
 
                     # 添加 tool 结果消息
                     messages.append(
@@ -1183,16 +1183,16 @@ class DelayedQueueTasks:
                 break
 
             # 如果有多模态内容，作为 user 消息注入
-            if skill_multimodal:
-                messages.append({"role": "user", "content": skill_multimodal})
+            if tool_multimodal:
+                messages.append({"role": "user", "content": tool_multimodal})
 
         # If the loop ended because max rounds were exhausted and the last round
         # already sent a partial reply, don't duplicate that text as the final reply.
         if ended_because_max_rounds and last_round_had_partial:
             logger.debug(
-                "Chain hit max_skill_rounds=%d; last partial already sent, "
+                "Chain hit max_tool_rounds=%d; last partial already sent, "
                 "clearing clean_reply to avoid duplication",
-                max_skill_rounds,
+                max_tool_rounds,
             )
             reply = ""
 
@@ -1276,7 +1276,7 @@ class DelayedQueueTasks:
         group_id: str,
         caller_is_developer: bool = False,
         adapter_type: str | None = None,
-        expose_skills: bool = True,
+        expose_tools: bool = True,
         tool_flow_mode: str = "chat",
     ):
         """构建延迟响应的 PromptBundle。"""
@@ -1334,7 +1334,7 @@ class DelayedQueueTasks:
             style_params=style_params,
             other_ai_names=engine._other_ai_names,
             user_profiles=delayed_user_profiles,
-            skill_registry=engine._skill_registry if expose_skills else None,
+            tool_registry=engine._tool_registry if expose_tools else None,
             plugin_registry=getattr(engine, "_plugin_registry", None),
             caller_is_developer=caller_is_developer,
             adapter_type=adapter_type,
@@ -1362,10 +1362,10 @@ class DelayedQueueTasks:
     def _inject_group_id_into_latest_reminder(self, group_id: str) -> None:
         """Attach group_id and adapter_type to reminders that lack them."""
         engine = self._engine
-        if engine._skill_executor is None:
+        if engine._tool_executor is None:
             return
         try:
-            store = engine._skill_executor.get_data_store("reminder")
+            store = engine._tool_executor.get_data_store("reminder")
             reminders = list(store.get("reminders", []))
             if not reminders:
                 return
@@ -1384,19 +1384,19 @@ class DelayedQueueTasks:
             logger.warning("Failed to inject group_id into reminder: %s", exc)
 
     @staticmethod
-    def _is_autonomous_message_skill(skill: Any, params: dict[str, Any] | None = None) -> bool:
+    def _is_autonomous_message_tool(tool: Any, params: dict[str, Any] | None = None) -> bool:
         """Return True for package built-ins that replace legacy prompt tags."""
-        skill_name = getattr(skill, "name", "")
-        if skill_name not in _AUTONOMOUS_MESSAGE_SKILLS:
+        tool_name = getattr(tool, "name", "")
+        if tool_name not in _AUTONOMOUS_MESSAGE_TOOLS:
             return False
-        source_path = getattr(skill, "source_path", None)
+        source_path = getattr(tool, "source_path", None)
         if source_path is None:
             return False
         try:
-            builtin_dir = (Path(__file__).resolve().parents[1] / "skills" / "builtin").resolve()
+            builtin_dir = (Path(__file__).resolve().parents[1] / "tools" / "builtin").resolve()
             if not source_path.resolve().is_relative_to(builtin_dir):
                 return False
-            if skill_name == "interaction_with_master":
+            if tool_name == "interaction_with_master":
                 return str((params or {}).get("action", "")).strip().lower() == "message"
             return True
         except Exception:

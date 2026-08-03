@@ -82,8 +82,8 @@ PATH_TO_DOCS: dict[str, set[str]] = {
     "sirius_pulse/memory/":      {"guide/memory-system.md"},
     "sirius_pulse/session/":     {"guide/memory-system.md"},
 
-    # 技能系统
-    "sirius_pulse/skills/":      {"extensions/skill-overview.md", "reference/skills-api.md", "extensions/skill-authoring.md"},
+    # 工具系统
+    "sirius_pulse/tools/":      {"extensions/tool-overview.md", "reference/tools-api.md", "extensions/tool-authoring.md"},
 
     # 平台适配
     "sirius_pulse/platforms/":   {"guide/platform-napcat.md"},
@@ -92,7 +92,7 @@ PATH_TO_DOCS: dict[str, set[str]] = {
     "sirius_pulse/embedding/":   {"guide/architecture-overview.md"},
 
     # 数据模型
-    "sirius_pulse/models/":      {"reference/plugins-api.md", "reference/skills-api.md"},
+    "sirius_pulse/models/":      {"reference/plugins-api.md", "reference/tools-api.md"},
 
     # 人格管理
     "sirius_pulse/persona_manager.py": {"guide/persona-system.md"},

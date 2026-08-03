@@ -13,14 +13,14 @@ if str(project_root) not in sys.path:
 
 
 @pytest.fixture
-def tmp_skill_dir(tmp_path: Path) -> Path:
-    """模拟用户在工作区安装的本地技能目录。"""
-    skills_dir = tmp_path / "skills"
-    skills_dir.mkdir()
-    skill_file = skills_dir / "test_hello.py"
-    skill_file.write_text(
+def tmp_tool_dir(tmp_path: Path) -> Path:
+    """模拟用户在工作区安装的本地工具目录。"""
+    tools_dir = tmp_path / "tools"
+    tools_dir.mkdir()
+    tool_file = tools_dir / "test_hello.py"
+    tool_file.write_text(
         """
-SKILL_META = {
+TOOL_META = {
     "name": "test_hello",
     "description": "给群友发送问候",
     "version": "1.0",
@@ -43,4 +43,4 @@ def run(name: str = "世界", **kwargs) -> dict:
 """,
         encoding="utf-8",
     )
-    return skills_dir
+    return tools_dir

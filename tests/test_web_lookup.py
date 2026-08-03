@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from sirius_pulse.skills.builtin import web_lookup
+from sirius_pulse.tools.builtin import web_lookup
 
 
 class _Store:
@@ -81,5 +81,5 @@ def test_web_lookup_search_requires_tavily_key(monkeypatch):
 
     assert result == {
         "success": False,
-        "error": "请先在 web_lookup 技能设置中配置 Tavily API Key",
+        "error": "请先在 web_lookup 工具设置中配置 Tavily API Key",
     }

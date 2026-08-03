@@ -16,7 +16,7 @@ from sirius_pulse.core.plan_runtime import start_plan_session, update_plan_progr
 from sirius_pulse.core.prompt_factory import StyleAdapter
 from sirius_pulse.models.response_strategy import ResponseStrategy, StrategyDecision
 from sirius_pulse.providers.base import ToolCall
-from sirius_pulse.skills.models import SkillResult
+from sirius_pulse.tools.models import ToolResult
 
 
 def _decision(strategy: ResponseStrategy, *, urgency: float = 50.0) -> StrategyDecision:
@@ -39,10 +39,10 @@ def test_assistant_tool_message_when_reasoning_exists_then_keeps_it_private_to_m
     assert message["tool_calls"][0]["function"]["name"] == "lookup"
 
 
-def _agent_tool_tasks(queue, skill, chat_results, execute_skill):
+def _agent_tool_tasks(queue, tool, chat_results, execute_tool):
     profile = SimpleNamespace(name="Alice", is_developer=False)
     engine = SimpleNamespace(
-        config={"max_skill_rounds": 2},
+        config={"max_tool_rounds": 2},
         delayed_queue=queue,
         _helpers=SimpleNamespace(
             get_recent_messages=lambda group_id, n: [],
@@ -71,10 +71,10 @@ def _agent_tool_tasks(queue, skill, chat_results, execute_skill):
             )
         ),
         brain=SimpleNamespace(chat=AsyncMock(side_effect=chat_results)),
-        _skill_registry=SimpleNamespace(get=lambda name: skill),
-        _skill_executor=SimpleNamespace(
+        _tool_registry=SimpleNamespace(get=lambda name: tool),
+        _tool_executor=SimpleNamespace(
             set_chat_context=lambda **kwargs: None,
-            execute_async=execute_skill,
+            execute_async=execute_tool,
         ),
         _log_inner_thought=lambda text: None,
         event_bus=SimpleNamespace(emit=AsyncMock()),
@@ -229,7 +229,7 @@ def test_build_delayed_prompt_injects_configured_length_limit():
             emoji_preference="",
         ),
         _other_ai_names=[],
-        _skill_registry=None,
+        _tool_registry=None,
         _plugin_registry=None,
     )
     item = SimpleNamespace(
@@ -326,19 +326,19 @@ async def test_delayed_queue_when_tool_call_has_text_then_partial_leads_final_re
             reply_references=[],
         ),
     ]
-    skill = SimpleNamespace(name="lookup", silent=False, developer_only=False, retry_safe=False)
+    tool = SimpleNamespace(name="lookup", silent=False, developer_only=False, retry_safe=False)
     profile = SimpleNamespace(name="Alice", is_developer=False)
     order: list[str] = []
 
-    async def execute_skill(*args, **kwargs):
+    async def execute_tool(*args, **kwargs):
         order.append("tool")
-        return SkillResult(success=True, data={"ok": True})
+        return ToolResult(success=True, data={"ok": True})
 
     engine = SimpleNamespace(
         config={
-            "max_skill_rounds": 2,
+            "max_tool_rounds": 2,
             "partial_reply_lead_seconds": 1.5,
-            "skill_execution_timeout": 12,
+            "tool_execution_timeout": 12,
         },
         delayed_queue=queue,
         _helpers=SimpleNamespace(
@@ -368,10 +368,10 @@ async def test_delayed_queue_when_tool_call_has_text_then_partial_leads_final_re
             )
         ),
         brain=SimpleNamespace(chat=AsyncMock(side_effect=chat_results)),
-        _skill_registry=SimpleNamespace(get=lambda name: skill),
-        _skill_executor=SimpleNamespace(
+        _tool_registry=SimpleNamespace(get=lambda name: tool),
+        _tool_executor=SimpleNamespace(
             set_chat_context=lambda **kwargs: None,
-            execute_async=AsyncMock(side_effect=execute_skill),
+            execute_async=AsyncMock(side_effect=execute_tool),
         ),
         _log_inner_thought=lambda text: None,
         event_bus=SimpleNamespace(emit=AsyncMock()),
@@ -405,7 +405,7 @@ async def test_delayed_queue_when_tool_call_has_text_then_partial_leads_final_re
         tasks.tick_delayed_queue("group-1", on_partial_reply=capture_partial)
     )
     await partial_started.wait()
-    engine._skill_executor.execute_async.assert_not_awaited()
+    engine._tool_executor.execute_async.assert_not_awaited()
     allow_partial_to_finish.set()
     results = await tick_task
 
@@ -413,7 +413,7 @@ async def test_delayed_queue_when_tool_call_has_text_then_partial_leads_final_re
     assert order == ["partial", "tool", "lead_wait"]
     assert slept[0] == pytest.approx(1.5, abs=0.1)
     assert results[0]["reply"] == "Everything is ready."
-    execute_kwargs = engine._skill_executor.execute_async.await_args.kwargs
+    execute_kwargs = engine._tool_executor.execute_async.await_args.kwargs
     assert execute_kwargs["timeout"] == 12
     assert execute_kwargs["max_retries"] == 0
     second_request = engine.brain.chat.await_args_list[1].args[0]
@@ -440,17 +440,17 @@ async def test_delayed_queue_executes_high_risk_tool_without_confirmation():
         function_name="group_management",
         function_arguments='{"action": "kick", "user_id": 42}',
     )
-    skill = SimpleNamespace(
+    tool = SimpleNamespace(
         name="group_management",
         silent=False,
         developer_only=False,
         retry_safe=False,
         side_effect="destructive",
     )
-    execute_skill = AsyncMock(return_value=SkillResult(success=True, data={"ok": True}))
+    execute_tool = AsyncMock(return_value=ToolResult(success=True, data={"ok": True}))
     tasks, engine = _agent_tool_tasks(
         queue,
-        skill,
+        tool,
         [
             SimpleNamespace(
                 raw_text="", clean_text="", tool_calls=[tool_call], reply_references=[]
@@ -459,13 +459,13 @@ async def test_delayed_queue_executes_high_risk_tool_without_confirmation():
                 raw_text="Done.", clean_text="Done.", tool_calls=[], reply_references=[]
             ),
         ],
-        execute_skill,
+        execute_tool,
     )
 
     results = await tasks.tick_delayed_queue("group-1")
 
     assert results[0]["reply"] == "Done."
-    assert execute_skill.await_args.args[1] == {"action": "kick", "user_id": 42}
+    assert execute_tool.await_args.args[1] == {"action": "kick", "user_id": 42}
 
 
 @pytest.mark.asyncio
@@ -492,7 +492,7 @@ async def test_delayed_queue_when_chat_round_has_no_completion_control_tool():
 
     profile = SimpleNamespace(name="Alice", is_developer=False)
     engine = SimpleNamespace(
-        config={"max_skill_rounds": 3},
+        config={"max_tool_rounds": 3},
         delayed_queue=queue,
         _helpers=SimpleNamespace(
             get_recent_messages=lambda group_id, n: [],
@@ -521,8 +521,8 @@ async def test_delayed_queue_when_chat_round_has_no_completion_control_tool():
             )
         ),
         brain=SimpleNamespace(chat=AsyncMock(side_effect=capture_chat)),
-        _skill_registry=None,
-        _skill_executor=None,
+        _tool_registry=None,
+        _tool_executor=None,
         _log_inner_thought=lambda text: None,
         event_bus=SimpleNamespace(emit=AsyncMock()),
     )
@@ -556,11 +556,11 @@ async def test_delayed_queue_when_partial_send_fails_then_tool_is_not_executed()
         function_name="lookup",
         function_arguments='{"query": "status"}',
     )
-    skill = SimpleNamespace(name="lookup", silent=False, developer_only=False)
+    tool = SimpleNamespace(name="lookup", silent=False, developer_only=False)
     profile = SimpleNamespace(name="Alice", is_developer=False)
-    execute_skill = AsyncMock(return_value=SkillResult(success=True, data={"ok": True}))
+    execute_tool = AsyncMock(return_value=ToolResult(success=True, data={"ok": True}))
     engine = SimpleNamespace(
-        config={"max_skill_rounds": 2},
+        config={"max_tool_rounds": 2},
         delayed_queue=queue,
         _helpers=SimpleNamespace(
             get_recent_messages=lambda group_id, n: [],
@@ -598,10 +598,10 @@ async def test_delayed_queue_when_partial_send_fails_then_tool_is_not_executed()
                 )
             )
         ),
-        _skill_registry=SimpleNamespace(get=lambda name: skill),
-        _skill_executor=SimpleNamespace(
+        _tool_registry=SimpleNamespace(get=lambda name: tool),
+        _tool_executor=SimpleNamespace(
             set_chat_context=lambda **kwargs: None,
-            execute_async=execute_skill,
+            execute_async=execute_tool,
         ),
         _log_inner_thought=lambda text: None,
         event_bus=SimpleNamespace(emit=AsyncMock()),
@@ -620,7 +620,7 @@ async def test_delayed_queue_when_partial_send_fails_then_tool_is_not_executed()
     with pytest.raises(RuntimeError, match="send failed"):
         await tasks.tick_delayed_queue("group-1", on_partial_reply=fail_partial_send)
 
-    execute_skill.assert_not_awaited()
+    execute_tool.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -674,8 +674,8 @@ async def test_delayed_queue_when_enter_plan_then_intermediate_text_is_hidden():
     profile = SimpleNamespace(name="Alice", is_developer=False)
     engine = SimpleNamespace(
         config={
-            "max_skill_rounds": 3,
-            "enable_skills": True,
+            "max_tool_rounds": 3,
+            "enable_tools": True,
             "plan_mode_enabled": True,
             "plan_mode_limit_normal_tools": True,
         },
@@ -707,8 +707,8 @@ async def test_delayed_queue_when_enter_plan_then_intermediate_text_is_hidden():
             )
         ),
         brain=SimpleNamespace(chat=AsyncMock(side_effect=chat_results)),
-        _skill_registry=None,
-        _skill_executor=None,
+        _tool_registry=None,
+        _tool_executor=None,
         _active_plan_sessions={},
         _log_inner_thought=lambda text: None,
         event_bus=SimpleNamespace(emit=AsyncMock()),
@@ -732,8 +732,8 @@ async def test_delayed_queue_when_enter_plan_then_intermediate_text_is_hidden():
     assert engine._active_plan_sessions == {}
     first_request = engine.brain.chat.await_args_list[0].args[0]
     second_request = engine.brain.chat.await_args_list[1].args[0]
-    assert first_request.enable_skills is False
-    assert second_request.enable_skills is True
+    assert first_request.enable_tools is False
+    assert second_request.enable_tools is True
     assert "enter_plan" in {tool["function"]["name"] for tool in (first_request.extra_tools or [])}
     assert "exit_plan" in {tool["function"]["name"] for tool in (second_request.extra_tools or [])}
     assert "abort_plan" in {tool["function"]["name"] for tool in (second_request.extra_tools or [])}
@@ -782,8 +782,8 @@ async def test_delayed_queue_when_plan_aborts_then_session_is_cleared_without_re
     profile = SimpleNamespace(name="Alice", is_developer=False)
     engine = SimpleNamespace(
         config={
-            "max_skill_rounds": 3,
-            "enable_skills": True,
+            "max_tool_rounds": 3,
+            "enable_tools": True,
             "plan_mode_enabled": True,
             "plan_mode_limit_normal_tools": True,
         },
@@ -832,8 +832,8 @@ async def test_delayed_queue_when_plan_aborts_then_session_is_cleared_without_re
                 ]
             )
         ),
-        _skill_registry=None,
-        _skill_executor=None,
+        _tool_registry=None,
+        _tool_executor=None,
         _active_plan_sessions={},
         _log_inner_thought=lambda text: None,
         event_bus=SimpleNamespace(emit=AsyncMock()),
@@ -876,8 +876,8 @@ async def test_delayed_queue_when_plan_presence_enabled_then_sends_status_once()
     profile = SimpleNamespace(name="Alice", is_developer=False)
     engine = SimpleNamespace(
         config={
-            "max_skill_rounds": 3,
-            "enable_skills": True,
+            "max_tool_rounds": 3,
+            "enable_tools": True,
             "plan_mode_enabled": True,
             "plan_mode_limit_normal_tools": True,
             "plan_mode_presence_enabled": True,
@@ -934,8 +934,8 @@ async def test_delayed_queue_when_plan_presence_enabled_then_sends_status_once()
                 ]
             )
         ),
-        _skill_registry=None,
-        _skill_executor=None,
+        _tool_registry=None,
+        _tool_executor=None,
         _active_plan_sessions={},
         _log_inner_thought=lambda text: None,
         event_bus=SimpleNamespace(emit=AsyncMock()),
@@ -977,8 +977,8 @@ async def test_delayed_queue_when_normal_chat_requests_plan_status_then_reads_pu
     profile = SimpleNamespace(name="Bob", is_developer=False)
     engine = SimpleNamespace(
         config={
-            "max_skill_rounds": 3,
-            "enable_skills": True,
+            "max_tool_rounds": 3,
+            "enable_tools": True,
             "plan_mode_enabled": True,
             "plan_mode_limit_normal_tools": True,
             "plan_mode_chat_awareness_enabled": True,
@@ -1033,8 +1033,8 @@ async def test_delayed_queue_when_normal_chat_requests_plan_status_then_reads_pu
                 ]
             )
         ),
-        _skill_registry=None,
-        _skill_executor=None,
+        _tool_registry=None,
+        _tool_executor=None,
         _active_plan_sessions={},
         _log_inner_thought=lambda text: None,
         event_bus=SimpleNamespace(emit=AsyncMock()),
@@ -1064,7 +1064,7 @@ async def test_delayed_queue_when_normal_chat_requests_plan_status_then_reads_pu
     assert results[0]["reply"] == "I am checking config and tests."
     first_request = engine.brain.chat.await_args_list[0].args[0]
     second_request = engine.brain.chat.await_args_list[1].args[0]
-    assert first_request.enable_skills is False
+    assert first_request.enable_tools is False
     assert "get_plan_status" in {
         tool["function"]["name"] for tool in (first_request.extra_tools or [])
     }
@@ -1089,9 +1089,9 @@ async def test_delayed_queue_when_text_sticker_marker_is_present_then_sticker_is
     item.enqueue_time = _past(item.window_seconds + 1)
 
     profile = SimpleNamespace(name="Alice", is_developer=False)
-    execute_skill = AsyncMock(return_value=SkillResult(success=True, data={"sent": True}))
+    execute_tool = AsyncMock(return_value=ToolResult(success=True, data={"sent": True}))
     engine = SimpleNamespace(
-        config={"max_skill_rounds": 2},
+        config={"max_tool_rounds": 2},
         delayed_queue=queue,
         _helpers=SimpleNamespace(
             get_recent_messages=lambda group_id, n: [],
@@ -1130,8 +1130,8 @@ async def test_delayed_queue_when_text_sticker_marker_is_present_then_sticker_is
                 )
             )
         ),
-        _skill_registry=None,
-        _skill_executor=None,
+        _tool_registry=None,
+        _tool_executor=None,
         _sticker_names=["开心"],
         _log_inner_thought=lambda text: None,
         event_bus=SimpleNamespace(emit=AsyncMock()),
@@ -1146,7 +1146,7 @@ async def test_delayed_queue_when_text_sticker_marker_is_present_then_sticker_is
 
     results = await tasks.tick_delayed_queue("group-1")
 
-    execute_skill.assert_not_awaited()
+    execute_tool.assert_not_awaited()
     assert results[0]["reply"] == "先说正文"
     assert results[0]["sticker_names"] == ["开心"]
 
@@ -1173,7 +1173,7 @@ async def test_delayed_queue_when_fenced_markdown_has_context_then_sends_text_im
         assert title == ""
         return "42"
 
-    execute_skill = AsyncMock()
+    execute_tool = AsyncMock()
     tasks, engine = _agent_tool_tasks(
         queue,
         SimpleNamespace(name="lookup", silent=False, developer_only=False),
@@ -1191,7 +1191,7 @@ async def test_delayed_queue_when_fenced_markdown_has_context_then_sends_text_im
                 },
             )
         ],
-        execute_skill,
+        execute_tool,
     )
     engine._adapter = SimpleNamespace()
     monkeypatch.setattr(
@@ -1216,7 +1216,7 @@ async def test_delayed_queue_when_fenced_markdown_has_context_then_sends_text_im
         "text:细节之后再聊。",
     ]
     assert engine.brain.chat.await_count == 1
-    execute_skill.assert_not_awaited()
+    execute_tool.assert_not_awaited()
     assert results[0]["reply"] == ""
     assert delivered_cards == [
         {
@@ -1287,7 +1287,7 @@ async def test_delayed_queue_when_short_inline_markdown_stays_text(monkeypatch):
     )
     item.enqueue_time = _past(item.window_seconds + 1)
 
-    execute_skill = AsyncMock()
+    execute_tool = AsyncMock()
     tasks, engine = _agent_tool_tasks(
         queue,
         SimpleNamespace(name="lookup", silent=False, developer_only=False),
@@ -1300,7 +1300,7 @@ async def test_delayed_queue_when_short_inline_markdown_stays_text(monkeypatch):
                 injected_request={},
             )
         ],
-        execute_skill,
+        execute_tool,
     )
     engine._adapter = SimpleNamespace()
     render_markdown = AsyncMock()
@@ -1331,7 +1331,7 @@ async def test_delayed_queue_when_markdown_card_render_fails_then_falls_back_to_
     async def fail_to_render(*args, **kwargs):
         raise ValueError("content 过长")
 
-    execute_skill = AsyncMock()
+    execute_tool = AsyncMock()
     tasks, engine = _agent_tool_tasks(
         queue,
         SimpleNamespace(name="lookup", silent=False, developer_only=False),
@@ -1349,7 +1349,7 @@ async def test_delayed_queue_when_markdown_card_render_fails_then_falls_back_to_
                 },
             )
         ],
-        execute_skill,
+        execute_tool,
     )
     engine._adapter = SimpleNamespace()
     monkeypatch.setattr(

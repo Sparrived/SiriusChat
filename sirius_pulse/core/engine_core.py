@@ -52,7 +52,7 @@ from sirius_pulse.memory.user.unified_manager import UnifiedUserManager
 from sirius_pulse.models.emotion import AssistantEmotionState, EmotionState
 from sirius_pulse.models.models import Message, Transcript, UnifiedUser
 from sirius_pulse.models.response_strategy import ResponseStrategy, StrategyDecision
-from sirius_pulse.skills.builtin import _markdown_image
+from sirius_pulse.tools.builtin import _markdown_image
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +76,7 @@ class _EmotionalGroupChatEngineBase:
         self.work_path = work_path
         self._vector_store = vector_store
         self._embedding_client = embedding_client
-        self._adapter: Any = None  # 由 add_skill_bridge() 注入，plugin 直接取用
+        self._adapter: Any = None  # 由 add_tool_bridge() 注入，plugin 直接取用
         self._persona_db_conn = persona_db_conn
 
         self._init_expressiveness()
@@ -88,7 +88,7 @@ class _EmotionalGroupChatEngineBase:
         self._init_model_router()
         self._init_brain()
         self._init_event_bus_and_persistence(work_path)
-        self._init_skill_plugin_and_runtime()
+        self._init_tool_plugin_and_runtime()
         self._init_helpers()
         self._init_bg_tasks()
         self._init_pipeline()
@@ -148,7 +148,7 @@ class _EmotionalGroupChatEngineBase:
             "cognition_analyze": analysis_model,
             "memory_extract": memory_model,
             "response_generate": chat_model,
-            "passive_skill": chat_model,
+            "passive_tool": chat_model,
             "github_monitor_notify": chat_model,
             "plugin_generate": plugin_model,
             "plugin_analyze": plugin_model,
@@ -298,17 +298,17 @@ class _EmotionalGroupChatEngineBase:
             batch_size=1,
         )
 
-    def _init_skill_plugin_and_runtime(self) -> None:
+    def _init_tool_plugin_and_runtime(self) -> None:
         self._group_last_message_at: dict[str, str] = {}
         self._transcripts: dict[str, Transcript] = {}
         self._last_reply_at: dict[str, float] = {}
         self._last_reply_depth: dict[str, int] = {}
 
-        self._skill_registry: Any | None = None
-        self._skill_executor: Any | None = None
-        self._passive_skill_tasks: dict[str, asyncio.Task] = {}
-        self._passive_skill_triggers: dict[str, list[Any]] = {}
-        self._passive_skill_unloaders: list[tuple[Any, Any]] = []
+        self._tool_registry: Any | None = None
+        self._tool_executor: Any | None = None
+        self._passive_tool_tasks: dict[str, asyncio.Task] = {}
+        self._passive_tool_triggers: dict[str, list[Any]] = {}
+        self._passive_tool_unloaders: list[tuple[Any, Any]] = []
 
         self._plugin_registry: Any | None = None
         self._plugin_executor: Any | None = None
@@ -367,16 +367,16 @@ class _EmotionalGroupChatEngineBase:
     # 向后兼容的委托方法（委托给 Helpers 组件）
     # ==================================================================
 
-    def set_skill_runtime(
+    def set_tool_runtime(
         self,
         *,
-        skill_registry: Any | None = None,
-        skill_executor: Any | None = None,
+        tool_registry: Any | None = None,
+        tool_executor: Any | None = None,
     ) -> None:
-        """Attach SKILL registry and executor to the engine."""
-        self._helpers.set_skill_runtime(
-            skill_registry=skill_registry,
-            skill_executor=skill_executor,
+        """Attach TOOL registry and executor to the engine."""
+        self._helpers.set_tool_runtime(
+            tool_registry=tool_registry,
+            tool_executor=tool_executor,
         )
 
     def update_qq_group_members(self, group_id: str, members: list[dict[str, Any]]) -> None:
@@ -446,12 +446,12 @@ class _EmotionalGroupChatEngineBase:
         """Execute a Plugin command and produce the reply."""
         return await self._helpers.execute_plugin_command(decision, message, group_id, user_id)
 
-    def _register_passive_skills(self) -> None:
-        """Discover passive SKILLs and instantiate their background tasks / triggers."""
-        self._helpers._register_passive_skills()
+    def _register_passive_tools(self) -> None:
+        """Discover passive TOOLs and instantiate their background tasks / triggers."""
+        self._helpers._register_passive_tools()
 
     def _wrap_event_bus_for_triggers(self) -> None:
-        """Wrap event_bus.emit so passive SKILL triggers fire on matching events."""
+        """Wrap event_bus.emit so passive TOOL triggers fire on matching events."""
         self._helpers._wrap_event_bus_for_triggers()
 
     def _get_recent_messages(self, group_id: str, n: int = 10) -> list[dict[str, Any]]:

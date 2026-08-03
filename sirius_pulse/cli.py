@@ -60,7 +60,7 @@ PERSONA_LOGGER_PREFIXES = (
     "sirius_pulse.platforms.",
     "sirius_pulse.plugins.",
     "sirius_pulse.providers.",
-    "sirius_pulse.skills.",
+    "sirius_pulse.tools.",
     "sirius_pulse.token.",
 )
 
@@ -287,7 +287,7 @@ def _migrate_flat_to_personas() -> None:
         "glossary",
         "diary",
         "plugins",
-        "skills",
+        "tools",
         "logs",
         "image_cache",
         "plugin_data",
@@ -522,7 +522,7 @@ def _cmd_persona_create(args: argparse.Namespace) -> None:
         return
 
     persona_dir.mkdir(parents=True)
-    for subdir in ("engine_state", "archive", "plugins", "skills", "logs", "image_cache"):
+    for subdir in ("engine_state", "archive", "plugins", "tools", "logs", "image_cache"):
         (persona_dir / subdir).mkdir(exist_ok=True)
 
     (persona_dir / "persona.json").write_text(

@@ -32,7 +32,7 @@ description: "在不通读全部代码的情况下快速理解 Sirius Pulse 架�
 4. `docs/guide/memory-diary.md`（日记记忆子系统）
 5. `docs/guide/memory-evolution.md`（演化链记忆子系统）
 6. `docs/guide/persona-system.md`（人格系统）
-7. `docs/guide/skill-system.md`（技能系统）
+7. `docs/guide/tool-system.md`（工具系统）
 8. `docs/guide/configuration.md`（配置系统）
 9. `docs/guide/platform-napcat.md`（NapCat 平台适配）
 10. `README.md`
@@ -78,7 +78,7 @@ description: "在不通读全部代码的情况下快速理解 Sirius Pulse 架�
 41. `sirius_pulse/core/plugin_intent_matcher.py`（插件意图嵌入匹配）
 42. `sirius_pulse/core/plugin_intent_verifier.py`（插件意图 LLM 验证）
 43. `sirius_pulse/core/user_lookup.py`（用户查找服务）
-44. `sirius_pulse/core/skill_engine_context.py`（SkillEngineContextImpl）
+44. `sirius_pulse/core/tool_engine_context.py`（ToolEngineContextImpl）
 45. `sirius_pulse/core/constants.py`（核心引擎常量定义）
 46. `sirius_pulse/core/utils.py`（核心引擎工具函数）
 
@@ -128,14 +128,14 @@ description: "在不通读全部代码的情况下快速理解 Sirius Pulse 架�
 
 ### SKILL 系统
 
-82. `sirius_pulse/skills/api.py`（SKILL 开发统一 API 入口）
-83. `sirius_pulse/skills/registry.py`（SKILL 注册表）
-84. `sirius_pulse/skills/executor.py`（SKILL 执行器）
-85. `sirius_pulse/skills/security.py`（安全校验）
-86. `sirius_pulse/skills/models.py`（SKILL 数据模型）
-87. `sirius_pulse/skills/data_store.py`（SKILL 数据持久化 KV）
-88. `sirius_pulse/skills/dependency_resolver.py`（依赖自动安装）
-89. `sirius_pulse/skills/telemetry.py`（执行遥测）
+82. `sirius_pulse/tools/api.py`（SKILL 开发统一 API 入口）
+83. `sirius_pulse/tools/registry.py`（SKILL 注册表）
+84. `sirius_pulse/tools/executor.py`（SKILL 执行器）
+85. `sirius_pulse/tools/security.py`（安全校验）
+86. `sirius_pulse/tools/models.py`（SKILL 数据模型）
+87. `sirius_pulse/tools/data_store.py`（SKILL 数据持久化 KV）
+88. `sirius_pulse/tools/dependency_resolver.py`（依赖自动安装）
+89. `sirius_pulse/tools/telemetry.py`（执行遥测）
 
 ### Provider 体系
 
@@ -179,7 +179,7 @@ description: "在不通读全部代码的情况下快速理解 Sirius Pulse 架�
 118. `sirius_pulse/webui/evolution_api.py`（统一记忆系统 API）
 119. `sirius_pulse/webui/memory_api.py`（Token/认知/日记 API）
 120. `sirius_pulse/webui/server_plugin_api.py`（全局 Plugin 管理 API）
-121. `sirius_pulse/webui/server_skill_api.py`（每人格 Skill 配置 API）
+121. `sirius_pulse/webui/server_tool_api.py`（每人格 Skill 配置 API）
 122. `sirius_pulse/webui/auth.py`（JWT 认证管理器）
 123. `sirius_pulse/webui/middleware.py`（认证中间件）
 124. `sirius_pulse/webui/monitoring_api.py`（监控 API）
@@ -222,7 +222,7 @@ description: "在不通读全部代码的情况下快速理解 Sirius Pulse 架�
     │       ├── IdentityResolver（四层身份解析链）
     │       ├── ModelRouter（任务感知模型选择）
     │       ├── PluginExecutor + PluginIntentMatcher + PluginIntentVerifier
-    │       ├── SkillRegistry + SkillExecutor
+    │       ├── ToolRegistry + ToolExecutor
     │       ├── ProactiveTrigger（无刺激主动触发）
     │       ├── DelayedResponseQueue（延迟防抖合并）
     │       └── PinnedMessageManager（消息钉住）
@@ -255,7 +255,7 @@ description: "在不通读全部代码的情况下快速理解 Sirius Pulse 架�
 - **平台适配层**：`adapters/` 包提供跨平台抽象（`BaseAdapter`、`MessageSegment` 联合类型、`ParsedEvent`），各平台（NapCat/Discord 等）继承实现。
 - 一个 `SessionConfig` 只对应一个主 AI，主 AI 由 `preset=AgentPreset(...)` 描述。
 - `User` 是 `Participant` 的公开别名，不存在第二套独立的人类参与者模型。
-- 配置资产与运行态数据支持双根分离：config root 负责配置与角色资产，data root 负责 session、memory、token 与 skill_data。
+- 配置资产与运行态数据支持双根分离：config root 负责配置与角色资产，data root 负责 session、memory、token 与 tool_data。
 - `sirius_pulse/__init__.py` 是顶层公开 API 统一重导出（严格 `__all__`，130+ 符号），所有对外接口从这里导入。
 - WebUI 支持 JWT 认证（admin/viewer 角色）、WebSocket 事件推送、监控 API、传记管理、演化链仪表盘。
 
@@ -275,7 +275,7 @@ description: "在不通读全部代码的情况下快速理解 Sirius Pulse 架�
 | `sirius_pulse/core/` | 编排核心：EmotionalGroupChatEngine（组合模式）、Brain（LLM 中枢）、Pipeline、认知/决策/响应策略、四层身份解析、主动触发、延迟防抖、消息钉住、编排持久化、人格数据库、事件总线、节奏/阈值分析 | 不负责 SKILL 注册表 |
 | `sirius_pulse/memory/` | 四层记忆架构（基础消息→情景压缩→演化链验证→传记/模式/缺口）、日记、语义、统一用户管理、名词解释、上下文组装、冷检测 | 不直接决定 provider 路由 |
 | `sirius_pulse/providers/` | provider 协议、9 个具体上游实现（OpenAI 兼容/智谱/DeepSeek/硅基流动/火山引擎/阿里云百炼/MIMO/YTea/Mock）、注册表、自动路由、models.dev 自动填充 | 不介入高层人格生命周期 |
-| `sirius_pulse/skills/` | SKILL 注册、依赖解析、执行、安全校验、遥测、数据存储；被动 SKILL 支持；13 个内置技能（reminder/github_monitor/bing_search/url_content_reader/file_*/send_*/desktop_screenshot/learn_term/system_info） | 不负责 provider 注册表 |
+| `sirius_pulse/tools/` | SKILL 注册、依赖解析、执行、安全校验、遥测、数据存储；被动 SKILL 支持；13 个内置技能（reminder/github_monitor/bing_search/url_content_reader/file_*/send_*/desktop_screenshot/learn_term/system_info） | 不负责 provider 注册表 |
 | `sirius_pulse/config/` | SessionConfig、WorkspaceConfig、ConfigManager、ConfigBuilder 声明式构建、JSONC 解析、原子文件 I/O、类型强制转换 | 不改变核心对话契约 |
 | `sirius_pulse/models/` | 数据契约：Message、Transcript、EmotionState、IntentAnalysisV3、PersonaProfile、ResponseStrategy 等 | 不处理持久化 |
 | `sirius_pulse/session/` | SessionStore（Json/Sqlite）、持久化后端 | 不介入对话逻辑 |
@@ -322,7 +322,7 @@ description: "在不通读全部代码的情况下快速理解 Sirius Pulse 架�
 | `sirius_pulse/core/threshold_engine.py` | 阈值引擎 |
 | `sirius_pulse/core/rhythm.py` | 节奏分析 |
 | `sirius_pulse/core/events.py` | 事件总线（8 种事件类型，有损广播） |
-| `sirius_pulse/core/skill_engine_context.py` | SkillEngineContextImpl（被动 SKILL 与引擎交互适配器） |
+| `sirius_pulse/core/tool_engine_context.py` | ToolEngineContextImpl（被动 SKILL 与引擎交互适配器） |
 | `sirius_pulse/core/constants.py` | 核心引擎常量定义（时间、Token、记忆等魔法数字） |
 | `sirius_pulse/core/utils.py` | 核心引擎工具函数（时间戳、XML 清理、表情包标签解析） |
 | `sirius_pulse/memory/cold_detector.py` | 两阶段冷检测器（HOT→WARM 5 分钟→COLD 30 分钟） |
@@ -352,10 +352,10 @@ description: "在不通读全部代码的情况下快速理解 Sirius Pulse 架�
 | `sirius_pulse/plugins/lexer.py` | 词法分析器 + AST 解析（Unix 风格指令） |
 | `sirius_pulse/plugins/dispatcher.py` | 输出调度器（direct/llm/silent 三模式） |
 | `sirius_pulse/plugins/scheduler.py` | 定时调度器（cron + interval） |
-| `sirius_pulse/skills/api.py` | SKILL 开发统一 API 入口 |
-| `sirius_pulse/skills/data_store.py` | SKILL 数据持久化 KV（JSON 文件，线程安全） |
-| `sirius_pulse/skills/dependency_resolver.py` | 依赖自动安装（uv pip install） |
-| `sirius_pulse/skills/telemetry.py` | 执行遥测（JSONL 追加式存储） |
+| `sirius_pulse/tools/api.py` | SKILL 开发统一 API 入口 |
+| `sirius_pulse/tools/data_store.py` | SKILL 数据持久化 KV（JSON 文件，线程安全） |
+| `sirius_pulse/tools/dependency_resolver.py` | 依赖自动安装（uv pip install） |
+| `sirius_pulse/tools/telemetry.py` | 执行遥测（JSONL 追加式存储） |
 | `sirius_pulse/providers/base.py` | Provider 抽象基类 + 数据模型 |
 | `sirius_pulse/providers/routing.py` | Provider 注册表 + 路由逻辑 |
 | `sirius_pulse/providers/openai_compatible.py` | OpenAI 兼容基类（所有 Provider 的基础） |
@@ -418,7 +418,7 @@ data/
     ├── memory/                     # 语义记忆（向量存储）
     ├── diary/                      # 日记记忆（切片+向量）
     ├── image_cache/                # 图片缓存
-    ├── skill_data/                 # 技能数据（含 stickers/ 表情包 RAG 库）
+    ├── tool_data/                 # 技能数据（含 stickers/ 表情包 RAG 库）
     └── logs/                       # 文件日志
 ```
 
@@ -437,13 +437,13 @@ data/
 - **修改人格生命周期**：同步检查 `sirius_pulse/persona_manager.py`、`persona_worker.py`、`persona_config.py`、`core/persona_db.py`、`core/persona_store.py`、`core/persona_generator.py`、`core/orchestration_store.py`、`platforms/runtime.py`。
 - **修改平台适配**：同步检查 `sirius_pulse/adapters/base.py`、`adapters/models.py`、`platforms/onebot_v11/napcat/manager.py`、`platforms/onebot_v11/napcat/adapter.py`、`platforms/onebot_v11/protocol.py`、`platforms/runtime.py`、`platforms/persona_utils.py`。
 - **修改插件系统**：同步检查 `sirius_pulse/plugins/api.py`、`plugins/base.py`、`plugins/loader.py`、`plugins/registry.py`、`plugins/executor.py`、`plugins/lexer.py`、`plugins/dispatcher.py`、`plugins/scheduler.py`、`plugins/context.py`、`plugins/models.py`、`plugins/decorators.py`、`plugins/config.py`、`plugins/events.py`、`core/plugin_intent_matcher.py`、`core/plugin_intent_verifier.py`、`webui/server_plugin_api.py`。
-- **修改 SKILL 系统**：同步检查 `sirius_pulse/skills/api.py`、`skills/registry.py`、`skills/executor.py`、`skills/security.py`、`skills/models.py`、`skills/data_store.py`、`skills/dependency_resolver.py`、`skills/telemetry.py`、`core/skill_engine_context.py`、`core/helpers.py`（被动 SKILL 注册与触发分发）。
+- **修改 SKILL 系统**：同步检查 `sirius_pulse/tools/api.py`、`tools/registry.py`、`tools/executor.py`、`tools/security.py`、`tools/models.py`、`tools/data_store.py`、`tools/dependency_resolver.py`、`tools/telemetry.py`、`core/tool_engine_context.py`、`core/helpers.py`（被动 SKILL 注册与触发分发）。
 - **修改配置系统**：同步检查 `sirius_pulse/config/manager.py`、`config/models.py`、`config/helpers.py`、`config/config_builder.py`、`config/config_helpers.py`、`config/file_io.py`、`config/jsonc.py`。
 - **修改外部 API**：同步更新 `sirius_pulse/__init__.py`、README、docs 与示例代码。
-- **修改 WebUI**：同步检查 `sirius_pulse/webui/server_core.py`、`webui/server_utils.py`、`webui/persona_api.py`、`webui/biography_api.py`、`webui/evolution_api.py`、`webui/memory_api.py`、`webui/server_plugin_api.py`、`webui/server_skill_api.py`、`webui/auth.py`、`webui/middleware.py`、`webui/monitoring_api.py`、`webui/ws_server.py`。
+- **修改 WebUI**：同步检查 `sirius_pulse/webui/server_core.py`、`webui/server_utils.py`、`webui/persona_api.py`、`webui/biography_api.py`、`webui/evolution_api.py`、`webui/memory_api.py`、`webui/server_plugin_api.py`、`webui/server_tool_api.py`、`webui/auth.py`、`webui/middleware.py`、`webui/monitoring_api.py`、`webui/ws_server.py`。
 - **修改状态持久化**：同步检查 `sirius_pulse/core/engine_persistence.py`、`core/engine_core.py`、`core/orchestration_store.py`、`core/persona_store.py`、`core/persona_db.py`、`utils/json_io.py`、`config/file_io.py`。
-- **修改表情包系统**：同步检查 `sirius_pulse/core/engine_sticker.py`、`core/utils.py`、`skills/builtin/send_image.py`。
+- **修改表情包系统**：同步检查 `sirius_pulse/core/engine_sticker.py`、`core/utils.py`、`tools/builtin/send_image.py`。
 - **修改身份系统**：同步检查 `sirius_pulse/core/identity_resolver.py`、`core/user_lookup.py`、`core/user_lookup_mixin.py`、`memory/user/unified_manager.py`、`memory/storage.py`。
-- **修改 GitHub 集成**：同步检查 `sirius_pulse/github/client.py`、`github/event_bridge.py`、`github/events.py`、`github/webhook.py`、`skills/builtin/github_monitor.py`。
+- **修改 GitHub 集成**：同步检查 `sirius_pulse/github/client.py`、`github/event_bridge.py`、`github/events.py`、`github/webhook.py`、`tools/builtin/github_monitor.py`。
 - **修改 Token 系统**：同步检查 `sirius_pulse/token/token_store.py`、`token/analytics.py`、`token/usage.py`、`token/token_utils.py`、`token/utils.py`。
 - **修改工具函数**：同步检查 `sirius_pulse/core/constants.py`、`core/utils.py`、`utils/json_io.py`、`utils/retry.py`、`utils/sqlite_base.py`、`utils/query_builder.py`。

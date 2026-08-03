@@ -44,7 +44,7 @@ from sirius_pulse.config import (
     WorkspaceConfig,
 )
 
-# ── Config Builder (shared between plugins and skills) ──
+# ── Config Builder (shared between plugins and tools) ──
 from sirius_pulse.config.config_builder import (
     ConfigBuilder,
     ParamDefinition,
@@ -190,18 +190,18 @@ from sirius_pulse.providers.base import AsyncLLMProvider, LLMProvider
 # ── Session / Workspace ──
 from sirius_pulse.session.store import JsonSessionStore, SessionStoreFactory, SqliteSessionStore
 
-# ── Skills ──
-from sirius_pulse.skills import (
+# ── Tools ──
+from sirius_pulse.tools import (
     BackgroundTaskSpec,
-    SkillDataStore,
-    SkillDefinition,
-    SkillEngineContext,
-    SkillExecutor,
-    SkillInvocationContext,
-    SkillParameter,
-    SkillPassiveType,
-    SkillRegistry,
-    SkillResult,
+    ToolDataStore,
+    ToolDefinition,
+    ToolEngineContext,
+    ToolExecutor,
+    ToolInvocationContext,
+    ToolParameter,
+    ToolPassiveType,
+    ToolRegistry,
+    ToolResult,
     TriggerSpec,
 )
 from sirius_pulse.token.analytics import (
@@ -310,19 +310,19 @@ __all__ = [
     "SessionStoreFactory",
     "SqliteSessionStore",
     "WorkspaceLayout",
-    # Skills
+    # Tools
     "BackgroundTaskSpec",
-    "SkillDataStore",
-    "SkillDefinition",
-    "SkillEngineContext",
-    "SkillExecutor",
-    "SkillInvocationContext",
-    "SkillParameter",
-    "SkillPassiveType",
-    "SkillRegistry",
-    "SkillResult",
+    "ToolDataStore",
+    "ToolDefinition",
+    "ToolEngineContext",
+    "ToolExecutor",
+    "ToolInvocationContext",
+    "ToolParameter",
+    "ToolPassiveType",
+    "ToolRegistry",
+    "ToolResult",
     "TriggerSpec",
-    # Config Builder (shared between plugins and skills)
+    # Config Builder (shared between plugins and tools)
     "ConfigBuilder",
     "ParamDefinition",
     "config_param",

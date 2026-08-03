@@ -260,7 +260,7 @@ let globe = null;
 let starfield = null;
 let currentPersona = null;
 const realtime = createRealtimeRefresh(refreshDashboardRealtime, {
-  resources: ['dashboard', 'monitoring', 'personas', 'tokens', 'cognition', 'skill-history', 'conversations'],
+  resources: ['dashboard', 'monitoring', 'personas', 'tokens', 'cognition', 'tool-history', 'conversations'],
   debounceMs: 700,
   personaScoped: false,
 });
@@ -860,8 +860,8 @@ async function loadStats() {
     const avg = tokenRes.response_avg || {};
     const personas = store.personas || [];
     const running = personas.filter(p => p.running).length;
-    const skills = telemetryRes.skills || {};
-    const totalSkillCalls = telemetryRes.total_calls || 0;
+    const tools = telemetryRes.tools || {};
+    const totalToolCalls = telemetryRes.total_calls || 0;
 
     if ($('dsPersonas')) animateNumber($('dsPersonas'), personas.length);
     if ($('dsRunning')) animateNumber($('dsRunning'), running);
@@ -874,17 +874,17 @@ async function loadStats() {
         : '—';
     }
     if ($('dsAvgTokens')) animateNumber($('dsAvgTokens'), avg.avg_total_tokens || 0);
-    if ($('dsSkillCalls')) animateNumber($('dsSkillCalls'), totalSkillCalls);
+    if ($('dsToolCalls')) animateNumber($('dsToolCalls'), totalToolCalls);
 
-    const skillNames = Object.keys(skills);
-    if (skillNames.length > 0) {
+    const toolNames = Object.keys(tools);
+    if (toolNames.length > 0) {
       let totalSuccess = 0, totalCount = 0;
-      skillNames.forEach(name => {
-        totalSuccess += (skills[name].success_rate || 0) * skills[name].calls;
-        totalCount += skills[name].calls;
+      toolNames.forEach(name => {
+        totalSuccess += (tools[name].success_rate || 0) * tools[name].calls;
+        totalCount += tools[name].calls;
       });
       const avgRate = totalCount > 0 ? Math.round(totalSuccess / totalCount) : 0;
-      if ($('dsSkillRate')) $('dsSkillRate').textContent = `${avgRate}%`;
+      if ($('dsToolRate')) $('dsToolRate').textContent = `${avgRate}%`;
     }
 
     if ($('dsHeartbeat') && personas.length > 0) {

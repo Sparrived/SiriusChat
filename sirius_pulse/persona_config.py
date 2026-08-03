@@ -170,10 +170,10 @@ class PersonaExperienceConfig:
     reply_time_curve_points: list[dict[str, float | str]] = field(default_factory=list)
     max_sentence_chars: int = 20
 
-    # 并发与技能
-    enable_skills: bool = True
-    max_skill_rounds: int = 3
-    auto_install_skill_deps: bool = True
+    # 并发与工具
+    enable_tools: bool = True
+    max_tool_rounds: int = 3
+    auto_install_tool_deps: bool = True
     plan_mode_enabled: bool = False
     plan_mode_limit_normal_tools: bool = False
     plan_mode_allow_light_chat: bool = True
@@ -202,9 +202,9 @@ class PersonaExperienceConfig:
                 self.reply_time_curve_points
             ),
             "max_sentence_chars": self.max_sentence_chars,
-            "enable_skills": self.enable_skills,
-            "max_skill_rounds": self.max_skill_rounds,
-            "auto_install_skill_deps": self.auto_install_skill_deps,
+            "enable_tools": self.enable_tools,
+            "max_tool_rounds": self.max_tool_rounds,
+            "auto_install_tool_deps": self.auto_install_tool_deps,
             "plan_mode_enabled": self.plan_mode_enabled,
             "plan_mode_limit_normal_tools": self.plan_mode_limit_normal_tools,
             "plan_mode_allow_light_chat": self.plan_mode_allow_light_chat,
@@ -238,10 +238,10 @@ class PersonaExperienceConfig:
                 data.get("reply_time_curve_points", [])
             ),
             max_sentence_chars=max(5, min(50, int(data.get("max_sentence_chars", 20)))),
-            enable_skills=bool(data.get("enable_skills", True)),
+            enable_tools=bool(data.get("enable_tools", True)),
             other_ai_names=[str(v) for v in data.get("other_ai_names", [])],
-            max_skill_rounds=int(data.get("max_skill_rounds", 3)),
-            auto_install_skill_deps=bool(data.get("auto_install_skill_deps", True)),
+            max_tool_rounds=int(data.get("max_tool_rounds", 3)),
+            auto_install_tool_deps=bool(data.get("auto_install_tool_deps", True)),
             plan_mode_enabled=bool(data.get("plan_mode_enabled", False)),
             plan_mode_limit_normal_tools=bool(data.get("plan_mode_limit_normal_tools", False)),
             plan_mode_allow_light_chat=bool(data.get("plan_mode_allow_light_chat", True)),

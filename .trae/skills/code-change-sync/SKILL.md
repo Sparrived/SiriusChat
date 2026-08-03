@@ -55,7 +55,7 @@ sirius_pulse/
 │   ├── prompt_factory.py    # PromptFactory（无状态 prompt 构建工具类，含 StyleAdapter 风格适配）
 │   ├── bg_tasks.py          # BackgroundTasksMixin（6 个后台任务，含延迟回复/主动触发 prompt 构建）
 │   ├── helpers.py           # HelpersMixin（技能集成、被动 SKILL 注册与触发分发、token 记录）
-│   ├── skill_engine_context.py # SkillEngineContextImpl（被动 SKILL 与引擎交互适配器）
+│   ├── tool_engine_context.py # ToolEngineContextImpl（被动 SKILL 与引擎交互适配器）
 │   ├── cognition.py         # 统一认知分析器（情绪+意图联合推断）
 │   ├── response_strategy.py # 四层响应策略（IMMEDIATE/DELAYED/SILENT/PROACTIVE）
 │   ├── model_router.py      # 任务感知模型选择
@@ -117,15 +117,15 @@ sirius_pulse/
 │   ├── napcat_bridge.py     # QQ群聊/私聊桥接器
 │   ├── runtime.py           # EngineRuntime封装（单个人格子进程内）
 │   └── persona_utils.py     # 人格生成工具函数
-├── skills/                  # SKILL系统
-│   ├── registry.py          # SKILL注册与发现
-│   ├── executor.py          # SKILL执行（参数校验、重试、遥测）
+├── tools/                   # TOOL系统
+│   ├── registry.py          # TOOL注册与发现
+│   ├── executor.py          # TOOL执行（参数校验、重试、遥测）
 │   ├── security.py          # 开发者权限校验
-│   ├── models.py            # SkillDefinition/SkillResult/SkillPassiveType/BackgroundTaskSpec/TriggerSpec/SkillEngineContext 等数据模型
-│   ├── data_store.py        # SKILL独立JSON数据存储
+│   ├── models.py            # ToolDefinition/ToolResult/ToolPassiveType/BackgroundTaskSpec/TriggerSpec/ToolEngineContext 等数据模型
+│   ├── data_store.py        # TOOL独立JSON数据存储
 │   ├── dependency_resolver.py # 依赖自动解析安装
 │   ├── telemetry.py         # 执行遥测记录
-│   ├── builtin/             # 内置技能（system_info/learn_term/bing_search/file_list/file_read/file_write/upload_file/send_image/send_workspace_file/reminder/desktop_screenshot/url_content_reader/weather等）
+│   ├── builtin/             # 内置工具（system_info/learn_term/bing_search/file_list/file_read/file_write/upload_file/send_image/send_workspace_file/reminder/desktop_screenshot/url_content_reader/weather等）
 │   └── sticker/             # 表情包子系统（RAG 向量检索、偏好管理、学习、反馈、新鲜度）
 ├── session/                 # 会话持久化
 │   └── store.py             # JsonSessionStore/SqliteSessionStore/SessionStoreFactory
@@ -143,7 +143,7 @@ sirius_pulse/
     ├── persona_api.py       # 人格管理 API
     ├── memory_api.py        # 记忆管理 API
     ├── napcat_api.py        # NapCat 管理 API
-    ├── server_skill_api.py  # SKILL 管理 API
+    ├── server_tool_api.py  # SKILL 管理 API
     └── static/              # 前端页面（16 个页面）
 ```
 
@@ -166,7 +166,7 @@ sirius_pulse/
 | `docs/engine-deep-dive.md` | 情感化群聊引擎深度解析 | 引擎行为变更 |
 | `docs/persistence-system.md` | 持久化系统（记忆+会话+Token） | 记忆系统变更 |
 | `docs/persona-lifecycle.md` | 多人格生命周期 | 人格管理变更 |
-| `docs/skill-guide.md` | SKILL 系统指南 | 技能系统变更 |
+| `docs/guide/tool-system.md` | TOOL 系统指南 | 工具系统变更 |
 | `docs/provider-system.md` | Provider系统 | Provider变更 |
 | `docs/platforms.md` | 平台适配层 | 平台适配变更 |
 | `docs/configuration-guide.md` | 配置指南 | 配置选项新增、参数变化 |
@@ -376,14 +376,14 @@ grep -r "^description:" .trae/skills/*/SKILL.md
 ### 场景 3：新增内置 SKILL
 
 ```
-变更：在 sirius_pulse/skills/builtin/ 新增 skill
+变更：在 sirius_pulse/tools/builtin/ 新增 tool
 
 检查清单：
-✓ 实现 SKILL_META + run() 函数
-✓ 在 skills/builtin/__init__.py 中注册（如果需要）
-✓ 在 docs/skill-guide.md 中补充说明
-✓ 在 docs/change-impact-guide.md 中按 7.1 节更新 Skill 联动链
-✓ 新增 tests/test_skills_*.py
+✓ 实现 TOOL_META + run() 函数
+✓ 在 tools/builtin/__init__.py 中注册（如果需要）
+✓ 在 docs/guide/tool-system.md 中补充说明
+✓ 在 docs/change-impact-guide.md 中按 7.1 节更新 Tool 联动链
+✓ 新增 tests/test_tools_*.py
 ```
 
 ### 场景 4：修改 WebUI API 路由或返回字段

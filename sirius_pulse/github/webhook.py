@@ -1,7 +1,7 @@
 """GitHub Webhook 基础设施。
 
 提供签名验证、HTTP 服务器生命周期管理与事件分发机制。
-SKILL 与 Plugin 均可复用此模块，无需各自实现 Webhook 服务端。
+TOOL 与 Plugin 均可复用此模块，无需各自实现 Webhook 服务端。
 """
 
 from __future__ import annotations

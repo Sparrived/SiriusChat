@@ -289,7 +289,7 @@ def test_assemble_chat_puts_function_call_and_qq_mentions_in_interaction_spec():
         group_profile=group_profile,
         style_params=style_params,
         other_ai_names=[],
-        skill_registry=object(),
+        tool_registry=object(),
         adapter_type="napcat",
         qq_mention_members=[{"user_id": "123456", "nickname": "Alice"}],
     )
@@ -384,7 +384,7 @@ def test_assemble_chat_reply_spec_is_injected_once_after_context_assembly():
         group_profile=group_profile,
         style_params=style_params,
         other_ai_names=[],
-        skill_registry=object(),
+        tool_registry=object(),
     )
     marker = PromptFactory.build_reply_spec(supports_function_call=True).splitlines()[0]
 
@@ -411,7 +411,7 @@ def test_assemble_chat_when_plan_flow_then_uses_plan_finish_tools():
         group_profile=group_profile,
         style_params=style_params,
         other_ai_names=[],
-        skill_registry=object(),
+        tool_registry=object(),
         tool_flow_mode="plan",
     )
 

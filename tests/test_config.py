@@ -12,7 +12,7 @@ def test_experience_config_when_new_persona_starts_then_uses_safe_defaults(tmp_p
 
     assert config.engagement_sensitivity == 0.5
     assert config.expressiveness == 0.5
-    assert config.max_skill_rounds == 3
+    assert config.max_tool_rounds == 3
     assert config.max_sentence_chars == 20
     assert config.memory_unit_top_k == 5
 
@@ -46,7 +46,7 @@ def test_experience_config_when_webui_loads_form_then_all_user_options_are_seria
     payload = config.to_dict()
 
     assert "engagement_sensitivity" in payload
-    assert "enable_skills" in payload
+    assert "enable_tools" in payload
     assert payload["max_sentence_chars"] == 20
     assert "plan_mode_enabled" in payload
     assert "plan_mode_limit_normal_tools" in payload
@@ -64,12 +64,12 @@ def test_experience_config_when_webui_posts_partial_payload_then_missing_values_
     config = PersonaExperienceConfig.from_dict(
         {
             "engagement_sensitivity": 0.2,
-            "enable_skills": False,
+            "enable_tools": False,
         }
     )
 
     assert config.engagement_sensitivity == 0.2
-    assert config.enable_skills is False
+    assert config.enable_tools is False
     assert config.plan_mode_enabled is False
     assert config.plan_mode_allow_light_chat is True
     assert config.plan_mode_chat_awareness_enabled is False

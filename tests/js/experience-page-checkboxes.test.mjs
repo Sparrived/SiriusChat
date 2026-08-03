@@ -10,7 +10,7 @@ assert.match(
 );
 
 for (const field of [
-  'enable_skills',
+  'enable_tools',
   'plan_mode_enabled',
   'plan_mode_limit_normal_tools',
   'plan_mode_allow_light_chat',

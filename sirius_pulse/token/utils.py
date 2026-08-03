@@ -187,7 +187,7 @@ class PromptTokenBreakdown:
     group_style: int = 0
     participants: int = 0
     cross_group: int = 0
-    skills: int = 0
+    tools: int = 0
     glossary: int = 0
     output_format: int = 0
 
@@ -218,7 +218,7 @@ class PromptTokenBreakdown:
             "group_style": self.group_style,
             "participants": self.participants,
             "cross_group": self.cross_group,
-            "skills": self.skills,
+            "tools": self.tools,
             "glossary": self.glossary,
             "output_format": self.output_format,
             "diary": self.diary,

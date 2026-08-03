@@ -1,4 +1,4 @@
-"""GitHub 事件桥接 —— 让 github_monitor SKILL 检测到的事件能被 Plugin 消费。
+"""GitHub 事件桥接 —— 让 github_monitor TOOL 检测到的事件能被 Plugin 消费。
 
 github_monitor 在检测到新 Issue/PR 后调用 notify_* 函数，
 coding_agent 等插件通过 register_* 注册处理器，无需自行搭建 webhook 或轮询。

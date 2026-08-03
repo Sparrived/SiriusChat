@@ -160,8 +160,8 @@ async def test_something(tmp_path):
 | `core/prompt_factory.py` | `tests/test_response_assembler.py` |
 | `core/cognition.py` | `tests/test_cognition_analyzer.py` |
 | `core/response_strategy.py` | `tests/test_response_strategy.py` |
-| `skills/registry.py` | `tests/test_skill_system.py` |
-| `skills/executor.py` | `tests/test_skill_system.py` |
+| `tools/registry.py` | `tests/test_tool_system.py` |
+| `tools/executor.py` | `tests/test_tool_system.py` |
 | `providers/routing.py` | `tests/test_provider_routing.py` |
 | `providers/base.py` | `tests/test_providers.py` |
 | `token/utils.py` | `tests/test_token_utils.py` |

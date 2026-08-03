@@ -71,23 +71,23 @@ class BackgroundTasks:
             t.add_done_callback(engine._bg_tasks.discard)
 
     def stop(self) -> None:
-        """Cancel all background tasks and run passive SKILL unload hooks."""
+        """Cancel all background tasks and run passive TOOL unload hooks."""
         engine = self._engine
         engine._bg_running = False
         for t in list(engine._bg_tasks):
             t.cancel()
         engine._bg_tasks.clear()
 
-        # 执行被动 SKILL on_unload 钩子（通过 ensure_future 调度，快速清理资源）
-        for ctx, factory in getattr(engine, "_passive_skill_unloaders", []):
+        # 执行被动 TOOL on_unload 钩子（通过 ensure_future 调度，快速清理资源）
+        for ctx, factory in getattr(engine, "_passive_tool_unloaders", []):
             try:
                 coro = factory(ctx)
                 if coro is not None and asyncio.iscoroutine(coro):
                     asyncio.ensure_future(coro)
             except Exception as exc:
-                logger.warning("被动SKILL on_unload 失败: %s", exc)
-        if hasattr(engine, "_passive_skill_unloaders"):
-            engine._passive_skill_unloaders.clear()
+                logger.warning("被动TOOL on_unload 失败: %s", exc)
+        if hasattr(engine, "_passive_tool_unloaders"):
+            engine._passive_tool_unloaders.clear()
 
     async def _sticker_cache_warmup(self) -> None:
         """启动后异步预热表情包二元对立缓存。"""

@@ -488,11 +488,11 @@ async def api_tokens_get(request: web.Request, data_dir: Path) -> web.Response:
 
 
 async def api_telemetry_get(request: web.Request, data_dir: Path) -> web.Response:
-    """Return skill usage telemetry for the current persona."""
+    """Return tool usage telemetry for the current persona."""
     all_summaries: dict[str, dict[str, Any]] = {}
     total_calls = 0
 
-    telemetry_path = data_dir / "skill_data" / ".telemetry.jsonl"
+    telemetry_path = data_dir / "tool_data" / ".telemetry.jsonl"
     if telemetry_path.exists():
         try:
             with open(telemetry_path, "r", encoding="utf-8") as f:
@@ -501,15 +501,15 @@ async def api_telemetry_get(request: web.Request, data_dir: Path) -> web.Respons
                     if not line:
                         continue
                     record = json.loads(line)
-                    skill_name = record.get("skill_name", "unknown")
-                    if skill_name not in all_summaries:
-                        all_summaries[skill_name] = {
+                    tool_name = record.get("tool_name", "unknown")
+                    if tool_name not in all_summaries:
+                        all_summaries[tool_name] = {
                             "calls": 0,
                             "successes": 0,
                             "failures": 0,
                             "total_ms": 0.0,
                         }
-                    agg = all_summaries[skill_name]
+                    agg = all_summaries[tool_name]
                     agg["calls"] += 1
                     total_calls += 1
                     if record.get("success"):
@@ -520,10 +520,10 @@ async def api_telemetry_get(request: web.Request, data_dir: Path) -> web.Respons
         except Exception as exc:
             LOG.warning("读取 Telemetry 失败: %s", exc)
 
-    skills: dict[str, Any] = {}
-    for skill_name, stats in all_summaries.items():
+    tools: dict[str, Any] = {}
+    for tool_name, stats in all_summaries.items():
         calls = stats["calls"]
-        skills[skill_name] = {
+        tools[tool_name] = {
             "calls": calls,
             "success_rate": round(stats["successes"] / calls * 100, 1) if calls else 0,
             "avg_ms": round(stats["total_ms"] / calls, 1) if calls else 0,
@@ -532,7 +532,7 @@ async def api_telemetry_get(request: web.Request, data_dir: Path) -> web.Respons
     return _json_response(
         {
             "total_calls": total_calls,
-            "skills": skills,
+            "tools": tools,
         }
     )
 

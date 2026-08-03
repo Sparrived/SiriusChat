@@ -50,7 +50,7 @@ def _path_event_payload(data_dir: Path, path: Path) -> dict[str, Any] | None:
     if name == "basic_memory.json":
         resources.update({"conversations", "memory", "monitoring", "dashboard"})
     if name == ".telemetry.jsonl":
-        resources.update({"skill-history", "monitoring", "dashboard"})
+        resources.update({"tool-history", "monitoring", "dashboard"})
     if "diary" in parts or "memory" in parts:
         resources.update({"memory", "dashboard"})
 

@@ -46,9 +46,9 @@ function mutationResources(path) {
   if (/^\/persona\/tokens/.test(path)) resources.add('tokens');
   if (/^\/persona\/cognition/.test(path)) resources.add('cognition');
   if (/^\/persona\/conversations/.test(path)) resources.add('conversations');
-  if (/^\/persona\/skill-history|^\/persona\/skills/.test(path)) {
-    resources.add('skills');
-    resources.add('skill-history');
+  if (/^\/persona\/tool-history|^\/persona\/tools/.test(path)) {
+    resources.add('tools');
+    resources.add('tool-history');
   }
   if (/^\/persona\/(diary|users|glossary|memory-viz|memory-units)/.test(path)) resources.add('memory');
   if (/^\/plugins/.test(path)) resources.add('plugins');

@@ -1,4 +1,4 @@
-﻿<h1 align="center"> Sirius Pulse —— 灵动月白</h1>
+<h1 align="center"> Sirius Pulse —— 灵动月白</h1>
 
 <div align="center">
 
@@ -65,7 +65,7 @@
 - **日记系统**（Diary）：LLM 生成群聊摘要，ChromaDB 向量索引，token 预算检索
 - **语义记忆**（Semantic Memory）：群级/用户级/全局级向量记忆，支持话题关联与兴趣学习
 - **人物传记**（Biography）：跨对话人物画像提取与注入
-- **术语表**（Glossary）：自定义术语/黑话学习，`learn_term` 技能动态添加
+- **术语表**（Glossary）：自定义术语/黑话学习，`learn_term` 工具动态添加
 
 ### 🧠 **5 阶段情感引擎**
 ```text
@@ -83,7 +83,7 @@ Perception → Cognition → Decision → Execution → Background
 - 自动路由与健康检查
 
 ### 🎯 **双重扩展机制**
-- **技能系统**（Skills）：AI 通过 `[SKILL_CALL: ...]` 自主调用工具，提供多个内置技能
+- **工具系统**（Tools）：AI 通过 `[TOOL_CALL: ...]` 自主调用工具，提供多个内置工具
 - **插件系统**（Plugins）：用户通过 `/` `#` `!` 前缀显式命令触发
 - 详见 [扩展开发](#-扩展开发)
 
@@ -91,7 +91,7 @@ Perception → Cognition → Decision → Execution → Background
 - 多模态输入（图片/视频）
 - Token 消耗追踪与分析
 - `@command` 装饰器声明式插件开发
-- 被动技能：后台任务、事件触发器、生命周期回调
+- 被动工具：后台任务、事件触发器、生命周期回调
 - Provider 全局共享 + 人格级模型编排独立
 
 ---
@@ -200,8 +200,8 @@ sirius_pulse/
 │   ├── pipeline.py          # 5 阶段管线 Mixin
 │   ├── prompt_factory.py    # Prompt 构建工具类（含 StyleAdapter）
 │   ├── bg_tasks.py          # 6 个后台任务 Mixin
-│   ├── helpers.py           # 技能集成、被动 SKILL、插件集成 Mixin
-│   ├── skill_engine_context.py  # 被动 SKILL 引擎交互适配器
+│   ├── helpers.py           # 工具集成、被动 TOOL、插件集成 Mixin
+│   ├── tool_engine_context.py  # 被动 TOOL 引擎交互适配器
 │   ├── cognition.py         # 统一认知分析器（情绪 + 意图）
 │   ├── response_strategy.py # 四层响应策略
 │   ├── delayed_response_queue.py
@@ -221,14 +221,14 @@ sirius_pulse/
 │   ├── glossary/            # 术语表
 │   └── context_assembler.py # 上下文组装器
 │
-├── skills/                  # 技能系统
-│   ├── registry.py          # 技能注册中心
-│   ├── executor.py          # 技能执行器（参数校验、重试、遥测）
+├── tools/                  # 工具系统
+│   ├── registry.py          # 工具注册中心
+│   ├── executor.py          # 工具执行器（参数校验、重试、遥测）
 │   ├── security.py          # 权限校验
-│   ├── data_store.py        # 技能数据持久化
+│   ├── data_store.py        # 工具数据持久化
 │   ├── dependency_resolver.py
-│   ├── telemetry.py         # 技能遥测
-│   └── builtin/             # 内置技能
+│   ├── telemetry.py         # 工具遥测
+│   └── builtin/             # 内置工具
 │       ├── web_lookup.py
 │       ├── qq_member_info.py
 │       ├── reminder.py（混合：主动 + 后台）
@@ -316,15 +316,15 @@ report = store.full_report("2026-01-01", "2026-06-01")
 
 Sirius Pulse 提供**双重扩展机制**，区分"AI 主动使用工具"与"用户显式命令"两种场景。
 
-### 技能系统（Skills）
+### 工具系统（Tools）
 
-AI 在对话中**自主决定**调用技能。通过 `[SKILL_CALL: name | {params}]` 标记实现。
+AI 在对话中**自主决定**调用工具。通过 `[TOOL_CALL: name | {params}]` 标记实现。
 
 ```python
-# skills/my_skill.py
-SKILL_META = {
-    "name": "my_skill",
-    "description": "我的技能",
+# tools/my_tool.py
+TOOL_META = {
+    "name": "my_tool",
+    "description": "我的工具",
     "parameters": {"query": "搜索关键词"},
 }
 
@@ -333,9 +333,9 @@ def run(query: str = "", data_store=None, **kwargs) -> dict:
     return {"success": True, "text": result}
 ```
 
-内置技能包括：`bash`（含受限 Docker 命令）、`web_lookup`、`qq_member_info`、`reminder`、`github_monitor`、`desktop_screenshot` 等。
+内置工具包括：`bash`（含受限 Docker 命令）、`web_lookup`、`qq_member_info`、`reminder`、`github_monitor`、`desktop_screenshot` 等。
 
-支持**被动技能**：后台任务、事件触发器、生命周期回调。
+支持**被动工具**：后台任务、事件触发器、生命周期回调。
 
 ### 插件系统（Plugins）
 
@@ -372,7 +372,7 @@ class MyPlugin(PluginBase):
 | 板块 | 内容 |
 |------|------|
 | 📖 **指南** | 快速开始 → 安装 → 配置 → 人格系统 → 引擎架构 → 记忆系统 → NapCat 接入 |
-| 🔧 **扩展开发** | 技能系统（总览/编写技能/内置技能/被动技能）+ 插件系统（总览/编写插件/指令详解/生命周期） |
+| 🔧 **扩展开发** | 工具系统（总览/编写工具/内置工具/被动工具）+ 插件系统（总览/编写插件/指令详解/生命周期） |
 | 📋 **参考** | 全局配置 / 人格配置 / Provider 配置 / Python API / WebUI API / 开发指南 |
 
 ### 本地运行
@@ -404,10 +404,10 @@ python -m pytest tests/ --cov=sirius_pulse
 |----------|--------------|
 | `test_plugin_lexer.py` | Tokenizer → Lexer 完整解析链路 |
 | `test_plugin_registry.py` | 插件注册/匹配/注销/清空 |
-| `test_skill_executor.py` | SKILL_CALL 解析/参数传递/默认值/data_store/失败处理 |
-| `test_skill_registry.py` | 技能加载/注册/工具描述/原子替换 |
+| `test_tool_executor.py` | TOOL_CALL 解析/参数传递/默认值/data_store/失败处理 |
+| `test_tool_registry.py` | 工具加载/注册/工具描述/原子替换 |
 | `test_basic_memory.py` | 记忆添加/上下文窗口/硬限制/归档/多群/热度/序列化 |
-| `test_skill_data_store.py` + `test_config.py` | 数据持久化与配置加载 |
+| `test_tool_data_store.py` + `test_config.py` | 数据持久化与配置加载 |
 
 ---
 

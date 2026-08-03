@@ -8,7 +8,7 @@
     - 人格 prompt 构建（从 PersonaProfile 字段生成）
     - 响应组装（immediate / delayed）
     - 消息渲染（表情、图片、聊天记录、摘要）
-    - 技能结果格式化
+    - 工具结果格式化
     - 提醒等辅助 prompt
 """
 
@@ -93,7 +93,7 @@ class StyleAdapter:
     """根据用户偏好适配回复语气与生成参数。
 
     max_tokens 由 ModelRouter 按任务类型决定，此处不再动态缩减，
-    避免在 SKILL 调用场景下因 token 预算不足导致技能标记被截断。
+    避免在 TOOL 调用场景下因 token 预算不足导致工具标记被截断。
     """
 
     _DEFAULT_MAX_TOKENS: int = RESPONSE_MAX_TOKENS
@@ -602,8 +602,8 @@ class PromptFactory:
         user_name: str,
         user_id: str,
         target: str = "user",
-        skill_results: list[dict[str, Any]] | None = None,
-        skill_desc: str = "",
+        tool_results: list[dict[str, Any]] | None = None,
+        tool_desc: str = "",
     ) -> tuple[str, list[dict[str, str]]]:
         """构建提醒消息的 system prompt 和 messages。"""
         sections: list[str] = []
@@ -621,19 +621,19 @@ class PromptFactory:
                 f"语气自然，不用太正式，就像平时聊天一样。"
             )
 
-        if skill_results:
+        if tool_results:
             results_text = "\n".join(
-                f"- [{i+1}] {sr['skill']}({json.dumps(sr.get('params', {}), ensure_ascii=False)}): "
+                f"- [{i+1}] {sr['tool']}({json.dumps(sr.get('params', {}), ensure_ascii=False)}): "
                 f"{json.dumps(sr.get('result') or sr.get('error'), ensure_ascii=False, default=str)}"
-                for i, sr in enumerate(skill_results)
+                for i, sr in enumerate(tool_results)
             )
             sections.append(
                 f"顺便一提，刚才已经执行了这些操作：\n{results_text}\n"
                 f"有结果的话直接带进去说，不用刻意汇报。"
             )
 
-        if skill_desc:
-            sections.append(skill_desc)
+        if tool_desc:
+            sections.append(tool_desc)
 
         system_prompt = "\n\n".join(sections)
         messages = [{"role": "user", "content": "（提醒时间到了）"}]
@@ -655,7 +655,7 @@ class PromptFactory:
         style_params: Any,
         other_ai_names: list[str],
         user_profiles: list[Any] | None = None,
-        skill_registry: Any | None = None,
+        tool_registry: Any | None = None,
         plugin_registry: Any | None = None,
         caller_is_developer: bool = False,
         adapter_type: str | None = None,
@@ -678,10 +678,10 @@ class PromptFactory:
             style_params: 风格适配结果（StyleParams）。
             other_ai_names: 群内其他 AI 名称。
             user_profiles: 相关用户语义画像列表。
-            skill_registry: 技能注册表。
+            tool_registry: 工具注册表。
             plugin_registry: 插件注册表（v1.3+）。
             caller_is_developer: 调用者是否为开发者。
-            adapter_type: 适配器类型（用于技能过滤）。
+            adapter_type: 适配器类型（用于工具过滤）。
 
         人格注入已由 Brain.chat() 默认 pre 步骤处理，此处不再管理。
         """
@@ -713,7 +713,7 @@ class PromptFactory:
         length_instruction = str(getattr(style_params, "length_instruction", "") or "").strip()
         output_spec_text = PromptFactory.build_reply_spec(
             length_instruction=length_instruction,
-            supports_function_call=skill_registry is not None,
+            supports_function_call=tool_registry is not None,
             tool_flow_mode=tool_flow_mode,
         )
         _add(output_spec_text, "output_constraint")
@@ -734,7 +734,7 @@ class PromptFactory:
                 caller_is_developer=caller_is_developer,
             )
             if plugin_awareness:
-                _add(plugin_awareness, "skills", target="dynamic")
+                _add(plugin_awareness, "tools", target="dynamic")
 
         system_prompt = "\n\n".join(stable_sections)
         dynamic_context = "\n\n".join(dynamic_sections)

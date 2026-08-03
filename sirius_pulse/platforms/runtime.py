@@ -22,8 +22,8 @@ from sirius_pulse.embedding.client import EmbeddingClient
 from sirius_pulse.memory.diary.vector_store import DiaryVectorStore
 from sirius_pulse.persona_config import PersonaConfigPaths, PersonaExperienceConfig
 from sirius_pulse.providers.routing import AutoRoutingProvider, ProviderConfig
-from sirius_pulse.skills.executor import SkillExecutor
-from sirius_pulse.skills.registry import SkillRegistry
+from sirius_pulse.tools.executor import ToolExecutor
+from sirius_pulse.tools.registry import ToolRegistry
 from sirius_pulse.token.token_store import TokenUsageStore
 
 LOG = logging.getLogger("sirius.platforms.runtime")
@@ -227,46 +227,46 @@ class EngineRuntime:
         if isinstance(settings, dict) and settings:
             definition.user_settings = settings
 
-    def _setup_skill_runtime(self, engine: EmotionalGroupChatEngine) -> None:
-        """Discover and attach SKILL registry + executor to the engine."""
-        auto_install = bool(self.plugin_config.get("auto_install_skill_deps", True))
-        registry = SkillRegistry()
-        # Load built-in skills
-        builtin_loaded = registry._load_builtin_skills(auto_install_deps=auto_install)
+    def _setup_tool_runtime(self, engine: EmotionalGroupChatEngine) -> None:
+        """Discover and attach TOOL registry + executor to the engine."""
+        auto_install = bool(self.plugin_config.get("auto_install_tool_deps", True))
+        registry = ToolRegistry()
+        # Load built-in tools
+        builtin_loaded = registry._load_builtin_tools(auto_install_deps=auto_install)
         if builtin_loaded:
-            LOG.info("内置 SKILL 已加载 %d 个", builtin_loaded)
+            LOG.info("内置 TOOL 已加载 %d 个", builtin_loaded)
 
-        # Load user-defined skills from workspace
-        skills_dir = self.work_path / "skills"
-        if skills_dir.exists():
+        # Load user-defined tools from workspace
+        tools_dir = self.work_path / "tools"
+        if tools_dir.exists():
             user_loaded = registry.load_from_directory(
-                skills_dir,
+                tools_dir,
                 auto_install_deps=auto_install,
                 include_builtin=False,
             )
             if user_loaded:
-                LOG.info("用户 SKILL 已加载 %d 个", user_loaded)
+                LOG.info("用户 TOOL 已加载 %d 个", user_loaded)
 
-        executor = SkillExecutor(self.work_path)
-        engine.set_skill_runtime(
-            skill_registry=registry,
-            skill_executor=executor,
+        executor = ToolExecutor(self.work_path)
+        engine.set_tool_runtime(
+            tool_registry=registry,
+            tool_executor=executor,
         )
-        LOG.info("SKILL runtime 已挂载，共 %d 个技能", len(registry.skill_names))
+        LOG.info("TOOL runtime 已挂载，共 %d 个工具", len(registry.tool_names))
 
-    def add_skill_bridge(self, adapter_type: str, bridge: Any) -> None:
-        """Register a platform adapter so adapter-specific skills/plugins can call adapter APIs.
+    def add_tool_bridge(self, adapter_type: str, bridge: Any) -> None:
+        """Register a platform adapter so adapter-specific tools/plugins can call adapter APIs.
 
         The bridge IS the adapter itself (e.g. NapCatAdapter).
         Stored directly on the engine for plugin access.
         """
         if self._engine is None:
             return
-        executor = getattr(self._engine, "_skill_executor", None)
+        executor = getattr(self._engine, "_tool_executor", None)
         if executor is not None:
             executor.set_bridge(adapter_type, bridge)
             LOG.info(
-                "平台 bridge 已注入 skill executor: %s → %s", adapter_type, type(bridge).__name__
+                "平台 bridge 已注入 tool executor: %s → %s", adapter_type, type(bridge).__name__
             )
         # 同时直接存储在引擎上，方便 plugin 直接取用
         self._engine._adapter = bridge
@@ -433,7 +433,7 @@ class EngineRuntime:
                 )
             ),
             "reply_time_curve_points": exp.reply_time_curve_points,
-            "max_skill_rounds": int(self.plugin_config.get("max_skill_rounds", 3)),
+            "max_tool_rounds": int(self.plugin_config.get("max_tool_rounds", 3)),
             "partial_reply_lead_seconds": float(
                 self.plugin_config.get("partial_reply_lead_seconds", 1.5)
             ),
@@ -531,11 +531,11 @@ class EngineRuntime:
         engine.token_store = self.token_store
         engine.brain.token_store = self.token_store
 
-        # 初始化并注入 SKILL runtime
+        # 初始化并注入 TOOL runtime
         try:
-            self._setup_skill_runtime(engine)
+            self._setup_tool_runtime(engine)
         except Exception as exc:
-            LOG.warning("SKILL runtime 初始化失败: %s", exc)
+            LOG.warning("TOOL runtime 初始化失败: %s", exc)
 
         # 初始化并注入 Plugin runtime（v1.2+）
         try:

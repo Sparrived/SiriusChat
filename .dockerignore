@@ -14,7 +14,7 @@ data/
 logs/
 napcat/
 plugins/
-skills/
+tools/
 tests/
 docs/
 .vscode/

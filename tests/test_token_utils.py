@@ -63,7 +63,7 @@ def test_prompt_breakdown_when_budget_panel_serializes_then_all_sections_are_pre
     assert payload["total"] == 170
     assert {
         "identity",
-        "skills",
+        "tools",
         "diary",
         "history_xml",
         "system_prompt_total",

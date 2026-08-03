@@ -114,7 +114,7 @@ class DelayedResponseQueue:
                     item.candidate_memories.extend(candidate_memories)
                 if multimodal_inputs:
                     item.multimodal_inputs.extend(multimodal_inputs)
-                # Update caller identity to the latest message (most relevant for skill auth)
+                # Update caller identity to the latest message (most relevant for tool auth)
                 item.user_id = user_id
                 item.channel = channel
                 item.channel_user_id = channel_user_id

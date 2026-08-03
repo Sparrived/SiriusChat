@@ -31,20 +31,20 @@ class Helpers:
         self._engine = engine
 
     # ==================================================================
-    # SKILL integration
+    # TOOL integration
     # ==================================================================
 
-    def set_skill_runtime(
+    def set_tool_runtime(
         self,
         *,
-        skill_registry: Any | None = None,
-        skill_executor: Any | None = None,
+        tool_registry: Any | None = None,
+        tool_executor: Any | None = None,
     ) -> None:
-        """Attach SKILL registry and executor to the engine."""
-        self._engine._skill_registry = skill_registry
-        self._engine._skill_executor = skill_executor
+        """Attach TOOL registry and executor to the engine."""
+        self._engine._tool_registry = tool_registry
+        self._engine._tool_executor = tool_executor
         if hasattr(self._engine, "brain"):
-            self._engine.brain.skill_registry = skill_registry
+            self._engine.brain.tool_registry = tool_registry
             self._engine.brain.current_adapter_type_fn = (
                 lambda: getattr(self._engine, "_current_adapter_type", "") or None
             )
@@ -53,11 +53,11 @@ class Helpers:
                 if hasattr(self._engine, "is_qq_bot_group_admin")
                 else False
             )
-        if skill_executor is not None:
-            from sirius_pulse.core.skill_engine_context import SkillEngineContextImpl
+        if tool_executor is not None:
+            from sirius_pulse.core.tool_engine_context import ToolEngineContextImpl
 
-            skill_executor.set_engine_context(SkillEngineContextImpl(self._engine))
-        self._register_passive_skills()
+            tool_executor.set_engine_context(ToolEngineContextImpl(self._engine))
+        self._register_passive_tools()
 
     # ==================================================================
     # Plugin integration（v1.2+）
@@ -201,7 +201,7 @@ class Helpers:
                             caller_profile and getattr(caller_profile, "is_developer", False)
                         )
             except Exception:
-                logger.warning("SKILL 执行上下文组装失败", exc_info=True)
+                logger.warning("TOOL 执行上下文组装失败", exc_info=True)
                 pass
 
         # 构建消息上下文
@@ -303,37 +303,37 @@ class Helpers:
             ),
         }
 
-    def _register_passive_skills(self) -> None:
-        """Discover passive SKILLs and instantiate their background tasks / triggers."""
+    def _register_passive_tools(self) -> None:
+        """Discover passive TOOLs and instantiate their background tasks / triggers."""
         engine = self._engine
-        if engine._skill_registry is None:
+        if engine._tool_registry is None:
             return
-        from sirius_pulse.core.skill_engine_context import SkillEngineContextImpl
+        from sirius_pulse.core.tool_engine_context import ToolEngineContextImpl
 
-        ctx = SkillEngineContextImpl(engine)
-        for skill in engine._skill_registry.passive_skills():
+        ctx = ToolEngineContextImpl(engine)
+        for tool in engine._tool_registry.passive_tools():
             try:
                 # 生命周期：on_load（通过 asyncio.create_task 调度，与后台任务生命周期一致）
-                if skill._on_load_factory is not None:
+                if tool._on_load_factory is not None:
                     try:
-                        on_load_coro = skill._on_load_factory(ctx)
+                        on_load_coro = tool._on_load_factory(ctx)
                         if on_load_coro is not None and asyncio.iscoroutine(on_load_coro):
                             task = asyncio.create_task(
                                 on_load_coro,
-                                name=f"passive_skill_on_load_{skill.name}",
+                                name=f"passive_tool_on_load_{tool.name}",
                             )
                             engine._bg_tasks.add(task)
                             task.add_done_callback(engine._bg_tasks.discard)
-                            logger.info("被动SKILL on_load 已调度: %s", skill.name)
+                            logger.info("被动TOOL on_load 已调度: %s", tool.name)
                     except Exception as exc:
-                        logger.warning("被动SKILL on_load 失败 (%s): %s", skill.name, exc)
+                        logger.warning("被动TOOL on_load 失败 (%s): %s", tool.name, exc)
 
                 # 生命周期：注册 on_unload
-                if skill._on_unload_factory is not None:
-                    engine._passive_skill_unloaders.append((ctx, skill._on_unload_factory))
+                if tool._on_unload_factory is not None:
+                    engine._passive_tool_unloaders.append((ctx, tool._on_unload_factory))
 
-                if skill._background_task_factory is not None:
-                    specs = skill._background_task_factory(ctx)
+                if tool._background_task_factory is not None:
+                    specs = tool._background_task_factory(ctx)
                     if specs is None:
                         continue
                     if not isinstance(specs, list):
@@ -341,36 +341,36 @@ class Helpers:
                     for spec in specs:
                         task = asyncio.create_task(
                             spec.run_loop(lambda: engine._bg_running),
-                            name=f"passive_skill_{spec.name}",
+                            name=f"passive_tool_{spec.name}",
                         )
-                        engine._passive_skill_tasks[spec.name] = task
+                        engine._passive_tool_tasks[spec.name] = task
                         engine._bg_tasks.add(task)
                         task.add_done_callback(engine._bg_tasks.discard)
                         logger.info(
-                            "被动SKILL后台任务已注册: %s (间隔 %.1fs)",
+                            "被动TOOL后台任务已注册: %s (间隔 %.1fs)",
                             spec.name,
                             spec.interval_seconds,
                         )
 
-                if skill._trigger_factory is not None:
-                    trigger_specs = skill._trigger_factory(ctx)
+                if tool._trigger_factory is not None:
+                    trigger_specs = tool._trigger_factory(ctx)
                     if trigger_specs is None:
                         continue
                     if not isinstance(trigger_specs, list):
                         trigger_specs = [trigger_specs]
                     for spec in trigger_specs:
-                        engine._passive_skill_triggers.setdefault(spec.event_type, []).append(spec)
+                        engine._passive_tool_triggers.setdefault(spec.event_type, []).append(spec)
                         logger.info(
-                            "被动SKILL触发器已注册: %s (事件: %s)", spec.name, spec.event_type
+                            "被动TOOL触发器已注册: %s (事件: %s)", spec.name, spec.event_type
                         )
             except Exception as exc:
-                logger.warning("注册被动SKILL失败 (%s): %s", skill.name, exc)
+                logger.warning("注册被动TOOL失败 (%s): %s", tool.name, exc)
 
-        if engine._passive_skill_triggers:
+        if engine._passive_tool_triggers:
             self._wrap_event_bus_for_triggers()
 
     def _wrap_event_bus_for_triggers(self) -> None:
-        """Wrap event_bus.emit so passive SKILL triggers fire on matching events."""
+        """Wrap event_bus.emit so passive TOOL triggers fire on matching events."""
         engine = self._engine
         original_emit = engine.event_bus.emit
         dispatch = self._dispatch_passive_triggers
@@ -380,21 +380,21 @@ class Helpers:
             try:
                 await dispatch(event.type.value, event.data)
             except Exception as exc:
-                logger.warning("被动SKILL触发分发失败: %s", exc)
+                logger.warning("被动TOOL触发分发失败: %s", exc)
 
         engine.event_bus.emit = _dispatching_emit  # type: ignore[assignment]
 
     async def _dispatch_passive_triggers(self, event_type: str, data: dict[str, Any]) -> None:
-        """Dispatch registered passive SKILL triggers for the given event type."""
+        """Dispatch registered passive TOOL triggers for the given event type."""
         engine = self._engine
-        triggers = engine._passive_skill_triggers.get(event_type)
+        triggers = engine._passive_tool_triggers.get(event_type)
         if not triggers:
             return
         for spec in triggers:
             try:
                 await spec.trigger_func(data)
             except Exception as exc:
-                logger.warning("被动SKILL触发器执行失败 (%s): %s", spec.name, exc)
+                logger.warning("被动TOOL触发器执行失败 (%s): %s", spec.name, exc)
 
     def get_recent_messages(self, group_id: str, n: int = 10) -> list[dict[str, Any]]:
         """获取最近n条消息。"""
@@ -411,7 +411,7 @@ class Helpers:
         ]
 
     def _get_platform_adapter(self) -> Any:
-        """获取平台适配器实例。引擎在 add_skill_bridge() 时直接持有。"""
+        """获取平台适配器实例。引擎在 add_tool_bridge() 时直接持有。"""
         return getattr(self._engine, "_adapter", None)
 
     def enhance_topic_relevance(

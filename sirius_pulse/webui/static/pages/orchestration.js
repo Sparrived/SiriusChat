@@ -34,7 +34,7 @@ const TASK_GROUPS = [
     ],
   },
   {
-    title: '插件与技能',
+    title: '插件与工具',
     generalKey: 'plugin_model',
     tasks: [
       { key: 'plugin_generate', label: '插件生成' },
@@ -58,7 +58,7 @@ const PARAM_GROUPS = [
     title: '对话生成',
     tasks: [
       { key: 'response_generate', label: '回复生成' },
-      { key: 'passive_skill', label: '被动技能' },
+      { key: 'passive_tool', label: '被动工具' },
       { key: 'github_monitor_notify', label: 'GitHub 监控' },
     ],
   },

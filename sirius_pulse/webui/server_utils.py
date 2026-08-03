@@ -1,4 +1,4 @@
-"""WebUI 共享工具函数 — 避免 server_core 与 server_skill_api 之间的循环导入。"""
+"""WebUI 共享工具函数 — 避免 server_core 与 server_tool_api 之间的循环导入。"""
 
 from __future__ import annotations
 

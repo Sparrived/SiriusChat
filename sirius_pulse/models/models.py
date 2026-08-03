@@ -22,7 +22,7 @@ class Message(JsonSerializable):
     group_id: str | None = None
     message_id: str | None = None  # 平台消息 ID（用于引用回复）
     multimodal_inputs: list[dict[str, str]] = field(default_factory=list)
-    # Adapter 类型，用于按来源过滤可用 Skill（如 "napcat"）
+    # Adapter 类型，用于按来源过滤可用 Tool（如 "napcat"）
     adapter_type: str | None = None
     # 发送者类型：human / self_ai / other_ai / system
     sender_type: str = "human"
@@ -126,7 +126,7 @@ class Transcript:
 
         def _total_chars() -> int:
             # Exclude system messages: they are moved to system_prompt at request-build
-            # time and must not inflate the chat-history budget, otherwise large skill
+            # time and must not inflate the chat-history budget, otherwise large tool
             # results can evict the current user message and cause API errors.
             return sum(
                 len(item.content)

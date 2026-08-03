@@ -116,7 +116,7 @@ class PersonaWorker:
                     "allowed_private_user_ids": adapter_cfg.allowed_private_user_ids,
                     "enable_group_chat": adapter_cfg.enable_group_chat,
                     "enable_private_chat": adapter_cfg.enable_private_chat,
-                    "auto_install_skill_deps": plugin_config.get("auto_install_skill_deps", True),
+                    "auto_install_tool_deps": plugin_config.get("auto_install_tool_deps", True),
                     "peer_ai_ids": adapter_cfg.peer_ai_ids,
                     "qq_number": adapter_cfg.qq_number,
                     "persona_name": persona_name,
@@ -139,7 +139,7 @@ class PersonaWorker:
             await adapter.connect()
             await adapter.start_handling(self._runtime.engine)  # type: ignore[union-attr]
             self._adapters.append(adapter)
-            self._runtime.add_skill_bridge("napcat", adapter)  # type: ignore[union-attr]
+            self._runtime.add_tool_bridge("napcat", adapter)  # type: ignore[union-attr]
             LOG.info("NapCat adapter 已启动: %s", adapter_cfg.ws_url)
         else:
             LOG.warning("未知 adapter 类型，已跳过: %s", type(adapter_cfg).__name__)
@@ -158,11 +158,11 @@ class PersonaWorker:
             "diary_top_k": experience.diary_top_k,
             "diary_token_budget": experience.diary_token_budget,
             "memory_unit_top_k": experience.memory_unit_top_k,
-            # 技能
-            "max_skill_rounds": experience.max_skill_rounds,
-            "auto_install_skill_deps": experience.auto_install_skill_deps,
+            # 工具
+            "max_tool_rounds": experience.max_tool_rounds,
+            "auto_install_tool_deps": experience.auto_install_tool_deps,
             "max_sentence_chars": experience.max_sentence_chars,
-            "enable_skills": experience.enable_skills,
+            "enable_tools": experience.enable_tools,
             "plan_mode_enabled": experience.plan_mode_enabled,
             "plan_mode_limit_normal_tools": experience.plan_mode_limit_normal_tools,
             "plan_mode_allow_light_chat": experience.plan_mode_allow_light_chat,

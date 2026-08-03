@@ -15,7 +15,7 @@ V2 将当前“模型回复后串行执行工具”的半 Agent，演进为面�
 
 ## 当前架构复盘
 
-现有系统已有可复用基础：`DelayedResponseQueue` 聚合群消息，`ContextAssembler` 提供历史和记忆，`Brain` 负责模型调用，`SkillRegistry/SkillExecutor` 负责工具，并已有计划模式和公开进度。问题集中在边界不一致：
+现有系统已有可复用基础：`DelayedResponseQueue` 聚合群消息，`ContextAssembler` 提供历史和记忆，`Brain` 负责模型调用，`ToolRegistry/ToolExecutor` 负责工具，并已有计划模式和公开进度。问题集中在边界不一致：
 
 - 同一工具在同步和异步路径的参数、默认值、类型和权限校验曾不一致。
 - 延迟队列为所有工具无差别重试，可能重复产生副作用；超时配置也未传入执行器。
@@ -36,9 +36,9 @@ V2 将当前“模型回复后串行执行工具”的半 Agent，演进为面�
 
 ## 第一阶段：工具与提示词边界
 
-- `SkillExecutor` 对同步和异步工具共用参数准备、开发者权限、管理员资格、默认值、类型转换与运行时依赖注入。
-- `SkillDefinition` 新增 `retry_safe`。默认不重试；队列只为显式标记的只读工具重试，并将 `skill_execution_timeout` 传入执行器。`web_lookup` 是当前首个标记实例。
-- `SkillResult.to_model_text()` 以固定边界、最大长度和引用数据说明注入工具结果；群聊队列不再注入原始执行结果。
+- `ToolExecutor` 对同步和异步工具共用参数准备、开发者权限、管理员资格、默认值、类型转换与运行时依赖注入。
+- `ToolDefinition` 新增 `retry_safe`。默认不重试；队列只为显式标记的只读工具重试，并将 `tool_execution_timeout` 传入执行器。`web_lookup` 是当前首个标记实例。
+- `ToolResult.to_model_text()` 以固定边界、最大长度和引用数据说明注入工具结果；群聊队列不再注入原始执行结果。
 - 人格 prompt 覆盖动机、情绪范围、常用开场/收尾；自定义人格保留不可覆盖的工具与身份约束。
 - 工具使用规则改为任务/状态驱动，取消“为了群聊互动而主动调用”和“每轮必须 stop”；动态记忆和画像以参考上下文标识注入。
 
@@ -47,12 +47,12 @@ V2 将当前“模型回复后串行执行工具”的半 Agent，演进为面�
 ## 第二阶段：Agent 回合与全量工具注入
 
 - `AgentTurn` 已把 `observe -> decide -> plan -> act -> verify -> respond -> complete` 作为每个延迟群聊回合的显式事件轨迹；事件只含工具名、状态和限长摘要，不记录完整参数或结果。
-- `Brain` 每轮均从 `SkillRegistry.build_tools_list()` 注入全部可用 schema；开发者、平台和管理员权限过滤保持不变，使工具前缀稳定以命中提示词缓存。
+- `Brain` 每轮均从 `ToolRegistry.build_tools_list()` 注入全部可用 schema；开发者、平台和管理员权限过滤保持不变，使工具前缀稳定以命中提示词缓存。
 - 同一回合对非只读工具使用规范化参数指纹去重，阻止模型在多轮中重复提交相同副作用动作。
 
 ## 第三阶段：结果约束
 
-- `SkillDefinition` 使用 `side_effect` 分类；副作用操作仍按规范化参数去重，权限和管理员资格校验保持不变。
+- `ToolDefinition` 使用 `side_effect` 分类；副作用操作仍按规范化参数去重，权限和管理员资格校验保持不变。
 
 ## 验收与迁移
 

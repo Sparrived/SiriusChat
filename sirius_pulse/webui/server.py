@@ -3,13 +3,13 @@
 提供 REST API + 内嵌前端页面，用于：
 - 多个人格的列表、状态、启停管理
 - 每人格的 Provider / 人格 / 模型编排 / Adapter / Experience 配置
-- 每人格的 Skill 启停与配置管理
+- 每人格的 Tool 启停与配置管理
 
 实现已拆分到：
   - server_core   : WebUIServer 类定义、路由、生命周期、全局 API
   - persona_api   : 人格列表/创建/删除/状态/启停/配置/访谈/模型编排/体验/Adapter/引擎重载
   - memory_api    : Token 统计（全局+人格）、认知事件、日记、向量存储状态
-  - server_skill_api: Skill 管理（已存在）
+  - server_tool_api: Tool 管理（已存在）
 
 本模块作为向后兼容的 shim，重新导出 WebUIServer。
 """
@@ -101,12 +101,12 @@ from sirius_pulse.webui.server_plugin_api import (
     api_plugins_get,
     api_plugins_reload,
 )
-from sirius_pulse.webui.server_skill_api import (
-    api_persona_skill_config_get,
-    api_persona_skill_config_post,
-    api_persona_skill_history_get,
-    api_persona_skill_toggle,
-    api_persona_skills_get,
+from sirius_pulse.webui.server_tool_api import (
+    api_persona_tool_config_get,
+    api_persona_tool_config_post,
+    api_persona_tool_history_get,
+    api_persona_tool_toggle,
+    api_persona_tools_get,
 )
 from sirius_pulse.webui.server_utils import _json_response
 
@@ -170,11 +170,11 @@ DELEGATED_HANDLERS: dict[str, DelegatedHandler] = {
     "api_plugin_setting_delete": api_plugin_setting_delete,
     "api_plugins_reload": api_plugins_reload,
     "api_plugin_monitor_repos_get": api_plugin_monitor_repos_get,
-    "api_persona_skills_get": api_persona_skills_get,
-    "api_persona_skill_toggle": api_persona_skill_toggle,
-    "api_persona_skill_config_get": api_persona_skill_config_get,
-    "api_persona_skill_config_post": api_persona_skill_config_post,
-    "api_persona_skill_history_get": api_persona_skill_history_get,
+    "api_persona_tools_get": api_persona_tools_get,
+    "api_persona_tool_toggle": api_persona_tool_toggle,
+    "api_persona_tool_config_get": api_persona_tool_config_get,
+    "api_persona_tool_config_post": api_persona_tool_config_post,
+    "api_persona_tool_history_get": api_persona_tool_history_get,
     "api_monitoring_overview": _api_monitoring_overview,
     "api_monitoring_persona_metrics": _api_monitoring_persona_metrics,
     "api_monitoring_health": _api_monitoring_health,
@@ -206,7 +206,7 @@ _PERSONA_SCOPED_PREFIXES = (
     "api_diary_",
     "api_vector_",
     "api_glossary_",
-    "api_skill_",
+    "api_tool_",
     "api_conversations_",
     "api_knowledge_",
 )

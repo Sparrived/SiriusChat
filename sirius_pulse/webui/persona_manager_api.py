@@ -93,7 +93,7 @@ async def api_persona_create(
 
     # 创建目录结构
     persona_dir.mkdir(parents=True)
-    for subdir in ("engine_state", "archive", "plugins", "skills", "logs", "image_cache"):
+    for subdir in ("engine_state", "archive", "plugins", "tools", "logs", "image_cache"):
         (persona_dir / subdir).mkdir(exist_ok=True)
 
     # 创建默认配置文件

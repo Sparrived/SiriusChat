@@ -68,7 +68,7 @@ git diff HEAD~1 -- sirius_pulse/core/emotional_engine.py
 | 群消息收发异常、连接断开 | 平台适配 | `sirius_pulse/platforms/napcat_adapter.py`、`platforms/napcat_bridge.py` |
 | 子进程崩溃、端口冲突 | 运行时/管理 | `sirius_pulse/platforms/runtime.py`、`persona_manager.py`、`persona_worker.py` |
 | 配置加载失败、路径错误 | Workspace/配置 | `sirius_pulse/utils/layout.py`、`config/manager.py` |
-| SKILL 调用失败 | 技能系统 | `sirius_pulse/skills/registry.py`、`skills/executor.py`、`skills/security.py` |
+| SKILL 调用失败 | 技能系统 | `sirius_pulse/tools/registry.py`、`tools/executor.py`、`tools/security.py` |
 | WebUI 无法访问 | WebUI | `sirius_pulse/webui/server.py` |
 
 ### 步骤 3：缩小变更范围

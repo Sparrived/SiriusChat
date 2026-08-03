@@ -87,13 +87,13 @@ def test_token_store_when_breakdown_is_present_then_aggregates_sections(tmp_path
     store = TokenUsageStore(tmp_path / "token.db")
     store.add(_record(breakdown={"memory": 4, "history": 6}), timestamp=1.0)
     store.add(
-        _record(task_name="cognition_analyze", breakdown={"memory": 3, "skills": 9}), timestamp=2.0
+        _record(task_name="cognition_analyze", breakdown={"memory": 3, "tools": 9}), timestamp=2.0
     )
     store.flush()
 
-    assert store.get_section_breakdown() == {"history": 6, "memory": 7, "skills": 9}
+    assert store.get_section_breakdown() == {"history": 6, "memory": 7, "tools": 9}
     assert store.get_section_breakdown_by_task()["response_generate"] == {"history": 6, "memory": 4}
-    assert store.get_recent_records_with_breakdown()[0]["breakdown"] == {"memory": 3, "skills": 9}
+    assert store.get_recent_records_with_breakdown()[0]["breakdown"] == {"memory": 3, "tools": 9}
 
 
 def test_token_store_when_records_span_tasks_then_summary_and_breakdowns_are_available(tmp_path):

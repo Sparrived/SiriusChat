@@ -1,4 +1,4 @@
-"""Developer-role helpers shared by participant and skill security paths."""
+"""Developer-role helpers shared by participant and tool security paths."""
 
 from __future__ import annotations
 

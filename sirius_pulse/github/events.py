@@ -1,4 +1,4 @@
-"""GitHub Events API —— 从 github_monitor SKILL 提取的公共事件获取逻辑。
+"""GitHub Events API —— 从 github_monitor TOOL 提取的公共事件获取逻辑。
 
 提供仓库活动事件获取，带速率限制检测与可配置的重试机制。
 """

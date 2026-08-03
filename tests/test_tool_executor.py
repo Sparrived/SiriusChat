@@ -1,0 +1,364 @@
+"""工具执行器面向用户工具调用的业务行为测试。"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from sirius_pulse.memory.user.unified_models import UnifiedUser
+from sirius_pulse.tools import (
+    ToolDefinition,
+    ToolExecutor,
+    ToolInvocationContext,
+    ToolParameter,
+    ToolResult,
+)
+
+
+def _make_tool(
+    name: str,
+    run_func,
+    *,
+    description: str = "测试工具",
+    params: list[ToolParameter] | None = None,
+    developer_only: bool = False,
+    adapter_types: list[str] | None = None,
+    source_path: Path | None = None,
+) -> ToolDefinition:
+    return ToolDefinition(
+        name=name,
+        description=description,
+        parameters=params or [],
+        developer_only=developer_only,
+        adapter_types=adapter_types or [],
+        source_path=source_path,
+        _run_func=run_func,
+    )
+
+
+def _context(user_id: str = "u1", *, is_developer: bool = False) -> ToolInvocationContext:
+    return ToolInvocationContext(
+        caller=UnifiedUser(
+            user_id=user_id,
+            name=user_id,
+            metadata={"is_developer": is_developer},
+        )
+    )
+
+
+def test_tool_executor_when_user_calls_tool_then_receives_display_text(tmp_path: Path):
+    def run(name: str = "世界") -> dict[str, Any]:
+        return {"success": True, "text": f"你好，{name}！"}
+
+    tool = _make_tool(
+        "greet",
+        run,
+        params=[
+            ToolParameter(
+                name="name",
+                type="str",
+                description="要问候的人",
+                required=False,
+                default="世界",
+            )
+        ],
+    )
+    executor = ToolExecutor(work_path=tmp_path)
+
+    result = executor.execute(tool, {"name": "小明"}, invocation_context=_context())
+
+    assert result.success is True
+    assert result.to_display_text() == "你好，小明！"
+
+
+def test_tool_executor_when_optional_param_is_missing_then_default_is_used(tmp_path: Path):
+    def run(count: int = 3) -> dict[str, Any]:
+        return {"success": True, "text": f"生成 {count} 条提醒"}
+
+    tool = _make_tool(
+        "reminder_count",
+        run,
+        params=[
+            ToolParameter(name="count", type="int", description="数量", default=3),
+        ],
+    )
+    executor = ToolExecutor(work_path=tmp_path)
+
+    result = executor.execute(tool, {}, invocation_context=_context())
+
+    assert result.success is True
+    assert result.to_display_text() == "生成 3 条提醒"
+
+
+def test_tool_executor_when_user_supplies_string_number_then_tool_receives_int(tmp_path: Path):
+    seen: dict[str, Any] = {}
+
+    def run(count: int) -> dict[str, Any]:
+        seen["type"] = type(count)
+        return {"success": True, "text": str(count + 1)}
+
+    tool = _make_tool(
+        "increment",
+        run,
+        params=[
+            ToolParameter(name="count", type="int", description="数量", required=True),
+        ],
+    )
+    executor = ToolExecutor(work_path=tmp_path)
+
+    result = executor.execute(tool, {"count": "41"}, invocation_context=_context())
+
+    assert result.to_display_text() == "42"
+    assert seen["type"] is int
+
+
+def test_tool_executor_when_required_param_is_missing_then_user_gets_failure(tmp_path: Path):
+    def run(query: str) -> dict[str, Any]:
+        return {"success": True, "text": query}
+
+    tool = _make_tool(
+        "search",
+        run,
+        params=[
+            ToolParameter(name="query", type="str", description="搜索词", required=True),
+        ],
+    )
+    executor = ToolExecutor(work_path=tmp_path)
+
+    result = executor.execute(tool, {}, invocation_context=_context())
+
+    assert result.success is False
+    assert "query" in result.error
+
+
+def test_tool_executor_when_tool_writes_store_then_data_persists_for_next_call(
+    tmp_path: Path,
+):
+    def run(data_store=None) -> dict[str, Any]:
+        data_store.set("last_city", "上海")
+        return {"success": True, "text": "已记录"}
+
+    executor = ToolExecutor(work_path=tmp_path)
+    tool = _make_tool("weather_pref", run)
+
+    result = executor.execute(tool, {}, invocation_context=_context())
+    persisted_store = ToolExecutor(work_path=tmp_path).get_data_store("weather_pref")
+
+    assert result.success is True
+    assert persisted_store.get("last_city") == "上海"
+
+
+def test_tool_executor_when_tool_accepts_chat_context_then_receives_current_chat(tmp_path: Path):
+    seen: dict[str, Any] = {}
+
+    def run(chat_context=None) -> dict[str, Any]:
+        seen.update(chat_context)
+        return {"success": True, "text": chat_context["chat_type"]}
+
+    executor = ToolExecutor(work_path=tmp_path)
+    executor.set_chat_context(group_id="private_qq_10001", user_id="u1")
+    tool = _make_tool("where_am_i", run)
+
+    result = executor.execute(tool, {}, invocation_context=_context())
+
+    assert result.to_display_text() == "private"
+    assert seen["chat_id"] == "10001"
+    assert seen["is_private"] is True
+
+
+def test_tool_executor_when_tool_accepts_engine_context_then_receives_it(tmp_path: Path):
+    seen: dict[str, Any] = {}
+    engine_context = object()
+
+    def run(engine_context=None) -> dict[str, Any]:
+        seen["engine_context"] = engine_context
+        return {"success": True, "text": "ok"}
+
+    executor = ToolExecutor(work_path=tmp_path)
+    executor.set_engine_context(engine_context)
+    builtin_path = (
+        Path(__file__).resolve().parents[1]
+        / "sirius_pulse"
+        / "tools"
+        / "builtin"
+        / "needs_engine.py"
+    )
+    tool = _make_tool("needs_engine", run, source_path=builtin_path)
+
+    result = executor.execute(tool, {}, invocation_context=_context())
+
+    assert result.success is True
+    assert seen["engine_context"] is engine_context
+
+
+def test_tool_executor_when_workspace_tool_accepts_engine_context_then_it_is_not_injected(
+    tmp_path: Path,
+):
+    seen: dict[str, Any] = {}
+    engine_context = object()
+
+    def run(engine_context=None) -> dict[str, Any]:
+        seen["engine_context"] = engine_context
+        return {"success": True, "text": "ok"}
+
+    executor = ToolExecutor(work_path=tmp_path)
+    executor.set_engine_context(engine_context)
+    tool = _make_tool("workspace_needs_engine", run, source_path=tmp_path / "tools" / "x.py")
+
+    result = executor.execute(tool, {}, invocation_context=_context())
+
+    assert result.success is True
+    assert seen["engine_context"] is None
+
+
+@pytest.mark.asyncio
+async def test_tool_executor_when_async_tool_accepts_engine_context_then_receives_it(
+    tmp_path: Path,
+):
+    seen: dict[str, Any] = {}
+    engine_context = object()
+
+    async def run(engine_context=None) -> dict[str, Any]:
+        seen["engine_context"] = engine_context
+        return {"success": True, "text": "ok"}
+
+    executor = ToolExecutor(work_path=tmp_path)
+    executor.set_engine_context(engine_context)
+    builtin_path = (
+        Path(__file__).resolve().parents[1]
+        / "sirius_pulse"
+        / "tools"
+        / "builtin"
+        / "async_needs_engine.py"
+    )
+    tool = _make_tool("async_needs_engine", run, source_path=builtin_path)
+
+    result = await executor.execute_async(tool, {}, invocation_context=_context())
+
+    assert result.success is True
+    assert seen["engine_context"] is engine_context
+
+
+def test_tool_executor_when_normal_user_calls_developer_tool_then_access_is_denied(
+    tmp_path: Path,
+):
+    def run() -> dict[str, Any]:
+        return {"success": True, "text": "secret"}
+
+    tool = _make_tool("server_shell", run, developer_only=True)
+    executor = ToolExecutor(work_path=tmp_path)
+
+    result = executor.execute(tool, {}, invocation_context=_context(is_developer=False))
+
+    assert result.success is False
+    assert "developer" in result.error.lower() or "开发" in result.error
+
+
+@pytest.mark.asyncio
+async def test_tool_executor_when_async_tool_finishes_then_result_is_returned(tmp_path: Path):
+    async def run(name: str) -> dict[str, Any]:
+        return {"success": True, "text": f"异步完成：{name}"}
+
+    tool = _make_tool(
+        "async_greet",
+        run,
+        params=[ToolParameter(name="name", type="str", description="名字", required=True)],
+    )
+    executor = ToolExecutor(work_path=tmp_path)
+
+    result = await executor.execute_async(tool, {"name": "Alice"}, invocation_context=_context())
+
+    assert result.success is True
+    assert result.to_display_text() == "异步完成：Alice"
+
+
+@pytest.mark.asyncio
+async def test_tool_executor_when_async_tool_params_are_normalized_then_defaults_and_types_match_sync(
+    tmp_path: Path,
+):
+    received: list[int] = []
+
+    async def run(count: int = 3) -> dict[str, Any]:
+        received.append(count)
+        return {"success": True, "text": str(count)}
+
+    tool = _make_tool(
+        "async_count",
+        run,
+        params=[ToolParameter(name="count", type="int", description="数量", default=3)],
+    )
+    executor = ToolExecutor(work_path=tmp_path)
+
+    default_result = await executor.execute_async(tool, {}, invocation_context=_context())
+    coerced_result = await executor.execute_async(
+        tool, {"count": "4"}, invocation_context=_context()
+    )
+
+    assert default_result.success is True
+    assert coerced_result.success is True
+    assert received == [3, 4]
+
+
+@pytest.mark.asyncio
+async def test_tool_executor_when_async_developer_tool_is_called_by_user_then_access_is_denied(
+    tmp_path: Path,
+):
+    async def run() -> dict[str, Any]:
+        return {"success": True, "text": "secret"}
+
+    executor = ToolExecutor(work_path=tmp_path)
+    tool = _make_tool("async_server_shell", run, developer_only=True)
+
+    result = await executor.execute_async(
+        tool, {}, invocation_context=_context(is_developer=False)
+    )
+
+    assert result.success is False
+    assert "developer" in result.error.lower() or "开发" in result.error
+
+
+@pytest.mark.asyncio
+async def test_tool_executor_when_async_required_param_is_missing_then_tool_is_not_called(
+    tmp_path: Path,
+):
+    async def run(query: str) -> dict[str, Any]:
+        raise AssertionError(f"should not call tool with {query}")
+
+    executor = ToolExecutor(work_path=tmp_path)
+    tool = _make_tool(
+        "async_search",
+        run,
+        params=[ToolParameter(name="query", type="str", description="查询", required=True)],
+    )
+
+    result = await executor.execute_async(tool, {}, invocation_context=_context())
+
+    assert result.success is False
+    assert "query" in result.error
+
+
+def test_tool_result_when_rendered_for_model_then_marks_data_and_bounds_length():
+    result = ToolResult(success=True, data="x" * 300)
+
+    model_text = result.to_model_text(max_chars=256)
+
+    assert model_text.startswith("[Tool result: success]")
+    assert "reference data" in model_text
+    assert "[结果已截断]" in model_text
+
+
+def test_tool_executor_when_tool_raises_error_then_failure_is_visible_to_model(
+    tmp_path: Path,
+):
+    def run() -> dict[str, Any]:
+        raise ValueError("模拟错误")
+
+    executor = ToolExecutor(work_path=tmp_path)
+    tool = _make_tool("failing", run)
+
+    result = executor.execute(tool, {}, max_retries=0, invocation_context=_context())
+
+    assert result.success is False
+    assert "模拟错误" in result.to_display_text()

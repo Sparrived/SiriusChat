@@ -1,6 +1,6 @@
-"""用户查找服务 —— 为插件和技能提供统一的用户查找能力。
+"""用户查找服务 —— 为插件和工具提供统一的用户查找能力。
 
-组合模式：EngineProxy 和 SkillEngineContextImpl 各持有一个 UserLookupService 实例。
+组合模式：EngineProxy 和 ToolEngineContextImpl 各持有一个 UserLookupService 实例。
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 class UserLookupService:
     """统一的用户查找服务。
 
-    通过组合模式注入到 EngineProxy 和 SkillEngineContextImpl，
+    通过组合模式注入到 EngineProxy 和 ToolEngineContextImpl，
     避免代码重复。
     """
 

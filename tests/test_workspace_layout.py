@@ -51,13 +51,13 @@ def test_workspace_layout_when_ensuring_directories_then_creates_runtime_and_con
     assert layout.session_dir("chat A/B").is_dir()
 
 
-def test_workspace_layout_when_skills_exist_then_watch_paths_include_skill_files_and_readme(
+def test_workspace_layout_when_tools_exist_then_watch_paths_include_tool_files_and_readme(
     tmp_path,
 ):
     layout = WorkspaceLayout(tmp_path)
     layout.ensure_directories()
-    (layout.skills_dir() / "b.py").write_text("", encoding="utf-8")
-    (layout.skills_dir() / "a.py").write_text("", encoding="utf-8")
+    (layout.tools_dir() / "b.py").write_text("", encoding="utf-8")
+    (layout.tools_dir() / "a.py").write_text("", encoding="utf-8")
 
     paths = layout.config_watch_paths()
 
@@ -68,7 +68,7 @@ def test_workspace_layout_when_skills_exist_then_watch_paths_include_skill_files
         layout.generated_agents_path(),
     ]
     assert paths[-3:] == [
-        layout.skills_dir() / "a.py",
-        layout.skills_dir() / "b.py",
-        layout.skills_dir() / "README.md",
+        layout.tools_dir() / "a.py",
+        layout.tools_dir() / "b.py",
+        layout.tools_dir() / "README.md",
     ]

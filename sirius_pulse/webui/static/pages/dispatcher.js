@@ -4,7 +4,6 @@ import { createScopedPage } from '../page-context.js';
 
 const scopedPage = createScopedPage();
 const $ = scopedPage.$;
-let pollTimer = null;
 
 const REASONS = {
   selected: '获得发送权',
@@ -28,8 +27,6 @@ const STATUS_LABELS = {
 };
 
 export function dispose() {
-  if (pollTimer) clearInterval(pollTimer);
-  pollTimer = null;
   scopedPage.use(null, null);
 }
 
@@ -37,7 +34,7 @@ export async function init(container, params = {}) {
   scopedPage.use(params?.ctx, container);
   $('dispatcherRefresh').addEventListener('click', () => loadOverview(false));
   await loadOverview(false);
-  pollTimer = setInterval(() => loadOverview(true), 5000);
+  scopedPage.interval(() => loadOverview(true), 5000);
 }
 
 async function loadOverview(silent) {

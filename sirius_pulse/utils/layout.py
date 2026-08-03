@@ -112,11 +112,11 @@ class WorkspaceLayout:
     def generated_agent_trace_dir(self) -> Path:
         return self.roleplay_dir() / "generated_agent_traces"
 
-    def skills_dir(self) -> Path:
-        return self.config_root / "skills"
+    def tools_dir(self) -> Path:
+        return self.config_root / "tools"
 
-    def skill_data_dir(self) -> Path:
-        return self.data_root / "skill_data"
+    def tool_data_dir(self) -> Path:
+        return self.data_root / "tool_data"
 
     def config_watch_paths(self) -> list[Path]:
         paths = [
@@ -125,10 +125,10 @@ class WorkspaceLayout:
             self.provider_registry_path(),
             self.generated_agents_path(),
         ]
-        skills_dir = self.skills_dir()
-        if skills_dir.exists():
-            paths.extend(sorted(skills_dir.glob("*.py")))
-            paths.append(skills_dir / "README.md")
+        tools_dir = self.tools_dir()
+        if tools_dir.exists():
+            paths.extend(sorted(tools_dir.glob("*.py")))
+            paths.append(tools_dir / "README.md")
         return paths
 
     def ensure_directories(self, *, session_id: str | None = None) -> None:
@@ -143,8 +143,8 @@ class WorkspaceLayout:
             self.token_dir(),
             self.roleplay_dir(),
             self.generated_agent_trace_dir(),
-            self.skills_dir(),
-            self.skill_data_dir(),
+            self.tools_dir(),
+            self.tool_data_dir(),
         ]
         if session_id is not None:
             directories.append(self.session_dir(session_id))
