@@ -39,7 +39,11 @@ from pathlib import Path
 from typing import Any
 
 from sirius_pulse.config.config_builder import ConfigBuilder
-from sirius_pulse.github import GitHubWebhookServer, fetch_repo_events
+from sirius_pulse.github import (
+    GitHubWebhookServer,
+    fetch_compare_commit_count,
+    fetch_repo_events,
+)
 from sirius_pulse.github.client import GitHubClient
 from sirius_pulse.github.event_bridge import (
     get_coding_bot_login,
@@ -427,7 +431,17 @@ async def _poll_github_events(ctx: Any) -> None:
                 # 使用最早 before → 最新 head 构建 compare URL 作为截图，
                 # 确保截图 diff 覆盖本轮全部变更
                 if push_raw:
-                    merged_push = _merge_push_events(push_raw)
+                    oldest_payload = push_raw[-1].get("payload", {}) or {}
+                    newest_payload = push_raw[0].get("payload", {}) or {}
+                    commit_count = await fetch_compare_commit_count(
+                        client,
+                        owner,
+                        repo,
+                        oldest_payload.get("before", ""),
+                        newest_payload.get("head", ""),
+                        extra_headers=extra_headers,
+                    )
+                    merged_push = _merge_push_events(push_raw, commit_count=commit_count)
                     if merged_push:
                         grouped[f"__push_{repo_key}"] = [merged_push]
                         logger.info(
@@ -473,9 +487,7 @@ async def _poll_github_events(ctx: Any) -> None:
                             logger.warning("github_monitor: 截图失败 (%s): %s", screenshot_url, exc)
 
                     # LLM 生成：每个合并组仅调用一次
-                    notification = await _generate_notification_text(
-                        ctx, merged_info, screenshot_path
-                    )
+                    notification = await _generate_notification_text(ctx, merged_info)
 
                     if not notification:
                         continue
@@ -617,10 +629,14 @@ def _extract_event_info(event: dict[str, Any]) -> dict[str, Any]:
             # CommitCommentEvent：规范 URL 为 commit 页面
             canonical_url = _clean_canonical_url(html_url)
     elif etype == "PushEvent":
-        commits: list[dict[str, Any]] = payload.get("commits", [])
+        raw_commits = payload.get("commits")
+        commits: list[dict[str, Any]] = raw_commits if isinstance(raw_commits, list) else []
         ref = payload.get("ref", "")
         branch = ref.replace("refs/heads/", "") if ref.startswith("refs/heads/") else ref
-        title = f"{len(commits)} 个提交 → {branch}"
+        commit_summary = (
+            f"{len(commits)} 个提交" if isinstance(raw_commits, list) else "提交数量未知"
+        )
+        title = f"{commit_summary} → {branch}"
         commit_lines: list[str] = []
         for c in commits[:_MAX_COMMITS_IN_BODY]:
             msg_first_line = (c.get("message", "")).split("\n")[0][:100]
@@ -735,7 +751,11 @@ def _merge_event_group(events: list[dict[str, Any]]) -> dict[str, Any]:
     return primary
 
 
-def _merge_push_events(raw_events: list[dict[str, Any]]) -> dict[str, Any] | None:
+def _merge_push_events(
+    raw_events: list[dict[str, Any]],
+    *,
+    commit_count: int | None = None,
+) -> dict[str, Any] | None:
     """将同一轮 API 轮询中的多个 PushEvent 合并为一条事件信息。
 
     合并策略：
@@ -791,7 +811,8 @@ def _merge_push_events(raw_events: list[dict[str, Any]]) -> dict[str, Any] | Non
         if len(branches) > 1
         else (branches.pop() if branches else "未知分支")
     )
-    title = f"{len(all_commits)} 个提交 → {branch_str}"
+    commit_summary = f"{commit_count} 个提交" if commit_count is not None else "提交数量未知"
+    title = f"{commit_summary} → {branch_str}"
 
     commit_lines: list[str] = []
     for c in all_commits[:_MAX_COMMITS_IN_BODY]:
@@ -938,19 +959,17 @@ def _get_artifact_dir(store: Any) -> Path:
 async def _generate_notification_text(
     ctx: Any,
     event_info: dict[str, Any],
-    screenshot_path: str | None,
 ) -> str | None:
     """调用 LLM 生成人格风格的通知消息（不绑定群，不写记忆）。
 
-    构建包含人格身份、事件详情的 prompt，并将页面截图作为多模态输入
-    传给模型，让 AI 能参考真实页面内容生成更贴合的回覆。
+    仅将人格身份和结构化事件详情传给模型；页面截图由群消息分发链路单独发送。
     """
     try:
         persona = ctx.get_persona()
         identity = persona.build_system_prompt() if persona else ""
 
         # 构建事件描述
-        event_desc = _build_event_section(event_info, screenshot_path)
+        event_desc = _build_event_section(event_info)
 
         system_prompt = (
             f"{identity}\n\n"
@@ -964,27 +983,15 @@ async def _generate_notification_text(
             f"这个操作者是真实的 GitHub 用户\n"
             f"- 提到关键信息：谁、做了什么、涉及什么仓库\n"
             f"- 必须在播报末尾附带「链接」中的网址，让群友可以直接点击跳转\n"
-            f"- 可以表达你的感受（惊讶、期待、好奇等），但要符合你的人设\n"
-            f"- 如果附带了页面截图，请结合截图内容描述具体变化"
+            f"- 可以表达你的感受（惊讶、期待、好奇等），但要符合你的人设"
         )
 
-        # 构建多模态 user message（如有截图则以 image_url 格式传入）
-        user_content: str | list[dict[str, Any]]
-        if screenshot_path:
-            user_content = [
-                {
-                    "type": "text",
-                    "text": f"（{event_info['repo']} 仓库有新动态，下方是页面截图，请参考截图播报一下）",
-                },
-                {
-                    "type": "image_url",
-                    "image_url": {"url": screenshot_path},
-                },
-            ]
-        else:
-            user_content = f"（{event_info['repo']} 仓库有新动态，请播报一下）"
-
-        messages: list[dict[str, Any]] = [{"role": "user", "content": user_content}]
+        messages: list[dict[str, Any]] = [
+            {
+                "role": "user",
+                "content": f"（{event_info['repo']} 仓库有新动态，请播报一下）",
+            }
+        ]
 
         # 使用第一个活跃群作为 generate_text 的 group_id（仅用于 token 统计/路由）
         active_groups = ctx.get_active_groups()
@@ -1006,7 +1013,6 @@ async def _generate_notification_text(
 
 def _build_event_section(
     event_info: dict[str, Any],
-    screenshot_path: str | None,
 ) -> str:
     """构建注入 prompt 的事件描述 section。"""
     lines = [
@@ -1029,8 +1035,6 @@ def _build_event_section(
         lines.append(f"内容: {event_info['body']}")
     if event_info.get("url"):
         lines.append(f"链接: {event_info['url']}")
-    if screenshot_path:
-        lines.append(f"页面截图: {screenshot_path}（可用作参考）")
     return "\n".join(lines)
 
 
@@ -1143,7 +1147,7 @@ async def _handle_webhook_event(event_type: str, body: dict[str, Any]) -> None:
             logger.warning("github_monitor (webhook): 截图失败 (%s): %s", screenshot_url, exc)
 
     # LLM 生成通知
-    notification = await _generate_notification_text(ctx, event_info, screenshot_path)
+    notification = await _generate_notification_text(ctx, event_info)
     if not notification:
         return
 
@@ -1231,14 +1235,18 @@ def _extract_webhook_event_info(
 
     if event_type == "push":
         # 跳过 PR 合并导致的 push（会与 pull_request (merged) 事件重复）
-        commits: list[dict[str, Any]] = body.get("commits", [])
+        raw_commits = body.get("commits")
+        commits: list[dict[str, Any]] = raw_commits if isinstance(raw_commits, list) else []
         if commits and all(_PR_MERGE_COMMIT_PATTERN.match(c.get("message", "")) for c in commits):
             logger.debug("github_monitor (webhook): 跳过 PR 合并 Push 事件")
             return None
 
         ref = body.get("ref", "")
         branch = ref.replace("refs/heads/", "") if ref.startswith("refs/heads/") else ref
-        title = f"{len(commits)} 个提交 → {branch}"
+        commit_summary = (
+            f"{len(commits)} 个提交" if isinstance(raw_commits, list) else "提交数量未知"
+        )
+        title = f"{commit_summary} → {branch}"
         commit_lines: list[str] = []
         for c in commits[:_MAX_COMMITS_IN_BODY]:
             msg_first_line = (c.get("message", "")).split("\n")[0][:100]

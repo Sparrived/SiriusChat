@@ -3,7 +3,7 @@
 提供：
 - GitHubWebhookServer: Webhook 签名验证 + HTTP 生命周期 + 事件分发
 - GitHubClient: 渐近式请求封装，使用标准 API headers
-- fetch_repo_events: Events API 批量获取 + 速率限制检测
+- fetch_repo_events / fetch_compare_commit_count: GitHub 事件与提交范围查询
 - event_bridge: github_monitor → plugin 事件通知桥接
 """
 
@@ -20,7 +20,7 @@ from sirius_pulse.github.event_bridge import (
     set_coding_bot_login,
     set_issue_repos,
 )
-from sirius_pulse.github.events import fetch_repo_events
+from sirius_pulse.github.events import fetch_compare_commit_count, fetch_repo_events
 from sirius_pulse.github.webhook import (
     GitHubWebhookServer,
     RepoFilter,
@@ -34,6 +34,7 @@ __all__ = [
     "RepoFilter",
     "WebhookHandler",
     "fetch_repo_events",
+    "fetch_compare_commit_count",
     "github_headers",
     "get_coding_bot_login",
     "get_issue_repos",

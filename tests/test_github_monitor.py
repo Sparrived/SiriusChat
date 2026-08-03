@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
+from sirius_pulse.github.events import fetch_compare_commit_count
 from sirius_pulse.skills.builtin import github_monitor
 
 
@@ -17,6 +18,15 @@ class _Client:
 
     async def __aexit__(self, *args: Any) -> None:
         return None
+
+
+class _Response:
+    def __init__(self, status_code: int, payload: dict[str, Any]) -> None:
+        self.status_code = status_code
+        self._payload = payload
+
+    def json(self) -> dict[str, Any]:
+        return self._payload
 
 
 @pytest.mark.asyncio
@@ -49,3 +59,92 @@ async def test_poll_recovers_from_persisted_pre_restart_timestamp(monkeypatch):
 
     fetch_events.assert_awaited_once()
     assert data["_last_poll_at"]["Sparrived/SiriusPulse"] == 1_754_000_000.0
+
+
+@pytest.mark.asyncio
+async def test_compare_api_returns_push_commit_count():
+    client = Mock()
+    client.get = AsyncMock(return_value=_Response(200, {"total_commits": 3}))
+
+    count = await fetch_compare_commit_count(
+        client,
+        "Sparrived",
+        "SiriusPulse",
+        "a" * 40,
+        "b" * 40,
+        extra_headers={"Authorization": "Bearer test"},
+    )
+
+    assert count == 3
+    client.get.assert_awaited_once_with(
+        "/repos/Sparrived/SiriusPulse/compare/" + "a" * 40 + "..." + "b" * 40,
+        headers={"Authorization": "Bearer test"},
+    )
+
+
+def test_merge_push_events_does_not_claim_zero_when_commit_count_is_unavailable():
+    event = {
+        "repo": {"name": "Sparrived/SiriusPulse"},
+        "actor": {"login": "Sparrived"},
+        "payload": {
+            "ref": "refs/heads/master",
+            "before": "a" * 40,
+            "head": "b" * 40,
+        },
+    }
+
+    info = github_monitor._merge_push_events([event])
+
+    assert info is not None
+    assert info["title"] == "提交数量未知 → master"
+
+
+@pytest.mark.asyncio
+async def test_notification_generation_does_not_inject_screenshot():
+    ctx = Mock()
+    ctx.get_persona.return_value = Mock(build_system_prompt=Mock(return_value="identity"))
+    ctx.get_active_groups.return_value = ["1057020972"]
+    ctx.generate_text = AsyncMock(return_value="通知")
+    event_info = {
+        "repo": "Sparrived/SiriusPulse",
+        "type_desc": "推送",
+        "actor": "Sparrived",
+        "title": "3 个提交 → master",
+        "body": "",
+        "url": "https://github.com/Sparrived/SiriusPulse",
+        "screenshot_url": "C:/artifacts/github_update.png",
+    }
+
+    result = await github_monitor._generate_notification_text(ctx, event_info)
+
+    assert result == "通知"
+    system_prompt, messages, *_ = ctx.generate_text.await_args.args
+    assert "页面截图" not in system_prompt
+    assert "image_url" not in str(messages)
+    assert "github_update.png" not in str((system_prompt, messages))
+    assert messages == [
+        {
+            "role": "user",
+            "content": "（Sparrived/SiriusPulse 仓库有新动态，请播报一下）",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_dispatch_notification_keeps_screenshot_for_group_delivery():
+    ctx = Mock()
+    ctx.emit_event = AsyncMock()
+    screenshot_path = "C:/artifacts/github_update.png"
+
+    await github_monitor._dispatch_notification(ctx, "1057020972", "通知", screenshot_path)
+
+    ctx.queue_pending_message.assert_called_once_with("1057020972", "通知")
+    ctx.emit_event.assert_awaited_once_with(
+        "reminder_triggered",
+        {
+            "group_id": "1057020972",
+            "reply": "通知",
+            "image_path": screenshot_path,
+            "adapter_type": "napcat",
+        },
+    )

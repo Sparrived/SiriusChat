@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 
 _MAX_EVENTS_PER_PAGE = 30
 _DEFAULT_RETRIES = 3
+_NULL_SHA = "0" * 40
 
 
 async def fetch_repo_events(
@@ -74,3 +75,58 @@ async def fetch_repo_events(
         return []
 
     return []
+
+
+async def fetch_compare_commit_count(
+    client: GitHubClient,
+    owner: str,
+    repo: str,
+    before: str,
+    head: str,
+    *,
+    max_retries: int = _DEFAULT_RETRIES,
+    extra_headers: dict[str, str] | None = None,
+) -> int | None:
+    """Return the commit count for a push range from the Compare API.
+
+    The Events API no longer includes ``payload.commits`` for PushEvent.
+    """
+    if not before or not head or before == _NULL_SHA:
+        return None
+
+    from urllib.parse import quote
+
+    path = (
+        f"/repos/{quote(owner)}/{quote(repo)}/compare/"
+        f"{quote(before, safe='')}...{quote(head, safe='')}"
+    )
+    headers = dict(extra_headers or {}) if extra_headers else None
+
+    for attempt in range(1, max_retries + 1):
+        resp = await client.get(path, headers=headers)
+        if resp.status_code in (403, 429):
+            logger.warning(
+                "github: %s/%s Compare API %d（可能触发速率限制，第 %d/%d 次）",
+                owner,
+                repo,
+                resp.status_code,
+                attempt,
+                max_retries,
+            )
+            if attempt < max_retries:
+                await asyncio.sleep(2.0 * attempt)
+                continue
+            return None
+
+        if resp.status_code == 200:
+            data = resp.json()
+            total_commits = data.get("total_commits") if isinstance(data, dict) else None
+            return total_commits if isinstance(total_commits, int) else None
+
+        logger.warning("github: %s/%s Compare API 返回 %d", owner, repo, resp.status_code)
+        if attempt < max_retries:
+            await asyncio.sleep(2.0 * attempt)
+            continue
+        return None
+
+    return None
