@@ -93,7 +93,7 @@ def should_render_markdown_card(blocks: Iterable[str]) -> bool:
         return False
     content = "\n".join(clean_blocks)
     nonempty_lines = [line for line in content.splitlines() if line.strip()]
-    return len(nonempty_lines) > 2 or len(content) > 40
+    return len(nonempty_lines) > 2 or len(content) > 80
 
 
 def _normalize_fence_chars(text: str) -> str:

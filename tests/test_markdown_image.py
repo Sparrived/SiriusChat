@@ -105,12 +105,10 @@ def test_split_unfenced_markdown_detects_inline_formatting_from_group_history():
     ]
 
 
-def test_markdown_card_requires_more_than_two_lines_or_forty_chars():
+def test_markdown_card_requires_more_than_two_lines_or_eighty_chars():
     assert should_render_markdown_card(["**标题**\n- 一项"]) is False
     assert should_render_markdown_card(["**标题**\n- 一项\n- 二项"]) is True
-    assert should_render_markdown_card(
-        ["执行 `docker ps` 查看当前服务器状态是否正常，并确认容器、端口和日志都没有异常。"]
-    ) is True
+    assert should_render_markdown_card(["执行 `docker ps` " + "检查服务器状态。" * 20]) is True
     assert has_fenced_markdown("执行 `docker ps` 查看状态。") is False
 
 
