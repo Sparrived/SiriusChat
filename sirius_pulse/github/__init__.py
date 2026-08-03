@@ -20,7 +20,11 @@ from sirius_pulse.github.event_bridge import (
     set_coding_bot_login,
     set_issue_repos,
 )
-from sirius_pulse.github.events import fetch_compare_commit_count, fetch_repo_events
+from sirius_pulse.github.events import (
+    fetch_compare_commit_count,
+    fetch_compare_details,
+    fetch_repo_events,
+)
 from sirius_pulse.github.webhook import (
     GitHubWebhookServer,
     RepoFilter,
@@ -35,6 +39,7 @@ __all__ = [
     "WebhookHandler",
     "fetch_repo_events",
     "fetch_compare_commit_count",
+    "fetch_compare_details",
     "github_headers",
     "get_coding_bot_login",
     "get_issue_repos",

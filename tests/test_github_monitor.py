@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from sirius_pulse.github.events import fetch_compare_commit_count
+from sirius_pulse.github.events import fetch_compare_commit_count, fetch_compare_details
 from sirius_pulse.tools.builtin import github_monitor
 
 
@@ -82,6 +82,27 @@ async def test_compare_api_returns_push_commit_count():
     )
 
 
+@pytest.mark.asyncio
+async def test_compare_api_returns_push_details():
+    client = Mock()
+    payload = {
+        "total_commits": 2,
+        "commits": [{"sha": "abc123", "commit": {"message": "修复提交通知"}}],
+        "files": [{"filename": "sirius_pulse/tools/builtin/github_monitor.py"}],
+    }
+    client.get = AsyncMock(return_value=_Response(200, payload))
+
+    details = await fetch_compare_details(
+        client,
+        "Sparrived",
+        "SiriusPulse",
+        "a" * 40,
+        "b" * 40,
+    )
+
+    assert details == payload
+
+
 def test_merge_push_events_does_not_claim_zero_when_commit_count_is_unavailable():
     event = {
         "repo": {"name": "Sparrived/SiriusPulse"},
@@ -97,6 +118,46 @@ def test_merge_push_events_does_not_claim_zero_when_commit_count_is_unavailable(
 
     assert info is not None
     assert info["title"] == "提交数量未知 → master"
+
+
+def test_merge_push_events_keeps_compare_commit_details_for_prompt():
+    event = {
+        "repo": {"name": "Sparrived/SiriusPulse"},
+        "actor": {"login": "Sparrived"},
+        "payload": {
+            "ref": "refs/heads/master",
+            "before": "a" * 40,
+            "head": "b" * 40,
+        },
+    }
+
+    info = github_monitor._merge_push_events(
+        [event],
+        commit_count=2,
+        commit_details=[
+            {
+                "sha": "abc123456789",
+                "commit": {
+                    "message": "修复提交通知\n\n补充 Compare API 详情",
+                    "author": {"name": "Sparrived"},
+                },
+            }
+        ],
+        changed_files=[
+            {
+                "filename": "sirius_pulse/tools/builtin/github_monitor.py",
+                "status": "modified",
+                "additions": 20,
+                "deletions": 4,
+            }
+        ],
+    )
+
+    assert info is not None
+    section = github_monitor._build_event_section(info)
+    assert "提交数: 2" in section
+    assert "修复提交通知" in section
+    assert "github_monitor.py" in section
 
 
 @pytest.mark.asyncio
@@ -128,6 +189,52 @@ async def test_notification_generation_does_not_inject_screenshot():
             "content": "（Sparrived/SiriusPulse 仓库有新动态，请播报一下）",
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_notification_generation_includes_event_commit_details():
+    ctx = Mock()
+    ctx.get_persona.return_value = Mock(build_system_prompt=Mock(return_value="identity"))
+    ctx.get_active_groups.return_value = ["1057020972"]
+    ctx.generate_text = AsyncMock(return_value="通知")
+    event_info = {
+        "repo": "Sparrived/SiriusPulse",
+        "type": "PushEvent",
+        "type_desc": "推送",
+        "actor": "Sparrived",
+        "action": "",
+        "action_cn": "推送了",
+        "branch": "master",
+        "commit_count": 2,
+        "commits": [
+            {
+                "sha": "abc123456789",
+                "commit": {
+                    "message": "修复提交通知",
+                    "author": {"name": "Sparrived"},
+                },
+            }
+        ],
+        "changed_files": [
+            {
+                "filename": "sirius_pulse/tools/builtin/github_monitor.py",
+                "status": "modified",
+                "additions": 20,
+                "deletions": 4,
+            }
+        ],
+        "title": "2 个提交 → master",
+        "url": "https://github.com/Sparrived/SiriusPulse/compare/a...b",
+        "screenshot_url": "C:/artifacts/github_update.png",
+    }
+
+    await github_monitor._generate_notification_text(ctx, event_info)
+
+    system_prompt = ctx.generate_text.await_args.args[0]
+    assert "提交数: 2" in system_prompt
+    assert "修复提交通知" in system_prompt
+    assert "github_monitor.py" in system_prompt
+    assert "github_update.png" not in system_prompt
 
 
 @pytest.mark.asyncio

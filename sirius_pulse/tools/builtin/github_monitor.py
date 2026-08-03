@@ -41,7 +41,7 @@ from typing import Any
 from sirius_pulse.config.config_builder import ConfigBuilder
 from sirius_pulse.github import (
     GitHubWebhookServer,
-    fetch_compare_commit_count,
+    fetch_compare_details,
     fetch_repo_events,
 )
 from sirius_pulse.github.client import GitHubClient
@@ -106,6 +106,7 @@ _DEFAULT_POLL_SECONDS = 120
 _MIN_BG_INTERVAL = 30
 _MAX_EVENTS_PER_PAGE = 30
 _MAX_COMMITS_IN_BODY = 5
+_MAX_CHANGED_FILES_IN_BODY = 12
 _MAX_SCREENSHOT_RETRIES = 3
 
 # Webhook 模式运行时状态（模块级，由 on_load/on_unload 管理）
@@ -433,7 +434,7 @@ async def _poll_github_events(ctx: Any) -> None:
                 if push_raw:
                     oldest_payload = push_raw[-1].get("payload", {}) or {}
                     newest_payload = push_raw[0].get("payload", {}) or {}
-                    commit_count = await fetch_compare_commit_count(
+                    compare_data = await fetch_compare_details(
                         client,
                         owner,
                         repo,
@@ -441,7 +442,27 @@ async def _poll_github_events(ctx: Any) -> None:
                         newest_payload.get("head", ""),
                         extra_headers=extra_headers,
                     )
-                    merged_push = _merge_push_events(push_raw, commit_count=commit_count)
+                    commit_count = (
+                        compare_data.get("total_commits")
+                        if compare_data
+                        else None
+                    )
+                    compare_commits = (
+                        compare_data.get("commits", [])
+                        if compare_data and isinstance(compare_data.get("commits"), list)
+                        else []
+                    )
+                    changed_files = (
+                        compare_data.get("files", [])
+                        if compare_data and isinstance(compare_data.get("files"), list)
+                        else []
+                    )
+                    merged_push = _merge_push_events(
+                        push_raw,
+                        commit_count=commit_count if isinstance(commit_count, int) else None,
+                        commit_details=compare_commits,
+                        changed_files=changed_files,
+                    )
                     if merged_push:
                         grouped[f"__push_{repo_key}"] = [merged_push]
                         logger.info(
@@ -560,6 +581,27 @@ def _clean_canonical_url(url: str) -> str:
     return cleaned
 
 
+def _commit_message(commit: dict[str, Any]) -> str:
+    nested = commit.get("commit", {})
+    nested_message = nested.get("message", "") if isinstance(nested, dict) else ""
+    message = commit.get("message") or nested_message
+    return str(message or "").strip()
+
+
+def _commit_author(commit: dict[str, Any]) -> str:
+    nested = commit.get("commit", {})
+    nested_author = nested.get("author", {}) if isinstance(nested, dict) else {}
+    author = commit.get("author") or nested_author
+    if not isinstance(author, dict):
+        return "未知作者"
+    return str(author.get("login") or author.get("name") or "未知作者")
+
+
+def _commit_subject(commit: dict[str, Any]) -> str:
+    message = _commit_message(commit)
+    return message.splitlines()[0][:160] if message else "未提供提交说明"
+
+
 def _extract_event_info(event: dict[str, Any]) -> dict[str, Any]:
     """从原始 GitHub Event JSON 中提取结构化信息。"""
     etype = event.get("type", "未知事件")
@@ -577,6 +619,9 @@ def _extract_event_info(event: dict[str, Any]) -> dict[str, Any]:
     body = ""
     action = payload.get("action", "")
     action_cn = _ACTION_DESC.get(action, action)
+    branch = ""
+    commit_count: int | None = None
+    commits: list[dict[str, Any]] = []
     # type_desc 默认从映射表取，PR 评论会覆盖
     type_desc = _TYPE_DESC.get(etype, etype)
 
@@ -630,7 +675,8 @@ def _extract_event_info(event: dict[str, Any]) -> dict[str, Any]:
             canonical_url = _clean_canonical_url(html_url)
     elif etype == "PushEvent":
         raw_commits = payload.get("commits")
-        commits: list[dict[str, Any]] = raw_commits if isinstance(raw_commits, list) else []
+        commits = raw_commits if isinstance(raw_commits, list) else []
+        commit_count = len(commits) if isinstance(raw_commits, list) else None
         ref = payload.get("ref", "")
         branch = ref.replace("refs/heads/", "") if ref.startswith("refs/heads/") else ref
         commit_summary = (
@@ -639,8 +685,7 @@ def _extract_event_info(event: dict[str, Any]) -> dict[str, Any]:
         title = f"{commit_summary} → {branch}"
         commit_lines: list[str] = []
         for c in commits[:_MAX_COMMITS_IN_BODY]:
-            msg_first_line = (c.get("message", "")).split("\n")[0][:100]
-            commit_lines.append(f"- {msg_first_line}")
+            commit_lines.append(f"- {_commit_subject(c)}")
         body = "\n".join(commit_lines)
         # 用 before/head 自行拼接 compare URL，覆盖本轮全部 commit 的 diff
         before_sha = payload.get("before", "")
@@ -679,6 +724,9 @@ def _extract_event_info(event: dict[str, Any]) -> dict[str, Any]:
         "screenshot_url": screenshot_url,
         "canonical_url": canonical_url or html_url,
         "created_at": created_at,
+        "branch": branch,
+        "commit_count": commit_count,
+        "commits": commits[:_MAX_COMMITS_IN_BODY],
     }
 
 
@@ -755,11 +803,14 @@ def _merge_push_events(
     raw_events: list[dict[str, Any]],
     *,
     commit_count: int | None = None,
+    commit_details: list[dict[str, Any]] | None = None,
+    changed_files: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
     """将同一轮 API 轮询中的多个 PushEvent 合并为一条事件信息。
 
     合并策略：
     - 汇集所有 commit
+    - 优先使用 Compare API 返回的提交详情和文件变更摘要
     - 使用最早推送的 before SHA 作为起始点、最新推送的 head SHA 作为终点，
       构建跨全部推送的 compare URL，使得截图可展示从最早到最新的完整 diff
     - 合并多笔推送的参与者和分支信息
@@ -792,8 +843,9 @@ def _merge_push_events(
 
     for event in raw_events:
         payload = event.get("payload", {}) or {}
-        commits = payload.get("commits", [])
-        all_commits.extend(commits)
+        raw_commits = payload.get("commits")
+        if isinstance(raw_commits, list):
+            all_commits.extend(raw_commits)
 
         actor = event.get("actor", {})
         actor_name = actor.get("display_login") or actor.get("login", "未知用户")
@@ -811,13 +863,21 @@ def _merge_push_events(
         if len(branches) > 1
         else (branches.pop() if branches else "未知分支")
     )
-    commit_summary = f"{commit_count} 个提交" if commit_count is not None else "提交数量未知"
+    if commit_details:
+        all_commits = commit_details
+    effective_commit_count = (
+        commit_count if commit_count is not None else (len(all_commits) or None)
+    )
+    commit_summary = (
+        f"{effective_commit_count} 个提交"
+        if effective_commit_count is not None
+        else "提交数量未知"
+    )
     title = f"{commit_summary} → {branch_str}"
 
     commit_lines: list[str] = []
     for c in all_commits[:_MAX_COMMITS_IN_BODY]:
-        msg_first_line = (c.get("message", "")).split("\n")[0][:100]
-        commit_lines.append(f"- {msg_first_line}")
+        commit_lines.append(f"- {_commit_subject(c)}")
     body_lines = "\n".join(commit_lines)
 
     # 构建横跨所有推送的 compare URL
@@ -842,6 +902,14 @@ def _merge_push_events(
         "canonical_url": _clean_canonical_url(html_url),
         "merged_count": len(raw_events),
         "merged_actions": [f"推送了 {branch_str}"],
+        "branch": branch_str,
+        "commit_count": effective_commit_count,
+        "commits": all_commits[:_MAX_COMMITS_IN_BODY],
+        "changed_files": changed_files[:_MAX_CHANGED_FILES_IN_BODY]
+        if changed_files
+        else [],
+        "before": min_before,
+        "head": max_head,
     }
 
 
@@ -982,6 +1050,8 @@ async def _generate_notification_text(
             f"- 必须明确提到「操作者」是谁（不要混淆为你人格设定中的人），"
             f"这个操作者是真实的 GitHub 用户\n"
             f"- 提到关键信息：谁、做了什么、涉及什么仓库\n"
+            f"- 如果有「提交详情」或「变更文件摘要」，优先根据实际内容概括变更，"
+            f"不要只复述提交数量\n"
             f"- 必须在播报末尾附带「链接」中的网址，让群友可以直接点击跳转\n"
             f"- 可以表达你的感受（惊讶、期待、好奇等），但要符合你的人设"
         )
@@ -1021,18 +1091,53 @@ def _build_event_section(
         f"操作者: {event_info['actor']}",
     ]
 
+    if event_info.get("type"):
+        lines.append(f"Event 类型: {event_info['type']}")
+
     # 合并事件：列出所有动作
     merged_actions = event_info.get("merged_actions")
     if merged_actions:
         lines.append(f"合并动作: {'、'.join(merged_actions)}")
         lines.append(f"（本组共合并了 {event_info.get('merged_count', 1)} 条关联事件）")
     elif event_info.get("action_cn"):
-        lines.append(f"动作: {event_info['action_cn']}")
+        action = event_info.get("action", "")
+        action_text = event_info["action_cn"]
+        if action and action != action_text:
+            action_text += f"（{action}）"
+        lines.append(f"动作: {action_text}")
+
+    if event_info.get("created_at"):
+        lines.append(f"发生时间: {event_info['created_at']}")
+    if event_info.get("branch"):
+        lines.append(f"分支: {event_info['branch']}")
+    if event_info.get("commit_count") is not None:
+        lines.append(f"提交数: {event_info['commit_count']}")
 
     if event_info.get("title"):
         lines.append(f"标题: {event_info['title']}")
     if event_info.get("body"):
         lines.append(f"内容: {event_info['body']}")
+
+    commits = event_info.get("commits") or []
+    if commits:
+        lines.append("提交详情:")
+        for commit in commits[:_MAX_COMMITS_IN_BODY]:
+            sha = str(commit.get("sha", ""))[:10] or "未知 SHA"
+            message = _truncate_text(_commit_message(commit), 400)
+            lines.append(f"- {sha} | 作者: {_commit_author(commit)}")
+            lines.append(f"  提交说明: {message or '未提供提交说明'}")
+
+    changed_files = event_info.get("changed_files") or []
+    if changed_files:
+        lines.append("变更文件摘要:")
+        for changed_file in changed_files[:_MAX_CHANGED_FILES_IN_BODY]:
+            filename = changed_file.get("filename", "未知文件")
+            status = changed_file.get("status", "")
+            additions = changed_file.get("additions", 0)
+            deletions = changed_file.get("deletions", 0)
+            lines.append(
+                f"- {filename}（{status}，+{additions}/-{deletions}）"
+            )
     if event_info.get("url"):
         lines.append(f"链接: {event_info['url']}")
     return "\n".join(lines)
@@ -1249,8 +1354,7 @@ def _extract_webhook_event_info(
         title = f"{commit_summary} → {branch}"
         commit_lines: list[str] = []
         for c in commits[:_MAX_COMMITS_IN_BODY]:
-            msg_first_line = (c.get("message", "")).split("\n")[0][:100]
-            commit_lines.append(f"- {msg_first_line}")
+            commit_lines.append(f"- {_commit_subject(c)}")
         body_text = "\n".join(commit_lines)
         before_sha = body.get("before", "")
         head_sha = body.get("after", "")
@@ -1267,6 +1371,7 @@ def _extract_webhook_event_info(
         screenshot_url = compare_url or html_url
         return {
             "repo": repo_name,
+            "type": "PushEvent",
             "type_desc": "推送",
             "actor": actor_name,
             "action": "",
@@ -1276,6 +1381,9 @@ def _extract_webhook_event_info(
             "url": html_url,
             "screenshot_url": screenshot_url,
             "canonical_url": _clean_canonical_url(html_url),
+            "branch": branch,
+            "commit_count": len(commits) if isinstance(raw_commits, list) else None,
+            "commits": commits[:_MAX_COMMITS_IN_BODY],
         }
 
     if event_type == "release":

@@ -77,7 +77,16 @@ async def fetch_repo_events(
     return []
 
 
-async def fetch_compare_commit_count(
+def _compare_path(owner: str, repo: str, before: str, head: str) -> str:
+    from urllib.parse import quote
+
+    return (
+        f"/repos/{quote(owner)}/{quote(repo)}/compare/"
+        f"{quote(before, safe='')}...{quote(head, safe='')}"
+    )
+
+
+async def fetch_compare_details(
     client: GitHubClient,
     owner: str,
     repo: str,
@@ -86,20 +95,15 @@ async def fetch_compare_commit_count(
     *,
     max_retries: int = _DEFAULT_RETRIES,
     extra_headers: dict[str, str] | None = None,
-) -> int | None:
-    """Return the commit count for a push range from the Compare API.
+) -> dict[str, Any] | None:
+    """Return raw commit and file details for a push range.
 
     The Events API no longer includes ``payload.commits`` for PushEvent.
     """
     if not before or not head or before == _NULL_SHA:
         return None
 
-    from urllib.parse import quote
-
-    path = (
-        f"/repos/{quote(owner)}/{quote(repo)}/compare/"
-        f"{quote(before, safe='')}...{quote(head, safe='')}"
-    )
+    path = _compare_path(owner, repo, before, head)
     headers = dict(extra_headers or {}) if extra_headers else None
 
     for attempt in range(1, max_retries + 1):
@@ -120,8 +124,7 @@ async def fetch_compare_commit_count(
 
         if resp.status_code == 200:
             data = resp.json()
-            total_commits = data.get("total_commits") if isinstance(data, dict) else None
-            return total_commits if isinstance(total_commits, int) else None
+            return data if isinstance(data, dict) else None
 
         logger.warning("github: %s/%s Compare API 返回 %d", owner, repo, resp.status_code)
         if attempt < max_retries:
@@ -130,3 +133,27 @@ async def fetch_compare_commit_count(
         return None
 
     return None
+
+
+async def fetch_compare_commit_count(
+    client: GitHubClient,
+    owner: str,
+    repo: str,
+    before: str,
+    head: str,
+    *,
+    max_retries: int = _DEFAULT_RETRIES,
+    extra_headers: dict[str, str] | None = None,
+) -> int | None:
+    """Return the commit count for a push range from the Compare API."""
+    data = await fetch_compare_details(
+        client,
+        owner,
+        repo,
+        before,
+        head,
+        max_retries=max_retries,
+        extra_headers=extra_headers,
+    )
+    total_commits = data.get("total_commits") if data else None
+    return total_commits if isinstance(total_commits, int) else None
