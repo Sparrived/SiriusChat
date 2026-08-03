@@ -37,19 +37,26 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _AUTONOMOUS_MESSAGE_SKILLS = {
-    "chat_with_developer",
+    "interaction_with_master",
 }
 
 
-def _composite_action(tool_call: ToolCall) -> str:
-    """Return the effective action for a composite tool call."""
-    if tool_call.function_name != "group_file_exec":
+def _tool_action(tool_call: ToolCall) -> str:
+    """Return the action for a tool call that dispatches multiple operations."""
+    if tool_call.function_name not in {"group_file_exec", "interaction_with_master"}:
         return ""
     try:
         params = json.loads(tool_call.function_arguments or "{}")
     except json.JSONDecodeError:
         return ""
     return str(params.get("action", "")).strip().lower()
+
+
+def _composite_action(tool_call: ToolCall) -> str:
+    """Return the effective action for a composite file tool call."""
+    if tool_call.function_name != "group_file_exec":
+        return ""
+    return _tool_action(tool_call)
 
 
 def _build_assistant_tool_message(
@@ -240,9 +247,30 @@ class DelayedQueueTasks:
         )
 
     @staticmethod
-    def _side_effect_name(skill: Any) -> str:
+    def _side_effect_name(skill: Any, params: dict[str, Any] | None = None) -> str:
+        if (
+            getattr(skill, "name", "") == "interaction_with_master"
+            and str((params or {}).get("action", "")).strip().lower() == "status"
+        ):
+            return "read_only"
         value = getattr(skill, "side_effect", "unknown")
         return str(getattr(value, "value", value) or "unknown")
+
+    @staticmethod
+    def _retry_safe(skill: Any, params: dict[str, Any] | None = None) -> bool:
+        if getattr(skill, "name", "") == "interaction_with_master":
+            return str((params or {}).get("action", "")).strip().lower() == "status"
+        return bool(getattr(skill, "retry_safe", False))
+
+    @staticmethod
+    def _tool_is_silent(skill: Any, tool_call: ToolCall) -> bool:
+        if skill is None:
+            return False
+        if tool_call.function_name == "group_file_exec":
+            return _composite_action(tool_call) == "image"
+        if tool_call.function_name == "interaction_with_master":
+            return _tool_action(tool_call) == "message"
+        return bool(getattr(skill, "silent", False))
 
     async def delayed_queue_ticker(self) -> None:
         """Smart-sleep ticker for the delayed queue.
@@ -959,11 +987,7 @@ class DelayedQueueTasks:
                     if engine._skill_registry is not None
                     else None
                 )
-                if skill is None:
-                    return False
-                if tool_call.function_name == "group_file_exec":
-                    return _composite_action(tool_call) == "image"
-                return skill.silent
+                return self._tool_is_silent(skill, tool_call)
 
             non_skill_text = round_clean
             all_silent = bool(regular_tools) and all(_tool_is_silent(tc) for tc in regular_tools)
@@ -1040,7 +1064,7 @@ class DelayedQueueTasks:
                         messages.append({"role": "tool", "tool_call_id": tc.id, "content": err_msg})
                         continue
 
-                    side_effect = self._side_effect_name(skill)
+                    side_effect = self._side_effect_name(skill, params)
 
                     # Engagement-based permission
                     if (
@@ -1091,7 +1115,7 @@ class DelayedQueueTasks:
                             params,
                             timeout=skill_timeout,
                             invocation_context=ctx,
-                            max_retries=2 if getattr(skill, "retry_safe", False) else 0,
+                            max_retries=2 if self._retry_safe(skill, params) else 0,
                         )
                         agent_turn.finish_action(
                             tc.id,
@@ -1370,6 +1394,10 @@ class DelayedQueueTasks:
             return False
         try:
             builtin_dir = (Path(__file__).resolve().parents[1] / "skills" / "builtin").resolve()
-            return source_path.resolve().is_relative_to(builtin_dir)
+            if not source_path.resolve().is_relative_to(builtin_dir):
+                return False
+            if skill_name == "interaction_with_master":
+                return str((params or {}).get("action", "")).strip().lower() == "message"
+            return True
         except Exception:
             return False

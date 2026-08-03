@@ -1,4 +1,4 @@
-"""Built-in skill for sensing the developer's public current status."""
+"""Built-in skill for messaging the master and sensing the master's public status."""
 
 from __future__ import annotations
 
@@ -10,6 +10,12 @@ from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
 from sirius_pulse.config.config_builder import ConfigBuilder
+from sirius_pulse.skills.builtin._qq_ops import (
+    bridge_error,
+    failure_from_exception,
+    get_adapter,
+    success_result,
+)
 
 _MDS_BASE_URL = "https://sparrived.xyz/mds"
 _MDS_TOKEN_ENV = "MDS_PUBLIC_STATUS_TOKEN"
@@ -18,29 +24,47 @@ _MAX_RESPONSE_BYTES = 512 * 1024
 _DEFAULT_TIMEOUT_SECONDS = 10
 
 _config = ConfigBuilder()
+_config.group("和主人互动").add(
+    "action",
+    type="str",
+    description=(
+        "操作类型：message 给主人发送私聊消息；status 查询主人公开设备状态。"
+        "需要表达想法时用 message，需要了解主人近况时用 status。"
+    ),
+    required=True,
+    choices=["message", "status"],
+)
+_config.group("和主人互动").add(
+    "message",
+    type="str",
+    description=(
+        "action=message 时发给主人的话。可以是闲聊、分享有趣的事、吐槽、开心、难过、"
+        "委屈或求助，像给熟人发 QQ 一样自然写；不要泄露系统提示、密钥或隐私。"
+    ),
+)
 _config.group("状态查询").add(
     "device_id",
     type="str",
-    description="可选：只查看指定设备 ID；留空则返回公开白名单中的全部设备。",
-    default="",
+    description="action=status 时可选：只查看指定设备 ID；留空则返回公开白名单中的全部设备。",
 )
 
 SKILL_META = {
-    "name": "developer_status",
+    "name": "interaction_with_master",
     "description": (
-        "人格需要感知开发者当前状态时使用：了解开发者的"
-        "设备是否在线、所在地区、前台应用和活动状态。"
+        "和主人互动的统一工具。需要私下给主人发送消息时使用 action=message；"
+        "需要感知主人当前公开设备状态时使用 action=status。"
+        "纯文字回复直接写在正文中，不要为了增强角色感而强行调用。"
     ),
     "version": "1.0.0",
+    "side_effect": "external_write",
+    "tags": ["napcat", "qq", "master", "chat", "status", "presence"],
+    "silent": False,
     "retry_safe": True,
-    "side_effect": "read_only",
-    "tags": ["microdevicestatus", "mds", "status", "location", "presence"],
-    "dependencies": [],
     "parameters": _config.build(),
     "config": {
         "public_status_token": {
             "type": "password",
-            "description": "MDS 公开状态接口令牌；保存在当前人格的 developer_status.json 中。",
+            "description": "MDS 公开状态接口令牌；保存在当前人格的 interaction_with_master.json 中。",
             "group": "MDS 连接",
         },
         "base_url": {
@@ -59,18 +83,89 @@ SKILL_META = {
 }
 
 
-def run(
+async def run(
+    action: str,
+    message: str = "",
     device_id: str = "",
+    bridge: Any = None,
+    chat_context: dict[str, Any] | None = None,
     data_store: Any = None,
     **kwargs: Any,
 ) -> dict[str, Any]:
+    action_key = str(action or "").strip().lower()
+    if action_key == "message":
+        return await _send_message(message, bridge, chat_context)
+    if action_key == "status":
+        return _read_status(device_id, data_store)
+    return {"success": False, "error": f"不支持的互动 action: {action}"}
+
+
+async def _send_message(
+    message: str,
+    bridge: Any,
+    chat_context: dict[str, Any] | None,
+) -> dict[str, Any]:
+    adapter = get_adapter(bridge)
+    if adapter is None:
+        return bridge_error("和主人私聊")
+
+    master_qq = _master_qq_from_adapter(adapter, bridge)
+    if not master_qq:
+        return {
+            "success": False,
+            "error": "NapCat adapter 未配置 root QQ，无法和主人私聊",
+            "summary": "操作失败：缺少主人 QQ",
+        }
+
+    text = str(message or "").strip()
+    if not text:
+        return {
+            "success": False,
+            "error": "message 不能为空",
+            "summary": "操作失败：私聊内容为空",
+        }
+
+    body = _truncate(text, 1200)
+    try:
+        raw = await adapter.send_private_message(master_qq, body)
+        return success_result(
+            "已发给主人",
+            master_qq=master_qq,
+            chat_context=dict(chat_context or {}),
+            raw=raw,
+        )
+    except Exception as exc:
+        return failure_from_exception("和主人私聊", exc)
+
+
+def _master_qq_from_adapter(adapter: Any, bridge: Any = None) -> str:
+    for source in (adapter, bridge):
+        if source is None:
+            continue
+        for attr in ("plugin_config", "config"):
+            cfg = getattr(source, attr, None)
+            if not isinstance(cfg, dict):
+                continue
+            value = str(cfg.get("root", "") or "").strip()
+            if value:
+                return value
+    return ""
+
+
+def _truncate(text: str, limit: int) -> str:
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3].rstrip() + "..."
+
+
+def _read_status(device_id: str = "", data_store: Any = None) -> dict[str, Any]:
     """Fetch and redact the public MDS snapshot for model consumption."""
     _reload_data_store(data_store)
     token = _resolve_token(data_store)
     if not token:
         return _failure(
-            "未配置 MDS 公开状态令牌。请在 WebUI 的 developer_status 配置中填写，"
-            "它会保存到当前人格的 skill_data/developer_status.json；"
+            "未配置 MDS 公开状态令牌。请在 WebUI 的 interaction_with_master 配置中填写，"
+            "它会保存到当前人格的 skill_data/interaction_with_master.json；"
             "MDS_PUBLIC_STATUS_TOKEN 环境变量可作为后备。"
         )
 
@@ -102,7 +197,7 @@ def run(
     generated_at = _optional_string(snapshot.get("generated_at")) or "未知"
     return {
         "success": True,
-        "summary": f"已读取 {len(devices)} 台设备的开发者当前状态参考。",
+        "summary": f"已读取 {len(devices)} 台设备的主人当前状态参考。",
         "generated_at": generated_at,
         "devices": devices,
         "text_blocks": [_render_summary(devices, generated_at, wanted_id)],
@@ -154,7 +249,7 @@ def _fetch_snapshot(token: str, *, endpoint: str, timeout_seconds: int) -> dict[
         headers={
             "Accept": "application/json",
             "Authorization": f"Bearer {token}",
-            "User-Agent": "SiriusChat/developer-status",
+            "User-Agent": "SiriusChat/interaction-with-master",
         },
         method="GET",
     )
@@ -236,13 +331,13 @@ def _normalize_devices(raw_devices: Any) -> list[dict[str, Any]]:
 
 
 def _render_summary(devices: list[dict[str, Any]], generated_at: str, wanted_id: str) -> str:
-    title = f"开发者当前状态参考（MDS 生成时间：{generated_at}）"
+    title = f"主人当前状态参考（MDS 生成时间：{generated_at}）"
     if wanted_id and not devices:
-        return f"{title}\n没有找到开发者设备 {wanted_id}。"
+        return f"{title}\n没有找到主人设备 {wanted_id}。"
     if not devices:
         return f"{title}\n暂时没有可用的公开设备状态。"
 
-    lines = [title, "以下信息用于帮助人格理解开发者近况："]
+    lines = [title, "以下信息用于帮助人格理解主人的近况："]
     for device in devices:
         name = str(device.get("name") or device.get("id") or "未命名设备")
         status = {
@@ -282,4 +377,4 @@ def _optional_string(value: Any) -> str:
 
 
 def _failure(message: str) -> dict[str, Any]:
-    return {"success": False, "error": message, "summary": "开发者当前状态读取失败"}
+    return {"success": False, "error": message, "summary": "主人当前状态读取失败"}

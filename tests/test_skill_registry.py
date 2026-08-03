@@ -177,9 +177,8 @@ def test_skill_registry_when_builtin_skills_load_then_napcat_tools_are_visible(
         auto_install_deps=False,
         include_builtin=True,
     )
-    skill = registry.get("chat_with_developer")
+    skill = registry.get("interaction_with_master")
     bash = registry.get("bash")
-    developer_status = registry.get("developer_status")
     group_file_exec = registry.get("group_file_exec")
     group_management = registry.get("group_management")
     web_lookup = registry.get("web_lookup")
@@ -193,9 +192,9 @@ def test_skill_registry_when_builtin_skills_load_then_napcat_tools_are_visible(
     )
 
     assert skill is not None
-    assert skill.silent is True
-    assert skill.adapter_types == ["napcat"]
-    assert "私聊" in skill.description
+    assert skill.silent is False
+    assert skill.adapter_types == []
+    assert "主人" in skill.description
     assert bash is not None
     assert [param.name for param in bash.config_parameters] == [
         "max_timeout_seconds",
@@ -204,14 +203,17 @@ def test_skill_registry_when_builtin_skills_load_then_napcat_tools_are_visible(
     assert bash.developer_only is False
     assert "max_timeout_seconds" not in bash.to_tool_schema()["function"]["parameters"]["properties"]
     assert any(tool["function"]["name"] == "bash" for tool in regular_user_tools)
+    assert any(tool["function"]["name"] == "interaction_with_master" for tool in tools)
     assert registry.get("container_admin") is None
-    assert developer_status is not None
-    assert [param.name for param in developer_status.config_parameters] == [
+    assert [param.name for param in skill.config_parameters] == [
         "public_status_token",
         "base_url",
         "timeout_seconds",
     ]
-    assert "public_status_token" not in developer_status.to_tool_schema()["function"]["parameters"]["properties"]
+    assert "public_status_token" not in skill.to_tool_schema()["function"]["parameters"]["properties"]
+    assert [param.name for param in skill.parameters] == ["action", "message", "device_id"]
+    assert registry.get("chat_with_developer") is None
+    assert registry.get("developer_status") is None
     assert group_file_exec is not None
     assert group_management is not None
     assert web_lookup is not None
