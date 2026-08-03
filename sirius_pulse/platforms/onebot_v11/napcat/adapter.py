@@ -465,6 +465,7 @@ class NapCatAdapter(BaseAdapter):
         self, group_id: str, message: MessageGroup | str
     ) -> dict[str, Any]:
         """发送群聊消息（平台无关接口）。"""
+        self._require_allowed_group(str(group_id))
         segments = self._message_group_to_onebot(message)
         return await self.call_api(
             "send_group_msg", {"group_id": int(group_id), "message": segments}
@@ -485,6 +486,7 @@ class NapCatAdapter(BaseAdapter):
         self, group_id: str | int, message: list[dict[str, Any]] | str
     ) -> dict[str, Any]:
         """发送群消息（OneBot 接口）。message 为字符串时自动包装。"""
+        self._require_allowed_group(str(group_id))
         segments = self._to_segments(message)
         return await self.call_api(
             "send_group_msg", {"group_id": int(group_id), "message": segments}
@@ -742,6 +744,8 @@ class NapCatAdapter(BaseAdapter):
 
         if msg_type == "group":
             gid = str(raw_event.get("group_id", ""))
+            if not self._is_group_allowed(gid):
+                return None
         elif msg_type == "private":
             gid = f"private_{uid}"
         else:
@@ -1034,6 +1038,15 @@ class NapCatAdapter(BaseAdapter):
             return [gids.strip()] if gids.strip() else []
         return [str(g).strip() for g in gids if g]
 
+    def _is_group_allowed(self, group_id: str) -> bool:
+        return bool(self.plugin_config.get("enable_group_chat", True)) and str(group_id) in set(
+            self._get_allowed_group_ids()
+        )
+
+    def _require_allowed_group(self, group_id: str) -> None:
+        if not self._is_group_allowed(group_id):
+            raise PermissionError(f"群 {group_id} 不在允许列表中")
+
     @staticmethod
     def extract_sender_names(event: dict[str, Any]) -> tuple[str, str]:
         from ..protocol import extract_sender_names
@@ -1049,11 +1062,13 @@ class NapCatAdapter(BaseAdapter):
             return
         if post_type == "message" and self._is_duplicate_message_event(event):
             return
-        self._event_queue.put_nowait(event)
-
         msg_type = event.get("message_type")
         if is_poke:
             msg_type = "group" if event.get("group_id") else "private"
+        if msg_type == "group" and not self._is_group_allowed(str(event.get("group_id", ""))):
+            LOG.debug("忽略不在群白名单中的消息: group=%s", event.get("group_id", ""))
+            return
+        self._event_queue.put_nowait(event)
         if msg_type == "group":
             await self._on_group_message(event)
         elif msg_type == "private":

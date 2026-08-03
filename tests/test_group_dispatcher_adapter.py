@@ -78,7 +78,7 @@ async def test_parse_poke_notice_as_model_message(tmp_path):
     adapter = NapCatAdapter(
         "ws://example.invalid",
         work_path=tmp_path,
-        config={"persona_name": "alpha", "qq_number": "100"},
+        config={"persona_name": "alpha", "qq_number": "100", "allowed_group_ids": ["g1"]},
     )
     adapter.set_persona_name("alpha")
 
