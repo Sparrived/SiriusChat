@@ -33,6 +33,10 @@ class DispatchDecision:
     def granted(self) -> bool:
         return self.action == "grant" and bool(self.lease_id)
 
+    @property
+    def deferred(self) -> bool:
+        return self.action == "defer"
+
 
 class GroupDispatcher:
     """Coordinate one public persona turn per group across worker processes."""
@@ -183,6 +187,22 @@ class GroupDispatcher:
             return
         self.account_id = account_id
         self.register()
+
+    def is_peer_account(self, account_id: str) -> bool:
+        """Return whether a live registered worker owns this other account."""
+        account_id = str(account_id or "").strip()
+        if not account_id or account_id == self.account_id:
+            return False
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT 1 FROM dispatcher_workers
+                WHERE account_id=? AND last_seen>?
+                LIMIT 1
+                """,
+                (account_id, self._clock() - self.registry_ttl_seconds),
+            ).fetchone()
+        return row is not None
 
     def close(self) -> None:
         """Expire this worker and release a lease it owns."""
@@ -339,21 +359,6 @@ class GroupDispatcher:
             if not force and len(candidates) < max(1, int(expected)) and now < float(event["created_at"]) + self.score_collection_seconds:
                 return None
 
-            self._expire_active_lease(conn, group_id, now)
-            state = conn.execute(
-                "SELECT * FROM dispatcher_groups WHERE group_id=?", (group_id,)
-            ).fetchone()
-            if state is None:
-                conn.execute("INSERT OR IGNORE INTO dispatcher_groups(group_id) VALUES (?)", (group_id,))
-                state = conn.execute(
-                    "SELECT * FROM dispatcher_groups WHERE group_id=?", (group_id,)
-                ).fetchone()
-            assert state is not None
-            if str(state["active_worker_id"] or ""):
-                return self._mark_candidate_observed(
-                    conn, event_id, now, str(state["active_worker_id"]), "group_busy"
-                )
-
             first = candidates[0] if candidates else None
             sender_type = str(first["sender_type"] or "human") if first else "human"
             sender_account_id = str(first["sender_account_id"] or "") if first else ""
@@ -393,14 +398,33 @@ class GroupDispatcher:
             is_peer = sender_type == "other_ai" or (
                 sender_account_id
                 and sender_account_id in known_accounts
+                and sender_account_id != self.account_id
             )
+            self._expire_active_lease(conn, group_id, now)
+            state = conn.execute(
+                "SELECT * FROM dispatcher_groups WHERE group_id=?", (group_id,)
+            ).fetchone()
+            if state is None:
+                conn.execute("INSERT OR IGNORE INTO dispatcher_groups(group_id) VALUES (?)", (group_id,))
+                state = conn.execute(
+                    "SELECT * FROM dispatcher_groups WHERE group_id=?", (group_id,)
+                ).fetchone()
+            assert state is not None
+            active_worker = str(state["active_worker_id"] or "")
+            if active_worker:
+                if is_peer and eligible:
+                    return self._mark_candidate_deferred(
+                        conn, event_id, now, active_worker, "group_busy"
+                    )
+                return self._mark_candidate_observed(conn, event_id, now, active_worker, "group_busy")
+
             is_human = sender_type not in {"other_ai", "system"}
             if is_peer:
                 if self.max_peer_turns <= 0:
                     return self._mark_candidate_observed(conn, event_id, now, "", "peer_disabled")
                 last_human_at = float(state["last_human_at"] or 0)
                 if last_human_at and now - last_human_at < self.peer_cooldown_seconds:
-                    return self._mark_candidate_observed(
+                    return self._mark_candidate_deferred(
                         conn, event_id, now, "", "peer_waiting_for_humans"
                     )
                 peer_started = float(state["peer_window_started_at"] or 0)
@@ -557,6 +581,20 @@ class GroupDispatcher:
         )
         return DispatchDecision("observe", event_id, worker_id=worker_id, reason=reason)
 
+    @staticmethod
+    def _mark_candidate_deferred(
+        conn: sqlite3.Connection,
+        event_id: str,
+        now: float,
+        worker_id: str,
+        reason: str,
+    ) -> DispatchDecision:
+        conn.execute(
+            "UPDATE dispatcher_events SET worker_id=?, reason=?, updated_at=? WHERE event_id=? AND status='collecting'",
+            (worker_id, reason, now, event_id),
+        )
+        return DispatchDecision("defer", event_id, worker_id=worker_id, reason=reason)
+
     def _recent_reply_counts(
         self, conn: sqlite3.Connection, group_id: str, now: float
     ) -> dict[str, int]:
@@ -607,7 +645,9 @@ class GroupDispatcher:
                 (event_id,),
             ).fetchone()
             if existing is not None:
-                if (
+                if existing["status"] == "collecting":
+                    pass
+                elif (
                     existing["worker_id"] == self.worker_id
                     and existing["status"] == "granted"
                     and existing["lease_id"]

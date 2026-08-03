@@ -19,6 +19,7 @@ def _dispatcher(
     clock: _Clock,
     worker_id: str,
     account_id: str,
+    peer_cooldown_seconds: float = 60,
     **kwargs,
 ) -> GroupDispatcher:
     return GroupDispatcher(
@@ -27,7 +28,7 @@ def _dispatcher(
         account_id=account_id,
         clock=clock,
         min_reply_interval_seconds=3,
-        peer_cooldown_seconds=60,
+        peer_cooldown_seconds=peer_cooldown_seconds,
         **kwargs,
     )
 
@@ -104,6 +105,41 @@ def test_group_dispatcher_limits_peer_turns_until_humans_return(tmp_path: Path):
     )
     assert another_peer.action == "observe"
     assert another_peer.reason == "peer_budget_exhausted"
+
+
+def test_group_dispatcher_defers_peer_event_until_active_turn_releases(tmp_path: Path):
+    async def run() -> None:
+        clock = _Clock()
+        db_path = tmp_path / "dispatcher.db"
+        first = _dispatcher(db_path, clock, "alpha", "100", peer_cooldown_seconds=0)
+        second = _dispatcher(db_path, clock, "beta", "200", peer_cooldown_seconds=0)
+
+        human = first.admit(event_id="m1", group_id="g1")
+        assert human.granted
+
+        pending = await second.coordinate(
+            event_id="m2",
+            group_id="g1",
+            base_score=1.0,
+            should_reply=True,
+            sender_type="other_ai",
+            sender_account_id="100",
+        )
+        assert pending.deferred
+        assert pending.reason == "group_busy"
+
+        assert first.finish(human.lease_id, sent=True)
+        resumed = await second.coordinate(
+            event_id="m2",
+            group_id="g1",
+            base_score=1.0,
+            should_reply=True,
+            sender_type="other_ai",
+            sender_account_id="100",
+        )
+        assert resumed.granted
+
+    asyncio.run(run())
 
 
 def test_group_dispatcher_expired_lease_does_not_block_group(tmp_path: Path):

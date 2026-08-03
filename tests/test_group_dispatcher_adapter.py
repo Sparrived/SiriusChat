@@ -13,11 +13,13 @@ class _Engine:
         self._bot_platform_uids = {}
         self.processed: list[str] = []
         self.processed_messages = []
+        self.processed_participants = []
         self.observed: list[str] = []
 
     async def process_message(self, *, message, participants, group_id):
         self.processed.append(message.speaker or "")
         self.processed_messages.append(message)
+        self.processed_participants.append(participants)
         return {"strategy": "silent", "reply": None}
 
     def observe_message(self, message, participants, group_id):
@@ -52,10 +54,16 @@ def _set_parsed(adapter: NapCatAdapter, parsed: ParsedEvent) -> None:
     adapter.parse_event = fake_parse  # type: ignore[method-assign]
 
 
-def _parsed(account: str, message_id: str, *, at: tuple[str, ...] = ()) -> ParsedEvent:
+def _parsed(
+    account: str,
+    message_id: str,
+    *,
+    at: tuple[str, ...] = (),
+    user_id: str = "300",
+) -> ParsedEvent:
     return ParsedEvent(
         group_id="g1",
-        user_id="300",
+        user_id=user_id,
         self_id=account,
         message_type="group",
         prompt="群里说一句",
@@ -137,6 +145,20 @@ async def test_targeted_persona_gets_the_next_group_event(tmp_path):
 
     assert first_engine.processed == ["Alice"]
     assert second_engine.processed == ["Alice"]
+
+
+@pytest.mark.asyncio
+async def test_registered_peer_account_is_marked_as_other_ai(tmp_path):
+    first_engine = _Engine()
+    second_engine = _Engine()
+    first = _adapter(tmp_path, "alpha", "100", first_engine)
+    _adapter(tmp_path, "beta", "200", second_engine)
+
+    _set_parsed(first, _parsed("100", "peer-1", user_id="200"))
+    await first._process_event_impl({"self_id": "100"})
+
+    assert first_engine.processed_messages[0].sender_type == "other_ai"
+    assert first_engine.processed_participants[0][0].metadata["is_ai"] is True
 
 
 @pytest.mark.asyncio

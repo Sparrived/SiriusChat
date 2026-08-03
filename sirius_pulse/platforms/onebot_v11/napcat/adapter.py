@@ -152,6 +152,7 @@ class NapCatAdapter(BaseAdapter):
         self._dispatcher: GroupDispatcher | None = None
         self._dispatch_leases: dict[str, str] = {}
         self._dispatch_delivery_active: set[str] = set()
+        self._dispatch_retry_tasks: dict[str, asyncio.Task] = {}
 
     # ─── 生命周期 ─────────────────────────────────────────
 
@@ -171,6 +172,12 @@ class NapCatAdapter(BaseAdapter):
     async def stop_handling(self) -> None:
         """停止事件处理和引擎事件总线监听。"""
         self._running = False
+        retry_tasks = list(self._dispatch_retry_tasks.values())
+        for task in retry_tasks:
+            task.cancel()
+        if retry_tasks:
+            await asyncio.gather(*retry_tasks, return_exceptions=True)
+        self._dispatch_retry_tasks.clear()
         if self._event_bus_task is not None:
             self._event_bus_task.cancel()
             try:
@@ -1087,16 +1094,16 @@ class NapCatAdapter(BaseAdapter):
         )
         return f"qq:{parsed.group_id}:hash:{hashlib.sha256(raw.encode('utf-8')).hexdigest()[:24]}"
 
-    async def _process_event(self, event: dict[str, Any]) -> None:
+    async def _process_event(self, event: dict[str, Any]) -> bool:
         """统一消息处理：解析 → 引擎 → 发送。"""
         async with self._process_lock:
-            await self._process_event_impl(event)
+            return await self._process_event_impl(event)
 
-    async def _process_event_impl(self, event: dict[str, Any]) -> None:
+    async def _process_event_impl(self, event: dict[str, Any]) -> bool:
         """实际的消息处理逻辑，受 _process_lock 保护。"""
         parsed = await self.parse_event(event)
         if parsed is None:
-            return
+            return True
 
         # 记录 Bot 自身的 platform_uid
         if self._engine is not None and parsed.self_id:
@@ -1107,10 +1114,15 @@ class NapCatAdapter(BaseAdapter):
         speaker_name = parsed.card or parsed.nickname or f"qq_{parsed.user_id}"
         uid = f"qq_{parsed.user_id}"
         group_id = parsed.group_id
+        dispatcher = self._get_dispatcher() if parsed.message_type == "group" else None
+        qq_number = str(self.plugin_config.get("qq_number", "") or "").strip()
+        if dispatcher is not None:
+            dispatcher.set_account_id(parsed.self_id or qq_number)
 
         peer_ai_ids = self.plugin_config.get("peer_ai_ids", [])
-        is_peer_ai = str(parsed.user_id) in [str(v) for v in peer_ai_ids]
-        qq_number = str(self.plugin_config.get("qq_number", "") or "").strip()
+        is_peer_ai = str(parsed.user_id) in [str(v) for v in peer_ai_ids] or bool(
+            dispatcher is not None and dispatcher.is_peer_account(parsed.user_id)
+        )
         mentions_current_bot = bool(
             (
                 parsed.message_type == "group"
@@ -1155,10 +1167,8 @@ class NapCatAdapter(BaseAdapter):
             mentions_current_bot=mentions_current_bot,
         )
 
-        dispatcher = self._get_dispatcher() if parsed.message_type == "group" else None
         dispatch_lease_id = ""
         if dispatcher is not None:
-            dispatcher.set_account_id(parsed.self_id or qq_number)
             event_id = self._dispatch_event_id(parsed)
             preview_dispatch = getattr(self._engine, "preview_dispatch", None)
             if callable(preview_dispatch):
@@ -1182,6 +1192,16 @@ class NapCatAdapter(BaseAdapter):
                 reason=str(candidate.get("reason", "")),
             )
             if not decision.granted:
+                if decision.deferred:
+                    self._schedule_dispatch_retry(event, event_id, group_id, dispatcher)
+                    LOG.info(
+                        "[群调度] defer group=%s worker=%s selected=%s reason=%s",
+                        group_id,
+                        dispatcher.worker_id,
+                        decision.worker_id,
+                        decision.reason,
+                    )
+                    return False
                 observe = getattr(self._engine, "observe_message", None)
                 if callable(observe):
                     observe(message, [participant], group_id)
@@ -1192,7 +1212,7 @@ class NapCatAdapter(BaseAdapter):
                     decision.worker_id,
                     decision.reason,
                 )
-                return
+                return True
             dispatch_lease_id = decision.lease_id
             message.dispatch_coordinated = True
             message.dispatch_lease_id = dispatch_lease_id
@@ -1287,6 +1307,44 @@ class NapCatAdapter(BaseAdapter):
                 dispatcher.finish(dispatch_lease_id, sent=dispatch_sent)
                 if self._dispatch_leases.get(group_id) == dispatch_lease_id:
                     self._dispatch_leases.pop(group_id, None)
+        return True
+
+    def _schedule_dispatch_retry(
+        self,
+        event: dict[str, Any],
+        event_id: str,
+        group_id: str,
+        dispatcher: GroupDispatcher,
+    ) -> None:
+        task = self._dispatch_retry_tasks.get(event_id)
+        if task is not None and not task.done():
+            return
+        wait_seconds = min(
+            max(30.0, dispatcher.lease_seconds + dispatcher.peer_cooldown_seconds),
+            180.0,
+        )
+        self._dispatch_retry_tasks[event_id] = asyncio.create_task(
+            self._retry_dispatch_event(event, event_id, wait_seconds)
+        )
+
+    async def _retry_dispatch_event(
+        self,
+        event: dict[str, Any],
+        event_id: str,
+        wait_seconds: float,
+    ) -> None:
+        deadline = time.monotonic() + wait_seconds
+        try:
+            while self._running and time.monotonic() < deadline:
+                await asyncio.sleep(0.5)
+                if await self._process_event(event):
+                    return
+            LOG.info("[群调度] retry expired event=%s", event_id)
+        except asyncio.CancelledError:
+            raise
+        finally:
+            if self._dispatch_retry_tasks.get(event_id) is asyncio.current_task():
+                self._dispatch_retry_tasks.pop(event_id, None)
 
     # ─── 事件总线监听 ────────────────────────────────────
 
