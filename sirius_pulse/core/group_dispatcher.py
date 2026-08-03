@@ -10,12 +10,50 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import sqlite3
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 from uuid import uuid4
+
+
+_OPEN_LOOP_RE = re.compile(
+    r"(?:[?？]|你(?:怎么看|觉得|认为|说|来|接着|继续|补充)|"
+    r"(?:轮到你|请你|想听你|能不能|要不要|是不是|对吧))"
+)
+_CONTINUATION_RE = re.compile(r"(?:不过|但是|不太同意|不同意|补充|反而|确实|有道理|我也觉得)")
+
+
+def _normalized_topic(text: str) -> str:
+    return "".join(
+        char.lower()
+        for char in str(text or "")
+        if char.isalnum() or "\u4e00" <= char <= "\u9fff"
+    )[:240]
+
+
+def _topic_signature(text: str) -> str:
+    normalized = _normalized_topic(text)
+    if not normalized:
+        return ""
+    if len(normalized) < 2:
+        tokens = {normalized}
+    else:
+        tokens = {normalized[index : index + 2] for index in range(len(normalized) - 1)}
+    return json.dumps(sorted(tokens), ensure_ascii=False, separators=(",", ":"))
+
+
+def _topic_similarity(left: str, right: str) -> float:
+    try:
+        left_tokens = set(json.loads(left or "[]"))
+        right_tokens = set(json.loads(right or "[]"))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return 0.0
+    if not left_tokens or not right_tokens:
+        return 0.0
+    return len(left_tokens & right_tokens) / len(left_tokens | right_tokens)
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,8 +91,8 @@ class GroupDispatcher:
         priority: float = 0.0,
         min_reply_interval_seconds: float = 3.0,
         lease_seconds: float = 120.0,
-        peer_cooldown_seconds: float = 10.0,
-        max_peer_turns: int = 1,
+        peer_cooldown_seconds: float = 5.0,
+        max_peer_turns: int = 3,
         registry_ttl_seconds: float = 180.0,
         score_collection_seconds: float = 0.15,
         activity_window_seconds: float = 300.0,
@@ -105,6 +143,9 @@ class GroupDispatcher:
                     last_human_at REAL NOT NULL DEFAULT 0,
                     peer_turns INTEGER NOT NULL DEFAULT 0,
                     peer_window_started_at REAL NOT NULL DEFAULT 0,
+                    open_loop_target_worker_id TEXT NOT NULL DEFAULT '',
+                    open_loop_topic TEXT NOT NULL DEFAULT '',
+                    open_loop_expires_at REAL NOT NULL DEFAULT 0,
                     active_lease_id TEXT NOT NULL DEFAULT '',
                     active_worker_id TEXT NOT NULL DEFAULT '',
                     active_event_id TEXT NOT NULL DEFAULT '',
@@ -137,6 +178,7 @@ class GroupDispatcher:
                     reason TEXT NOT NULL DEFAULT '',
                     sender_type TEXT NOT NULL DEFAULT 'human',
                     sender_account_id TEXT NOT NULL DEFAULT '',
+                    topic_signature TEXT NOT NULL DEFAULT '',
                     target_account_ids TEXT NOT NULL DEFAULT '[]',
                     preferred_worker_id TEXT NOT NULL DEFAULT '',
                     submitted_at REAL NOT NULL,
@@ -157,6 +199,25 @@ class GroupDispatcher:
             if "reason" not in columns:
                 conn.execute(
                     "ALTER TABLE dispatcher_events ADD COLUMN reason TEXT NOT NULL DEFAULT ''"
+                )
+            group_columns = {
+                str(row[1])
+                for row in conn.execute("PRAGMA table_info(dispatcher_groups)").fetchall()
+            }
+            for name, definition in (
+                ("open_loop_target_worker_id", "TEXT NOT NULL DEFAULT ''"),
+                ("open_loop_topic", "TEXT NOT NULL DEFAULT ''"),
+                ("open_loop_expires_at", "REAL NOT NULL DEFAULT 0"),
+            ):
+                if name not in group_columns:
+                    conn.execute(f"ALTER TABLE dispatcher_groups ADD COLUMN {name} {definition}")
+            candidate_columns = {
+                str(row[1])
+                for row in conn.execute("PRAGMA table_info(dispatcher_candidates)").fetchall()
+            }
+            if "topic_signature" not in candidate_columns:
+                conn.execute(
+                    "ALTER TABLE dispatcher_candidates ADD COLUMN topic_signature TEXT NOT NULL DEFAULT ''"
                 )
             for name, definition in (
                 ("base_score", "REAL NOT NULL DEFAULT 0"),
@@ -233,6 +294,7 @@ class GroupDispatcher:
         target_account_ids: tuple[str, ...] | list[str] = (),
         preferred_worker_id: str = "",
         reason: str = "",
+        message_text: str = "",
     ) -> DispatchDecision:
         """Collect local candidates, then grant the highest final score."""
         self._submit_candidate(
@@ -245,6 +307,7 @@ class GroupDispatcher:
             target_account_ids=target_account_ids,
             preferred_worker_id=preferred_worker_id,
             reason=reason,
+            message_text=message_text,
         )
         deadline = time.monotonic() + self.score_collection_seconds
         while True:
@@ -268,6 +331,7 @@ class GroupDispatcher:
         target_account_ids: tuple[str, ...] | list[str],
         preferred_worker_id: str,
         reason: str,
+        message_text: str,
     ) -> None:
         event_id = str(event_id or "").strip()
         group_id = str(group_id or "").strip()
@@ -275,6 +339,7 @@ class GroupDispatcher:
             return
         now = self._clock()
         targets = sorted({str(value).strip() for value in target_account_ids if str(value).strip()})
+        topic_signature = _topic_signature(message_text)
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             conn.execute(
@@ -298,10 +363,10 @@ class GroupDispatcher:
                 """
                 INSERT INTO dispatcher_candidates(
                     event_id, group_id, worker_id, account_id, base_score, eligible,
-                    reason, sender_type, sender_account_id, target_account_ids,
+                    reason, sender_type, sender_account_id, topic_signature, target_account_ids,
                     preferred_worker_id, submitted_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(event_id, worker_id) DO UPDATE SET
                     account_id=excluded.account_id,
                     base_score=excluded.base_score,
@@ -309,6 +374,7 @@ class GroupDispatcher:
                     reason=excluded.reason,
                     sender_type=excluded.sender_type,
                     sender_account_id=excluded.sender_account_id,
+                    topic_signature=excluded.topic_signature,
                     target_account_ids=excluded.target_account_ids,
                     preferred_worker_id=excluded.preferred_worker_id,
                     submitted_at=excluded.submitted_at
@@ -323,11 +389,91 @@ class GroupDispatcher:
                     str(reason or ""),
                     str(sender_type or "human"),
                     str(sender_account_id or ""),
+                    topic_signature,
                     json.dumps(targets, ensure_ascii=True),
                     str(preferred_worker_id or ""),
                     now,
                 ),
             )
+
+    @staticmethod
+    def _clear_open_loop(conn: sqlite3.Connection, group_id: str) -> None:
+        conn.execute(
+            """
+            UPDATE dispatcher_groups
+            SET open_loop_target_worker_id='', open_loop_topic='', open_loop_expires_at=0
+            WHERE group_id=?
+            """,
+            (group_id,),
+        )
+
+    def _open_loop_state(
+        self,
+        conn: sqlite3.Connection,
+        group_id: str,
+        state: sqlite3.Row,
+        now: float,
+    ) -> tuple[str, str]:
+        expires_at = float(state["open_loop_expires_at"] or 0)
+        if expires_at <= now:
+            if expires_at:
+                self._clear_open_loop(conn, group_id)
+            return "", ""
+        return (
+            str(state["open_loop_target_worker_id"] or ""),
+            str(state["open_loop_topic"] or ""),
+        )
+
+    def _peer_gate(
+        self,
+        state: sqlite3.Row,
+        now: float,
+        *,
+        interaction_expected: bool,
+    ) -> str:
+        if self.max_peer_turns <= 0:
+            return "peer_disabled"
+
+        last_human_at = float(state["last_human_at"] or 0)
+        if last_human_at and now - last_human_at < self.peer_cooldown_seconds:
+            return "peer_waiting_for_humans"
+        if int(state["peer_turns"] or 0) >= self.max_peer_turns:
+            return "peer_budget_exhausted"
+        if not interaction_expected:
+            return "peer_topic_closed"
+        return ""
+
+    @staticmethod
+    def _response_opens_peer_loop(
+        text: str,
+        *,
+        target_worker_id: str,
+        source_sender_type: str,
+    ) -> bool:
+        if target_worker_id:
+            return True
+        if _OPEN_LOOP_RE.search(text):
+            return True
+        return source_sender_type == "other_ai" and bool(_CONTINUATION_RE.search(text))
+
+    def _find_peer_target(self, conn: sqlite3.Connection, text: str, now: float) -> str:
+        normalized = _normalized_topic(text)
+        if not normalized:
+            return ""
+        workers = conn.execute(
+            """
+            SELECT worker_id, account_id
+            FROM dispatcher_workers
+            WHERE last_seen > ? AND worker_id<>?
+            ORDER BY LENGTH(worker_id) DESC
+            """,
+            (now - self.registry_ttl_seconds, self.worker_id),
+        ).fetchall()
+        for worker in workers:
+            for candidate in (str(worker["worker_id"] or ""), str(worker["account_id"] or "")):
+                if candidate and _normalized_topic(candidate) in normalized:
+                    return str(worker["worker_id"] or "")
+        return ""
 
     def _finalize_candidate(
         self,
@@ -362,6 +508,7 @@ class GroupDispatcher:
             first = candidates[0] if candidates else None
             sender_type = str(first["sender_type"] or "human") if first else "human"
             sender_account_id = str(first["sender_account_id"] or "") if first else ""
+            message_topic = str(first["topic_signature"] or "") if first else ""
             target_accounts: set[str] = set()
             preferred_worker_id = ""
             if first:
@@ -410,6 +557,23 @@ class GroupDispatcher:
                     "SELECT * FROM dispatcher_groups WHERE group_id=?", (group_id,)
                 ).fetchone()
             assert state is not None
+            open_target, open_topic = self._open_loop_state(conn, group_id, state, now)
+            if is_peer:
+                if known_targets:
+                    directed = [
+                        row
+                        for row in candidates
+                        if str(row["account_id"] or "") in known_targets
+                    ]
+                    if directed:
+                        eligible = directed
+                elif open_target:
+                    eligible = [row for row in candidates if str(row["worker_id"]) == open_target]
+                    preferred_worker_id = open_target
+                elif open_topic and _topic_similarity(open_topic, message_topic) >= 0.18:
+                    # A non-directed question keeps the topic open. The dispatcher
+                    # selects a peer even when its local preview was initially silent.
+                    eligible = list(candidates)
             active_worker = str(state["active_worker_id"] or "")
             if active_worker:
                 if is_peer and eligible:
@@ -419,31 +583,34 @@ class GroupDispatcher:
                 return self._mark_candidate_observed(conn, event_id, now, active_worker, "group_busy")
 
             is_human = sender_type not in {"other_ai", "system"}
+            if not eligible:
+                reason = (
+                    "peer_target_unavailable"
+                    if is_peer and (known_targets or open_target)
+                    else "all_candidates_silent"
+                )
+                return self._mark_candidate_observed(conn, event_id, now, "", reason)
             if is_peer:
-                if self.max_peer_turns <= 0:
-                    return self._mark_candidate_observed(conn, event_id, now, "", "peer_disabled")
-                last_human_at = float(state["last_human_at"] or 0)
-                if last_human_at and now - last_human_at < self.peer_cooldown_seconds:
+                interaction_expected = bool(known_targets or open_target)
+                if not interaction_expected and open_topic:
+                    interaction_expected = _topic_similarity(open_topic, message_topic) >= 0.18
+                peer_reason = self._peer_gate(
+                    state,
+                    now,
+                    interaction_expected=interaction_expected,
+                )
+                if peer_reason == "peer_waiting_for_humans":
                     return self._mark_candidate_deferred(
                         conn, event_id, now, "", "peer_waiting_for_humans"
                     )
-                peer_started = float(state["peer_window_started_at"] or 0)
-                peer_turns = int(state["peer_turns"] or 0)
-                if peer_started and now - peer_started >= self.peer_cooldown_seconds:
-                    peer_turns = 0
-                    conn.execute(
-                        "UPDATE dispatcher_groups SET peer_turns=0, peer_window_started_at=0 WHERE group_id=?",
-                        (group_id,),
-                    )
-                if peer_turns >= self.max_peer_turns:
-                    return self._mark_candidate_observed(
-                        conn, event_id, now, "", "peer_budget_exhausted"
-                    )
+                if peer_reason:
+                    return self._mark_candidate_observed(conn, event_id, now, "", peer_reason)
             elif is_human:
                 conn.execute(
                     """
                     UPDATE dispatcher_groups
-                    SET last_human_at=?, peer_turns=0, peer_window_started_at=0
+                    SET last_human_at=?, peer_turns=0, peer_window_started_at=0,
+                        open_loop_target_worker_id='', open_loop_topic='', open_loop_expires_at=0
                     WHERE group_id=?
                     """,
                     (now, group_id),
@@ -454,10 +621,6 @@ class GroupDispatcher:
                     and now - float(state["last_reply_at"]) < self.min_reply_interval_seconds
                 ):
                     return self._mark_candidate_observed(conn, event_id, now, "", "reply_cooldown")
-
-            if not eligible:
-                reason = "target_unavailable" if known_targets else "all_candidates_silent"
-                return self._mark_candidate_observed(conn, event_id, now, "", reason)
 
             recent_counts = self._recent_reply_counts(conn, group_id, now)
             ranked: list[dict[str, object]] = []
@@ -525,7 +688,8 @@ class GroupDispatcher:
                     """
                     UPDATE dispatcher_groups
                     SET peer_turns=peer_turns+1,
-                        peer_window_started_at=CASE WHEN peer_window_started_at=0 THEN ? ELSE peer_window_started_at END
+                        peer_window_started_at=CASE WHEN peer_window_started_at=0 THEN ? ELSE peer_window_started_at END,
+                        open_loop_target_worker_id='', open_loop_topic='', open_loop_expires_at=0
                     WHERE group_id=?
                     """,
                     (now, group_id),
@@ -618,6 +782,7 @@ class GroupDispatcher:
         sender_account_id: str = "",
         target_account_ids: tuple[str, ...] | list[str] = (),
         preferred_worker_id: str = "",
+        message_text: str = "",
     ) -> DispatchDecision:
         """Return a grant for the selected worker, or observe for everyone else."""
         event_id = str(event_id or "").strip()
@@ -628,6 +793,7 @@ class GroupDispatcher:
         now = self._clock()
         target_accounts = {str(value).strip() for value in target_account_ids if str(value).strip()}
         sender_account_id = str(sender_account_id or "").strip()
+        message_topic = _topic_signature(message_text)
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             conn.execute(
@@ -670,6 +836,7 @@ class GroupDispatcher:
                 "SELECT * FROM dispatcher_groups WHERE group_id=?", (group_id,)
             ).fetchone()
             assert state is not None
+            open_target, open_topic = self._open_loop_state(conn, group_id, state, now)
             active_worker = str(state["active_worker_id"] or "")
             if active_worker:
                 self._record_event(
@@ -714,32 +881,18 @@ class GroupDispatcher:
             )
             is_human = sender_type not in {"other_ai", "system"}
             if is_peer:
-                if self.max_peer_turns <= 0:
-                    self._record_event(
-                        conn, event_id, group_id, "", "observed", now, reason="peer_disabled"
-                    )
-                    return DispatchDecision("observe", event_id, reason="peer_disabled")
-                last_human_at = float(state["last_human_at"] or 0)
-                if last_human_at and now - last_human_at < self.peer_cooldown_seconds:
-                    self._record_event(
-                        conn,
-                        event_id,
-                        group_id,
-                        "",
-                        "observed",
-                        now,
-                        reason="peer_waiting_for_humans",
-                    )
-                    return DispatchDecision("observe", event_id, reason="peer_waiting_for_humans")
-                peer_started = float(state["peer_window_started_at"] or 0)
-                peer_turns = int(state["peer_turns"] or 0)
-                if peer_started and now - peer_started >= self.peer_cooldown_seconds:
-                    peer_turns = 0
-                    conn.execute(
-                        "UPDATE dispatcher_groups SET peer_turns=0, peer_window_started_at=0 WHERE group_id=?",
-                        (group_id,),
-                    )
-                if peer_turns >= self.max_peer_turns:
+                if open_target:
+                    eligible = [row for row in eligible if str(row["worker_id"]) == open_target]
+                    preferred_worker_id = open_target
+                interaction_expected = bool(known_targets or open_target)
+                if not interaction_expected and open_topic:
+                    interaction_expected = _topic_similarity(open_topic, message_topic) >= 0.18
+                peer_reason = self._peer_gate(
+                    state,
+                    now,
+                    interaction_expected=interaction_expected,
+                )
+                if peer_reason:
                     self._record_event(
                         conn,
                         event_id,
@@ -747,14 +900,15 @@ class GroupDispatcher:
                         "",
                         "observed",
                         now,
-                        reason="peer_budget_exhausted",
+                        reason=peer_reason,
                     )
-                    return DispatchDecision("observe", event_id, reason="peer_budget_exhausted")
+                    return DispatchDecision("observe", event_id, reason=peer_reason)
             elif is_human:
                 conn.execute(
                     """
                     UPDATE dispatcher_groups
-                    SET last_human_at=?, peer_turns=0, peer_window_started_at=0
+                    SET last_human_at=?, peer_turns=0, peer_window_started_at=0,
+                        open_loop_target_worker_id='', open_loop_topic='', open_loop_expires_at=0
                     WHERE group_id=?
                     """,
                     (now, group_id),
@@ -771,9 +925,19 @@ class GroupDispatcher:
 
             if not eligible:
                 self._record_event(
-                    conn, event_id, group_id, "", "observed", now, reason="target_unavailable"
+                    conn,
+                    event_id,
+                    group_id,
+                    "",
+                    "observed",
+                    now,
+                    reason="peer_target_unavailable" if is_peer and open_target else "target_unavailable",
                 )
-                return DispatchDecision("observe", event_id, reason="target_unavailable")
+                return DispatchDecision(
+                    "observe",
+                    event_id,
+                    reason="peer_target_unavailable" if is_peer and open_target else "target_unavailable",
+                )
 
             selected = eligible[0]
             selected_worker = str(selected["worker_id"])
@@ -802,7 +966,8 @@ class GroupDispatcher:
                     """
                     UPDATE dispatcher_groups
                     SET peer_turns=peer_turns+1,
-                        peer_window_started_at=CASE WHEN peer_window_started_at=0 THEN ? ELSE peer_window_started_at END
+                        peer_window_started_at=CASE WHEN peer_window_started_at=0 THEN ? ELSE peer_window_started_at END,
+                        open_loop_target_worker_id='', open_loop_topic='', open_loop_expires_at=0
                     WHERE group_id=?
                     """,
                     (now, group_id),
@@ -816,8 +981,48 @@ class GroupDispatcher:
                 reason="selected" if action == "grant" else "another_worker_selected",
             )
 
-    def finish(self, lease_id: str, *, sent: bool) -> bool:
-        """Release a lease and record a public reply when one was delivered."""
+    def _record_open_loop(
+        self,
+        conn: sqlite3.Connection,
+        group_id: str,
+        event_id: str,
+        response_text: str,
+        now: float,
+    ) -> None:
+        source = conn.execute(
+            """
+            SELECT sender_type
+            FROM dispatcher_candidates
+            WHERE event_id=?
+            ORDER BY submitted_at ASC
+            LIMIT 1
+            """,
+            (event_id,),
+        ).fetchone()
+        source_sender_type = str(source["sender_type"] or "human") if source else "human"
+        target_worker_id = self._find_peer_target(conn, response_text, now)
+        if not self._response_opens_peer_loop(
+            response_text,
+            target_worker_id=target_worker_id,
+            source_sender_type=source_sender_type,
+        ):
+            self._clear_open_loop(conn, group_id)
+            return
+        topic = _topic_signature(response_text)
+        if not topic:
+            self._clear_open_loop(conn, group_id)
+            return
+        conn.execute(
+            """
+            UPDATE dispatcher_groups
+            SET open_loop_target_worker_id=?, open_loop_topic=?, open_loop_expires_at=?
+            WHERE group_id=?
+            """,
+            (target_worker_id, topic, now + 60.0, group_id),
+        )
+
+    def finish(self, lease_id: str, *, sent: bool, response_text: str = "") -> bool:
+        """Release a lease and remember whether the reply leaves a peer loop open."""
         lease_id = str(lease_id or "").strip()
         if not lease_id:
             return False
@@ -825,12 +1030,17 @@ class GroupDispatcher:
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
-                "SELECT group_id, active_worker_id FROM dispatcher_groups WHERE active_lease_id=?",
+                """
+                SELECT group_id, active_worker_id, active_event_id
+                FROM dispatcher_groups
+                WHERE active_lease_id=?
+                """,
                 (lease_id,),
             ).fetchone()
             if row is None or row["active_worker_id"] != self.worker_id:
                 return False
             group_id = str(row["group_id"])
+            event_id = str(row["active_event_id"] or "")
             status = "sent" if sent else "silent"
             conn.execute(
                 "UPDATE dispatcher_events SET status=?, updated_at=? WHERE lease_id=?",
@@ -846,6 +1056,7 @@ class GroupDispatcher:
                 (1 if sent else 0, now, group_id, lease_id),
             )
             if sent:
+                self._record_open_loop(conn, group_id, event_id, response_text, now)
                 conn.execute(
                     """
                     INSERT INTO dispatcher_worker_stats(group_id, worker_id, last_reply_at, reply_count)
@@ -906,6 +1117,10 @@ class GroupDispatcher:
             event_columns = {
                 str(row[1])
                 for row in conn.execute("PRAGMA table_info(dispatcher_events)").fetchall()
+            }
+            group_columns = {
+                str(row[1])
+                for row in conn.execute("PRAGMA table_info(dispatcher_groups)").fetchall()
             }
             reason_sql = "reason" if "reason" in event_columns else "'' AS reason"
             base_score_sql = "base_score" if "base_score" in event_columns else "0 AS base_score"

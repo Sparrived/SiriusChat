@@ -11,6 +11,8 @@ const REASONS = {
   another_worker_selected: '其他人格优先',
   reply_cooldown: '回复冷却中',
   peer_waiting_for_humans: '等待人类消息',
+  peer_topic_closed: '没有连续话题',
+  peer_target_unavailable: '期待的人格不可用',
   peer_budget_exhausted: 'Peer 轮次已用尽',
   peer_disabled: 'Peer 交互已关闭',
   target_unavailable: '目标人格不可用',

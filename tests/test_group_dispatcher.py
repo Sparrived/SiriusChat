@@ -19,7 +19,7 @@ def _dispatcher(
     clock: _Clock,
     worker_id: str,
     account_id: str,
-    peer_cooldown_seconds: float = 60,
+    peer_cooldown_seconds: float = 5,
     **kwargs,
 ) -> GroupDispatcher:
     return GroupDispatcher(
@@ -92,6 +92,7 @@ def test_group_dispatcher_limits_peer_turns_until_humans_return(tmp_path: Path):
         group_id="g1",
         sender_type="other_ai",
         sender_account_id="100",
+        target_account_ids=("200",),
     )
     assert peer.granted
     assert second.finish(peer.lease_id, sent=True)
@@ -102,9 +103,106 @@ def test_group_dispatcher_limits_peer_turns_until_humans_return(tmp_path: Path):
         group_id="g1",
         sender_type="other_ai",
         sender_account_id="200",
+        target_account_ids=("100",),
     )
     assert another_peer.action == "observe"
     assert another_peer.reason == "peer_budget_exhausted"
+
+
+def test_group_dispatcher_opens_targeted_peer_loop_without_preview_score(
+    tmp_path: Path,
+):
+    async def run() -> None:
+        clock = _Clock()
+        db_path = tmp_path / "dispatcher.db"
+        first = _dispatcher(db_path, clock, "alpha", "100")
+        second = _dispatcher(db_path, clock, "beta", "200")
+
+        human = await first.coordinate(
+            event_id="m1",
+            group_id="g1",
+            base_score=1.0,
+            should_reply=True,
+            message_text="这个问题怎么看？",
+        )
+        assert human.granted
+        assert first.finish(
+            human.lease_id,
+            sent=True,
+            response_text="beta，你怎么看这个问题？",
+        )
+
+        clock.value += 6
+        peer = await second.coordinate(
+            event_id="m2",
+            group_id="g1",
+            base_score=0.0,
+            should_reply=False,
+            sender_type="other_ai",
+            sender_account_id="100",
+            message_text="我觉得这个问题需要从实际情况看。",
+        )
+        assert peer.granted
+        assert second.finish(peer.lease_id, sent=True, response_text="我同意这个判断。")
+
+    asyncio.run(run())
+
+
+def test_group_dispatcher_continues_a_non_directed_open_topic(tmp_path: Path):
+    async def run() -> None:
+        clock = _Clock()
+        db_path = tmp_path / "dispatcher.db"
+        first = _dispatcher(db_path, clock, "alpha", "100")
+        second = _dispatcher(db_path, clock, "beta", "200")
+
+        human = await first.coordinate(
+            event_id="m1",
+            group_id="g1",
+            base_score=1.0,
+            should_reply=True,
+            message_text="夜拍参数怎么设置？",
+        )
+        assert human.granted
+        assert first.finish(
+            human.lease_id,
+            sent=True,
+            response_text="夜拍参数应该优先调整什么？",
+        )
+
+        clock.value += 6
+        peer = await second.coordinate(
+            event_id="m2",
+            group_id="g1",
+            base_score=0.0,
+            should_reply=False,
+            sender_type="other_ai",
+            sender_account_id="100",
+            message_text="夜拍参数先调快门还是 ISO？",
+        )
+        assert peer.granted
+
+    asyncio.run(run())
+
+
+def test_group_dispatcher_rejects_peer_message_without_open_topic(tmp_path: Path):
+    clock = _Clock()
+    db_path = tmp_path / "dispatcher.db"
+    first = _dispatcher(db_path, clock, "alpha", "100")
+    second = _dispatcher(db_path, clock, "beta", "200")
+
+    human = first.admit(event_id="m1", group_id="g1")
+    assert human.granted
+    assert first.finish(human.lease_id, sent=True, response_text="今天晚饭吃面。")
+
+    clock.value += 61
+    peer = second.admit(
+        event_id="m2",
+        group_id="g1",
+        sender_type="other_ai",
+        sender_account_id="100",
+        message_text="今天晚饭吃什么？",
+    )
+    assert peer.reason == "peer_topic_closed"
 
 
 def test_group_dispatcher_defers_peer_event_until_active_turn_releases(tmp_path: Path):
@@ -124,6 +222,7 @@ def test_group_dispatcher_defers_peer_event_until_active_turn_releases(tmp_path:
             should_reply=True,
             sender_type="other_ai",
             sender_account_id="100",
+            target_account_ids=("200",),
         )
         assert pending.deferred
         assert pending.reason == "group_busy"
@@ -136,6 +235,7 @@ def test_group_dispatcher_defers_peer_event_until_active_turn_releases(tmp_path:
             should_reply=True,
             sender_type="other_ai",
             sender_account_id="100",
+            target_account_ids=("200",),
         )
         assert resumed.granted
 

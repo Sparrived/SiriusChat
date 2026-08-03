@@ -154,7 +154,7 @@ async def test_registered_peer_account_is_marked_as_other_ai(tmp_path):
     first = _adapter(tmp_path, "alpha", "100", first_engine)
     _adapter(tmp_path, "beta", "200", second_engine)
 
-    _set_parsed(first, _parsed("100", "peer-1", user_id="200"))
+    _set_parsed(first, _parsed("100", "peer-1", user_id="200", at=("100",)))
     await first._process_event_impl({"self_id": "100"})
 
     assert first_engine.processed_messages[0].sender_type == "other_ai"

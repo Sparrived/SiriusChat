@@ -42,8 +42,8 @@ class NapCatAdapterConfig:
     dispatch_priority: float = 0.0
     dispatch_min_reply_interval_seconds: float = 3.0
     dispatch_lease_seconds: float = 120.0
-    dispatch_peer_cooldown_seconds: float = 10.0
-    dispatch_max_peer_turns: int = 1
+    dispatch_peer_cooldown_seconds: float = 5.0
+    dispatch_max_peer_turns: int = 3
     dispatch_score_collection_seconds: float = 0.15
     dispatch_activity_window_seconds: float = 300.0
     dispatch_activity_penalty_per_reply: float = 0.12
@@ -97,9 +97,9 @@ class NapCatAdapterConfig:
             ),
             dispatch_lease_seconds=max(5.0, float(data.get("dispatch_lease_seconds", 120.0))),
             dispatch_peer_cooldown_seconds=max(
-                0.0, float(data.get("dispatch_peer_cooldown_seconds", 10.0))
+                0.0, float(data.get("dispatch_peer_cooldown_seconds", 5.0))
             ),
-            dispatch_max_peer_turns=max(0, int(data.get("dispatch_max_peer_turns", 1))),
+            dispatch_max_peer_turns=max(0, int(data.get("dispatch_max_peer_turns", 3))),
             dispatch_score_collection_seconds=max(
                 0.05, float(data.get("dispatch_score_collection_seconds", 0.15))
             ),

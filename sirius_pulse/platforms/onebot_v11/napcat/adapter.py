@@ -238,9 +238,9 @@ class NapCatAdapter(BaseAdapter):
             ),
             lease_seconds=float(self.plugin_config.get("dispatch_lease_seconds", 120.0)),
             peer_cooldown_seconds=float(
-                self.plugin_config.get("dispatch_peer_cooldown_seconds", 10.0)
+                self.plugin_config.get("dispatch_peer_cooldown_seconds", 5.0)
             ),
-            max_peer_turns=int(self.plugin_config.get("dispatch_max_peer_turns", 1)),
+            max_peer_turns=int(self.plugin_config.get("dispatch_max_peer_turns", 3)),
             score_collection_seconds=float(
                 self.plugin_config.get("dispatch_score_collection_seconds", 0.15)
             ),
@@ -1190,6 +1190,7 @@ class NapCatAdapter(BaseAdapter):
                     dict.fromkeys([*parsed.at_user_ids, parsed.poke_target_id])
                 ),
                 reason=str(candidate.get("reason", "")),
+                message_text=parsed.prompt,
             )
             if not decision.granted:
                 if decision.deferred:
@@ -1230,6 +1231,7 @@ class NapCatAdapter(BaseAdapter):
 
         dispatch_sent = False
         dispatch_deferred = False
+        response_parts: list[str] = []
         try:
             result = await self._engine.process_message(
                 message=message,
@@ -1242,16 +1244,16 @@ class NapCatAdapter(BaseAdapter):
                     if parsed.message_type == "group":
                         if partial_sent_count > 0:
                             await self._sleep_before_reply_sequence_part(group_id, partial)
-                        dispatch_sent = bool(await self._send_group_text(group_id, partial)) or dispatch_sent
+                        sent = bool(await self._send_group_text(group_id, partial))
                     else:
                         if partial_sent_count > 0:
                             await self._sleep_before_reply_sequence_part(
                                 f"private_{parsed.user_id}", partial
                             )
-                        dispatch_sent = (
-                            bool(await self._send_private_text(parsed.user_id, partial))
-                            or dispatch_sent
-                        )
+                        sent = bool(await self._send_private_text(parsed.user_id, partial))
+                    if sent:
+                        response_parts.append(str(partial))
+                    dispatch_sent = sent or dispatch_sent
                     partial_sent_count += 1
 
             reply = result.get("reply")
@@ -1270,20 +1272,17 @@ class NapCatAdapter(BaseAdapter):
                         if partial_sent_count > 0:
                             await self._sleep_before_reply_sequence_part(group_id, clean_reply)
                         if clean_reply:
-                            dispatch_sent = (
-                                bool(await self._send_group_text(group_id, clean_reply))
-                                or dispatch_sent
-                            )
+                            sent = bool(await self._send_group_text(group_id, clean_reply))
                     else:
                         if partial_sent_count > 0:
                             await self._sleep_before_reply_sequence_part(
                                 f"private_{parsed.user_id}", clean_reply
                             )
                         if clean_reply:
-                            dispatch_sent = (
-                                bool(await self._send_private_text(parsed.user_id, clean_reply))
-                                or dispatch_sent
-                            )
+                            sent = bool(await self._send_private_text(parsed.user_id, clean_reply))
+                    if sent:
+                        response_parts.append(clean_reply)
+                    dispatch_sent = sent or dispatch_sent
             sticker_names = result.get("sticker_names", [])
             poke_user_ids = result.get("poke_user_ids", [])
             await self._send_stickers_after_reply(group_id, sticker_names)
@@ -1304,7 +1303,11 @@ class NapCatAdapter(BaseAdapter):
             LOG.exception("消息处理异常 (%s/%s): %s", group_id, parsed.user_id, exc)
         finally:
             if dispatch_lease_id and not dispatch_deferred and dispatcher is not None:
-                dispatcher.finish(dispatch_lease_id, sent=dispatch_sent)
+                dispatcher.finish(
+                    dispatch_lease_id,
+                    sent=dispatch_sent,
+                    response_text="\n".join(response_parts),
+                )
                 if self._dispatch_leases.get(group_id) == dispatch_lease_id:
                     self._dispatch_leases.pop(group_id, None)
         return True
@@ -1399,6 +1402,7 @@ class NapCatAdapter(BaseAdapter):
                     send_key = f"private_{uid}"
                 partial_sent_count = 0
                 dispatch_sent = False
+                response_parts: list[str] = []
 
                 async def _send_partial(text: str) -> None:
                     nonlocal dispatch_sent, partial_sent_count
@@ -1414,6 +1418,7 @@ class NapCatAdapter(BaseAdapter):
                     if not sent:
                         raise RuntimeError(f"Failed to send partial reply: {gid}")
                     dispatch_sent = True
+                    response_parts.append(str(text))
                     partial_sent_count += 1
 
                 self._begin_reply_send(send_key)
@@ -1438,8 +1443,10 @@ class NapCatAdapter(BaseAdapter):
                                         f"private_{uid}", reply
                                     )
                                 if reply:
-                                    await self._send_private_text(uid, reply, reply_refs)
-                                    dispatch_sent = True
+                                    sent = await self._send_private_text(uid, reply, reply_refs)
+                                    dispatch_sent = bool(sent) or dispatch_sent
+                                    if sent:
+                                        response_parts.append(str(reply))
                             await self._send_stickers_after_reply(gid, sticker_names)
                             await self._send_pokes_after_reply(gid, poke_user_ids)
                             dispatch_sent = bool(sticker_names or poke_user_ids) or dispatch_sent
@@ -1448,14 +1455,20 @@ class NapCatAdapter(BaseAdapter):
                                 if partial_sent_count > 0:
                                     await self._sleep_before_reply_sequence_part(gid, reply)
                                 if reply:
-                                    await self._send_group_text(gid, reply, reply_refs)
-                                    dispatch_sent = True
+                                    sent = await self._send_group_text(gid, reply, reply_refs)
+                                    dispatch_sent = bool(sent) or dispatch_sent
+                                    if sent:
+                                        response_parts.append(str(reply))
                             await self._send_stickers_after_reply(gid, sticker_names)
                             await self._send_pokes_after_reply(gid, poke_user_ids)
                 finally:
                     self._end_reply_send(send_key)
                     if dispatch_lease_id and dispatcher is not None:
-                        dispatcher.finish(dispatch_lease_id, sent=dispatch_sent)
+                        dispatcher.finish(
+                            dispatch_lease_id,
+                            sent=dispatch_sent,
+                            response_text="\n".join(response_parts),
+                        )
                         if self._dispatch_leases.get(gid) == dispatch_lease_id:
                             self._dispatch_leases.pop(gid, None)
                     self._dispatch_delivery_active.discard(gid)
