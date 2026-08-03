@@ -34,7 +34,7 @@ def test_engine_runtime_when_work_path_is_persona_dir_then_loads_global_provider
 
 
 def test_persona_worker_passes_main_model_reply_cooldown_to_runtime_config(tmp_path):
-    worker = PersonaWorker("sirius", tmp_path)
+    worker = PersonaWorker(tmp_path)
     experience = PersonaExperienceConfig(
         main_model_reply_cooldown_seconds=7.5,
         diary_top_k=7,

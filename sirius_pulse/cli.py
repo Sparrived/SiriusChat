@@ -7,7 +7,6 @@
     start.pyw                                    # 无窗口启动（双击运行）
     python main.py run                           # 启动活跃人格引擎 + WebUI
     python main.py webui                         # 仅启动 WebUI（管理模式）
-    python main.py assistant --butler ws://...   # 以助手模式连接管家端
     python main.py persona list                  # 列出所有人格
     python main.py persona create <名称>         # 创建新人格
     python main.py persona activate <名称>       # 切换活跃人格
@@ -45,8 +44,6 @@ WEBUI_LOGGER_PREFIXES = (
     "sirius.main",
     "sirius.webui",
     "sirius.persona_manager",
-    "sirius.butler_server",
-    "sirius.data_sync",
     "embedding.",
     "sirius_pulse.embedding.",
 )
@@ -394,21 +391,6 @@ async def _cmd_run(args: argparse.Namespace) -> None:
     webui.persona_manager = worker
     LOG.info("活跃人格: %s (%s)", config.get("active_persona", "default"), persona_dir)
 
-    # 可选：启动 ButlerServer
-    butler_port = getattr(args, "butler_port", 0)
-    butler_server = None
-    if butler_port > 0:
-        from sirius_pulse.network.butler_server import ButlerServer
-
-        butler_server = ButlerServer(
-            host="0.0.0.0",
-            port=butler_port,
-            data_dir=persona_dir,
-            token=getattr(args, "butler_token", None),
-        )
-        await butler_server.start()
-        LOG.info("ButlerServer 已启动: ws://0.0.0.0:%d", butler_port)
-
     stop_all_event = asyncio.Event()
 
     def _request_shutdown() -> None:
@@ -436,80 +418,8 @@ async def _cmd_run(args: argparse.Namespace) -> None:
             LOG.info("Persona worker stopped; WebUI remains running")
             await stop_all_event.wait()
     finally:
-        if butler_server:
-            await butler_server.stop()
         await webui.stop()
         LOG.info("所有服务已停止")
-
-
-async def _cmd_assistant(args: argparse.Namespace) -> None:
-    """以助手模式启动人格：连接管家端，接管消息处理。"""
-    _migrate_flat_to_personas()
-
-    config = _load_global_config()
-    persona_dir = _get_active_persona_dir()
-    persona_name = config.get("active_persona", "default")
-    butler_url = args.butler
-    token = getattr(args, "token", None)
-    log_level = getattr(args, "log_level", "INFO")
-
-    if not persona_dir.is_dir():
-        print(f"人格目录不存在: {persona_dir}")
-        print("请先运行: python main.py persona create <名称>")
-        raise SystemExit(1)
-
-    log_file = persona_dir / "logs" / "assistant.log"
-    setup_log_archival(log_file)
-    configure_logging(level=log_level.upper(), format_type="console", log_file=str(log_file))
-    LOG = logging.getLogger("sirius.assistant")
-
-    from sirius_pulse.network.assistant_client import AssistantClient
-    from sirius_pulse.persona_worker import PersonaWorker
-
-    client = AssistantClient(butler_url=butler_url, persona_name=persona_name, token=token)
-    try:
-        success = await client.connect_and_takeover()
-    except ConnectionError as exc:
-        print(f"连接管家端失败: {exc}")
-        raise SystemExit(1)
-
-    if not success:
-        print("接管请求被拒绝")
-        raise SystemExit(1)
-
-    LOG.info("已接管人格「%s」，正在启动本地引擎...", persona_name)
-    print(f"已接管人格「{persona_name}」，助手模式运行中")
-    print(f"  管家端: {butler_url}")
-    print("  按 Ctrl+C 释放控制权并退出")
-
-    worker = PersonaWorker(persona_dir)
-
-    if sys.platform == "win32":
-        import signal as _signal
-
-        def _sig_handler(_signum, _frame):
-            worker.shutdown()
-
-        _signal.signal(_signal.SIGINT, _sig_handler)
-        _signal.signal(_signal.SIGTERM, _sig_handler)
-    else:
-        loop = asyncio.get_running_loop()
-        for sig in (signal.SIGTERM, signal.SIGINT):
-            loop.add_signal_handler(sig, worker.shutdown)
-
-    try:
-
-        async def _watch_butler():
-            await client.wait_disconnect()
-            LOG.warning("与管家端的连接已断开，正在停止...")
-            worker.shutdown()
-
-        watch_task = asyncio.create_task(_watch_butler())
-        await worker.run()
-        watch_task.cancel()
-    finally:
-        await client.release()
-        LOG.info("助手模式已退出，控制权已归还管家端")
 
 
 async def _cmd_webui(args: argparse.Namespace) -> None:
@@ -685,20 +595,12 @@ def main() -> int:
 
     # run
     run_parser = subparsers.add_parser("run", help="启动活跃人格引擎 + WebUI")
-    run_parser.add_argument("--butler-port", type=int, default=0, help="启用管家端 WebSocket 端口")
-    run_parser.add_argument("--butler-token", default=None, help="管家端认证令牌")
 
     # webui
     webui_parser = subparsers.add_parser("webui", help="启动 WebUI 管理服务")
     webui_parser.add_argument("--foreground", action="store_true", help="前台运行")
     webui_parser.add_argument("--status", action="store_true", help="查看 WebUI 状态")
     webui_parser.add_argument("--stop", action="store_true", help="停止后台 WebUI")
-
-    # assistant
-    assistant_parser = subparsers.add_parser("assistant", help="以助手模式连接管家端")
-    assistant_parser.add_argument("--butler", required=True, help="管家端 WebSocket 地址")
-    assistant_parser.add_argument("--token", default=None, help="管家端认证令牌")
-    assistant_parser.add_argument("--log-level", default="INFO", help="日志级别")
 
     # persona
     persona_parser = subparsers.add_parser("persona", help="人格管理")
@@ -726,8 +628,6 @@ def main() -> int:
                 _cmd_webui_stop(args)
             else:
                 asyncio.run(_cmd_webui(args))
-        elif args.command == "assistant":
-            asyncio.run(_cmd_assistant(args))
         elif args.command == "persona":
             if args.persona_action == "list":
                 _cmd_persona_list(args)
