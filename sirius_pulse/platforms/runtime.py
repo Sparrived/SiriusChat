@@ -567,6 +567,11 @@ class EngineRuntime:
             self._engine.start_background_tasks()
         return self._engine
 
+    async def rebuild_engine(self) -> "EmotionalGroupChatEngine":
+        """Rebuild the engine and return the running replacement."""
+        self.reload_engine()
+        return await self._ensure_engine()
+
     async def start(self) -> None:
         if self._running:
             return

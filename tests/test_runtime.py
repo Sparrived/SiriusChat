@@ -3,6 +3,8 @@ from __future__ import annotations
 import os
 from types import SimpleNamespace
 
+import pytest
+
 from sirius_pulse.persona_config import PersonaExperienceConfig
 from sirius_pulse.persona_worker import PersonaWorker
 from sirius_pulse.platforms.runtime import EngineRuntime
@@ -100,6 +102,36 @@ def test_persona_worker_config_reload_consumes_experience_flag(tmp_path):
     assert not flag.exists()
     assert engine.config["memory_unit_top_k"] == 15
     assert engine.brain.config["memory_unit_top_k"] == 15
+
+
+@pytest.mark.asyncio
+async def test_persona_worker_rebuild_engine_rebinds_adapters(tmp_path):
+    replacement = object()
+    bridges = []
+
+    class Runtime:
+        async def rebuild_engine(self):
+            return replacement
+
+        def add_tool_bridge(self, adapter_type, adapter):
+            bridges.append((adapter_type, adapter))
+
+    class Adapter:
+        def __init__(self):
+            self.engine = None
+
+        async def rebind_engine(self, engine):
+            self.engine = engine
+
+    adapter = Adapter()
+    worker = PersonaWorker(tmp_path)
+    worker._runtime = Runtime()
+    worker._adapters = [adapter]
+
+    await worker._rebuild_engine_and_rebind()
+
+    assert adapter.engine is replacement
+    assert bridges == [("napcat", adapter)]
 
 
 def test_engine_runtime_includes_main_model_reply_cooldown_in_engine_config(tmp_path):

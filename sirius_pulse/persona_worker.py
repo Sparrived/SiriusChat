@@ -51,6 +51,7 @@ class PersonaWorker:
         self._running = False
         self._shutdown_event = asyncio.Event()
         self._heartbeat_task: asyncio.Task | None = None
+        self._engine_reload_task: asyncio.Task | None = None
 
     # ------------------------------------------------------------------
     # 主循环
@@ -263,11 +264,32 @@ class PersonaWorker:
                 self._reload_global_config(engine)
 
             if reload_types & {"mcp", "all"}:
-                self._runtime.reload_engine()
+                self._schedule_engine_rebuild()
 
             LOG.info("配置热重载完成: types=%s", sorted(reload_types))
         except Exception as exc:
             LOG.warning("配置热重载失败: %s", exc)
+
+    def _schedule_engine_rebuild(self) -> None:
+        if self._engine_reload_task is not None and not self._engine_reload_task.done():
+            return
+        self._engine_reload_task = asyncio.create_task(self._rebuild_engine_and_rebind())
+
+    async def _rebuild_engine_and_rebind(self) -> None:
+        try:
+            if self._runtime is None:
+                return
+            engine = await self._runtime.rebuild_engine()
+            for adapter in self._adapters:
+                await adapter.rebind_engine(engine)
+                self._runtime.add_tool_bridge("napcat", adapter)
+            LOG.info("引擎重建完成，已重新绑定 %d 个 adapter", len(self._adapters))
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            LOG.warning("引擎重建或 adapter 重绑定失败: %s", exc)
+        finally:
+            self._engine_reload_task = None
 
     def _reload_persona(self, engine: Any) -> None:
         """热重载 Persona 配置（persona.json）。"""
@@ -383,6 +405,13 @@ class PersonaWorker:
 
     async def _cleanup(self) -> None:
         LOG.info("开始清理资源...")
+
+        if self._engine_reload_task and not self._engine_reload_task.done():
+            self._engine_reload_task.cancel()
+            try:
+                await self._engine_reload_task
+            except asyncio.CancelledError:
+                pass
 
         if self._heartbeat_task and not self._heartbeat_task.done():
             self._heartbeat_task.cancel()
