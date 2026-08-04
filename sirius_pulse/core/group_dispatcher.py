@@ -510,13 +510,19 @@ class GroupDispatcher:
             sender_account_id = str(first["sender_account_id"] or "") if first else ""
             message_topic = str(first["topic_signature"] or "") if first else ""
             target_accounts: set[str] = set()
-            preferred_worker_id = ""
+            text_target_worker_ids = {
+                str(row["preferred_worker_id"] or "").strip()
+                for row in candidates
+                if str(row["preferred_worker_id"] or "").strip()
+            }
+            text_target_worker_id = (
+                next(iter(text_target_worker_ids)) if len(text_target_worker_ids) == 1 else ""
+            )
             if first:
                 try:
                     target_accounts = set(json.loads(str(first["target_account_ids"] or "[]")))
                 except (TypeError, ValueError):
                     target_accounts = set()
-                preferred_worker_id = str(first["preferred_worker_id"] or "")
 
             workers = conn.execute(
                 """
@@ -537,11 +543,6 @@ class GroupDispatcher:
                     or str(row["account_id"] or "") in known_targets
                 )
             ]
-            if preferred_worker_id:
-                preferred = [row for row in eligible if row["worker_id"] == preferred_worker_id]
-                if preferred:
-                    eligible = preferred + [row for row in eligible if row not in preferred]
-
             is_peer = sender_type == "other_ai" or (
                 sender_account_id
                 and sender_account_id in known_accounts
@@ -569,7 +570,6 @@ class GroupDispatcher:
                         eligible = directed
                 elif open_target:
                     eligible = [row for row in candidates if str(row["worker_id"]) == open_target]
-                    preferred_worker_id = open_target
                 elif open_topic and _topic_similarity(open_topic, message_topic) >= 0.18:
                     # A non-directed question keeps the topic open. The dispatcher
                     # selects a peer even when its local preview was initially silent.
@@ -635,7 +635,14 @@ class GroupDispatcher:
                 )
                 priority_bonus = max(-0.2, min(0.2, priority * 0.1))
                 base_score = float(candidate["base_score"] or 0)
-                final_score = base_score + priority_bonus - activity_penalty
+                text_target_adjustment = 0.0
+                if text_target_worker_id:
+                    text_target_adjustment = (
+                        0.55 if worker_id == text_target_worker_id else -0.35
+                    )
+                final_score = (
+                    base_score + priority_bonus - activity_penalty + text_target_adjustment
+                )
                 ranked.append(
                     {
                         "worker_id": worker_id,

@@ -306,6 +306,54 @@ def test_group_dispatcher_final_score_selects_highest_candidate(tmp_path: Path):
     asyncio.run(run())
 
 
+def test_group_dispatcher_text_target_bonus_is_not_a_hard_filter(tmp_path: Path):
+    async def run() -> None:
+        clock = _Clock()
+        db_path = tmp_path / "dispatcher.db"
+        first = _dispatcher(db_path, clock, "alpha", "100")
+        second = _dispatcher(db_path, clock, "beta", "200")
+
+        alpha, beta = await asyncio.gather(
+            first.coordinate(
+                event_id="text-targeted-1",
+                group_id="g1",
+                base_score=1.2,
+                should_reply=True,
+            ),
+            second.coordinate(
+                event_id="text-targeted-1",
+                group_id="g1",
+                base_score=1.0,
+                should_reply=True,
+                preferred_worker_id="beta",
+            ),
+        )
+        assert not alpha.granted
+        assert beta.granted
+        assert second.finish(beta.lease_id, sent=True)
+
+        clock.value += 4
+        alpha, beta = await asyncio.gather(
+            first.coordinate(
+                event_id="text-targeted-2",
+                group_id="g2",
+                base_score=3.0,
+                should_reply=True,
+            ),
+            second.coordinate(
+                event_id="text-targeted-2",
+                group_id="g2",
+                base_score=1.0,
+                should_reply=True,
+                preferred_worker_id="beta",
+            ),
+        )
+        assert alpha.granted
+        assert not beta.granted
+
+    asyncio.run(run())
+
+
 def test_group_dispatcher_penalizes_recently_active_worker(tmp_path: Path):
     async def run() -> None:
         clock = _Clock()

@@ -1185,6 +1185,13 @@ class NapCatAdapter(BaseAdapter):
         dispatch_lease_id = ""
         if dispatcher is not None:
             event_id = self._dispatch_event_id(parsed)
+            target_account_ids = tuple(
+                dict.fromkeys(
+                    target_id
+                    for target_id in [*parsed.at_user_ids, parsed.poke_target_id]
+                    if target_id
+                )
+            )
             preview_dispatch = getattr(self._engine, "preview_dispatch", None)
             if callable(preview_dispatch):
                 try:
@@ -1201,8 +1208,11 @@ class NapCatAdapter(BaseAdapter):
                 should_reply=bool(candidate.get("should_reply", False)),
                 sender_type=message.sender_type,
                 sender_account_id=parsed.user_id,
-                target_account_ids=tuple(
-                    dict.fromkeys([*parsed.at_user_ids, parsed.poke_target_id])
+                target_account_ids=target_account_ids,
+                preferred_worker_id=(
+                    dispatcher.worker_id
+                    if candidate.get("is_mentioned") and not target_account_ids
+                    else ""
                 ),
                 reason=str(candidate.get("reason", "")),
                 message_text=parsed.prompt,

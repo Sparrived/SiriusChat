@@ -26,6 +26,15 @@ class _Engine:
         self.observed.append(message.speaker or "")
 
 
+class _PreviewEngine(_Engine):
+    def __init__(self, candidate: dict[str, object]) -> None:
+        super().__init__()
+        self.candidate = candidate
+
+    def preview_dispatch(self, message, participants, group_id):
+        return self.candidate
+
+
 def _adapter(tmp_path, persona: str, account: str, engine: _Engine) -> NapCatAdapter:
     adapter = NapCatAdapter(
         "ws://example.invalid",
@@ -60,13 +69,14 @@ def _parsed(
     *,
     at: tuple[str, ...] = (),
     user_id: str = "300",
+    prompt: str = "群里说一句",
 ) -> ParsedEvent:
     return ParsedEvent(
         group_id="g1",
         user_id=user_id,
         self_id=account,
         message_type="group",
-        prompt="群里说一句",
+        prompt=prompt,
         nickname="Alice",
         message_id=message_id,
         at_user_ids=list(at),
@@ -144,6 +154,29 @@ async def test_targeted_persona_gets_the_next_group_event(tmp_path):
     )
 
     assert first_engine.processed == ["Alice"]
+    assert second_engine.processed == ["Alice"]
+
+
+@pytest.mark.asyncio
+async def test_text_named_persona_gets_a_soft_dispatch_bonus(tmp_path):
+    first_engine = _PreviewEngine(
+        {"should_reply": True, "score": 1.2, "reason": "reply_needed", "is_mentioned": False}
+    )
+    second_engine = _PreviewEngine(
+        {"should_reply": True, "score": 1.0, "reason": "addressed", "is_mentioned": True}
+    )
+    first = _adapter(tmp_path, "alpha", "100", first_engine)
+    second = _adapter(tmp_path, "beta", "200", second_engine)
+    _set_parsed(first, _parsed("100", "named-1", prompt="beta，帮我看一下"))
+    _set_parsed(second, _parsed("200", "named-1", prompt="beta，帮我看一下"))
+
+    await asyncio.gather(
+        first._process_event_impl({"self_id": "100"}),
+        second._process_event_impl({"self_id": "200"}),
+    )
+
+    assert first_engine.processed == []
+    assert first_engine.observed == ["Alice"]
     assert second_engine.processed == ["Alice"]
 
 
