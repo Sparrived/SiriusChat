@@ -51,6 +51,7 @@ from sirius_pulse.models.models import Message, UnifiedUser
 from sirius_pulse.tools.builtin._markdown_image import to_image_reference
 
 LOG = logging.getLogger("sirius.platforms.napcat")
+_DISPATCH_EVENT_TIME_BUCKET_SECONDS = 5
 
 EventHandler = Callable[[dict[str, Any]], Any]
 
@@ -168,6 +169,21 @@ class NapCatAdapter(BaseAdapter):
             self._event_bus_task = asyncio.create_task(self._event_bus_listener())
         self.on_event(self._on_event)
         LOG.info("NapCatAdapter 平台集成已启动")
+
+    async def rebind_engine(self, engine: Any) -> None:
+        """Switch the adapter and event listener to a rebuilt engine."""
+        task = self._event_bus_task
+        self._event_bus_task = None
+        if task is not None:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+        self._engine = engine
+        if self._running:
+            self._event_bus_task = asyncio.create_task(self._event_bus_listener())
 
     async def stop_handling(self) -> None:
         """停止事件处理和引擎事件总线监听。"""
@@ -792,7 +808,12 @@ class NapCatAdapter(BaseAdapter):
                 elif at_qq:
                     at_user_ids.append(at_qq)
 
-        # 提取平台消息 ID（用于引用回复）
+        try:
+            event_time = int(raw_event.get("time", 0) or 0)
+        except (TypeError, ValueError):
+            event_time = 0
+
+        # 提取平台消息 ID（只用于引用回复，不能作为跨账号调度 ID）
         msg_id = str(raw_event.get("message_id", ""))
         poke_target_id = str(raw_event.get("target_id", "")) if is_poke else ""
         if is_poke and not msg_id:
@@ -809,6 +830,7 @@ class NapCatAdapter(BaseAdapter):
             nickname=nickname,
             card=card,
             message_id=msg_id,
+            event_time=event_time,
             multimodal_inputs=multimodal_inputs,
             at_user_ids=at_user_ids,
             mention_all=mention_all,
@@ -1102,6 +1124,26 @@ class NapCatAdapter(BaseAdapter):
 
     @staticmethod
     def _dispatch_event_id(parsed: "ParsedEvent") -> str:
+        if parsed.event_time:
+            raw = json.dumps(
+                {
+                    "group_id": parsed.group_id,
+                    "user_id": parsed.user_id,
+                    "message_type": parsed.message_type,
+                    "prompt": parsed.prompt,
+                    "at_user_ids": sorted(parsed.at_user_ids),
+                    "mention_all": parsed.mention_all,
+                    "poke_target_id": parsed.poke_target_id,
+                    # Different NapCat instances can receive the same event a
+                    # few seconds apart; the bucket keeps their dispatch ID aligned.
+                    "event_time_bucket": parsed.event_time // _DISPATCH_EVENT_TIME_BUCKET_SECONDS,
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
+            return f"qq:{parsed.group_id}:event:{digest}"
         if parsed.message_id:
             return f"qq:{parsed.group_id}:{parsed.message_id}"
         raw = "|".join(

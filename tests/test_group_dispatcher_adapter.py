@@ -35,6 +35,27 @@ class _PreviewEngine(_Engine):
         return self.candidate
 
 
+class _EventBus:
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+        self.closed = asyncio.Event()
+
+    async def subscribe(self):
+        self.started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            self.closed.set()
+        if False:
+            yield None
+
+
+class _EventEngine(_Engine):
+    def __init__(self) -> None:
+        super().__init__()
+        self.event_bus = _EventBus()
+
+
 def _adapter(tmp_path, persona: str, account: str, engine: _Engine) -> NapCatAdapter:
     adapter = NapCatAdapter(
         "ws://example.invalid",
@@ -56,6 +77,24 @@ async def _async_noop():
     return None
 
 
+@pytest.mark.asyncio
+async def test_rebind_engine_switches_event_bus_listener(tmp_path):
+    first_engine = _EventEngine()
+    second_engine = _EventEngine()
+    adapter = _adapter(tmp_path, "alpha", "100", first_engine)
+    adapter._running = True
+    adapter._event_bus_task = asyncio.create_task(adapter._event_bus_listener())
+
+    await first_engine.event_bus.started.wait()
+    await adapter.rebind_engine(second_engine)
+    await second_engine.event_bus.started.wait()
+
+    assert adapter._engine is second_engine
+    assert first_engine.event_bus.closed.is_set()
+
+    await adapter.stop_handling()
+
+
 def _set_parsed(adapter: NapCatAdapter, parsed: ParsedEvent) -> None:
     async def fake_parse(event):
         return parsed
@@ -70,6 +109,7 @@ def _parsed(
     at: tuple[str, ...] = (),
     user_id: str = "300",
     prompt: str = "群里说一句",
+    event_time: int = 0,
 ) -> ParsedEvent:
     return ParsedEvent(
         group_id="g1",
@@ -79,6 +119,7 @@ def _parsed(
         prompt=prompt,
         nickname="Alice",
         message_id=message_id,
+        event_time=event_time,
         at_user_ids=list(at),
     )
 
@@ -110,6 +151,7 @@ async def test_parse_poke_notice_as_model_message(tmp_path):
     assert parsed.message_type == "group"
     assert parsed.poke_target_id == "100"
     assert parsed.message_id == "poke-1720000000-300-100"
+    assert parsed.event_time == 1720000000
     assert "戳了一下 alpha" in parsed.prompt
 
 
@@ -119,8 +161,8 @@ async def test_only_one_persona_processes_a_group_event(tmp_path):
     second_engine = _Engine()
     first = _adapter(tmp_path, "alpha", "100", first_engine)
     second = _adapter(tmp_path, "beta", "200", second_engine)
-    _set_parsed(first, _parsed("100", "m1"))
-    _set_parsed(second, _parsed("200", "m1"))
+    _set_parsed(first, _parsed("100", "m1", event_time=1720000000))
+    _set_parsed(second, _parsed("200", "m2", event_time=1720000000))
 
     await asyncio.gather(
         first._process_event_impl({"self_id": "100"}),
@@ -130,6 +172,15 @@ async def test_only_one_persona_processes_a_group_event(tmp_path):
     assert first_engine.processed == ["Alice"]
     assert second_engine.processed == []
     assert second_engine.observed == ["Alice"]
+
+
+def test_dispatch_event_id_aligns_per_account_message_ids_within_time_bucket():
+    first = _parsed("100", "m1", event_time=1720000000)
+    second = _parsed("200", "m2", event_time=1720000002)
+    later = _parsed("200", "m3", event_time=1720000006)
+
+    assert NapCatAdapter._dispatch_event_id(first) == NapCatAdapter._dispatch_event_id(second)
+    assert NapCatAdapter._dispatch_event_id(first) != NapCatAdapter._dispatch_event_id(later)
 
 
 @pytest.mark.asyncio

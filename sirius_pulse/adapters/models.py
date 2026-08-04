@@ -153,6 +153,7 @@ class ParsedEvent:
     nickname: str = ""
     card: str = ""
     message_id: str = ""  # 平台消息 ID（用于引用回复）
+    event_time: int = 0  # 平台事件时间（用于跨账号调度归并）
     multimodal_inputs: list[dict[str, str]] = field(default_factory=list)
     # 平台级 @ 提及元数据（从原始 segments 提取，不依赖渲染文本）
     at_user_ids: list[str] = field(default_factory=list)
