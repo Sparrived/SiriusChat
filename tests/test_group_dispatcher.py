@@ -148,6 +148,46 @@ def test_group_dispatcher_opens_targeted_peer_loop_without_preview_score(
     asyncio.run(run())
 
 
+def test_group_dispatcher_does_not_open_peer_loop_after_targeted_human_turn(
+    tmp_path: Path,
+):
+    async def run() -> None:
+        clock = _Clock()
+        db_path = tmp_path / "dispatcher.db"
+        first = _dispatcher(db_path, clock, "alpha", "100")
+        second = _dispatcher(db_path, clock, "beta", "200")
+
+        alpha = await first.coordinate(
+            event_id="targeted-human-1",
+            group_id="g1",
+            base_score=1.0,
+            should_reply=True,
+            preferred_worker_id="alpha",
+            message_text="月白，帮我看看这个问题？",
+        )
+        assert alpha.granted
+        assert first.finish(
+            alpha.lease_id,
+            sent=True,
+            response_text="我在呢，日暮也可以一起看看这个问题？",
+        )
+
+        clock.value += 6
+        peer = await second.coordinate(
+            event_id="targeted-human-2",
+            group_id="g1",
+            base_score=1.0,
+            should_reply=True,
+            sender_type="other_ai",
+            sender_account_id="100",
+            message_text="这个问题要怎么处理？",
+        )
+        assert peer.action == "observe"
+        assert peer.reason == "peer_topic_closed"
+
+    asyncio.run(run())
+
+
 def test_group_dispatcher_continues_a_non_directed_open_topic(tmp_path: Path):
     async def run() -> None:
         clock = _Clock()

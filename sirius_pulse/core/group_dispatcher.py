@@ -449,7 +449,10 @@ class GroupDispatcher:
         *,
         target_worker_id: str,
         source_sender_type: str,
+        source_targeted: bool,
     ) -> bool:
+        if source_sender_type != "other_ai" and source_targeted:
+            return False
         if target_worker_id:
             return True
         if _OPEN_LOOP_RE.search(text):
@@ -996,22 +999,49 @@ class GroupDispatcher:
         response_text: str,
         now: float,
     ) -> None:
-        source = conn.execute(
+        sources = conn.execute(
             """
-            SELECT sender_type
+            SELECT sender_type, target_account_ids, preferred_worker_id
             FROM dispatcher_candidates
             WHERE event_id=?
             ORDER BY submitted_at ASC
-            LIMIT 1
             """,
             (event_id,),
-        ).fetchone()
+        ).fetchall()
+        source = sources[0] if sources else None
         source_sender_type = str(source["sender_type"] or "human") if source else "human"
+        source_targeted = False
+        if source_sender_type != "other_ai":
+            live_accounts = {
+                str(row["account_id"] or "")
+                for row in conn.execute(
+                    """
+                    SELECT account_id
+                    FROM dispatcher_workers
+                    WHERE last_seen > ? AND account_id <> ''
+                    """,
+                    (now - self.registry_ttl_seconds,),
+                ).fetchall()
+            }
+            for candidate in sources:
+                if str(candidate["preferred_worker_id"] or "").strip():
+                    source_targeted = True
+                    break
+                try:
+                    target_accounts = set(
+                        json.loads(str(candidate["target_account_ids"] or "[]"))
+                    )
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    target_accounts = set()
+                if target_accounts & live_accounts:
+                    source_targeted = True
+                    break
         target_worker_id = self._find_peer_target(conn, response_text, now)
         if not self._response_opens_peer_loop(
             response_text,
             target_worker_id=target_worker_id,
             source_sender_type=source_sender_type,
+            source_targeted=source_targeted,
         ):
             self._clear_open_loop(conn, group_id)
             return
