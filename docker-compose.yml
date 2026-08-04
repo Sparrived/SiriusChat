@@ -4,6 +4,7 @@ services:
       context: .
       args:
         SIRIUS_ENV_CACHE_IMAGE: ${SIRIUS_ENV_CACHE_IMAGE:-environment}
+        SIRIUS_BROWSER_CACHE_IMAGE: ${SIRIUS_BROWSER_CACHE_IMAGE:-browser-empty}
         SIRIUS_ENV_CACHE_KEY: ${SIRIUS_ENV_CACHE_KEY:-}
     image: sirius-pulse:latest
     container_name: sirius-pulse-v2-test

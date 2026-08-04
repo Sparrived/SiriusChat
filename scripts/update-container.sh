@@ -70,8 +70,12 @@ if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet sirius-co
 fi
 docker compose config -q
 export SIRIUS_ENV_CACHE_KEY="$(sha256sum Dockerfile | awk '{print $1}')"
+export SIRIUS_BROWSER_CACHE_IMAGE=browser-empty
 unset SIRIUS_ENV_CACHE_IMAGE
 if docker image inspect sirius-pulse:latest >/dev/null 2>&1; then
+  if docker run --rm --entrypoint sh sirius-pulse:latest -c 'test -d /ms-playwright' >/dev/null 2>&1; then
+    export SIRIUS_BROWSER_CACHE_IMAGE=sirius-pulse:latest
+  fi
   current_environment_key="$(docker image inspect --format '{{ index .Config.Labels "org.sirius-pulse.environment-cache-key" }}' sirius-pulse:latest)"
   current_lock_hash="$(docker run --rm --entrypoint sha256sum sirius-pulse:latest /app/uv.lock 2>/dev/null | awk '{print $1}' || true)"
   if [[ ( -z "$current_environment_key" || "$current_environment_key" == "<no value>" || "$current_environment_key" == "$SIRIUS_ENV_CACHE_KEY" ) \

@@ -1,5 +1,12 @@
 ARG SIRIUS_ENV_CACHE_IMAGE=environment
+ARG SIRIUS_BROWSER_CACHE_IMAGE=browser-empty
 ARG SIRIUS_ENV_CACHE_KEY
+
+FROM python:3.12-slim AS browser-empty
+
+RUN mkdir -p /ms-playwright
+
+FROM ${SIRIUS_BROWSER_CACHE_IMAGE} AS browser-cache
 
 FROM python:3.12-slim AS environment
 
@@ -19,8 +26,10 @@ RUN apt-get update \
 
 COPY pyproject.toml uv.lock README.md ./
 RUN pip install --no-cache-dir uv \
-    && uv sync --frozen --no-dev --no-install-project \
-    && .venv/bin/python -m playwright install --with-deps chromium
+    && uv sync --frozen --no-dev --no-install-project
+
+COPY --from=browser-cache /ms-playwright/ /ms-playwright/
+RUN .venv/bin/python -m playwright install --with-deps chromium
 
 RUN useradd --create-home --uid 10001 sirius \
     && mkdir -p /app/data /ms-playwright \
@@ -36,6 +45,8 @@ LABEL org.sirius-pulse.environment-cache-key=$SIRIUS_ENV_CACHE_KEY
 WORKDIR /app
 
 USER root
+COPY pyproject.toml uv.lock README.md ./
+RUN uv sync --frozen --no-dev --no-install-project
 RUN rm -rf /app/sirius_pulse /app/sirius_pulse.egg-info \
     && chown sirius:sirius /app
 COPY --chown=sirius:sirius sirius_pulse ./sirius_pulse
