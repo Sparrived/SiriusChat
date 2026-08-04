@@ -466,8 +466,21 @@ class Pipeline:
         if message.dispatch_coordinated:
             # The shared dispatcher already owns admission and pacing. Keep
             # the local queue only as the existing generation runner.
-            strategy = ResponseStrategy.IMMEDIATE
-            delay_seconds = 0.0
+            try:
+                dispatch_strategy = ResponseStrategy(
+                    str(getattr(message, "dispatch_response_strategy", "immediate"))
+                )
+            except ValueError:
+                dispatch_strategy = ResponseStrategy.IMMEDIATE
+            if dispatch_strategy == ResponseStrategy.DELAYED:
+                strategy = ResponseStrategy.DELAYED
+                delay_seconds = max(
+                    0.0,
+                    float(getattr(message, "dispatch_response_delay_seconds", 0.0) or 0.0),
+                )
+            else:
+                strategy = ResponseStrategy.IMMEDIATE
+                delay_seconds = 0.0
 
         is_private = group_id.startswith("private_")
         reason = str(participation.get("reason") or "signal_passed")

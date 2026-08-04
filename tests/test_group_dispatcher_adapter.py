@@ -160,10 +160,24 @@ async def test_targeted_persona_gets_the_next_group_event(tmp_path):
 @pytest.mark.asyncio
 async def test_text_named_persona_gets_a_soft_dispatch_bonus(tmp_path):
     first_engine = _PreviewEngine(
-        {"should_reply": True, "score": 1.2, "reason": "reply_needed", "is_mentioned": False}
+        {
+            "should_reply": True,
+            "score": 1.2,
+            "reason": "reply_needed",
+            "is_mentioned": False,
+            "strategy": "delayed",
+            "delay_seconds": 12.0,
+        }
     )
     second_engine = _PreviewEngine(
-        {"should_reply": True, "score": 1.0, "reason": "addressed", "is_mentioned": True}
+        {
+            "should_reply": True,
+            "score": 1.0,
+            "reason": "addressed",
+            "is_mentioned": True,
+            "strategy": "delayed",
+            "delay_seconds": 12.0,
+        }
     )
     first = _adapter(tmp_path, "alpha", "100", first_engine)
     second = _adapter(tmp_path, "beta", "200", second_engine)
@@ -178,6 +192,8 @@ async def test_text_named_persona_gets_a_soft_dispatch_bonus(tmp_path):
     assert first_engine.processed == []
     assert first_engine.observed == ["Alice"]
     assert second_engine.processed == ["Alice"]
+    assert second_engine.processed_messages[0].dispatch_response_strategy == "delayed"
+    assert second_engine.processed_messages[0].dispatch_response_delay_seconds == 12.0
 
 
 @pytest.mark.asyncio

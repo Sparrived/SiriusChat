@@ -188,6 +188,144 @@ def test_group_dispatcher_does_not_open_peer_loop_after_targeted_human_turn(
     asyncio.run(run())
 
 
+def test_group_dispatcher_prefers_immediate_and_forces_one_peer_turn(
+    tmp_path: Path,
+):
+    async def run() -> None:
+        clock = _Clock()
+        db_path = tmp_path / "dispatcher.db"
+        delayed = _dispatcher(db_path, clock, "alpha", "100")
+        immediate = _dispatcher(db_path, clock, "beta", "200")
+
+        alpha, beta = await asyncio.gather(
+            delayed.coordinate(
+                event_id="multi-reply-1",
+                group_id="g1",
+                base_score=5.0,
+                should_reply=True,
+                response_strategy="delayed",
+                response_delay_seconds=12.0,
+            ),
+            immediate.coordinate(
+                event_id="multi-reply-1",
+                group_id="g1",
+                base_score=0.2,
+                should_reply=True,
+                response_strategy="immediate",
+            ),
+        )
+        assert not alpha.granted
+        assert beta.granted
+        assert beta.response_strategy == "immediate"
+        assert immediate.finish(beta.lease_id, sent=True, response_text="我先回答这个问题。")
+
+        clock.value += 6
+        peer = await delayed.coordinate(
+            event_id="multi-reply-2",
+            group_id="g1",
+            base_score=0.0,
+            should_reply=False,
+            response_strategy="silent",
+            sender_type="other_ai",
+            sender_account_id="200",
+            message_text="我也补充一下这个问题。",
+        )
+        assert peer.granted
+        assert delayed.finish(peer.lease_id, sent=True, response_text="补充完成。")
+
+    asyncio.run(run())
+
+
+def test_group_dispatcher_single_reply_uses_existing_peer_trigger_only(
+    tmp_path: Path,
+):
+    async def run() -> None:
+        clock = _Clock()
+        db_path = tmp_path / "dispatcher.db"
+        silent = _dispatcher(db_path, clock, "alpha", "100")
+        delayed = _dispatcher(db_path, clock, "beta", "200")
+
+        alpha, beta = await asyncio.gather(
+            silent.coordinate(
+                event_id="single-reply-1",
+                group_id="g1",
+                base_score=0.0,
+                should_reply=False,
+                response_strategy="silent",
+            ),
+            delayed.coordinate(
+                event_id="single-reply-1",
+                group_id="g1",
+                base_score=1.0,
+                should_reply=True,
+                response_strategy="delayed",
+                response_delay_seconds=12.0,
+            ),
+        )
+        assert not alpha.granted
+        assert beta.granted
+        assert beta.response_strategy == "delayed"
+        assert delayed.finish(beta.lease_id, sent=True, response_text="我先说我的看法。")
+
+        clock.value += 6
+        peer = await silent.coordinate(
+            event_id="single-reply-2",
+            group_id="g1",
+            base_score=1.0,
+            should_reply=True,
+            sender_type="other_ai",
+            sender_account_id="200",
+            message_text="我也补充一下。",
+        )
+        assert peer.action == "observe"
+        assert peer.reason == "peer_topic_closed"
+
+    asyncio.run(run())
+
+
+def test_group_dispatcher_keeps_peer_closed_when_all_human_candidates_are_silent(
+    tmp_path: Path,
+):
+    async def run() -> None:
+        clock = _Clock()
+        db_path = tmp_path / "dispatcher.db"
+        first = _dispatcher(db_path, clock, "alpha", "100")
+        second = _dispatcher(db_path, clock, "beta", "200")
+
+        alpha, beta = await asyncio.gather(
+            first.coordinate(
+                event_id="silent-human-1",
+                group_id="g1",
+                base_score=0.0,
+                should_reply=False,
+                response_strategy="silent",
+            ),
+            second.coordinate(
+                event_id="silent-human-1",
+                group_id="g1",
+                base_score=0.0,
+                should_reply=False,
+                response_strategy="silent",
+            ),
+        )
+        assert alpha.reason == "all_candidates_silent"
+        assert beta.reason == "all_candidates_silent"
+
+        clock.value += 6
+        peer = await first.coordinate(
+            event_id="silent-human-2",
+            group_id="g1",
+            base_score=1.0,
+            should_reply=True,
+            sender_type="other_ai",
+            sender_account_id="200",
+            message_text="我也想补充一下。",
+        )
+        assert peer.reason == "peer_topic_closed"
+
+    asyncio.run(run())
+
+
 def test_group_dispatcher_continues_a_non_directed_open_topic(tmp_path: Path):
     async def run() -> None:
         clock = _Clock()

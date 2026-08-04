@@ -33,6 +33,8 @@ class Message(JsonSerializable):
     # local participation gate; the lease itself is finalized by the adapter.
     dispatch_coordinated: bool = False
     dispatch_lease_id: str = ""
+    dispatch_response_strategy: str = "immediate"
+    dispatch_response_delay_seconds: float = 0.0
 
     @staticmethod
     def _trim_content_tail(content: str) -> str:

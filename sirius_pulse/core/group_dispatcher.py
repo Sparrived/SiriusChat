@@ -66,6 +66,8 @@ class DispatchDecision:
     base_score: float = 0.0
     final_score: float = 0.0
     activity_penalty: float = 0.0
+    response_strategy: str = "immediate"
+    response_delay_seconds: float = 0.0
 
     @property
     def granted(self) -> bool:
@@ -143,6 +145,7 @@ class GroupDispatcher:
                     last_human_at REAL NOT NULL DEFAULT 0,
                     peer_turns INTEGER NOT NULL DEFAULT 0,
                     peer_window_started_at REAL NOT NULL DEFAULT 0,
+                    peer_required INTEGER NOT NULL DEFAULT 0,
                     open_loop_target_worker_id TEXT NOT NULL DEFAULT '',
                     open_loop_topic TEXT NOT NULL DEFAULT '',
                     open_loop_expires_at REAL NOT NULL DEFAULT 0,
@@ -165,6 +168,8 @@ class GroupDispatcher:
                     lease_id TEXT NOT NULL DEFAULT '',
                     status TEXT NOT NULL,
                     reason TEXT NOT NULL DEFAULT '',
+                    response_strategy TEXT NOT NULL DEFAULT 'immediate',
+                    response_delay_seconds REAL NOT NULL DEFAULT 0,
                     created_at REAL NOT NULL,
                     updated_at REAL NOT NULL
                 );
@@ -181,6 +186,8 @@ class GroupDispatcher:
                     topic_signature TEXT NOT NULL DEFAULT '',
                     target_account_ids TEXT NOT NULL DEFAULT '[]',
                     preferred_worker_id TEXT NOT NULL DEFAULT '',
+                    response_strategy TEXT NOT NULL DEFAULT 'immediate',
+                    response_delay_seconds REAL NOT NULL DEFAULT 0,
                     submitted_at REAL NOT NULL,
                     PRIMARY KEY(event_id, worker_id)
                 );
@@ -205,6 +212,7 @@ class GroupDispatcher:
                 for row in conn.execute("PRAGMA table_info(dispatcher_groups)").fetchall()
             }
             for name, definition in (
+                ("peer_required", "INTEGER NOT NULL DEFAULT 0"),
                 ("open_loop_target_worker_id", "TEXT NOT NULL DEFAULT ''"),
                 ("open_loop_topic", "TEXT NOT NULL DEFAULT ''"),
                 ("open_loop_expires_at", "REAL NOT NULL DEFAULT 0"),
@@ -223,9 +231,19 @@ class GroupDispatcher:
                 ("base_score", "REAL NOT NULL DEFAULT 0"),
                 ("final_score", "REAL NOT NULL DEFAULT 0"),
                 ("activity_penalty", "REAL NOT NULL DEFAULT 0"),
+                ("response_strategy", "TEXT NOT NULL DEFAULT 'immediate'"),
+                ("response_delay_seconds", "REAL NOT NULL DEFAULT 0"),
             ):
                 if name not in columns:
                     conn.execute(f"ALTER TABLE dispatcher_events ADD COLUMN {name} {definition}")
+            for name, definition in (
+                ("response_strategy", "TEXT NOT NULL DEFAULT 'immediate'"),
+                ("response_delay_seconds", "REAL NOT NULL DEFAULT 0"),
+            ):
+                if name not in candidate_columns:
+                    conn.execute(
+                        f"ALTER TABLE dispatcher_candidates ADD COLUMN {name} {definition}"
+                    )
 
     def register(self) -> None:
         now = self._clock()
@@ -289,6 +307,8 @@ class GroupDispatcher:
         group_id: str,
         base_score: float,
         should_reply: bool,
+        response_strategy: str = "immediate",
+        response_delay_seconds: float = 0.0,
         sender_type: str = "human",
         sender_account_id: str = "",
         target_account_ids: tuple[str, ...] | list[str] = (),
@@ -302,6 +322,8 @@ class GroupDispatcher:
             group_id=group_id,
             base_score=base_score,
             should_reply=should_reply,
+            response_strategy=response_strategy,
+            response_delay_seconds=response_delay_seconds,
             sender_type=sender_type,
             sender_account_id=sender_account_id,
             target_account_ids=target_account_ids,
@@ -326,6 +348,8 @@ class GroupDispatcher:
         group_id: str,
         base_score: float,
         should_reply: bool,
+        response_strategy: str,
+        response_delay_seconds: float,
         sender_type: str,
         sender_account_id: str,
         target_account_ids: tuple[str, ...] | list[str],
@@ -340,6 +364,10 @@ class GroupDispatcher:
         now = self._clock()
         targets = sorted({str(value).strip() for value in target_account_ids if str(value).strip()})
         topic_signature = _topic_signature(message_text)
+        response_strategy = str(response_strategy or "").strip().lower()
+        if response_strategy not in {"immediate", "delayed"}:
+            response_strategy = "immediate" if should_reply else "silent"
+        response_delay_seconds = max(0.0, float(response_delay_seconds or 0.0))
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             conn.execute(
@@ -364,9 +392,9 @@ class GroupDispatcher:
                 INSERT INTO dispatcher_candidates(
                     event_id, group_id, worker_id, account_id, base_score, eligible,
                     reason, sender_type, sender_account_id, topic_signature, target_account_ids,
-                    preferred_worker_id, submitted_at
+                    preferred_worker_id, response_strategy, response_delay_seconds, submitted_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(event_id, worker_id) DO UPDATE SET
                     account_id=excluded.account_id,
                     base_score=excluded.base_score,
@@ -377,6 +405,8 @@ class GroupDispatcher:
                     topic_signature=excluded.topic_signature,
                     target_account_ids=excluded.target_account_ids,
                     preferred_worker_id=excluded.preferred_worker_id,
+                    response_strategy=excluded.response_strategy,
+                    response_delay_seconds=excluded.response_delay_seconds,
                     submitted_at=excluded.submitted_at
                 """,
                 (
@@ -392,6 +422,8 @@ class GroupDispatcher:
                     topic_signature,
                     json.dumps(targets, ensure_ascii=True),
                     str(preferred_worker_id or ""),
+                    response_strategy,
+                    response_delay_seconds,
                     now,
                 ),
             )
@@ -450,7 +482,10 @@ class GroupDispatcher:
         target_worker_id: str,
         source_sender_type: str,
         source_targeted: bool,
+        force_peer: bool,
     ) -> bool:
+        if force_peer:
+            return True
         if source_sender_type != "other_ai" and source_targeted:
             return False
         if target_worker_id:
@@ -551,6 +586,7 @@ class GroupDispatcher:
                 and sender_account_id in known_accounts
                 and sender_account_id != self.account_id
             )
+            is_human = sender_type not in {"other_ai", "system"}
             self._expire_active_lease(conn, group_id, now)
             state = conn.execute(
                 "SELECT * FROM dispatcher_groups WHERE group_id=?", (group_id,)
@@ -562,6 +598,7 @@ class GroupDispatcher:
                 ).fetchone()
             assert state is not None
             open_target, open_topic = self._open_loop_state(conn, group_id, state, now)
+            peer_required = bool(state["peer_required"] or 0)
             if is_peer:
                 if known_targets:
                     directed = [
@@ -573,7 +610,9 @@ class GroupDispatcher:
                         eligible = directed
                 elif open_target:
                     eligible = [row for row in candidates if str(row["worker_id"]) == open_target]
-                elif open_topic and _topic_similarity(open_topic, message_topic) >= 0.18:
+                elif peer_required or (
+                    open_topic and _topic_similarity(open_topic, message_topic) >= 0.18
+                ):
                     # A non-directed question keeps the topic open. The dispatcher
                     # selects a peer even when its local preview was initially silent.
                     eligible = list(candidates)
@@ -585,7 +624,17 @@ class GroupDispatcher:
                     )
                 return self._mark_candidate_observed(conn, event_id, now, active_worker, "group_busy")
 
-            is_human = sender_type not in {"other_ai", "system"}
+            if is_human:
+                conn.execute(
+                    """
+                    UPDATE dispatcher_groups
+                    SET last_human_at=?, peer_turns=0, peer_window_started_at=0,
+                        peer_required=0,
+                        open_loop_target_worker_id='', open_loop_topic='', open_loop_expires_at=0
+                    WHERE group_id=?
+                    """,
+                    (now, group_id),
+                )
             if not eligible:
                 reason = (
                     "peer_target_unavailable"
@@ -594,7 +643,7 @@ class GroupDispatcher:
                 )
                 return self._mark_candidate_observed(conn, event_id, now, "", reason)
             if is_peer:
-                interaction_expected = bool(known_targets or open_target)
+                interaction_expected = bool(known_targets or open_target or peer_required)
                 if not interaction_expected and open_topic:
                     interaction_expected = _topic_similarity(open_topic, message_topic) >= 0.18
                 peer_reason = self._peer_gate(
@@ -609,21 +658,17 @@ class GroupDispatcher:
                 if peer_reason:
                     return self._mark_candidate_observed(conn, event_id, now, "", peer_reason)
             elif is_human:
-                conn.execute(
-                    """
-                    UPDATE dispatcher_groups
-                    SET last_human_at=?, peer_turns=0, peer_window_started_at=0,
-                        open_loop_target_worker_id='', open_loop_topic='', open_loop_expires_at=0
-                    WHERE group_id=?
-                    """,
-                    (now, group_id),
-                )
                 if (
                     not known_targets
                     and float(state["last_reply_at"] or 0)
                     and now - float(state["last_reply_at"]) < self.min_reply_interval_seconds
                 ):
                     return self._mark_candidate_observed(conn, event_id, now, "", "reply_cooldown")
+                if len(eligible) > 1:
+                    conn.execute(
+                        "UPDATE dispatcher_groups SET peer_required=1 WHERE group_id=?",
+                        (group_id,),
+                    )
 
             recent_counts = self._recent_reply_counts(conn, group_id, now)
             ranked: list[dict[str, object]] = []
@@ -638,6 +683,10 @@ class GroupDispatcher:
                 )
                 priority_bonus = max(-0.2, min(0.2, priority * 0.1))
                 base_score = float(candidate["base_score"] or 0)
+                response_strategy = str(candidate["response_strategy"] or "").strip().lower()
+                if response_strategy not in {"immediate", "delayed"}:
+                    response_strategy = "immediate" if bool(candidate["eligible"]) else "silent"
+                strategy_rank = {"immediate": 0, "delayed": 1}.get(response_strategy, 2)
                 text_target_adjustment = 0.0
                 if text_target_worker_id:
                     text_target_adjustment = (
@@ -654,10 +703,14 @@ class GroupDispatcher:
                         "activity_penalty": activity_penalty,
                         "priority": priority,
                         "recent_replies": recent_replies,
+                        "response_strategy": response_strategy,
+                        "response_delay_seconds": float(candidate["response_delay_seconds"] or 0),
+                        "strategy_rank": strategy_rank,
                     }
                 )
             ranked.sort(
                 key=lambda item: (
+                    int(item["strategy_rank"]),
                     -float(item["final_score"]),
                     -float(item["base_score"]),
                     int(item["recent_replies"]),
@@ -671,8 +724,9 @@ class GroupDispatcher:
             conn.execute(
                 """
                 UPDATE dispatcher_events
-                SET worker_id=?, lease_id=?, status='granted', reason='selected',
-                    base_score=?, final_score=?, activity_penalty=?, updated_at=?
+                    SET worker_id=?, lease_id=?, status='granted', reason='selected',
+                    base_score=?, final_score=?, activity_penalty=?,
+                    response_strategy=?, response_delay_seconds=?, updated_at=?
                 WHERE event_id=?
                 """,
                 (
@@ -681,6 +735,8 @@ class GroupDispatcher:
                     selected["base_score"],
                     selected["final_score"],
                     selected["activity_penalty"],
+                    selected["response_strategy"],
+                    selected["response_delay_seconds"],
                     now,
                     event_id,
                 ),
@@ -699,6 +755,7 @@ class GroupDispatcher:
                     UPDATE dispatcher_groups
                     SET peer_turns=peer_turns+1,
                         peer_window_started_at=CASE WHEN peer_window_started_at=0 THEN ? ELSE peer_window_started_at END,
+                        peer_required=0,
                         open_loop_target_worker_id='', open_loop_topic='', open_loop_expires_at=0
                     WHERE group_id=?
                     """,
@@ -716,6 +773,8 @@ class GroupDispatcher:
         base_score = float(event["base_score"] or 0)
         final_score = float(event["final_score"] or 0)
         activity_penalty = float(event["activity_penalty"] or 0)
+        response_strategy = str(event["response_strategy"] or "immediate")
+        response_delay_seconds = float(event["response_delay_seconds"] or 0)
         if status == "granted" and worker_id == self.worker_id and event["lease_id"]:
             return DispatchDecision(
                 "grant",
@@ -726,6 +785,8 @@ class GroupDispatcher:
                 base_score=base_score,
                 final_score=final_score,
                 activity_penalty=activity_penalty,
+                response_strategy=response_strategy,
+                response_delay_seconds=response_delay_seconds,
             )
         return DispatchDecision(
             "observe",
@@ -739,6 +800,8 @@ class GroupDispatcher:
             base_score=base_score,
             final_score=final_score,
             activity_penalty=activity_penalty,
+            response_strategy=response_strategy,
+            response_delay_seconds=response_delay_seconds,
         )
 
     @staticmethod
@@ -1001,7 +1064,7 @@ class GroupDispatcher:
     ) -> None:
         sources = conn.execute(
             """
-            SELECT sender_type, target_account_ids, preferred_worker_id
+            SELECT sender_type, target_account_ids, preferred_worker_id, topic_signature
             FROM dispatcher_candidates
             WHERE event_id=?
             ORDER BY submitted_at ASC
@@ -1010,6 +1073,11 @@ class GroupDispatcher:
         ).fetchall()
         source = sources[0] if sources else None
         source_sender_type = str(source["sender_type"] or "human") if source else "human"
+        state = conn.execute(
+            "SELECT peer_required FROM dispatcher_groups WHERE group_id=?",
+            (group_id,),
+        ).fetchone()
+        force_peer = bool(state and state["peer_required"])
         source_targeted = False
         if source_sender_type != "other_ai":
             live_accounts = {
@@ -1042,10 +1110,13 @@ class GroupDispatcher:
             target_worker_id=target_worker_id,
             source_sender_type=source_sender_type,
             source_targeted=source_targeted,
+            force_peer=force_peer,
         ):
             self._clear_open_loop(conn, group_id)
             return
-        topic = _topic_signature(response_text)
+        topic = _topic_signature(response_text) or (
+            str(source["topic_signature"] or "") if source else ""
+        )
         if not topic:
             self._clear_open_loop(conn, group_id)
             return
@@ -1165,6 +1236,16 @@ class GroupDispatcher:
             activity_penalty_sql = (
                 "activity_penalty" if "activity_penalty" in event_columns else "0 AS activity_penalty"
             )
+            response_strategy_sql = (
+                "response_strategy"
+                if "response_strategy" in event_columns
+                else "'immediate' AS response_strategy"
+            )
+            response_delay_sql = (
+                "response_delay_seconds"
+                if "response_delay_seconds" in event_columns
+                else "0 AS response_delay_seconds"
+            )
             workers = [
                 {
                     "worker_id": str(row["worker_id"] or ""),
@@ -1214,6 +1295,9 @@ class GroupDispatcher:
                         "last_human_at": float(row["last_human_at"] or 0),
                         "peer_turns": int(row["peer_turns"] or 0),
                         "peer_window_started_at": float(row["peer_window_started_at"] or 0),
+                        "peer_required": bool(row["peer_required"] or 0)
+                        if "peer_required" in group_columns
+                        else False,
                         "active": active,
                         "active_worker_id": str(row["active_worker_id"] or "") if active else "",
                         "active_event_id": str(row["active_event_id"] or "") if active else "",
@@ -1235,6 +1319,8 @@ class GroupDispatcher:
                     "base_score": float(row["base_score"] or 0),
                     "final_score": float(row["final_score"] or 0),
                     "activity_penalty": float(row["activity_penalty"] or 0),
+                    "response_strategy": str(row["response_strategy"] or "immediate"),
+                    "response_delay_seconds": float(row["response_delay_seconds"] or 0),
                     "created_at": float(row["created_at"] or 0),
                     "updated_at": float(row["updated_at"] or 0),
                 }
@@ -1242,7 +1328,8 @@ class GroupDispatcher:
                     f"""
                     SELECT event_id, group_id, worker_id, lease_id, status,
                            {reason_sql}, {base_score_sql}, {final_score_sql},
-                           {activity_penalty_sql}, created_at, updated_at
+                           {activity_penalty_sql}, {response_strategy_sql}, {response_delay_sql},
+                           created_at, updated_at
                     FROM dispatcher_events
                     ORDER BY updated_at DESC
                     LIMIT ?

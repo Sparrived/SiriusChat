@@ -1015,9 +1015,21 @@ class _EmotionalGroupChatEngineBase:
             message.mentions_current_bot or self._message_explicitly_mentions_current_bot(message)
         )
         if message.received_during_bot_send and not explicitly_mentioned:
-            return {"should_reply": False, "score": 0.0, "reason": "reply_send_window"}
+            return {
+                "should_reply": False,
+                "score": 0.0,
+                "reason": "reply_send_window",
+                "strategy": "silent",
+                "delay_seconds": 0.0,
+            }
         if message.sender_type == "other_ai" and not explicitly_mentioned and len(content) < 30:
-            return {"should_reply": False, "score": 0.0, "reason": "short_peer_message"}
+            return {
+                "should_reply": False,
+                "score": 0.0,
+                "reason": "short_peer_message",
+                "strategy": "silent",
+                "delay_seconds": 0.0,
+            }
         if content.lstrip().startswith("/"):
             return {
                 "should_reply": True,
@@ -1025,6 +1037,8 @@ class _EmotionalGroupChatEngineBase:
                 "threshold": 0.0,
                 "reason": "plugin_candidate",
                 "urgency_score": 100.0,
+                "strategy": "immediate",
+                "delay_seconds": 0.0,
             }
 
         user_id = (
@@ -1069,6 +1083,8 @@ class _EmotionalGroupChatEngineBase:
             "score": score,
             "threshold": float(participation.get("threshold", 0.5)),
             "reason": str(participation.get("reason") or filter_result),
+            "strategy": str(participation.get("strategy") or "silent"),
+            "delay_seconds": float(participation.get("delay_seconds", 0.0) or 0.0),
             "urgency_score": float(signal.urgency_score),
             "directed_score": float(signal.directed_score),
             "is_mentioned": is_mentioned,

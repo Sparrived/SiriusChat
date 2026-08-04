@@ -1198,14 +1198,28 @@ class NapCatAdapter(BaseAdapter):
                     candidate = preview_dispatch(message, [participant], group_id)
                 except Exception:
                     LOG.warning("[群调度] 预判失败，按静默候选处理", exc_info=True)
-                    candidate = {"should_reply": False, "score": 0.0, "reason": "preview_failed"}
+                    candidate = {
+                        "should_reply": False,
+                        "score": 0.0,
+                        "reason": "preview_failed",
+                        "strategy": "silent",
+                        "delay_seconds": 0.0,
+                    }
             else:
-                candidate = {"should_reply": True, "score": 1.0, "reason": "legacy_engine"}
+                candidate = {
+                    "should_reply": True,
+                    "score": 1.0,
+                    "reason": "legacy_engine",
+                    "strategy": "immediate",
+                    "delay_seconds": 0.0,
+                }
             decision = await dispatcher.coordinate(
                 event_id=event_id,
                 group_id=group_id,
                 base_score=float(candidate.get("score", 0.0)),
                 should_reply=bool(candidate.get("should_reply", False)),
+                response_strategy=str(candidate.get("strategy", "silent")),
+                response_delay_seconds=float(candidate.get("delay_seconds", 0.0) or 0.0),
                 sender_type=message.sender_type,
                 sender_account_id=parsed.user_id,
                 target_account_ids=target_account_ids,
@@ -1242,6 +1256,8 @@ class NapCatAdapter(BaseAdapter):
             dispatch_lease_id = decision.lease_id
             message.dispatch_coordinated = True
             message.dispatch_lease_id = dispatch_lease_id
+            message.dispatch_response_strategy = decision.response_strategy
+            message.dispatch_response_delay_seconds = decision.response_delay_seconds
             self._dispatch_leases[group_id] = dispatch_lease_id
 
         msg_preview = (parsed.prompt or "")[:200].replace("\n", " ")
