@@ -19,6 +19,20 @@ from sirius_pulse.reply_time_curve import normalize_reply_time_curve_points
 
 logger = logging.getLogger(__name__)
 
+_GROUP_REPLY_STRATEGIES = {"smart", "keyword"}
+
+
+def normalize_group_reply_strategies(value: Any) -> dict[str, str]:
+    if not isinstance(value, dict):
+        return {}
+    result: dict[str, str] = {}
+    for group_id, strategy in value.items():
+        group_key = str(group_id).strip()
+        strategy_key = str(strategy).strip().lower()
+        if group_key and strategy_key in _GROUP_REPLY_STRATEGIES:
+            result[group_key] = strategy_key
+    return result
+
 
 # ---------------------------------------------------------------------------
 # Adapter 配置
@@ -183,6 +197,8 @@ class PersonaExperienceConfig:
     # 参与决策
     engagement_sensitivity: float = 0.5  # 0.0~1.0
     expressiveness: float = 0.5  # 0.0~1.0 单旋钮活泼度
+    # 群级回复策略；未配置的群使用 smart
+    group_reply_strategies: dict[str, str] = field(default_factory=dict)
 
     # 回复频率限制
     min_reply_interval_seconds: float = 0.0
@@ -216,6 +232,9 @@ class PersonaExperienceConfig:
         d: dict[str, Any] = {
             "engagement_sensitivity": self.engagement_sensitivity,
             "expressiveness": self.expressiveness,
+            "group_reply_strategies": normalize_group_reply_strategies(
+                self.group_reply_strategies
+            ),
             "min_reply_interval_seconds": self.min_reply_interval_seconds,
             "main_model_reply_cooldown_seconds": self.main_model_reply_cooldown_seconds,
             "reply_time_curve_points": normalize_reply_time_curve_points(
@@ -250,6 +269,9 @@ class PersonaExperienceConfig:
         return cls(
             engagement_sensitivity=float(data.get("engagement_sensitivity", 0.5)),
             expressiveness=float(data.get("expressiveness", 0.5)),
+            group_reply_strategies=normalize_group_reply_strategies(
+                data.get("group_reply_strategies", {})
+            ),
             min_reply_interval_seconds=float(data.get("min_reply_interval_seconds", 0.0)),
             main_model_reply_cooldown_seconds=float(
                 data.get("main_model_reply_cooldown_seconds", 0.0)

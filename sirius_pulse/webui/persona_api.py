@@ -341,6 +341,7 @@ async def api_experience_get(request: web.Request, data_dir: Path) -> web.Respon
         {
             "engagement_sensitivity": exp.engagement_sensitivity,
             "expressiveness": exp.expressiveness,
+            "group_reply_strategies": exp.group_reply_strategies,
             "min_reply_interval_seconds": exp.min_reply_interval_seconds,
             "main_model_reply_cooldown_seconds": exp.main_model_reply_cooldown_seconds,
             "reply_time_curve_points": exp.reply_time_curve_points,
@@ -379,6 +380,7 @@ async def api_experience_post(request: web.Request, data_dir: Path) -> web.Respo
     for key in (
         "engagement_sensitivity",
         "expressiveness",
+        "group_reply_strategies",
         "min_reply_interval_seconds",
         "main_model_reply_cooldown_seconds",
         "reply_time_curve_points",

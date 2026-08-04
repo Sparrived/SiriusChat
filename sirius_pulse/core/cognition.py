@@ -737,6 +737,24 @@ class CognitionAnalyzer:
         names = [self.ai_name.lower()] + self.ai_aliases
         return any(name in text for name in names if name)
 
+    def is_name_or_alias_mentioned(self, message: str) -> bool:
+        """Return whether text explicitly contains the configured name or alias."""
+        text = (message or "").strip().lower()
+        if not text:
+            return False
+        for raw_name in [self.ai_name, *self.ai_aliases]:
+            name = str(raw_name or "").strip().lower()
+            if not name:
+                continue
+            if any("\u4e00" <= char <= "\u9fff" for char in name):
+                if name in text:
+                    return True
+                continue
+            pattern = rf"(?<![a-z0-9_])@?{re.escape(name)}(?![a-z0-9_])"
+            if re.search(pattern, text):
+                return True
+        return False
+
     def _detect_sarcasm_score(self, message: str) -> float:
         """Detect sarcasm / irony in message via heuristic patterns.
 

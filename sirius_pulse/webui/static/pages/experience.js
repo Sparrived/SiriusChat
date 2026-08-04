@@ -21,6 +21,7 @@ const BOOLEAN_FIELDS = [
 ];
 
 let replyTimeCurvePoints = [];
+let groupReplyStrategies = {};
 const booleanState = {};
 
 function numberInput(name, min, max, step) {
@@ -73,6 +74,29 @@ function replyTimeCurveEditor() {
       <svg id="replyTimeCurve" class="reply-time-curve" viewBox="0 0 720 180" role="img" aria-label="24小时回复系数曲线"></svg>
       <div class="exp-curve-axis"><span>00:00</span><span>06:00</span><span>12:00</span><span>18:00</span><span>24:00</span></div>
       <div id="replyCurvePoints" class="exp-curve-points"></div>
+    </div>
+  `;
+}
+
+function groupReplyStrategyEditor() {
+  return `
+    <div class="exp-group-strategy-card">
+      <div class="exp-curve-head">
+        <div>
+          <strong>群级回复策略</strong>
+          <small>未配置的群使用智能模式；关键词模式只在消息包含名称或别名时触发。</small>
+        </div>
+        <span class="exp-always-on">默认：智能</span>
+      </div>
+      <div id="groupReplyStrategyRows" class="exp-group-strategy-rows"></div>
+      <div class="exp-group-strategy-add">
+        <input id="groupReplyGroupId" type="text" inputmode="numeric" placeholder="输入群号" aria-label="群号">
+        <select id="groupReplyStrategyNew" aria-label="回复策略">
+          <option value="smart">智能</option>
+          <option value="keyword">关键词</option>
+        </select>
+        <button class="btn btn-sm" type="button" id="groupReplyStrategyAdd">添加群组</button>
+      </div>
     </div>
   `;
 }
@@ -215,6 +239,13 @@ function pageStyles() {
       .exp-toggle-state { flex:0 0 auto; border-radius:999px; padding:3px 8px; font-size:11px; font-weight:700; color:var(--text-3); background:var(--bg-2); border:1px solid var(--border); }
       .exp-toggle.is-enabled .exp-toggle-state { color:var(--success); border-color:color-mix(in srgb, var(--success) 55%, var(--border)); background:color-mix(in srgb, var(--success) 14%, var(--bg-2)); }
       .exp-curve-card { margin-top:14px; padding:14px; border:1px solid var(--border); border-radius:var(--radius-md); background:var(--surface-1,var(--bg-2)); user-select:none; }
+      .exp-group-strategy-card { margin-top:14px; padding:14px; border:1px solid var(--border); border-radius:var(--radius-md); background:var(--surface-1,var(--bg-2)); }
+      .exp-group-strategy-rows { display:grid; gap:8px; margin-top:14px; }
+      .exp-group-strategy-row { display:grid; grid-template-columns:minmax(120px,1fr) 140px 34px; gap:8px; align-items:center; }
+      .exp-group-strategy-row input, .exp-group-strategy-row select, .exp-group-strategy-add input, .exp-group-strategy-add select { width:100%; min-width:0; background:var(--surface-2); color:var(--text); border:1px solid var(--border); border-radius:6px; padding:7px 8px; font-size:12px; }
+      .exp-group-strategy-remove { width:34px; height:34px; padding:0; font-size:18px; line-height:1; }
+      .exp-group-strategy-empty { color:var(--text-3); font-size:12px; padding:8px 0 2px; }
+      .exp-group-strategy-add { display:grid; grid-template-columns:minmax(120px,1fr) 140px auto; gap:8px; margin-top:12px; }
       .exp-curve-head { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; }
       .exp-curve-head strong { display:block; color:var(--text-1); font-size:13px; margin-bottom:4px; }
       .exp-curve-head small { display:block; color:var(--text-2); font-size:12px; line-height:1.45; }
@@ -232,7 +263,7 @@ function pageStyles() {
       .exp-curve-point input { width:100%; background:var(--surface-2); color:var(--text); border:1px solid var(--border); border-radius:6px; padding:6px 8px; font-size:12px; }
       .exp-quadrant { min-height:260px; }
       @media (max-width: 900px) { .exp-style-grid { grid-template-columns:1fr; } .exp-hero { flex-direction:column; } }
-      @media (max-width: 620px) { .exp-grid { grid-template-columns:1fr; } .exp-card-wide, .exp-card-tall { grid-column:span 1; grid-row:span 1; } .exp-toggle { min-height:auto; } }
+      @media (max-width: 620px) { .exp-grid { grid-template-columns:1fr; } .exp-card-wide, .exp-card-tall { grid-column:span 1; grid-row:span 1; } .exp-toggle { min-height:auto; } .exp-group-strategy-row, .exp-group-strategy-add { grid-template-columns:1fr; } .exp-group-strategy-remove { width:100%; } }
     </style>
   `;
 }
@@ -255,6 +286,7 @@ export async function init(container, params = {}) {
   }
 
   for (const field of BOOLEAN_FIELDS) delete booleanState[field];
+  groupReplyStrategies = {};
 
   container.innerHTML = `
     ${pageStyles()}
@@ -300,6 +332,7 @@ export async function init(container, params = {}) {
             ${fieldCard('主模型调用冷却（秒）', '主回复模型之间的冷却时间，用于降低连续 LLM 调用。', numberInput('main_model_reply_cooldown_seconds', 0, null, 0.5))}
             ${fieldCard('单句最大长度（字）', '限制拆分后每句话的长度，越小越像短句聊天。', numberInput('max_sentence_chars', 5, 50))}
           </div>
+          ${groupReplyStrategyEditor()}
           ${replyTimeCurveEditor()}
         `)}
 
@@ -568,6 +601,102 @@ function setupBooleanCards(root, autoSave) {
   });
 }
 
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
+function renderGroupReplyStrategies() {
+  const rows = $('groupReplyStrategyRows');
+  if (!rows) return;
+  const entries = Object.entries(groupReplyStrategies);
+  rows.innerHTML = entries.length
+    ? entries.map(([groupId, strategy]) => `
+        <div class="exp-group-strategy-row" data-group-id="${escapeHtml(groupId)}">
+          <input type="text" value="${escapeHtml(groupId)}" aria-label="群号">
+          <select aria-label="回复策略">
+            <option value="smart" ${strategy === 'smart' ? 'selected' : ''}>智能</option>
+            <option value="keyword" ${strategy === 'keyword' ? 'selected' : ''}>关键词</option>
+          </select>
+          <button class="btn btn-sm exp-group-strategy-remove" type="button" title="移除" aria-label="移除群组">×</button>
+        </div>
+      `).join('')
+    : '<div class="exp-group-strategy-empty">暂未设置群级覆盖。</div>';
+}
+
+function setupGroupReplyStrategies(autoSave) {
+  const rows = $('groupReplyStrategyRows');
+  const groupIdInput = $('groupReplyGroupId');
+  const strategyInput = $('groupReplyStrategyNew');
+  const addButton = $('groupReplyStrategyAdd');
+  if (!rows || !groupIdInput || !strategyInput || !addButton) return;
+
+  const add = () => {
+    const groupId = groupIdInput.value.trim();
+    if (!groupId) return;
+    if (Object.prototype.hasOwnProperty.call(groupReplyStrategies, groupId)) {
+      toast('该群组已配置', 'error');
+      return;
+    }
+    groupReplyStrategies[groupId] = strategyInput.value === 'keyword' ? 'keyword' : 'smart';
+    groupIdInput.value = '';
+    renderGroupReplyStrategies();
+    autoSave?.schedule();
+  };
+
+  scopedPage.on(addButton, 'click', add);
+  scopedPage.on(groupIdInput, 'keydown', event => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      add();
+    }
+  });
+  scopedPage.on(rows, 'change', event => {
+    const row = event.target.closest?.('[data-group-id]');
+    if (!row) return;
+    const oldGroupId = row.dataset.groupId;
+    if (event.target.tagName === 'SELECT') {
+      groupReplyStrategies[oldGroupId] = event.target.value === 'keyword' ? 'keyword' : 'smart';
+      autoSave?.schedule();
+      return;
+    }
+    const newGroupId = event.target.value.trim();
+    if (!newGroupId || (newGroupId !== oldGroupId && Object.prototype.hasOwnProperty.call(groupReplyStrategies, newGroupId))) {
+      event.target.value = oldGroupId;
+      toast('群号为空或已存在', 'error');
+      return;
+    }
+    const strategy = groupReplyStrategies[oldGroupId];
+    delete groupReplyStrategies[oldGroupId];
+    groupReplyStrategies[newGroupId] = strategy;
+    renderGroupReplyStrategies();
+    autoSave?.schedule();
+  });
+  scopedPage.on(rows, 'click', event => {
+    const button = event.target.closest?.('.exp-group-strategy-remove');
+    if (!button || !confirmDanger()) return;
+    const row = button.closest('[data-group-id]');
+    if (!row) return;
+    delete groupReplyStrategies[row.dataset.groupId];
+    renderGroupReplyStrategies();
+    autoSave?.schedule();
+  });
+  renderGroupReplyStrategies();
+}
+
+function normalizeGroupReplyStrategies(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return Object.fromEntries(
+    Object.entries(value)
+      .map(([groupId, strategy]) => [String(groupId).trim(), strategy === 'keyword' ? 'keyword' : 'smart'])
+      .filter(([groupId]) => groupId),
+  );
+}
+
 async function loadExperience(name, autoSave) {
   try {
     const data = await get(`/persona/experience`);
@@ -583,6 +712,7 @@ async function loadExperience(name, autoSave) {
 
     form.min_reply_interval_seconds.value = data.min_reply_interval_seconds ?? 2;
     form.main_model_reply_cooldown_seconds.value = data.main_model_reply_cooldown_seconds ?? 0;
+    groupReplyStrategies = normalizeGroupReplyStrategies(data.group_reply_strategies);
     replyTimeCurvePoints = normalizeCurvePoints(data.reply_time_curve_points || []);
     if (!replyTimeCurvePoints.length) {
       replyTimeCurvePoints = [{ time: '00:00', coefficient: 1 }, { time: '24:00', coefficient: 1 }];
@@ -602,6 +732,7 @@ async function loadExperience(name, autoSave) {
     setBooleanField('plan_mode_presence_enabled', data.plan_mode_presence_enabled ?? false);
 
     setupQuadrant(autoSave);
+    setupGroupReplyStrategies(autoSave);
     setupReplyTimeCurve(autoSave);
 
     scopedPage.$$('[data-spin-target]').forEach(btn => {
@@ -630,6 +761,7 @@ async function saveExperience(name) {
   const experience = {
     engagement_sensitivity: parseFloat(form.engagement_sensitivity.value),
     expressiveness: parseFloat(form.expressiveness.value),
+    group_reply_strategies: { ...groupReplyStrategies },
     min_reply_interval_seconds: parseInt(form.min_reply_interval_seconds.value, 10),
     main_model_reply_cooldown_seconds: parseFloat(form.main_model_reply_cooldown_seconds.value),
     reply_time_curve_points: normalizeCurvePoints(replyTimeCurvePoints),

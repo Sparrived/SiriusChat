@@ -31,6 +31,14 @@ _SOCIAL_JOIN_RE = re.compile(
 _IMAGE_RE = re.compile(r"(\[图片描述|\[动画表情|图片|图里|截图|表情包)")
 
 
+def get_group_reply_strategy(config: dict[str, Any], group_id: str) -> str:
+    strategies = config.get("group_reply_strategies", {})
+    if not isinstance(strategies, dict):
+        return "smart"
+    strategy = str(strategies.get(str(group_id), "smart")).strip().lower()
+    return strategy if strategy in {"smart", "keyword"} else "smart"
+
+
 @dataclass(slots=True)
 class ParticipationDecision:
     """A non-LLM decision about whether and when to participate."""
@@ -466,4 +474,9 @@ def _scale_reply_score(raw_score: float, coefficient: float) -> float:
     return _clamp_reply_score(_clamp(raw_score) * _clamp_coefficient(coefficient))
 
 
-__all__ = ["ParticipationDecision", "ParticipationPolicy", "get_reply_time_coefficient"]
+__all__ = [
+    "ParticipationDecision",
+    "ParticipationPolicy",
+    "get_group_reply_strategy",
+    "get_reply_time_coefficient",
+]

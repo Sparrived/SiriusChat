@@ -13,7 +13,11 @@ from typing import TYPE_CHECKING, Any
 
 from sirius_pulse.core.identity_resolver import IdentityContext
 from sirius_pulse.core.cognition import extract_keywords
-from sirius_pulse.core.participation import ParticipationPolicy, get_reply_time_coefficient
+from sirius_pulse.core.participation import (
+    ParticipationPolicy,
+    get_group_reply_strategy,
+    get_reply_time_coefficient,
+)
 from sirius_pulse.models.emotion import EmotionState
 from sirius_pulse.models.models import Message, UnifiedUser
 from sirius_pulse.models.response_strategy import ResponseStrategy, StrategyDecision
@@ -274,6 +278,20 @@ class Pipeline:
                 logger.debug("消息以配置前缀开头，跳过回复流程: %s", text_stripped[:50])
                 return "reject"
 
+        # 关键词模式只允许名称/别名命中，且不受普通评分模型影响。
+        is_private = group_id.startswith("private_")
+        reply_mode = get_group_reply_strategy(engine.config, group_id)
+        if not is_private and reply_mode == "keyword":
+            keyword_mentioned = engine.cognition_analyzer.is_name_or_alias_mentioned(content)
+            if not keyword_mentioned:
+                signal.participation = self._keyword_participation(False)
+                logger.info("[参与] reject group=%s reason=keyword_not_mentioned", group_id)
+                return "reject"
+            signal.directed_score = max(signal.directed_score, 1.0)
+            signal.is_mentioned = True
+            signal.participation = self._keyword_participation(True)
+            return "pass"
+
         if coordinated:
             return "pass"
 
@@ -312,7 +330,6 @@ class Pipeline:
             affinity = getattr(user_profile, "affinity_score", 0.0)
 
         # 私聊兜底：1v1 不完全沉默
-        is_private = group_id.startswith("private_")
         decision = self._participation_policy.evaluate(
             signal=signal,
             content=content,
@@ -381,6 +398,31 @@ class Pipeline:
         )
 
         return "pass"
+
+    @staticmethod
+    def _keyword_participation(mentioned: bool) -> dict[str, Any]:
+        return {
+            "strategy": (
+                ResponseStrategy.IMMEDIATE.value
+                if mentioned
+                else ResponseStrategy.SILENT.value
+            ),
+            "reason": "keyword_mentioned" if mentioned else "keyword_not_mentioned",
+            "score": 1.0 if mentioned else 0.0,
+            "threshold": 1.0,
+            "delay_seconds": 0.0,
+            "addressing_score": 1.0 if mentioned else 0.0,
+            "reply_need_score": 0.0,
+            "social_opportunity_score": 0.0,
+            "conversation_fit_score": 0.0,
+            "suppression_score": 0.0,
+            "context": {
+                "reply_mode": "keyword",
+                "keyword_mentioned": mentioned,
+                "raw_score": 1.0 if mentioned else 0.0,
+                "final_score": 1.0 if mentioned else 0.0,
+            },
+        }
 
     # ------------------------------------------------------------------
     # 统一生成（所有通过粗筛的消息走这条路）

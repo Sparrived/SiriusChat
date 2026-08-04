@@ -40,6 +40,7 @@ def test_persona_worker_passes_main_model_reply_cooldown_to_runtime_config(tmp_p
         diary_top_k=7,
         diary_token_budget=900,
         memory_unit_top_k=4,
+        group_reply_strategies={"group-keyword": "keyword"},
     )
 
     plugin_config = worker._build_plugin_config(experience)
@@ -48,6 +49,7 @@ def test_persona_worker_passes_main_model_reply_cooldown_to_runtime_config(tmp_p
     assert plugin_config["diary_top_k"] == 7
     assert plugin_config["diary_token_budget"] == 900
     assert plugin_config["memory_unit_top_k"] == 4
+    assert plugin_config["group_reply_strategies"] == {"group-keyword": "keyword"}
 
 
 def test_persona_worker_experience_reload_updates_runtime_config_keys(tmp_path):
@@ -109,3 +111,13 @@ def test_engine_runtime_includes_main_model_reply_cooldown_in_engine_config(tmp_
     config = runtime._build_engine_runtime_config(PersonaExperienceConfig())
 
     assert config["main_model_reply_cooldown_seconds"] == 7.5
+
+
+def test_engine_runtime_includes_group_reply_strategies_in_engine_config(tmp_path):
+    runtime = EngineRuntime(tmp_path)
+
+    config = runtime._build_engine_runtime_config(
+        PersonaExperienceConfig(group_reply_strategies={"group-keyword": "keyword"})
+    )
+
+    assert config["group_reply_strategies"] == {"group-keyword": "keyword"}

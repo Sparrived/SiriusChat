@@ -6,11 +6,16 @@ from types import SimpleNamespace
 import pytest
 
 from sirius_pulse.core.cognition import CognitionAnalyzer
-from sirius_pulse.core.participation import get_reply_time_coefficient
-from sirius_pulse.core.participation import ParticipationPolicy
+from sirius_pulse.core.engine_core import _EmotionalGroupChatEngineBase
+from sirius_pulse.core.participation import (
+    ParticipationPolicy,
+    get_group_reply_strategy,
+    get_reply_time_coefficient,
+)
 from sirius_pulse.core.pipeline import Pipeline
 from sirius_pulse.core.rhythm import RhythmAnalyzer
 from sirius_pulse.models.emotion import EmotionState
+from sirius_pulse.models.models import Message
 from sirius_pulse.models.response_strategy import ResponseStrategy
 from sirius_pulse.models.signal import SignalAnalysis
 
@@ -249,3 +254,63 @@ def test_participation_when_time_curve_boosts_score_then_can_reply():
     assert decision.reason == "addressed"
     assert decision.context["reply_time_coefficient"] == 2.0
     assert decision.score == pytest.approx(decision.context["raw_score"] * 2.0)
+
+
+def test_keyword_group_rejects_message_without_name_or_alias():
+    engine = SimpleNamespace(
+        config={"group_reply_strategies": {"keyword-group": "keyword"}},
+        cognition_analyzer=CognitionAnalyzer(ai_name="Luna", ai_aliases=["月白"]),
+    )
+    pipeline = Pipeline(engine)
+    signal = SignalAnalysis()
+
+    result = pipeline.pre_filter(signal, "大家今天吃什么？", "u1", "keyword-group")
+
+    assert result == "reject"
+    assert signal.participation["reason"] == "keyword_not_mentioned"
+    assert signal.participation["context"]["keyword_mentioned"] is False
+
+
+@pytest.mark.parametrize("content", ["Luna 你怎么看？", "月白，帮我看看"])
+def test_keyword_group_passes_message_with_name_or_alias(content):
+    engine = SimpleNamespace(
+        config={"group_reply_strategies": {"keyword-group": "keyword"}},
+        cognition_analyzer=CognitionAnalyzer(ai_name="Luna", ai_aliases=["月白"]),
+    )
+    pipeline = Pipeline(engine)
+    signal = SignalAnalysis()
+
+    result = pipeline.pre_filter(signal, content, "u1", "keyword-group")
+
+    assert result == "pass"
+    assert signal.is_mentioned is True
+    assert signal.participation["reason"] == "keyword_mentioned"
+    assert signal.participation["context"]["keyword_mentioned"] is True
+
+
+def test_unconfigured_group_keeps_smart_participation_mode():
+    assert get_group_reply_strategy({}, "smart-group") == "smart"
+    assert (
+        get_group_reply_strategy(
+            {"group_reply_strategies": {"keyword-group": "keyword"}},
+            "smart-group",
+        )
+        == "smart"
+    )
+
+
+def test_keyword_group_preview_does_not_promote_platform_only_mention():
+    engine = object.__new__(_EmotionalGroupChatEngineBase)
+    engine.config = {"group_reply_strategies": {"keyword-group": "keyword"}}
+    engine.persona = SimpleNamespace(name="Luna", aliases=["月白"])
+    engine._compute_signal = lambda *args, **kwargs: SignalAnalysis(is_mentioned=True)
+    engine._pre_filter = lambda *args, **kwargs: "reject"
+
+    candidate = engine.preview_dispatch(
+        Message(role="user", content="你好", mentions_current_bot=True),
+        [SimpleNamespace(user_id="u1", is_developer=False)],
+        "keyword-group",
+    )
+
+    assert candidate["should_reply"] is False
+    assert candidate["score"] == 0.0

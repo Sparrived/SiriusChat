@@ -157,6 +157,7 @@ class PersonaWorker:
         config: dict[str, Any] = {
             # 参与决策
             "sensitivity": experience.engagement_sensitivity,
+            "group_reply_strategies": dict(experience.group_reply_strategies),
             "reply_cooldown_seconds": int(experience.min_reply_interval_seconds),
             "main_model_reply_cooldown_seconds": experience.main_model_reply_cooldown_seconds,
             "diary_top_k": experience.diary_top_k,

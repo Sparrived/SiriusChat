@@ -36,6 +36,7 @@ from sirius_pulse.core.plan_runtime import (
     route_message_for_active_plan,
 )
 from sirius_pulse.core.pipeline import Pipeline
+from sirius_pulse.core.participation import get_group_reply_strategy
 from sirius_pulse.core.prompt_factory import PromptFactory, StyleAdapter
 from sirius_pulse.core.rhythm import RhythmAnalyzer
 
@@ -1051,11 +1052,18 @@ class _EmotionalGroupChatEngineBase:
         )
         participation = signal.participation or {}
         score = float(participation.get("score", 0.0))
-        should_reply = filter_result == "pass" or explicitly_mentioned
+        keyword_mode = get_group_reply_strategy(self.config, group_id) == "keyword"
+        should_reply = filter_result == "pass" or (explicitly_mentioned and not keyword_mode)
         if explicitly_mentioned:
-            score = max(score, 1.0)
-            if filter_result != "pass":
+            if not keyword_mode:
+                score = max(score, 1.0)
+            if filter_result != "pass" and not keyword_mode:
                 participation = {**participation, "reason": "explicit_mention"}
+        is_mentioned = bool(signal.is_mentioned or explicitly_mentioned)
+        if keyword_mode:
+            is_mentioned = bool(
+                (participation.get("context") or {}).get("keyword_mentioned", False)
+            )
         return {
             "should_reply": should_reply,
             "score": score,
@@ -1063,7 +1071,7 @@ class _EmotionalGroupChatEngineBase:
             "reason": str(participation.get("reason") or filter_result),
             "urgency_score": float(signal.urgency_score),
             "directed_score": float(signal.directed_score),
-            "is_mentioned": bool(signal.is_mentioned or explicitly_mentioned),
+            "is_mentioned": is_mentioned,
         }
 
     def observe_message(

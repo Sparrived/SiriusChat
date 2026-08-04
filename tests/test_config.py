@@ -38,6 +38,27 @@ def test_experience_config_when_admin_saves_changes_then_next_startup_reads_them
     assert reloaded.other_ai_names == ["HelperBot"]
 
 
+def test_experience_config_group_reply_strategies_round_trip_and_ignore_invalid_values(
+    tmp_path: Path,
+):
+    config_path = tmp_path / "persona_a" / "experience.json"
+    config = PersonaExperienceConfig.from_dict(
+        {
+            "group_reply_strategies": {
+                "100": "keyword",
+                "200": "smart",
+                "300": "unsupported",
+                "": "keyword",
+            }
+        }
+    )
+
+    config.save(config_path)
+    reloaded = PersonaExperienceConfig.load(config_path)
+
+    assert reloaded.group_reply_strategies == {"100": "keyword", "200": "smart"}
+
+
 def test_experience_config_when_webui_loads_form_then_all_user_options_are_serialized(
     tmp_path: Path,
 ):
@@ -57,6 +78,7 @@ def test_experience_config_when_webui_loads_form_then_all_user_options_are_seria
     assert payload["memory_unit_top_k"] == 5
     assert "reply_time_curve_enabled" not in payload
     assert "reply_time_curve_points" in payload
+    assert payload["group_reply_strategies"] == {}
     assert "memory_depth" not in payload
 
 

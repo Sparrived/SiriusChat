@@ -424,6 +424,7 @@ class EngineRuntime:
             ),
             # 行为控制
             "sensitivity": float(self.plugin_config.get("sensitivity", 0.5)),
+            "group_reply_strategies": dict(exp.group_reply_strategies),
             "expressiveness": {"expressiveness": exp.expressiveness},
             "reply_cooldown_seconds": int(self.plugin_config.get("reply_cooldown_seconds", 12)),
             "main_model_reply_cooldown_seconds": float(
