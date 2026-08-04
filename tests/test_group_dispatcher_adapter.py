@@ -174,6 +174,21 @@ async def test_only_one_persona_processes_a_group_event(tmp_path):
     assert second_engine.observed == ["Alice"]
 
 
+@pytest.mark.asyncio
+async def test_peer_event_is_recorded_before_dispatch_admission(tmp_path):
+    engine = _Engine()
+    adapter = _adapter(tmp_path, "beta", "200", engine)
+    adapter.plugin_config["peer_ai_ids"] = ["100"]
+    _set_parsed(adapter, _parsed("200", "peer-1", user_id="100", event_time=1720000000))
+    event = {"self_id": "200"}
+
+    await adapter._process_event_impl(event)
+
+    assert engine.observed == ["Alice"]
+    assert engine.processed == []
+    assert event["_sirius_peer_transcript_recorded"] is True
+
+
 def test_dispatch_event_id_aligns_per_account_message_ids_within_time_bucket():
     first = _parsed("100", "m1", event_time=1720000000)
     second = _parsed("200", "m2", event_time=1720000002)

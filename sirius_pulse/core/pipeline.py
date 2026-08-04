@@ -132,19 +132,22 @@ class Pipeline:
             if image_count > 0:
                 entry_tags.append({"type": "image", "label": f"图片 ×{image_count}"})
 
-        # Add to basic memory and archive to disk
-        entry = engine.basic_memory.add_entry(
-            group_id=group_id,
-            user_id=resolved_user_id,
-            speaker_name=resolved_speaker_name,
-            role="human",
-            content=message.content,
-            channel_user_id=message.channel_user_id or "",
-            platform_message_id=message.message_id or "",
-            multimodal_inputs=mm_inputs if mm_inputs else None,
-            tags=entry_tags if entry_tags else None,
-        )
-        engine.basic_store.append(entry)
+        # Peer messages can be recorded by the adapter before dispatcher admission.
+        # Keep perception idempotent so a deferred retry does not duplicate them.
+        if not message.transcript_recorded:
+            entry = engine.basic_memory.add_entry(
+                group_id=group_id,
+                user_id=resolved_user_id,
+                speaker_name=resolved_speaker_name,
+                role="human",
+                content=message.content,
+                channel_user_id=message.channel_user_id or "",
+                platform_message_id=message.message_id or "",
+                multimodal_inputs=mm_inputs if mm_inputs else None,
+                tags=entry_tags if entry_tags else None,
+            )
+            engine.basic_store.append(entry)
+            message.transcript_recorded = True
 
         # Update group last message time
         from sirius_pulse.core.utils import now_iso

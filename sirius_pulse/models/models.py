@@ -21,6 +21,7 @@ class Message(JsonSerializable):
     channel_user_id: str | None = None
     group_id: str | None = None
     message_id: str | None = None  # 平台消息 ID（用于引用回复）
+    transcript_recorded: bool = False  # 平台消息已写入本地群聊记忆
     multimodal_inputs: list[dict[str, str]] = field(default_factory=list)
     # Adapter 类型，用于按来源过滤可用 Tool（如 "napcat"）
     adapter_type: str | None = None

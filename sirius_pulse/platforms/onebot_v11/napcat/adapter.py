@@ -1224,6 +1224,17 @@ class NapCatAdapter(BaseAdapter):
             mentions_current_bot=mentions_current_bot,
         )
 
+        # A peer must see the actual platform message before it can obtain a
+        # dispatcher lease and generate a reply. The event flag survives a
+        # deferred retry, while Message prevents duplicate local history rows.
+        if is_peer_ai and self._engine is not None:
+            observe = getattr(self._engine, "observe_message", None)
+            if callable(observe):
+                if not bool(event.get("_sirius_peer_transcript_recorded")):
+                    observe(message, [participant], group_id)
+                    event["_sirius_peer_transcript_recorded"] = True
+                message.transcript_recorded = True
+
         dispatch_lease_id = ""
         if dispatcher is not None:
             event_id = self._dispatch_event_id(parsed)
@@ -1285,7 +1296,7 @@ class NapCatAdapter(BaseAdapter):
                     )
                     return False
                 observe = getattr(self._engine, "observe_message", None)
-                if callable(observe):
+                if callable(observe) and not message.transcript_recorded:
                     observe(message, [participant], group_id)
                 LOG.info(
                     "[群调度] observe group=%s worker=%s selected=%s reason=%s",
