@@ -29,6 +29,7 @@ from sirius_pulse.tools.registry import ToolRegistry
 from sirius_pulse.token.token_store import TokenUsageStore
 
 LOG = logging.getLogger("sirius.platforms.runtime")
+MCP_STARTUP_TIMEOUT_SECONDS = 30.0
 
 
 def _resolve_api_key(raw: str) -> str:
@@ -253,7 +254,22 @@ class EngineRuntime:
         executor = ToolExecutor(self.work_path)
         mcp_manager = MCPClientManager(load_mcp_config(PersonaConfigPaths(self.work_path).mcp))
         self._mcp_manager = mcp_manager
-        mcp_tools = await mcp_manager.load_tools(reserved_names=set(registry.tool_names))
+        try:
+            mcp_tools = await asyncio.wait_for(
+                mcp_manager.load_tools(reserved_names=set(registry.tool_names)),
+                timeout=MCP_STARTUP_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            LOG.warning(
+                "MCP TOOL 初始化超时（%.0f 秒），跳过本次 MCP 工具加载: %s",
+                MCP_STARTUP_TIMEOUT_SECONDS,
+                self.work_path,
+            )
+            try:
+                await mcp_manager.close()
+            finally:
+                self._mcp_manager = None
+            mcp_tools = []
         for tool in mcp_tools:
             registry.register(tool)
         if mcp_tools:

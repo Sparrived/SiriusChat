@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 from types import SimpleNamespace
 
@@ -153,3 +154,28 @@ def test_engine_runtime_includes_group_reply_strategies_in_engine_config(tmp_pat
     )
 
     assert config["group_reply_strategies"] == {"group-keyword": "keyword"}
+
+
+@pytest.mark.asyncio
+async def test_persona_worker_startup_lock_serializes_initialization(tmp_path):
+    lock = asyncio.Lock()
+    workers = [
+        PersonaWorker(tmp_path / name, startup_lock=lock)
+        for name in ("sunspot", "sirius")
+    ]
+    state = {"active": 0, "max_active": 0}
+
+    async def fake_start(_adapters_cfg, _plugin_config):
+        state["active"] += 1
+        state["max_active"] = max(state["max_active"], state["active"])
+        await asyncio.sleep(0)
+        state["active"] -= 1
+
+    for worker in workers:
+        worker._start_runtime_and_adapters = fake_start
+
+    await asyncio.gather(
+        *(worker._start_with_lock(SimpleNamespace(adapters=[]), {}) for worker in workers)
+    )
+
+    assert state["max_active"] == 1

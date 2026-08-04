@@ -404,7 +404,13 @@ async def _cmd_run(args: argparse.Namespace) -> None:
 
     from sirius_pulse.persona_worker import PersonaWorker
 
-    workers = {persona_dir.name: PersonaWorker(persona_dir) for persona_dir in persona_dirs}
+    # MCP 服务可能不支持同一时刻建立多个初始化会话；只串行启动阶段，
+    # Worker 进入 ready 后仍然并行处理各自的消息。
+    startup_lock = asyncio.Lock()
+    workers = {
+        persona_dir.name: PersonaWorker(persona_dir, startup_lock=startup_lock)
+        for persona_dir in persona_dirs
+    }
     webui.persona_manager = workers
     LOG.info("活跃人格: %s", ", ".join(persona_names))
 

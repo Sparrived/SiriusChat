@@ -43,9 +43,11 @@ class PersonaWorker:
     def __init__(
         self,
         persona_dir: Path | str,
+        startup_lock: asyncio.Lock | None = None,
     ) -> None:
         self.persona_dir = Path(persona_dir).resolve()
         self.paths = PersonaConfigPaths(self.persona_dir)
+        self._startup_lock = startup_lock
         self._adapters: list[NapCatAdapter] = []
         self._runtime: EngineRuntime | None = None
         self._running = False
@@ -72,15 +74,9 @@ class PersonaWorker:
             plugin_config=plugin_config,
         )
 
-        # 3. 启动引擎
-        await self._runtime.start()
-
-        # 4. 创建并启动各平台 Adapter
-        for adapter_cfg in adapters_cfg.adapters:
-            if not adapter_cfg.enabled:
-                LOG.info("跳过 disabled adapter: %s", getattr(adapter_cfg, "type", "?"))
-                continue
-            await self._start_adapter(adapter_cfg, plugin_config)
+        # 3-4. 启动引擎和 Adapter。多个 Worker 共用外部 MCP 服务时，
+        # 初始化阶段串行，进入 ready 后仍然各自独立并行运行。
+        await self._start_with_lock(adapters_cfg, plugin_config)
 
         # 5. 启动心跳
         self._running = True
@@ -94,6 +90,29 @@ class PersonaWorker:
 
         # 7. 清理
         await self._cleanup()
+
+    async def _start_runtime_and_adapters(
+        self,
+        adapters_cfg: PersonaAdaptersConfig,
+        plugin_config: dict[str, Any],
+    ) -> None:
+        await self._runtime.start()  # type: ignore[union-attr]
+        for adapter_cfg in adapters_cfg.adapters:
+            if not adapter_cfg.enabled:
+                LOG.info("跳过 disabled adapter: %s", getattr(adapter_cfg, "type", "?"))
+                continue
+            await self._start_adapter(adapter_cfg, plugin_config)
+
+    async def _start_with_lock(
+        self,
+        adapters_cfg: PersonaAdaptersConfig,
+        plugin_config: dict[str, Any],
+    ) -> None:
+        if self._startup_lock is None:
+            await self._start_runtime_and_adapters(adapters_cfg, plugin_config)
+            return
+        async with self._startup_lock:
+            await self._start_runtime_and_adapters(adapters_cfg, plugin_config)
 
     # ------------------------------------------------------------------
     # Adapter 启动
