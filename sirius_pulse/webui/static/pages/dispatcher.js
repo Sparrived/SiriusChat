@@ -31,6 +31,11 @@ const STATUS_LABELS = {
   expired: '已过期',
 };
 
+const STRATEGY_LABELS = {
+  immediate: '立即',
+  delayed: '延后',
+};
+
 export function dispose() {
   scopedPage.use(null, null);
 }
@@ -161,12 +166,15 @@ function renderEvents(events) {
     const score = event.final_score
       ? `最终 ${Number(event.final_score).toFixed(2)} · 基础 ${Number(event.base_score || 0).toFixed(2)}`
       : '';
+    const strategy = STRATEGY_LABELS[event.response_strategy]
+      ? ` · ${STRATEGY_LABELS[event.response_strategy]}`
+      : '';
     return `
       <div class="dispatcher-event-row">
         <span class="dispatcher-event-mark ${granted ? 'is-granted' : 'is-observed'}"></span>
         <div class="dispatcher-event-main">
           <div><strong>${escapeHtml(event.group_id)}</strong><span class="dispatcher-event-status ${granted ? 'is-granted' : ''}">${status}</span></div>
-          <div class="dispatcher-event-reason">${escapeHtml(reason)} · ${escapeHtml(event.worker_id || '未指定')}${score ? ` · ${escapeHtml(score)}` : ''}</div>
+          <div class="dispatcher-event-reason">${escapeHtml(reason)} · ${escapeHtml(event.worker_id || '未指定')}${strategy}${score ? ` · ${escapeHtml(score)}` : ''}</div>
         </div>
         <time>${formatRelative(event.updated_at)}</time>
       </div>
