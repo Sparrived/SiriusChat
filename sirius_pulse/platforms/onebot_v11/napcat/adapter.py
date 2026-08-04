@@ -1107,7 +1107,72 @@ class NapCatAdapter(BaseAdapter):
         if self._engine is None or not self._engine_ready():
             self._log_not_ready()
             return
+        if await self._try_inject_tool_chain_event(event):
+            return
         await self._process_event(event)
+
+    async def _try_inject_tool_chain_event(self, event: dict[str, Any]) -> bool:
+        """Offer an explicitly addressed group message to an active tool chain."""
+        engine = self._engine
+        if engine is None:
+            return False
+
+        group_id = str(event.get("group_id", "") or "").strip()
+        is_active = getattr(engine, "is_tool_chain_active", None)
+        inject = getattr(engine, "inject_tool_chain_message", None)
+        if (
+            not group_id
+            or not callable(is_active)
+            or not is_active(group_id)
+            or not callable(inject)
+        ):
+            return False
+
+        parsed = await self.parse_event(event)
+        if parsed is None or parsed.message_type != "group" or not parsed.prompt.strip():
+            return False
+
+        self_id = str(parsed.self_id or event.get("self_id", "") or "")
+        qq_number = str(self.plugin_config.get("qq_number", "") or "").strip()
+        mentions_current_bot = bool(
+            (self_id and self_id in parsed.at_user_ids)
+            or (qq_number and qq_number in parsed.at_user_ids)
+        )
+        uid = str(parsed.user_id or event.get("user_id", "") or "")
+        peer_ai_ids = self.plugin_config.get("peer_ai_ids", [])
+        is_peer_ai = uid in {str(value) for value in peer_ai_ids}
+        participant = UnifiedUser(
+            name=parsed.nickname or f"qq_{uid}",
+            user_id=f"qq_{uid}",
+            identities={"qq_native_sirius_pulse": uid},
+            metadata={
+                "platform": "qq",
+                "qq_uid": uid,
+                "is_developer": self._is_admin(uid),
+                "is_ai": is_peer_ai,
+                "group_id": group_id,
+                "scope": "group",
+            },
+        )
+        message = Message(
+            role="user",
+            content=parsed.prompt,
+            speaker=parsed.card or parsed.nickname or f"qq_{uid}",
+            nickname=parsed.nickname,
+            channel="qq_native_sirius_pulse",
+            channel_user_id=uid,
+            group_id=group_id,
+            message_id=parsed.message_id,
+            multimodal_inputs=parsed.multimodal_inputs,
+            adapter_type="napcat",
+            sender_type="other_ai" if is_peer_ai else "human",
+            mentions_current_bot=mentions_current_bot,
+        )
+        if not inject(message, [participant], group_id):
+            return False
+        event["_sirius_tool_chain_injected"] = True
+        LOG.info("[工具链] 注入群聊文本: group=%s sender=%s", group_id, uid)
+        return True
 
     async def _on_private_message(self, event: dict[str, Any]) -> None:
         uid = str(event.get("user_id", ""))

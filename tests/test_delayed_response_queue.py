@@ -132,6 +132,81 @@ def test_delayed_queue_when_immediate_messages_share_group_then_merges_into_one_
     assert "second" in item.message_content
 
 
+@pytest.mark.asyncio
+async def test_tool_chain_injects_explicit_group_text_into_next_model_round():
+    queue = DelayedResponseQueue()
+    item = queue.enqueue(
+        "group-1",
+        "u1",
+        "look up the status",
+        _decision(ResponseStrategy.IMMEDIATE),
+    )
+    item.enqueue_time = _past(item.window_seconds + 1)
+
+    tool_call = ToolCall(
+        id="call-1",
+        function_name="lookup",
+        function_arguments='{"q":"status"}',
+    )
+    execute_tool = AsyncMock()
+    tasks, engine = _agent_tool_tasks(
+        queue,
+        SimpleNamespace(name="lookup", silent=False, developer_only=False),
+        [
+            SimpleNamespace(
+                raw_text="",
+                clean_text="",
+                tool_calls=[tool_call],
+                reply_references=[],
+                injected_request={},
+            ),
+            SimpleNamespace(
+                raw_text="处理完成",
+                clean_text="处理完成",
+                tool_calls=[],
+                reply_references=[],
+                injected_request={},
+            ),
+        ],
+        execute_tool,
+    )
+    active: set[str] = set()
+    pending_messages: list[SimpleNamespace] = []
+    engine.begin_tool_chain = lambda group_id: active.add(group_id)
+    engine.end_tool_chain = lambda group_id: active.discard(group_id)
+
+    def pop_tool_chain_messages(group_id):
+        messages = pending_messages[:]
+        pending_messages.clear()
+        return messages
+
+    engine.pop_tool_chain_messages = pop_tool_chain_messages
+
+    async def execute_and_receive_message(*args, **kwargs):
+        assert "group-1" in active
+        pending_messages.append(
+            SimpleNamespace(
+                content="Luna 结果也发我",
+                speaker="Bob",
+                channel_user_id="u2",
+                message_id="m2",
+            )
+        )
+        return ToolResult(success=True, data={"ok": True})
+
+    execute_tool.side_effect = execute_and_receive_message
+
+    results = await tasks.tick_delayed_queue("group-1")
+
+    second_request = engine.brain.chat.await_args_list[1].args[0]
+    assert any(
+        message.get("role") == "user" and "Luna 结果也发我" in message.get("content", "")
+        for message in second_request.messages
+    )
+    assert results[0]["reply"] == "处理完成"
+    assert active == set()
+
+
 def test_delayed_queue_when_immediate_window_expires_then_triggers_item():
     queue = DelayedResponseQueue()
     item = queue.enqueue("group-1", "u1", "hello", _decision(ResponseStrategy.IMMEDIATE))

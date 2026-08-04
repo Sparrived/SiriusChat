@@ -272,6 +272,33 @@ class DelayedQueueTasks:
             return _tool_action(tool_call) == "message"
         return bool(getattr(tool, "silent", False))
 
+    @staticmethod
+    def _append_tool_chain_messages(
+        engine: Any,
+        messages: list[dict[str, Any]],
+        group_id: str,
+    ) -> bool:
+        """Append explicitly addressed messages captured during tool work."""
+        pop_messages = getattr(engine, "pop_tool_chain_messages", None)
+        if not callable(pop_messages):
+            return False
+
+        injected = pop_messages(group_id)
+        for message in injected:
+            messages.append(
+                {
+                    "role": "user",
+                    "content": PromptFactory.tag_message(
+                        str(getattr(message, "content", "") or ""),
+                        speaker=str(getattr(message, "speaker", "") or ""),
+                        user_id=str(getattr(message, "channel_user_id", "") or ""),
+                        platform_message_id=str(getattr(message, "message_id", "") or ""),
+                        group_id=group_id,
+                    ),
+                }
+            )
+        return bool(injected)
+
     async def delayed_queue_ticker(self) -> None:
         """Smart-sleep ticker for the delayed queue.
 
@@ -635,8 +662,10 @@ class DelayedQueueTasks:
         plan_session: Any | None = None
         plan_final_reply: str | None = None
         plan_send_to_group = True
+        tool_chain_active = False
 
         while True:
+            self._append_tool_chain_messages(engine, messages, group_id)
             if plan_mode and plan_session is None:
                 plan_session = get_active_plan_session(engine, group_id)
             if plan_mode and plan_session is not None:
@@ -720,6 +749,8 @@ class DelayedQueueTasks:
 
             # 没有调用任何工具 → 文本作为最终回复
             if not tool_calls:
+                if self._append_tool_chain_messages(engine, messages, group_id):
+                    continue
                 agent_turn.advance(AgentTurnPhase.RESPOND)
                 await self._emit_agent_turn(engine, agent_turn)
                 fenced_parts = _markdown_image.split_fenced_markdown(round_clean)
@@ -1011,6 +1042,10 @@ class DelayedQueueTasks:
                 and engine._tool_registry is not None
                 and engine._tool_executor is not None
             ):
+                begin_tool_chain = getattr(engine, "begin_tool_chain", None)
+                if callable(begin_tool_chain):
+                    begin_tool_chain(group_id)
+                    tool_chain_active = True
                 from sirius_pulse.memory.user.unified_models import UnifiedUser
 
                 caller_user_id = item.user_id
@@ -1180,11 +1215,17 @@ class DelayedQueueTasks:
                         await asyncio.sleep(2)
 
             if all_silent:
-                break
+                if not self._append_tool_chain_messages(engine, messages, group_id):
+                    break
 
             # 如果有多模态内容，作为 user 消息注入
             if tool_multimodal:
                 messages.append({"role": "user", "content": tool_multimodal})
+
+        if tool_chain_active:
+            end_tool_chain = getattr(engine, "end_tool_chain", None)
+            if callable(end_tool_chain):
+                end_tool_chain(group_id)
 
         # If the loop ended because max rounds were exhausted and the last round
         # already sent a partial reply, don't duplicate that text as the final reply.

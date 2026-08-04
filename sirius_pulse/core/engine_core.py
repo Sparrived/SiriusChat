@@ -325,6 +325,12 @@ class _EmotionalGroupChatEngineBase:
 
         self._delayed_event_emitted: dict[str, set[str]] = {}
 
+        # New group messages can be offered to an active tool chain between
+        # tool rounds.  The adapter owns the platform parsing; the engine owns
+        # the persona-mention guard and prompt queue.
+        self._active_tool_chain_groups: set[str] = set()
+        self._tool_chain_messages: dict[str, list[Message]] = {}
+
         self._pending_reminders: dict[str, list[dict[str, Any]]] = {}
         self._current_adapter_type: str = ""
         # Bot 在各平台的 UID（如 {"qq_native_sirius_pulse": "123456"}）
@@ -1002,6 +1008,51 @@ class _EmotionalGroupChatEngineBase:
     # ==================================================================
     # Public API
     # ==================================================================
+
+    def begin_tool_chain(self, group_id: str) -> None:
+        """Open the short-lived message injection window for a group."""
+        group_id = str(group_id or "").strip()
+        if not group_id or group_id.startswith("private_"):
+            return
+        self._active_tool_chain_groups.add(group_id)
+        self._tool_chain_messages.setdefault(group_id, [])
+
+    def end_tool_chain(self, group_id: str) -> None:
+        """Close a tool-chain injection window and discard unconsumed input."""
+        group_id = str(group_id or "").strip()
+        self._active_tool_chain_groups.discard(group_id)
+        self._tool_chain_messages.pop(group_id, None)
+
+    def is_tool_chain_active(self, group_id: str) -> bool:
+        """Return whether a group currently accepts mid-chain text."""
+        return str(group_id or "").strip() in self._active_tool_chain_groups
+
+    def inject_tool_chain_message(
+        self,
+        message: Message,
+        participants: list[UnifiedUser],
+        group_id: str,
+    ) -> bool:
+        """Queue an explicitly addressed group message for the next tool round."""
+        group_id = str(group_id or "").strip()
+        if (
+            not group_id
+            or group_id.startswith("private_")
+            or not self.is_tool_chain_active(group_id)
+            or not (message.content or "").strip()
+            or not self._message_explicitly_mentions_current_bot(message)
+        ):
+            return False
+
+        self._perception(group_id, message, participants)
+        message.transcript_recorded = True
+        self._tool_chain_messages.setdefault(group_id, []).append(message)
+        self._log_inner_thought(f"{message.speaker or '有人'} 在工具链中点名我，加入下一轮上下文～")
+        return True
+
+    def pop_tool_chain_messages(self, group_id: str) -> list[Message]:
+        """Take messages captured since the last tool-chain round."""
+        return self._tool_chain_messages.pop(str(group_id or "").strip(), [])
 
     def preview_dispatch(
         self,

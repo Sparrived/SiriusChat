@@ -8,6 +8,7 @@ import pytest
 from sirius_pulse.core.delayed_response_queue import DelayedResponseQueue
 from sirius_pulse.core.engine_core import _EmotionalGroupChatEngineBase
 from sirius_pulse.core.events import SessionEvent, SessionEventType
+from sirius_pulse.adapters.models import ParsedEvent
 from sirius_pulse.models.models import Message
 from sirius_pulse.platforms.onebot_v11.napcat.adapter import NapCatAdapter
 
@@ -155,6 +156,98 @@ def _engine_for_sending_window() -> (
     engine._log_inner_thought = lambda *args, **kwargs: None
 
     return engine, background_updates, persisted
+
+
+def test_engine_tool_chain_injection_requires_explicit_persona_mention():
+    engine, _, _ = _engine_for_sending_window()
+    engine._active_tool_chain_groups = set()
+    engine._tool_chain_messages = {}
+    engine.begin_tool_chain("group-1")
+
+    assert (
+        engine.inject_tool_chain_message(
+            Message(role="user", content="普通群聊文本", speaker="Alice"),
+            [SimpleNamespace(is_developer=False)],
+            "group-1",
+        )
+        is False
+    )
+    assert (
+        engine.inject_tool_chain_message(
+            Message(role="user", content="月白看这里", speaker="Alice"),
+            [SimpleNamespace(is_developer=False)],
+            "group-1",
+        )
+        is True
+    )
+    assert (
+        engine.inject_tool_chain_message(
+            Message(role="user", content="Luna 也确认一下", speaker="Alice"),
+            [SimpleNamespace(is_developer=False)],
+            "group-1",
+        )
+        is True
+    )
+    assert (
+        engine.inject_tool_chain_message(
+            Message(
+                role="user",
+                content="再看一下",
+                speaker="Alice",
+                mentions_current_bot=True,
+            ),
+            [SimpleNamespace(is_developer=False)],
+            "group-1",
+        )
+        is True
+    )
+    assert [message.content for message in engine.pop_tool_chain_messages("group-1")] == [
+        "月白看这里",
+        "Luna 也确认一下",
+        "再看一下",
+    ]
+    engine.end_tool_chain("group-1")
+
+
+@pytest.mark.asyncio
+async def test_napcat_injects_explicit_group_text_before_normal_processing():
+    adapter = NapCatAdapter("ws://example.invalid")
+    parsed = ParsedEvent(
+        group_id="100",
+        user_id="200",
+        self_id="300",
+        message_type="group",
+        prompt="月白继续看这个",
+        nickname="Alice",
+    )
+    injected: list[Message] = []
+    adapter._engine = SimpleNamespace(
+        is_ready=lambda: True,
+        is_tool_chain_active=lambda group_id: group_id == "100",
+        inject_tool_chain_message=lambda message, participants, group_id: (
+            injected.append(message) or True
+        ),
+    )
+
+    async def fake_parse_event(event):
+        return parsed
+
+    adapter.parse_event = fake_parse_event  # type: ignore[method-assign]
+    adapter._process_event = AsyncMock()
+
+    await adapter._on_group_message(
+        {
+            "post_type": "message",
+            "message_type": "group",
+            "group_id": "100",
+            "user_id": "200",
+            "self_id": "300",
+            "message": [{"type": "text", "data": {"text": "月白继续看这个"}}],
+        }
+    )
+
+    assert [message.content for message in injected] == ["月白继续看这个"]
+    adapter._process_event.assert_not_awaited()
 
 
 @pytest.mark.asyncio
