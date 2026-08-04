@@ -607,6 +607,31 @@ def test_context_assembler_builds_user_assistant_alternation():
     assert messages_after[0]["content"] == "system"
 
 
+def test_context_assembler_tagged_current_keeps_pending_messages():
+    basic = BasicMemoryManager()
+    basic.add_entry("group_a", "alice", "human", "first human", speaker_name="Alice")
+    basic.add_entry("group_a", "assistant", "assistant", "first reply", speaker_name="Bot")
+    basic.add_entry("group_a", "peer", "human", "peer reply", speaker_name="Peer")
+    basic.add_entry("group_a", "alice", "human", "current message", speaker_name="Alice")
+    assembler = ContextAssembler(
+        basic,
+        _NoopDiaryRetriever(),
+        is_source_diarized=lambda _group_id, _entry_id: False,
+    )
+
+    messages = assembler.build_messages(
+        group_id="group_a",
+        current_query='【最近消息】\n<message speaker="Alice" user_id="alice">current message</message>',
+        system_prompt="system",
+        content_is_tagged=True,
+        speaker_user_id="alice",
+    )
+
+    current = messages[-1]["content"]
+    assert "peer reply" in current
+    assert current.count("current message") == 1
+
+
 def test_context_assembler_removes_diarized_sources_from_system_prefix():
     basic = BasicMemoryManager()
     first = basic.add_entry("group_a", "alice", "human", "first human", speaker_name="Alice")

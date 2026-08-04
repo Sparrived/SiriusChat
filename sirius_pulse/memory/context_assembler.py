@@ -161,18 +161,29 @@ class ContextAssembler:
                 parts.append(content)
             return "\n\n".join(parts) if parts else ""
 
+        # 排除与当前发言者匹配的最后一条 pending 条目，避免 current_query 重复注入。
+        filtered_pending = pending_entries
+        if pending_entries and speaker_user_id:
+            for i in range(len(pending_entries) - 1, -1, -1):
+                if pending_entries[i].user_id == speaker_user_id:
+                    filtered_pending = pending_entries[:i] + pending_entries[i + 1 :]
+                    break
+        all_current = filtered_pending
+
         if content_is_tagged:
-            messages.append({"role": "user", "content": _with_user_context(current_query)})
+            tagged_content = current_query
+            if all_current:
+                pending_xml = self._entries_to_xml(all_current, tag="pending_messages")
+                pending_lines = [
+                    line
+                    for line in pending_xml.split("\n")
+                    if line.strip()
+                    and not line.startswith("<pending_messages>")
+                    and not line.startswith("</pending_messages>")
+                ]
+                tagged_content = "\n".join(pending_lines) + "\n" + current_query
+            messages.append({"role": "user", "content": _with_user_context(tagged_content)})
         else:
-            # 如果有 pending 消息，把它们和当前消息一起打包
-            # 排除与当前发言者匹配的最后一条 pending 条目，避免 current_query 重复注入
-            filtered_pending = pending_entries
-            if pending_entries and speaker_user_id:
-                for i in range(len(pending_entries) - 1, -1, -1):
-                    if pending_entries[i].user_id == speaker_user_id:
-                        filtered_pending = pending_entries[:i] + pending_entries[i + 1 :]
-                        break
-            all_current = filtered_pending
             if speaker_name or speaker_user_id:
                 from sirius_pulse.core.prompt_factory import PromptFactory
 
