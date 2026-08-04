@@ -13,6 +13,7 @@ const $ = scopedPage.$;
 
 let currentModal = null;
 const modal$ = (id) => currentModal?.querySelector(`#${id}`);
+let mcpServers = {};
 
 export async function init(container, params = {}) {
   scopedPage.use(params?.ctx, container);
@@ -27,6 +28,20 @@ export async function init(container, params = {}) {
   }
 
   container.innerHTML = `
+    <div class="card mcp-page" style="margin-bottom:20px">
+      <div class="card-header mcp-section-header">
+        <div>
+          <div class="card-title">MCP 服务</div>
+          <div class="card-subtitle">为当前人格连接外部工具服务，保存后自动重载运行时</div>
+        </div>
+        <div class="mcp-header-actions">
+          <span id="mcpLoadStatus" style="color:var(--text-3);font-size:12px"></span>
+          <button class="btn btn-sm" id="refreshMcp">刷新</button>
+          <button class="btn btn-primary btn-sm" id="addMcp">+ 添加服务</button>
+        </div>
+      </div>
+      <div id="mcpList"></div>
+    </div>
     <div class="card" style="margin-bottom:20px">
       <div class="card-header">
         <div>
@@ -42,8 +57,274 @@ export async function init(container, params = {}) {
   `;
 
   $('refreshTools').addEventListener('click', () => loadTools());
+  $('refreshMcp').addEventListener('click', () => loadMcp());
+  $('addMcp').addEventListener('click', () => openMcpModal());
 
-  await loadTools();
+  await Promise.all([loadMcp(), loadTools()]);
+}
+
+async function loadMcp() {
+  const list = $('mcpList');
+  const status = $('mcpLoadStatus');
+  if (!list) return;
+  if (status) status.textContent = '读取中...';
+  try {
+    const data = await get('/persona/mcp');
+    mcpServers = data.servers && typeof data.servers === 'object' ? data.servers : {};
+    renderMcpList();
+    if (status) status.textContent = `${Object.keys(mcpServers).length} 个服务`;
+  } catch (e) {
+    if (e?.name === 'AbortError') return;
+    list.innerHTML = `<div style="color:var(--danger);padding:12px">加载 MCP 配置失败: ${escapeHtml(e.message)}</div>`;
+    if (status) status.textContent = '读取失败';
+  }
+}
+
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, ch => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[ch]));
+}
+
+function mcpTransportLabel(transport) {
+  return ({
+    stdio: 'STDIO',
+    streamable_http: 'Streamable HTTP',
+    sse: 'SSE',
+  })[transport] || transport || 'STDIO';
+}
+
+function renderMcpList() {
+  const list = $('mcpList');
+  if (!list) return;
+  const entries = Object.entries(mcpServers);
+  if (!entries.length) {
+    list.innerHTML = `
+      <div class="mcp-empty">
+        <div class="mcp-empty-mark">MCP</div>
+        <div>暂无 MCP 服务</div>
+        <div style="font-size:12px;color:var(--text-3);margin-top:4px">添加一个 stdio、Streamable HTTP 或 SSE 服务</div>
+      </div>
+    `;
+    return;
+  }
+
+  list.innerHTML = `<div class="mcp-server-grid">${entries.map(([name, config]) => {
+    const server = config && typeof config === 'object' ? config : {};
+    const enabled = server.enabled !== false;
+    const transport = server.transport || 'stdio';
+    const entry = transport === 'stdio'
+      ? [server.command, ...(Array.isArray(server.args) ? server.args : [])].filter(Boolean).join(' ')
+      : server.url || '';
+    const headers = server.headers && typeof server.headers === 'object' ? Object.keys(server.headers).length : 0;
+    const env = server.env && typeof server.env === 'object' ? Object.keys(server.env).length : 0;
+    const args = Array.isArray(server.args) ? server.args.length : 0;
+    return `
+      <article class="mcp-server-card">
+        <div class="mcp-server-topline">
+          <div class="mcp-server-title-wrap">
+            <span class="mcp-status-dot ${enabled ? 'is-enabled' : ''}"></span>
+            <strong title="${escapeHtml(name)}">${escapeHtml(name)}</strong>
+          </div>
+          <span class="tag ${enabled ? 'tag-success' : 'tag-danger'}">${enabled ? '已启用' : '已禁用'}</span>
+        </div>
+        <div class="mcp-server-meta">
+          <span class="tag tag-accent">${escapeHtml(mcpTransportLabel(transport))}</span>
+          <span>${args ? `${args} 个参数` : ''}${headers ? `${args ? ' · ' : ''}${headers} 个 Header` : ''}${env ? `${args || headers ? ' · ' : ''}${env} 个环境变量` : ''}</span>
+        </div>
+        <div class="mcp-server-entry" title="${escapeHtml(entry)}">${escapeHtml(entry || '未配置连接入口')}</div>
+        <div class="mcp-server-actions">
+          <button class="btn btn-sm" data-mcp-action="edit" data-name="${escapeHtml(name)}">编辑</button>
+          <button class="btn btn-sm btn-danger" data-mcp-action="delete" data-name="${escapeHtml(name)}">删除</button>
+        </div>
+      </article>
+    `;
+  }).join('')}</div>`;
+
+  list.querySelectorAll('[data-mcp-action="edit"]').forEach(btn => {
+    btn.addEventListener('click', () => openMcpModal(btn.dataset.name));
+  });
+  list.querySelectorAll('[data-mcp-action="delete"]').forEach(btn => {
+    btn.addEventListener('click', () => deleteMcpServer(btn.dataset.name));
+  });
+}
+
+async function deleteMcpServer(name) {
+  if (!name || !window.confirm(`确定删除 MCP 服务“${name}”？`)) return;
+  const next = { ...mcpServers };
+  delete next[name];
+  await saveMcpServers(next);
+}
+
+async function saveMcpServers(servers, closeAfterSave = false) {
+  try {
+    const data = await post('/persona/mcp', { servers });
+    mcpServers = data.servers && typeof data.servers === 'object' ? data.servers : {};
+    renderMcpList();
+    const status = $('mcpLoadStatus');
+    if (status) status.textContent = `${Object.keys(mcpServers).length} 个服务 · 已保存`;
+    toast('MCP 配置已保存，运行时将自动重载', 'success');
+    if (closeAfterSave) scopedPage.timeout(closeModal, 800);
+    return true;
+  } catch (e) {
+    if (e?.name === 'AbortError') return false;
+    toast('保存 MCP 配置失败: ' + e.message, 'error');
+    return false;
+  }
+}
+
+function jsonEditorValue(value) {
+  return escapeHtml(JSON.stringify(value && typeof value === 'object' ? value : {}, null, 2));
+}
+
+function openMcpModal(name = null) {
+  closeModal();
+  const source = name && mcpServers[name] ? mcpServers[name] : {
+    enabled: true,
+    transport: 'stdio',
+    command: '',
+    args: [],
+    cwd: '',
+    env: {},
+    url: '',
+    headers: {},
+  };
+  const transport = source.transport || 'stdio';
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML = `
+    <div class="modal mcp-modal">
+      <div class="modal-header">
+        <div>
+          <div style="font-size:16px;font-weight:600">${name ? '编辑 MCP 服务' : '添加 MCP 服务'}</div>
+          <div style="font-size:12px;color:var(--text-3);margin-top:3px">配置完成后会重新发现该服务提供的工具</div>
+        </div>
+        <button class="btn btn-sm" id="modalClose" title="关闭">✕</button>
+      </div>
+      <div class="modal-body" id="modalBody">
+        <div class="mcp-form-grid">
+          <div class="form-group">
+            <label for="mcpName">服务名称</label>
+            <input id="mcpName" type="text" value="${escapeHtml(name || '')}" placeholder="例如 filesystem" ${name ? 'readonly' : ''}>
+          </div>
+          <div class="form-group mcp-enabled-field">
+            <label>状态</label>
+            <label class="mcp-checkbox-label"><input id="mcpEnabled" type="checkbox" ${source.enabled !== false ? 'checked' : ''}> 启用此服务</label>
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="mcpTransport">Transport</label>
+          <select id="mcpTransport">
+            <option value="stdio" ${transport === 'stdio' ? 'selected' : ''}>STDIO · 本地进程</option>
+            <option value="streamable_http" ${transport === 'streamable_http' ? 'selected' : ''}>Streamable HTTP · 远程服务</option>
+            <option value="sse" ${transport === 'sse' ? 'selected' : ''}>SSE · 远程服务</option>
+          </select>
+        </div>
+        <div id="mcpStdioFields">
+          <div class="mcp-form-grid">
+            <div class="form-group">
+              <label for="mcpCommand">启动命令</label>
+              <input id="mcpCommand" type="text" value="${escapeHtml(source.command || '')}" placeholder="例如 npx 或 python">
+            </div>
+            <div class="form-group">
+              <label for="mcpCwd">工作目录 <span style="font-weight:400;color:var(--text-3)">可选</span></label>
+              <input id="mcpCwd" type="text" value="${escapeHtml(source.cwd || '')}" placeholder="留空使用当前进程目录">
+            </div>
+          </div>
+          <div class="form-group">
+            <label for="mcpArgs">命令参数</label>
+            <textarea id="mcpArgs" rows="4" placeholder="每行一个参数，例如：&#10;-y&#10;@modelcontextprotocol/server-filesystem&#10;D:\\data">${escapeHtml(Array.isArray(source.args) ? source.args.join('\n') : '')}</textarea>
+          </div>
+          <div class="form-group">
+            <label for="mcpEnv">环境变量 JSON</label>
+            <textarea id="mcpEnv" rows="5" class="mcp-code-input">${jsonEditorValue(source.env)}</textarea>
+            <div class="mcp-field-hint">支持 <code>env:NAME</code> 或 <code>${'${NAME}'}</code> 引用系统环境变量。敏感值不会回显。</div>
+          </div>
+        </div>
+        <div id="mcpHttpFields">
+          <div class="form-group">
+            <label for="mcpUrl">服务 URL</label>
+            <input id="mcpUrl" type="url" value="${escapeHtml(source.url || '')}" placeholder="https://example.com/mcp">
+          </div>
+          <div class="form-group">
+            <label for="mcpHeaders">请求 Headers JSON</label>
+            <textarea id="mcpHeaders" rows="6" class="mcp-code-input">${jsonEditorValue(source.headers)}</textarea>
+            <div class="mcp-field-hint">可在值中使用 <code>${'${TOKEN}'}</code> 引用系统环境变量。敏感值不会回显。</div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn" id="modalCancel">取消</button>
+        <button class="btn btn-primary" id="modalSave">保存并重载</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  currentModal = overlay;
+  overlay.addEventListener('click', e => { if (e.target === overlay) closeModal(); });
+  overlay.querySelector('#modalClose').addEventListener('click', closeModal);
+  overlay.querySelector('#modalCancel').addEventListener('click', closeModal);
+  overlay.querySelector('#mcpTransport').addEventListener('change', updateMcpTransportFields);
+  overlay.querySelector('#modalSave').addEventListener('click', saveMcpModal);
+  updateMcpTransportFields();
+}
+
+function updateMcpTransportFields() {
+  const transport = modal$('mcpTransport')?.value || 'stdio';
+  const stdio = modal$('mcpStdioFields');
+  const http = modal$('mcpHttpFields');
+  if (stdio) stdio.style.display = transport === 'stdio' ? '' : 'none';
+  if (http) http.style.display = transport === 'stdio' ? 'none' : '';
+}
+
+function parseMcpJson(id, label) {
+  const text = modal$(id)?.value?.trim() || '{}';
+  try {
+    const value = JSON.parse(text);
+    if (!value || Array.isArray(value) || typeof value !== 'object') throw new Error();
+    return value;
+  } catch {
+    toast(`${label} 必须是 JSON 对象`, 'error');
+    return null;
+  }
+}
+
+async function saveMcpModal() {
+  const name = modal$('mcpName')?.value?.trim();
+  if (!name) {
+    toast('请填写服务名称', 'error');
+    return;
+  }
+  const transport = modal$('mcpTransport')?.value || 'stdio';
+  const server = {
+    enabled: modal$('mcpEnabled')?.checked !== false,
+    transport,
+  };
+  if (transport === 'stdio') {
+    server.command = modal$('mcpCommand')?.value?.trim() || '';
+    server.cwd = modal$('mcpCwd')?.value?.trim() || '';
+    server.args = (modal$('mcpArgs')?.value || '').split(/\r?\n/).map(value => value.trim()).filter(Boolean);
+    server.env = parseMcpJson('mcpEnv', '环境变量');
+    if (!server.env) return;
+  } else {
+    server.url = modal$('mcpUrl')?.value?.trim() || '';
+    server.headers = parseMcpJson('mcpHeaders', '请求 Headers');
+    if (!server.headers) return;
+  }
+  const btn = modal$('modalSave');
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = '保存中...';
+  }
+  const next = { ...mcpServers, [name]: server };
+  const saved = await saveMcpServers(next);
+  if (saved) {
+    flashSuccess(btn);
+    scopedPage.timeout(closeModal, 800);
+  } else if (btn) {
+    btn.disabled = false;
+    btn.textContent = '保存并重载';
+  }
 }
 
 async function loadTools() {

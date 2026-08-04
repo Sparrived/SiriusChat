@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import time
@@ -23,6 +24,7 @@ from sirius_pulse.memory.diary.vector_store import DiaryVectorStore
 from sirius_pulse.persona_config import PersonaConfigPaths, PersonaExperienceConfig
 from sirius_pulse.providers.routing import AutoRoutingProvider, ProviderConfig
 from sirius_pulse.tools.executor import ToolExecutor
+from sirius_pulse.tools.mcp_client import MCPClientManager, load_mcp_config
 from sirius_pulse.tools.registry import ToolRegistry
 from sirius_pulse.token.token_store import TokenUsageStore
 
@@ -107,6 +109,7 @@ class EngineRuntime:
         self._embedding_build_failed: bool = False
         self._embedding_last_fail_at: float = 0.0
         self._embedding_fail_count: int = 0
+        self._mcp_manager: MCPClientManager | None = None
 
         # 统一人格数据库：所有存储层共享同一连接
         self.persona_db = PersonaDatabase(self.work_path / "persona.db")
@@ -227,7 +230,7 @@ class EngineRuntime:
         if isinstance(settings, dict) and settings:
             definition.user_settings = settings
 
-    def _setup_tool_runtime(self, engine: EmotionalGroupChatEngine) -> None:
+    async def _setup_tool_runtime(self, engine: EmotionalGroupChatEngine) -> None:
         """Discover and attach TOOL registry + executor to the engine."""
         auto_install = bool(self.plugin_config.get("auto_install_tool_deps", True))
         registry = ToolRegistry()
@@ -248,6 +251,13 @@ class EngineRuntime:
                 LOG.info("用户 TOOL 已加载 %d 个", user_loaded)
 
         executor = ToolExecutor(self.work_path)
+        mcp_manager = MCPClientManager(load_mcp_config(PersonaConfigPaths(self.work_path).mcp))
+        self._mcp_manager = mcp_manager
+        mcp_tools = await mcp_manager.load_tools(reserved_names=set(registry.tool_names))
+        for tool in mcp_tools:
+            registry.register(tool)
+        if mcp_tools:
+            LOG.info("MCP TOOL 已加载 %d 个", len(mcp_tools))
         engine.set_tool_runtime(
             tool_registry=registry,
             tool_executor=executor,
@@ -534,7 +544,7 @@ class EngineRuntime:
 
         # 初始化并注入 TOOL runtime
         try:
-            self._setup_tool_runtime(engine)
+            await self._setup_tool_runtime(engine)
         except Exception as exc:
             LOG.warning("TOOL runtime 初始化失败: %s", exc)
 
@@ -585,12 +595,26 @@ class EngineRuntime:
                 LOG.warning("停止后台任务失败: %s", exc)
             self._engine = None
             LOG.info("引擎已标记为重建，下次访问时将重新初始化")
+        if self._mcp_manager is not None:
+            manager = self._mcp_manager
+            self._mcp_manager = None
+            try:
+                asyncio.get_running_loop().create_task(manager.close())
+            except RuntimeError:
+                LOG.warning("MCP 连接将在当前事件循环结束时关闭")
         # 重置 embedding 失败缓存，让 reload 后能立即重试
         self._embedding_build_failed = False
         self._embedding_fail_count = 0
 
     async def stop(self) -> None:
         self._running = False
+
+        if self._mcp_manager is not None:
+            try:
+                await self._mcp_manager.close()
+            except Exception as exc:
+                LOG.warning("MCP 连接关闭失败: %s", type(exc).__name__)
+            self._mcp_manager = None
 
         # 停止 PluginScheduler（如果有）
         plugin_scheduler = getattr(self, "_plugin_scheduler", None)

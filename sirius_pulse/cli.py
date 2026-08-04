@@ -302,6 +302,7 @@ def _migrate_flat_to_personas() -> None:
         "logs",
         "image_cache",
         "plugin_data",
+        "mcp.json",
         "persona.db",
     ]
 
@@ -568,6 +569,9 @@ def _cmd_persona_create(args: argparse.Namespace) -> None:
     )
     (persona_dir / "experience.json").write_text(
         json.dumps({}, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    (persona_dir / "mcp.json").write_text(
+        json.dumps({"servers": {}}, ensure_ascii=False, indent=2), encoding="utf-8"
     )
     (persona_dir / "adapters.json").write_text(
         json.dumps(

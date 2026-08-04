@@ -534,6 +534,191 @@ body {
   margin-top: 2px;
 }
 
+/* MCP service console */
+.mcp-section-header {
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.mcp-header-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.mcp-server-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 12px;
+}
+
+.mcp-server-card {
+  min-width: 0;
+  padding: 16px;
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  transition: border-color 0.2s var(--ease), transform 0.2s var(--ease);
+}
+
+.mcp-server-card:hover {
+  border-color: var(--border-accent);
+  transform: translateY(-1px);
+}
+
+.mcp-server-topline,
+.mcp-server-meta,
+.mcp-server-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.mcp-server-topline {
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.mcp-server-title-wrap {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 9px;
+}
+
+.mcp-server-title-wrap strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+}
+
+.mcp-status-dot {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 8px;
+  border-radius: 50%;
+  background: var(--text-3);
+  box-shadow: 0 0 0 3px rgba(82, 90, 101, 0.12);
+}
+
+.mcp-status-dot.is-enabled {
+  background: var(--success);
+  box-shadow: 0 0 0 3px var(--success-dim);
+}
+
+.mcp-server-meta {
+  min-height: 28px;
+  margin-top: 14px;
+  color: var(--text-3);
+  font-size: 11px;
+}
+
+.mcp-server-entry {
+  overflow: hidden;
+  margin-top: 10px;
+  padding: 8px 10px;
+  background: var(--bg-0);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-2);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mcp-server-actions {
+  justify-content: flex-end;
+  margin-top: 14px;
+}
+
+.mcp-empty {
+  padding: 28px 16px 24px;
+  color: var(--text-2);
+  text-align: center;
+}
+
+.mcp-empty-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 26px;
+  margin-bottom: 10px;
+  border: 1px solid var(--border-accent);
+  border-radius: 4px;
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+}
+
+.mcp-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.mcp-enabled-field {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+}
+
+.mcp-checkbox-label {
+  display: flex !important;
+  align-items: center;
+  min-height: 37px;
+  padding: 8px 12px;
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.mcp-code-input {
+  color: var(--text-1);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.mcp-field-hint {
+  margin-top: 5px;
+  color: var(--text-3);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.mcp-field-hint code {
+  color: var(--accent);
+  font-family: var(--font-mono);
+}
+
+@media (max-width: 720px) {
+  .mcp-section-header {
+    flex-direction: column;
+  }
+
+  .mcp-header-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .mcp-form-grid {
+    grid-template-columns: 1fr;
+    gap: 0;
+  }
+
+  .mcp-modal {
+    width: calc(100vw - 24px);
+    max-height: 90vh;
+  }
+}
+
 /* ==========================================================================
    8. Stat Cards — 统计卡片
    ========================================================================== */

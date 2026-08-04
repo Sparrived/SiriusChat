@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from copy import deepcopy
 import enum
 import logging
 import re
@@ -226,6 +227,9 @@ class ToolDefinition:
     _on_load_factory: Callable[..., Any] | None = field(default=None, repr=False)
     _on_unload_factory: Callable[..., Any] | None = field(default=None, repr=False)
     config_parameters: list[ToolParameter] = field(default_factory=list)
+    raw_parameters_schema: dict[str, Any] | None = None
+    inject_runtime_params: bool = True
+    allow_extra_parameters: bool = False
 
     def __post_init__(self) -> None:
         if self.passive_type is None and self.is_passive:
@@ -303,6 +307,16 @@ class ToolDefinition:
 
     def to_tool_schema(self) -> dict[str, Any]:
         """转换为 OpenAI function_call 格式的 JSON Schema。"""
+        if self.raw_parameters_schema is not None:
+            return {
+                "type": "function",
+                "function": {
+                    "name": self.name,
+                    "description": self.description,
+                    "parameters": deepcopy(self.raw_parameters_schema),
+                },
+            }
+
         properties: dict[str, Any] = {}
         required: list[str] = []
 

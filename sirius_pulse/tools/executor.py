@@ -132,6 +132,9 @@ class ToolExecutor:
                 call_params[param_def.name] = _coerce_type(params[param_def.name], param_def.type)
             elif param_def.default is not None:
                 call_params[param_def.name] = param_def.default
+        if tool.allow_extra_parameters:
+            for name, value in params.items():
+                call_params.setdefault(name, value)
         return call_params, None
 
     def _inject_runtime_params(
@@ -142,6 +145,8 @@ class ToolExecutor:
     ) -> None:
         """Inject framework-owned inputs after model-owned parameters are validated."""
         assert tool._run_func is not None
+        if not tool.inject_runtime_params:
+            return
         data_store = self._get_data_store(tool.name)
         injection_plan = _build_injection_plan(tool._run_func)
         if injection_plan.accepts("data_store"):

@@ -106,6 +106,7 @@ from sirius_pulse.webui.server_tool_api import (
     api_persona_tool_toggle,
     api_persona_tools_get,
 )
+from sirius_pulse.webui.server_mcp_api import api_persona_mcp_get, api_persona_mcp_post
 from sirius_pulse.webui.server_utils import _json_response
 
 LOG = logging.getLogger("sirius.webui")
@@ -171,6 +172,8 @@ DELEGATED_HANDLERS: dict[str, DelegatedHandler] = {
     "api_persona_tool_config_get": api_persona_tool_config_get,
     "api_persona_tool_config_post": api_persona_tool_config_post,
     "api_persona_tool_history_get": api_persona_tool_history_get,
+    "api_persona_mcp_get": api_persona_mcp_get,
+    "api_persona_mcp_post": api_persona_mcp_post,
     "api_monitoring_overview": _api_monitoring_overview,
     "api_monitoring_persona_metrics": _api_monitoring_persona_metrics,
     "api_monitoring_health": _api_monitoring_health,

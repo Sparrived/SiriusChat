@@ -5,6 +5,7 @@
 - orchestration.json   → 模型编排（已有）
 - adapters.json        → 平台连接配置
 - experience.json      → 体验参数（参与决策、回复频率、主动行为等）
+- mcp.json             → MCP server 连接配置
 """
 
 from __future__ import annotations
@@ -349,6 +350,10 @@ class PersonaConfigPaths:
     @property
     def experience(self) -> Path:
         return self.dir / "experience.json"
+
+    @property
+    def mcp(self) -> Path:
+        return self.dir / "mcp.json"
 
     @property
     def engine_state(self) -> Path:

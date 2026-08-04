@@ -209,7 +209,7 @@ class PersonaWorker:
         """检查配置文件变更，热重载到引擎。
 
         通过读取 engine_state/reload_requested 标志文件触发重载。
-        标志文件内容为重载类型：persona / orchestration / experience / provider / global / all
+        标志文件内容为重载类型：persona / orchestration / experience / provider / global / mcp / all
         """
         reload_flag = self.paths.engine_state / "reload_requested"
         if not reload_flag.exists():
@@ -261,6 +261,9 @@ class PersonaWorker:
 
             if reload_types & {"global", "all"}:
                 self._reload_global_config(engine)
+
+            if reload_types & {"mcp", "all"}:
+                self._runtime.reload_engine()
 
             LOG.info("配置热重载完成: types=%s", sorted(reload_types))
         except Exception as exc:

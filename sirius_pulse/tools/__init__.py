@@ -23,6 +23,7 @@ from sirius_pulse.config.config_builder import (
 from sirius_pulse.tools.data_store import ToolDataStore
 from sirius_pulse.tools.dependency_resolver import resolve_tool_dependencies
 from sirius_pulse.tools.executor import ToolExecutor
+from sirius_pulse.tools.mcp_client import MCPClientManager
 from sirius_pulse.tools.models import (
     BackgroundTaskSpec,
     ToolChainContext,
@@ -50,6 +51,7 @@ __all__ = [
     "TriggerSpec",
     "ToolRegistry",
     "ToolExecutor",
+    "MCPClientManager",
     "ToolDataStore",
     "resolve_tool_dependencies",
     # Config builder utilities

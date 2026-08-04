@@ -85,6 +85,8 @@ WEBUI_ROUTES: tuple[RouteSpec, ...] = (
     RouteSpec("GET", "/api/persona/tools/{tool_name}/config", "api_persona_tool_config_get"),
     RouteSpec("POST", "/api/persona/tools/{tool_name}/config", "api_persona_tool_config_post"),
     RouteSpec("GET", "/api/persona/tool-history", "api_persona_tool_history_get"),
+    RouteSpec("GET", "/api/persona/mcp", "api_persona_mcp_get"),
+    RouteSpec("POST", "/api/persona/mcp", "api_persona_mcp_post"),
     RouteSpec("GET", "/api/persona/memory-viz", "api_persona_memory_viz"),
     RouteSpec("GET", "/api/persona/conversations", "api_persona_conversation_history_get"),
     RouteSpec("DELETE", "/api/persona/conversations", "api_persona_conversation_history_delete"),
