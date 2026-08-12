@@ -13,7 +13,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from sirius_pulse.tools.builtin import _docker_cli
+from sirius_pulse.tools.builtin._internal import _docker_cli
 from sirius_pulse.tools.models import ToolInvocationContext
 
 _SENSITIVE_ENV = re.compile(
@@ -25,10 +25,10 @@ _RUNTIME_PYTHON_DIR = "python"
 _RUNTIME_NODE_DIR = "node"
 _RUNTIME_CACHE_DIR = "cache"
 _DOCKER_FUNCTION_TEMPLATE = """docker() {{
-    {python_executable} -m sirius_pulse.tools.builtin._docker_cli \"$@\"
+    {python_executable} -m sirius_pulse.tools.builtin._internal._docker_cli \"$@\"
 }}
 docker-compose() {{
-    {python_executable} -m sirius_pulse.tools.builtin._docker_cli compose \"$@\"
+    {python_executable} -m sirius_pulse.tools.builtin._internal._docker_cli compose \"$@\"
 }}
 """
 

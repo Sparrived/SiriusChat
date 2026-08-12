@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from sirius_pulse.tools.builtin import _docker_cli
+from sirius_pulse.tools.builtin._internal import _docker_cli
 
 
 @pytest.mark.parametrize(

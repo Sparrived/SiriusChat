@@ -52,7 +52,7 @@ from sirius_pulse.memory.user.unified_manager import UnifiedUserManager
 from sirius_pulse.models.emotion import AssistantEmotionState, EmotionState
 from sirius_pulse.models.models import Message, Transcript, UnifiedUser
 from sirius_pulse.models.response_strategy import ResponseStrategy, StrategyDecision
-from sirius_pulse.tools.builtin import _markdown_image
+from sirius_pulse.tools.builtin._internal import _markdown_image
 
 logger = logging.getLogger(__name__)
 

@@ -10,7 +10,7 @@ from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
 from sirius_pulse.config.config_builder import ConfigBuilder
-from sirius_pulse.tools.builtin._qq_ops import (
+from sirius_pulse.tools.builtin._internal._qq_ops import (
     bridge_error,
     failure_from_exception,
     get_adapter,

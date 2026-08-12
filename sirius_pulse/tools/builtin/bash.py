@@ -4,11 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import subprocess
-from pathlib import Path
 from typing import Any
 
 from sirius_pulse.config.config_builder import ConfigBuilder
-from sirius_pulse.tools.builtin import _bash_cron, _bash_runtime, _container_status_card
+from sirius_pulse.tools.builtin._internal import (
+    _bash_cron,
+    _bash_runtime,
+    _container_status_card,
+)
+from sirius_pulse.tools import cron_tasks
 from sirius_pulse.tools.models import ToolInvocationContext
 
 _DEFAULT_MAX_TIMEOUT = 15.0
@@ -100,15 +104,20 @@ async def run(
     if data_store is not None and data_store.get("_enabled", True) is False:
         return {"success": False, "error": "bash Tool 已被当前人格禁用"}
 
-    policy = _load_policy(data_store)
+    policy = _bash_runtime.load_policy(
+        data_store,
+        default_timeout=_DEFAULT_MAX_TIMEOUT,
+        default_output=_DEFAULT_MAX_OUTPUT,
+        minimum_output=_MIN_OUTPUT,
+    )
     try:
-        command_text = _validate_command(command)
-        cwd_path = _resolve_cwd(cwd)
-        timeout = _bounded_number(
+        command_text = _bash_runtime.validate_command(command, max_length=_MAX_COMMAND_LENGTH)
+        cwd_path = _bash_runtime.resolve_cwd(cwd)
+        timeout = _bash_runtime.bounded_number(
             timeout_seconds, default=10.0, minimum=0.1, maximum=policy["max_timeout_seconds"]
         )
         output_limit = int(
-            _bounded_number(
+            _bash_runtime.bounded_number(
                 max_output_chars,
                 default=8_000,
                 minimum=_MIN_OUTPUT,
@@ -120,13 +129,13 @@ async def run(
 
     if not kwargs.get("_skip_crontab", False):
         try:
-            cron_request = _bash_cron.parse_command(command_text)
-        except _bash_cron.CronParseError as exc:
+            cron_request = cron_tasks.parse_crontab_command(command_text)
+        except cron_tasks.CronParseError as exc:
             return {"success": False, "error": str(exc)}
         if cron_request is not None:
             if data_store is None:
                 return {"success": False, "error": "crontab 需要可持久化的 Bash 数据存储"}
-            return _handle_crontab_request(
+            return _bash_cron.handle_request(
                 cron_request,
                 cwd=cwd_path,
                 data_store=data_store,
@@ -135,7 +144,7 @@ async def run(
                 invocation_context=invocation_context,
             )
 
-    bash = _find_bash()
+    bash = _bash_runtime.find_bash()
     if not bash:
         return {
             "success": False,
@@ -143,14 +152,20 @@ async def run(
         }
 
     try:
-        environment = _runtime_environment(data_store)
+        environment = _bash_runtime.runtime_environment(data_store)
     except OSError as exc:
         return {"success": False, "error": f"准备人格运行时目录失败: {exc}"}
 
     try:
         completed = await asyncio.to_thread(
             subprocess.run,
-            [bash, "-o", "pipefail", "-lc", f"{_docker_function()}\n{command_text}"],
+            [
+                bash,
+                "-o",
+                "pipefail",
+                "-lc",
+                f"{_bash_runtime.docker_function()}\n{command_text}",
+            ],
             cwd=str(cwd_path),
             env=environment,
             capture_output=True,
@@ -158,7 +173,9 @@ async def run(
             check=False,
         )
     except subprocess.TimeoutExpired as exc:
-        partial = _decode_output((exc.stdout or b"") + (exc.stderr or b""), output_limit)
+        partial = _bash_runtime.decode_output(
+            (exc.stdout or b"") + (exc.stderr or b""), output_limit
+        )
         detail = f"命令执行超时（上限 {timeout:g} 秒）"
         if partial:
             detail += f"\n部分输出:\n{partial}"
@@ -166,7 +183,7 @@ async def run(
     except OSError as exc:
         return {"success": False, "error": f"启动 Bash 失败: {exc}"}
 
-    output, inspect_statuses, truncated = _decode_output_with_inspect_status(
+    output, inspect_statuses, truncated = _bash_runtime.decode_output_with_inspect_status(
         completed.stdout + completed.stderr, output_limit
     )
     metadata = {
@@ -180,15 +197,16 @@ async def run(
         detail = f"命令退出码 {completed.returncode}"
         if output:
             detail += f"\n{output}"
-        detail += _container_recovery_hint(command_text)
+        detail += _bash_runtime.container_recovery_hint(command_text)
         return {"success": False, "error": detail, "internal_metadata": metadata}
 
-    cards = await _send_inspect_status_cards(
+    cards = await _bash_runtime.send_inspect_status_cards(
         inspect_statuses,
         data_store=data_store,
         chat_context=chat_context,
         engine_context=engine_context,
         invocation_context=invocation_context,
+        status_card=_container_status_card,
     )
     metadata["inspect_statuses"] = [item["status"] for item in cards if item.get("status")]
     metadata["status_cards"] = cards
@@ -212,90 +230,3 @@ async def run(
         "text_blocks": ["\n".join(text_parts)],
         "internal_metadata": metadata,
     }
-
-
-def _handle_crontab_request(request: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
-    return _bash_cron.handle_request(request, **kwargs)
-
-
-async def _check_cron_tasks(ctx: Any) -> None:
-    await _bash_cron.check_tasks(ctx, run)
-
-
-async def _run_cron_job(ctx: Any, job: dict[str, Any]) -> None:
-    await _bash_cron._run_job(ctx, job, run)
-
-
-def _load_policy(data_store: Any) -> dict[str, Any]:
-    return _bash_runtime.load_policy(
-        data_store,
-        default_timeout=_DEFAULT_MAX_TIMEOUT,
-        default_output=_DEFAULT_MAX_OUTPUT,
-        minimum_output=_MIN_OUTPUT,
-    )
-
-
-def _validate_command(command: str) -> str:
-    return _bash_runtime.validate_command(command, max_length=_MAX_COMMAND_LENGTH)
-
-
-def _resolve_cwd(cwd: str) -> Path:
-    return _bash_runtime.resolve_cwd(cwd)
-
-
-def _find_bash() -> str | None:
-    return _bash_runtime.find_bash()
-
-
-def _docker_function() -> str:
-    return _bash_runtime.docker_function()
-
-
-async def _send_inspect_status_cards(
-    statuses: list[dict[str, Any]],
-    *,
-    data_store: Any,
-    chat_context: dict[str, Any] | None,
-    engine_context: Any,
-    invocation_context: ToolInvocationContext | None,
-) -> list[dict[str, Any]]:
-    return await _bash_runtime.send_inspect_status_cards(
-        statuses,
-        data_store=data_store,
-        chat_context=chat_context,
-        engine_context=engine_context,
-        invocation_context=invocation_context,
-        status_card=_container_status_card,
-    )
-
-
-def _chat_target(chat_context: dict[str, Any] | None) -> tuple[str, str]:
-    return _bash_runtime.chat_target(chat_context)
-
-
-def _container_recovery_hint(command: str) -> str:
-    return _bash_runtime.container_recovery_hint(command)
-
-
-def _runtime_environment(data_store: Any) -> dict[str, str]:
-    return _bash_runtime.runtime_environment(data_store)
-
-
-def _bounded_number(value: Any, *, default: float, minimum: float, maximum: float) -> float:
-    return _bash_runtime.bounded_number(
-        value, default=default, minimum=minimum, maximum=maximum
-    )
-
-
-def _decode_output(raw: bytes, limit: int) -> str:
-    return _bash_runtime.decode_output(raw, limit)
-
-
-def _decode_output_with_inspect_status(
-    raw: bytes, limit: int
-) -> tuple[str, list[dict[str, Any]], bool]:
-    return _bash_runtime.decode_output_with_inspect_status(raw, limit)
-
-
-def _truncate_text(text: str, limit: int) -> tuple[str, bool]:
-    return _bash_runtime.truncate_text(text, limit)

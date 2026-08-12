@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from sirius_pulse.tools.builtin import _docker_cli
+from sirius_pulse.tools.builtin._internal import _bash_runtime, _container_status_card, _docker_cli
 from sirius_pulse.tools.builtin import bash
 from sirius_pulse.tools.models import ToolResult
 
@@ -37,7 +37,7 @@ def _fake_bash(
         calls.update(kwargs)
         return subprocess.CompletedProcess(args, returncode, stdout=stdout, stderr=stderr)
 
-    monkeypatch.setattr(bash, "_find_bash", lambda: "bash")
+    monkeypatch.setattr(_bash_runtime, "find_bash", lambda: "bash")
     monkeypatch.setattr(bash.subprocess, "run", fake_run)
     return calls
 
@@ -120,7 +120,7 @@ async def test_bash_tool_makes_the_restricted_docker_cli_available(monkeypatch, 
 
     assert result["success"] is True
     assert (
-        f'{shlex.quote(sys.executable)} -m sirius_pulse.tools.builtin._docker_cli "$@"'
+        f'{shlex.quote(sys.executable)} -m sirius_pulse.tools.builtin._internal._docker_cli "$@"'
         in calls["args"][-1]
     )
     assert calls["args"][-1].endswith("docker logs --tail 20 nginx | grep error")
@@ -135,7 +135,7 @@ async def test_bash_tool_routes_docker_compose_through_the_same_proxy(monkeypatc
 
     assert result["success"] is True
     assert (
-        f'{shlex.quote(sys.executable)} -m sirius_pulse.tools.builtin._docker_cli compose "$@"'
+        f'{shlex.quote(sys.executable)} -m sirius_pulse.tools.builtin._internal._docker_cli compose "$@"'
         in calls["args"][-1]
     )
 
@@ -186,7 +186,7 @@ async def test_bash_docker_inspect_sends_a_status_card_and_hides_internal_marker
             sent["params"] = params
             return ToolResult(success=True, internal_metadata={"message_id": 42})
 
-    monkeypatch.setattr(bash._container_status_card, "render_status_card", fake_render)
+    monkeypatch.setattr(_container_status_card, "render_status_card", fake_render)
     engine_context = SimpleNamespace(tool_registry=_Registry(), tool_executor=_Executor())
 
     result = await bash.run(
@@ -207,7 +207,7 @@ async def test_bash_docker_inspect_sends_a_status_card_and_hides_internal_marker
 def test_bash_preserves_an_invalid_status_marker_as_regular_output():
     raw = b"before\n__SIRIUS_DOCKER_INSPECT_STATUS__:not-base64\nafter\n"
 
-    output, statuses, truncated = bash._decode_output_with_inspect_status(raw, 8_000)
+    output, statuses, truncated = _bash_runtime.decode_output_with_inspect_status(raw, 8_000)
 
     assert output == raw.decode("utf-8")
     assert statuses == []

@@ -48,7 +48,7 @@ from sirius_pulse.core.events import SessionEvent, SessionEventType
 from sirius_pulse.core.group_dispatcher import GroupDispatcher
 from sirius_pulse.core.qq_mentions import parse_qq_at_mentions
 from sirius_pulse.models.models import Message, UnifiedUser
-from sirius_pulse.tools.builtin._markdown_image import to_image_reference
+from sirius_pulse.tools.builtin._internal._markdown_image import to_image_reference
 
 LOG = logging.getLogger("sirius.platforms.napcat")
 _DISPATCH_EVENT_TIME_BUCKET_SECONDS = 5

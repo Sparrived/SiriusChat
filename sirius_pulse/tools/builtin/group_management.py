@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from sirius_pulse.config.config_builder import ConfigBuilder
-from sirius_pulse.tools.builtin._qq_ops import (
+from sirius_pulse.tools.builtin._internal._qq_ops import (
     bridge_error,
     current_group_id,
     failure_from_exception,

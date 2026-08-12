@@ -431,6 +431,6 @@ def _private_target_id(value: str) -> str:
 
 def _to_image_reference(image_path: str) -> str:
     """Encode local images so NapCat need not access this container's filesystem."""
-    from sirius_pulse.tools.builtin._markdown_image import to_image_reference
+    from sirius_pulse.tools.builtin._internal._markdown_image import to_image_reference
 
     return to_image_reference(image_path)

@@ -12,8 +12,6 @@ from sirius_pulse.memory.user.unified_models import UnifiedUser
 from sirius_pulse.tools import cron_tasks
 from sirius_pulse.tools.models import BackgroundTaskSpec, ToolInvocationContext
 
-CronParseError = cron_tasks.CronParseError
-parse_command = cron_tasks.parse_crontab_command
 logger = logging.getLogger(__name__)
 CommandRunner = Callable[..., Awaitable[dict[str, Any]]]
 
