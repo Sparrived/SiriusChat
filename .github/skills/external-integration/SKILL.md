@@ -64,7 +64,6 @@ description: "当需要让外部项目正确接入 Sirius Pulse 时使用，覆�
 - 用户记忆已改为群隔离：`UserManager.entries` 为 `{group_id: {user_id: UserProfile}}`。
 - 日记记忆通过 `_bg_diary_promoter` 周期性生成，从 `basic_memory` 归档消息 LLM 总结为 `DiaryEntry`。
 - 记忆系统配置通过 `emotional_engine` 配置字段完成，如 `basic_memory_hard_limit`、`diary_top_k`、`diary_token_budget`。
-- AI 自身记忆通过 `GlossaryManager` 维护名词解释，持久化至 `{work_path}/memory/glossary/terms.json`。
 - ✨ **(v0.15.0)** 自身记忆触发改回主流程内联：通过 `self_memory_extract_batch_size`、`self_memory_min_chars` 和长上下文自动触发控制，不再支持 `self_memory_extract_interval_seconds`。
 - ✨ **参与决策系统** (v0.14.0)：三级架构替代旧意愿分系统：HeatAnalyzer（零 LLM 开销热度分析）→ IntentAnalyzer v2（意图分类 + target 识别）→ EngagementCoordinator（融合决策）。LLM 意图分析现由 `intent_analysis` 任务驱动，可通过 `task_enabled/task_models/task_temperatures/task_max_tokens/task_retries` 精细控制；任务关闭时使用关键词回退，但任务启用后若调用失败或解析失败，不再自动降级为关键词意图推断。多 AI 群聊里，分析器会进一步区分“当前模型自身”与“其他 AI”，并在后者场景下抑制当前模型自动回复；为降低误判，传给模型的上下文已改为最近交互链摘要，并会显式附带最近 AI 发言者、最近用户侧发言者、aliases、`environment_context`，以及当前消息命中的当前模型/其他 AI/名称含 AI 线索对象/possible-AI 候选对象等线索。对未明确点名当前模型的群控/停用类命令，还会做硬抑制，不触发当前模型回复。
 - 外部系统应直接使用 `EmotionalGroupChatEngine.process_message(...)` 处理消息；`WorkspaceRuntime` 的 legacy 队列系统已在 v1.0 中移除。
@@ -110,7 +109,7 @@ description: "当需要让外部项目正确接入 Sirius Pulse 时使用，覆�
   - Benchmark：支持同步/异步/并发性能基准测试
   - 示例：`from sirius_pulse.performance import PerformanceProfiler; with PerformanceProfiler("task"): ...`
 - ✨ **SKILL 系统**：通过 `tools/` 模块让 AI 在运行时调用外部 Python 代码
-  - 默认：`enable_tools=True`；框架会先加载包内置 SKILL（当前包含 `system_info`、`learn_term`、`url_content_reader`、`bing_search` 与 developer-only 的 `desktop_screenshot`），再加载 workspace `tools/` 目录。SKILL 文件默认放在 `{work_path}/tools/`，双根布局时位于 `config_root/tools/`。若只想保留目录结构、不执行 SKILL，可显式设置 `enable_tools=False`
+  - 默认：`enable_tools=True`；框架会先加载包内置 SKILL（当前包含 `system_info`、`url_content_reader`、`bing_search` 与 developer-only 的 `desktop_screenshot`），再加载 workspace `tools/` 目录。SKILL 文件默认放在 `{work_path}/tools/`，双根布局时位于 `config_root/tools/`。若只想保留目录结构、不执行 SKILL，可显式设置 `enable_tools=False`
   - 加载时机：框架启动时预加载，`tools/` 目录变化时自动全量重载；不再在每条 message 路径上扫描 SKILL
   - 覆盖规则：如果 workspace 中存在同名文件（如 `tools/system_info.py`），则以 workspace 版本覆盖内置实现
   - 权限模型：developer-only SKILL 只会在 developer 当前轮次出现在提示词中，执行时 runtime 会再次校验当前调用者是否被显式标记为 developer

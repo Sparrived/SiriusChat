@@ -10,10 +10,6 @@ from sirius_pulse.webui.memory_api import (
     api_persona_diary_get,
     api_persona_diary_post,
     api_persona_diary_put,
-    api_persona_glossary_delete,
-    api_persona_glossary_get,
-    api_persona_glossary_post,
-    api_persona_glossary_put,
     api_persona_memory_dedupe_apply,
     api_persona_memory_dedupe_scan,
     api_persona_memory_dedupe_status,
@@ -88,34 +84,3 @@ async def test_persona_diary_crud_roundtrip(tmp_path):
 
     response = await api_persona_diary_get(_request(query={"limit": "20", "offset": "0"}), tmp_path)
     assert _payload(response)["total"] == 0
-
-
-@pytest.mark.asyncio
-async def test_persona_glossary_crud_roundtrip(tmp_path):
-    response = await api_persona_glossary_post(
-        _request({"term": "月白", "definition": "人格的称呼", "confidence": 0.9}),
-        tmp_path,
-    )
-    assert response.status == 201
-
-    response = await api_persona_glossary_put(
-        _request(
-            {"term": "月白酱", "definition": "更亲昵的人格称呼"},
-            match={"term": "月白"},
-        ),
-        tmp_path,
-    )
-    assert _payload(response)["term"]["term"] == "月白酱"
-
-    response = await api_persona_glossary_get(
-        _request(query={"limit": "20", "offset": "0"}), tmp_path
-    )
-    payload = _payload(response)
-    assert payload["total"] == 1
-    assert payload["terms"][0]["definition"] == "更亲昵的人格称呼"
-
-    response = await api_persona_glossary_delete(
-        _request(match={"term": "月白酱"}),
-        tmp_path,
-    )
-    assert _payload(response)["success"] is True

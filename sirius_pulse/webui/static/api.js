@@ -51,7 +51,7 @@ function mutationResources(path) {
     resources.add('tool-history');
   }
   if (/^\/persona\/mcp/.test(path)) resources.add('tools');
-  if (/^\/persona\/(diary|users|glossary|memory-viz|memory-units)/.test(path)) resources.add('memory');
+  if (/^\/persona\/(diary|users|memory-viz|memory-units)/.test(path)) resources.add('memory');
   if (/^\/plugins/.test(path)) resources.add('plugins');
   if (/^\/providers|^\/global-config|^\/persona\/(persona|orchestration|task-params|experience|adapters)/.test(path)) {
     resources.add('config');

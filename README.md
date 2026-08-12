@@ -65,7 +65,6 @@
 - **日记系统**（Diary）：LLM 生成群聊摘要，ChromaDB 向量索引，token 预算检索
 - **语义记忆**（Semantic Memory）：群级/用户级/全局级向量记忆，支持话题关联与兴趣学习
 - **人物传记**（Biography）：跨对话人物画像提取与注入
-- **术语表**（Glossary）：自定义术语/黑话学习，`learn_term` 工具动态添加
 
 ### 🧠 **5 阶段情感引擎**
 ```text
@@ -218,7 +217,6 @@ sirius_pulse/
 │   ├── semantic/            # 语义记忆（向量检索）
 │   ├── user/                # 用户管理
 │   ├── biography/           # 人物传记
-│   ├── glossary/            # 术语表
 │   └── context_assembler.py # 上下文组装器
 │
 ├── tools/                  # 工具系统

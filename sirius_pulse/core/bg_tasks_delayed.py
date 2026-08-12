@@ -26,7 +26,7 @@ from sirius_pulse.core.plan_runtime import (
     start_plan_session,
     update_plan_progress,
 )
-from sirius_pulse.core.prompt_factory import TAG_GLOSSARY, PromptFactory
+from sirius_pulse.core.prompt_factory import PromptFactory
 from sirius_pulse.core.sticker_delivery import dedupe_sticker_names
 from sirius_pulse.providers.base import ToolCall
 from sirius_pulse.tools.builtin import _markdown_image
@@ -1173,19 +1173,6 @@ class DelayedQueueTasks:
                                 tool_multimodal.append(
                                     {"type": "image_url", "image_url": {"url": block.value}}
                                 )
-                            # Auto-persist glossary terms from learn_term
-                            if tool_name == "learn_term":
-                                term = params.get("term", "")
-                                definition = params.get("definition", "")
-                                if term and definition:
-                                    from sirius_pulse.memory.glossary import GlossaryTerm
-
-                                    engine.glossary_manager.add_or_update(
-                                        group_id,
-                                        GlossaryTerm(
-                                            term=term, definition=definition, source="tool"
-                                        ),
-                                    )
                             # Inject group_id into newly created reminders
                             if (
                                 tool_name == "reminder"
@@ -1333,9 +1320,6 @@ class DelayedQueueTasks:
             message_content = "\n".join(parts)
             speaker_name = items[-1].speaker_name
             channel_user_id = getattr(items[-1], "channel_user_id", "") or ""
-        glossary = engine.glossary_manager.build_prompt_section(
-            group_id, text=message_content, max_terms=5
-        )
         # 收集触发批次中所有用户的语义画像
         related_uids: set[str] = set()
         for item in items:
@@ -1387,17 +1371,6 @@ class DelayedQueueTasks:
             ),
             tool_flow_mode=tool_flow_mode,
         )
-        dynamic_parts: list[str] = []
-        if glossary:
-            dynamic_parts.append(f"{TAG_GLOSSARY}\n{glossary}")
-
-        if dynamic_parts:
-            bundle.dynamic_context = (
-                f"{bundle.dynamic_context}\n\n" + "\n\n".join(dynamic_parts)
-                if bundle.dynamic_context
-                else "\n\n".join(dynamic_parts)
-            )
-
         return bundle
 
     def _inject_group_id_into_latest_reminder(self, group_id: str) -> None:

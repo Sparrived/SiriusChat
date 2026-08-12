@@ -96,7 +96,6 @@ description: "在不通读全部代码的情况下快速理解 Sirius Pulse 架�
 56. `sirius_pulse/memory/diary/manager.py`（日记记忆管理器）
 57. `sirius_pulse/memory/semantic/manager.py`（语义记忆管理器）
 58. `sirius_pulse/memory/user/unified_manager.py`（统一用户管理器）
-59. `sirius_pulse/memory/glossary/manager.py`（名词解释管理器）
 60. `sirius_pulse/memory/context_assembler.py`（上下文组装器）
 61. `sirius_pulse/memory/cognition_store.py`（认知事件存储）
 62. `sirius_pulse/memory/storage.py`（统一 SQLite 用户存储层）
@@ -273,9 +272,9 @@ description: "在不通读全部代码的情况下快速理解 Sirius Pulse 架�
 | `sirius_pulse/github/` | GitHub API 集成：REST 客户端、事件桥接、Webhook 服务器 | 不介入核心对话逻辑 |
 | `sirius_pulse/plugins/` | 插件系统：PluginBase、词法分析/AST、输出调度、定时调度、EngineProxy、@command 装饰器、PluginContext | 不负责 SKILL 执行 |
 | `sirius_pulse/core/` | 编排核心：EmotionalGroupChatEngine（组合模式）、Brain（LLM 中枢）、Pipeline、认知/决策/响应策略、四层身份解析、主动触发、延迟防抖、消息钉住、编排持久化、人格数据库、事件总线、节奏/阈值分析 | 不负责 SKILL 注册表 |
-| `sirius_pulse/memory/` | 四层记忆架构（基础消息→情景压缩→演化链验证→传记/模式/缺口）、日记、语义、统一用户管理、名词解释、上下文组装、冷检测 | 不直接决定 provider 路由 |
+| `sirius_pulse/memory/` | 四层记忆架构（基础消息→情景压缩→演化链验证→传记/模式/缺口）、日记、语义、统一用户管理、上下文组装、冷检测 | 不直接决定 provider 路由 |
 | `sirius_pulse/providers/` | provider 协议、9 个具体上游实现（OpenAI 兼容/智谱/DeepSeek/硅基流动/火山引擎/阿里云百炼/MIMO/YTea/Mock）、注册表、自动路由、models.dev 自动填充 | 不介入高层人格生命周期 |
-| `sirius_pulse/tools/` | SKILL 注册、依赖解析、执行、安全校验、遥测、数据存储；被动 SKILL 支持；13 个内置技能（reminder/github_monitor/bing_search/url_content_reader/file_*/send_*/desktop_screenshot/learn_term/system_info） | 不负责 provider 注册表 |
+| `sirius_pulse/tools/` | SKILL 注册、依赖解析、执行、安全校验、遥测、数据存储；被动 SKILL 支持；12 个内置技能（reminder/github_monitor/bing_search/url_content_reader/file_*/send_*/desktop_screenshot/system_info） | 不负责 provider 注册表 |
 | `sirius_pulse/config/` | SessionConfig、WorkspaceConfig、ConfigManager、ConfigBuilder 声明式构建、JSONC 解析、原子文件 I/O、类型强制转换 | 不改变核心对话契约 |
 | `sirius_pulse/models/` | 数据契约：Message、Transcript、EmotionState、IntentAnalysisV3、PersonaProfile、ResponseStrategy 等 | 不处理持久化 |
 | `sirius_pulse/session/` | SessionStore（Json/Sqlite）、持久化后端 | 不介入对话逻辑 |
@@ -340,7 +339,6 @@ description: "在不通读全部代码的情况下快速理解 Sirius Pulse 架�
 | `sirius_pulse/memory/diary/slice_vector_store.py` | 日记切片向量存储 |
 | `sirius_pulse/memory/semantic/manager.py` | 语义记忆管理器 |
 | `sirius_pulse/memory/user/unified_manager.py` | 统一用户管理器（注册/解析/群隔离/别名管理） |
-| `sirius_pulse/memory/glossary/manager.py` | 名词解释管理器 |
 | `sirius_pulse/memory/context_assembler.py` | 上下文组装器 |
 | `sirius_pulse/memory/cognition_store.py` | 认知事件存储 |
 | `sirius_pulse/adapters/base.py` | BaseAdapter 抽象基类（跨平台适配器接口） |
@@ -433,7 +431,7 @@ data/
 
 - **新增 provider**：修改 `sirius_pulse/providers/`、`providers/routing.py`，并补测试与文档。新增 Provider 继承 `OpenAICompatibleProvider`，只需覆盖路径/认证差异。
 - **修改对话主流程**：优先检查 `sirius_pulse/core/emotional_engine.py`、`core/engine_core.py`、`core/pipeline.py`、`core/brain.py`、`core/prompt_factory.py`、`core/bg_tasks.py`、`core/bg_tasks_delayed.py`、`core/bg_tasks_proactive.py`、`core/helpers.py`、`core/cognition.py`、`core/response_strategy.py`。
-- **修改记忆系统**：同步检查 `sirius_pulse/memory/cold_detector.py`、`memory/evolution/chain.py`、`memory/evolution/store.py`、`memory/situation/extractor.py`、`memory/situation/store.py`、`memory/biography/view.py`、`memory/schema.py`、`memory/gap_detector.py`、`memory/basic/manager.py`、`memory/diary/manager.py`、`memory/semantic/manager.py`、`memory/user/unified_manager.py`、`memory/glossary/manager.py`、`memory/context_assembler.py`、`memory/cognition_store.py`、`memory/storage.py`。
+- **修改记忆系统**：同步检查 `sirius_pulse/memory/cold_detector.py`、`memory/evolution/chain.py`、`memory/evolution/store.py`、`memory/situation/extractor.py`、`memory/situation/store.py`、`memory/biography/view.py`、`memory/schema.py`、`memory/gap_detector.py`、`memory/basic/manager.py`、`memory/diary/manager.py`、`memory/semantic/manager.py`、`memory/user/unified_manager.py`、`memory/context_assembler.py`、`memory/cognition_store.py`、`memory/storage.py`。
 - **修改人格生命周期**：同步检查 `sirius_pulse/persona_manager.py`、`persona_worker.py`、`persona_config.py`、`core/persona_db.py`、`core/persona_store.py`、`core/persona_generator.py`、`core/orchestration_store.py`、`platforms/runtime.py`。
 - **修改平台适配**：同步检查 `sirius_pulse/adapters/base.py`、`adapters/models.py`、`platforms/onebot_v11/napcat/manager.py`、`platforms/onebot_v11/napcat/adapter.py`、`platforms/onebot_v11/protocol.py`、`platforms/runtime.py`、`platforms/persona_utils.py`。
 - **修改插件系统**：同步检查 `sirius_pulse/plugins/api.py`、`plugins/base.py`、`plugins/loader.py`、`plugins/registry.py`、`plugins/executor.py`、`plugins/lexer.py`、`plugins/dispatcher.py`、`plugins/scheduler.py`、`plugins/context.py`、`plugins/models.py`、`plugins/decorators.py`、`plugins/config.py`、`plugins/events.py`、`core/plugin_intent_matcher.py`、`core/plugin_intent_verifier.py`、`webui/server_plugin_api.py`。

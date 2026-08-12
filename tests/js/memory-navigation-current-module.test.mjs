@@ -22,12 +22,12 @@ for (const oldPage of [
 
 for (const apiPath of [
   '/persona/diary',
-  '/persona/glossary',
   '/persona/conversations',
 ]) {
   assert.match(memorySource, new RegExp(apiPath.replaceAll('/', '\\/')));
 }
 
+assert.doesNotMatch(memorySource, /glossary|名词解释|术语表/);
 assert.match(memorySource, /记忆管理工作台/);
 assert.match(memorySource, /openEditor\(state\.tab, null\)/);
 assert.match(memorySource, /deleteItem\(state\.tab, filtered\[Number\(btn\.dataset\.delete\)\]\)/);

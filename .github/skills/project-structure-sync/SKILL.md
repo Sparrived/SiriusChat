@@ -23,7 +23,7 @@ sirius_pulse/
 ├── workspace/                - WorkspaceLayout / Runtime / Watcher / RoleplayManager
 ├── config/                   - SessionConfig / WorkspaceConfig / JSONC / ConfigManager
 ├── models/                   - Message / Participant / Transcript 等数据契约
-├── memory/                   - basic/diary/glossary/user/semantic 子包；context_assembler.py 将短期记忆以 XML 嵌入 system prompt，返回 [system, user] 两条消息；日记条目支持时间戳显示
+├── memory/                   - basic/diary/user/semantic 子包；context_assembler.py 将短期记忆以 XML 嵌入 system prompt，返回 [system, user] 两条消息；日记条目支持时间戳显示
 ├── session/                  - SessionStore / runner
 ├── providers/                - Provider 实现、路由（全链路异步 httpx）
 ├── token/                    - token 记录、SQLite 持久化与分析

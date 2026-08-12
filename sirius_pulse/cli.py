@@ -295,7 +295,6 @@ def _migrate_flat_to_personas() -> None:
         "adapters.json",
         "engine_state",
         "archive",
-        "glossary",
         "diary",
         "plugins",
         "tools",

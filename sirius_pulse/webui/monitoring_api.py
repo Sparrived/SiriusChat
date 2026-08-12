@@ -161,18 +161,6 @@ def _count_diary_entries(persona_dir: Path) -> int:
     return total
 
 
-def _count_glossary_terms(persona_dir: Path) -> int:
-    """统计名词解释条目数。"""
-    terms_path = persona_dir / "glossary" / "terms.json"
-    if not terms_path.exists():
-        return 0
-    try:
-        data = json.loads(terms_path.read_text(encoding="utf-8"))
-        return len(data) if isinstance(data, (dict, list)) else 0
-    except (OSError, json.JSONDecodeError):
-        return 0
-
-
 def _count_cognition_events(persona_dir: Path) -> int:
     """统计认知事件总数。"""
     db_path = persona_dir / "persona.db"
@@ -256,7 +244,6 @@ async def api_monitoring_persona_metrics(
 
     token_usage = _read_token_usage(persona_dir)
     diary_count = _count_diary_entries(persona_dir)
-    glossary_count = _count_glossary_terms(persona_dir)
     event_count = _count_cognition_events(persona_dir)
 
     return _json_response(
@@ -268,7 +255,6 @@ async def api_monitoring_persona_metrics(
             "token_usage": token_usage,
             "memory": {
                 "diary_count": diary_count,
-                "glossary_count": glossary_count,
             },
             "cognition": {
                 "event_count": event_count,

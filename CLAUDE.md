@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Sirius Pulse (灵动月白) is an async roleplay chat framework for QQ group chats. It runs multiple AI personas as isolated OS subprocesses, each with independent config, memory, and QQ identity. The core engine uses a 5-stage pipeline (Perception → Cognition → Decision → Execution → Background) with layered memory (basic/diary/semantic/biography/glossary) and supports multiple LLM providers with auto-routing.
+Sirius Pulse (灵动月白) is an async roleplay chat framework for QQ group chats. It runs multiple AI personas as isolated OS subprocesses, each with independent config, memory, and QQ identity. The core engine uses a 5-stage pipeline (Perception → Cognition → Decision → Execution → Background) with layered memory (basic/diary/semantic/biography) and supports multiple LLM providers with auto-routing.
 
 Python 3.12+. Package name: `sirius-pulse`. MIT license.
 
@@ -80,7 +80,7 @@ Each persona runs as an isolated subprocess (`python -m sirius_pulse.persona_wor
 - **`sirius_pulse/providers/`** — LLM provider abstraction. All providers implement `LLMProvider` from `base.py`. `AutoRoutingProvider` handles multi-provider failover. New providers go here only.
 - **`sirius_pulse/adapters/`** — Platform-agnostic message types (`TextSegment`, `ImageSegment`, `MessageGroup`, etc. in `models.py`) and `BaseAdapter` abstract class.
 - **`sirius_pulse/platforms/`** — Concrete platform implementations. Currently only OneBot v11 via NapCat (`platforms/onebot_v11/napcat/adapter.py`). `runtime.py` bridges platform adapters to the engine.
-- **`sirius_pulse/memory/`** — Layered memory: basic (sliding window, 30-msg hard limit), diary (LLM summaries + ChromaDB vectors), semantic (vector search at group/user/global levels), biography (cross-session character profiles), glossary (learnable terms).
+- **`sirius_pulse/memory/`** — Layered memory: basic (sliding window, 30-msg hard limit), diary (LLM summaries + ChromaDB vectors), semantic (vector search at group/user/global levels), biography (cross-session character profiles).
 - **`sirius_pulse/tools/`** — AI-callable tools. Tools are Python files exporting `TOOL_META` + `run()`. The LLM invokes them via `[TOOL_CALL: name | {params}]`. Includes passive tools (background tasks, event triggers, lifecycle hooks).
 - **`sirius_pulse/plugins/`** — User-facing chat commands triggered by `/` `#` `!` prefixes. Inherit `PluginBase`, use `@command` decorator (v1.2+). Three output modes: `direct` / `llm` (AI-personalized) / `silent`.
 - **`sirius_pulse/webui/`** — aiohttp REST API + static frontend for persona management, config, monitoring. Split into domain modules: `persona_api.py`, `memory_api.py`, `biography_api.py`, `evolution_api.py`, `monitoring_api.py`, etc.

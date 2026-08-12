@@ -12,7 +12,6 @@ from sirius_pulse.memory.diary import (
     DiaryManager,
     DiaryRetriever,
 )
-from sirius_pulse.memory.glossary import GlossaryManager, GlossaryTerm
 from sirius_pulse.memory.units import (
     MemoryUnit,
     MemoryUnitFileStore,
@@ -42,8 +41,6 @@ __all__ = [
     "ContextAssembler",
     "UnifiedUser",
     "UnifiedUserManager",
-    "GlossaryManager",
-    "GlossaryTerm",
     "ColdDetector",
     "ColdState",
 ]

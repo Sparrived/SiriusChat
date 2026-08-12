@@ -328,8 +328,6 @@ class PersonaWorker:
         if hasattr(engine, "biography_manager"):
             engine.biography_manager._persona_name = persona.name
             engine.biography_manager._persona_aliases = persona.aliases
-        if hasattr(engine, "glossary_manager"):
-            engine.glossary_manager._persona_name = persona.name
         if hasattr(engine, "cognition_analyzer"):
             engine.cognition_analyzer.ai_name = persona.name
             engine.cognition_analyzer.ai_aliases = persona.aliases

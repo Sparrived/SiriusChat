@@ -45,7 +45,6 @@ from sirius_pulse.memory.basic import BasicMemoryFileStore, BasicMemoryManager
 from sirius_pulse.memory.cold_detector import ColdDetector
 from sirius_pulse.memory.context_assembler import ContextAssembler
 from sirius_pulse.memory.diary import DiaryManager
-from sirius_pulse.memory.glossary import GlossaryManager
 from sirius_pulse.memory.semantic.manager import SemanticMemoryManager
 from sirius_pulse.memory.storage import MemoryStorage
 from sirius_pulse.memory.units import MemoryUnitManager
@@ -148,8 +147,8 @@ class _EmotionalGroupChatEngineBase:
         self._task_models = {
             "cognition_analyze": analysis_model,
             "memory_extract": memory_model,
-            "proactive_generate": chat_model,
             "response_generate": chat_model,
+            "proactive_generate": chat_model,
             "passive_tool": chat_model,
             "github_monitor_notify": chat_model,
             "plugin_generate": plugin_model,
@@ -207,7 +206,6 @@ class _EmotionalGroupChatEngineBase:
             memory_unit_retriever=self.memory_unit_manager,
             is_source_checkpointed=self.memory_unit_manager.is_source_checkpointed,
         )
-        self.glossary_manager = GlossaryManager(self.work_path, persona_name=self.persona.name)
 
     def _init_cognitive_layer(self) -> None:
         self.cognition_analyzer = CognitionAnalyzer(

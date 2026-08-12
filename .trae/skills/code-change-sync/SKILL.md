@@ -83,7 +83,6 @@ sirius_pulse/
 │   ├── basic/               # 基础记忆（滑动窗口+热度+归档）
 │   ├── diary/               # 日记记忆（LLM生成、索引、ChromaDB 向量存储、检索）
 │   ├── semantic/            # 语义记忆（群规范、氛围、关系状态）
-│   ├── glossary/            # 名词解释（AI自身知识，支持人格级隔离与迁移）
 │   ├── user/                # 用户管理（极简UserProfile+群隔离）
 │   ├── context_assembler.py # 上下文组装器
 │   └── cognition_store.py   # 认知状态持久化
@@ -125,7 +124,7 @@ sirius_pulse/
 │   ├── data_store.py        # TOOL独立JSON数据存储
 │   ├── dependency_resolver.py # 依赖自动解析安装
 │   ├── telemetry.py         # 执行遥测记录
-│   ├── builtin/             # 内置工具（system_info/learn_term/bing_search/file_list/file_read/file_write/upload_file/send_image/send_workspace_file/reminder/desktop_screenshot/url_content_reader/weather等）
+│   ├── builtin/             # 内置工具（system_info/bing_search/file_list/file_read/file_write/upload_file/send_image/send_workspace_file/reminder/desktop_screenshot/url_content_reader/weather等）
 │   └── sticker/             # 表情包子系统（RAG 向量检索、偏好管理、学习、反馈、新鲜度）
 ├── session/                 # 会话持久化
 │   └── store.py             # JsonSessionStore/SqliteSessionStore/SessionStoreFactory

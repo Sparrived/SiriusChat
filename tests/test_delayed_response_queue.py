@@ -291,7 +291,6 @@ def test_delayed_queue_when_topic_gap_exceeds_threshold_then_delayed_item_trigge
 def test_build_delayed_prompt_injects_configured_length_limit():
     engine = SimpleNamespace(
         config={"max_sentence_chars": 12},
-        glossary_manager=SimpleNamespace(build_prompt_section=lambda *args, **kwargs: ""),
         semantic_memory=SimpleNamespace(
             get_user_profile=lambda *args, **kwargs: None,
             get_group_profile=lambda *args, **kwargs: SimpleNamespace(atmosphere_history=[]),
@@ -1075,7 +1074,6 @@ async def test_delayed_queue_when_normal_chat_requests_plan_status_then_reads_pu
             get_user_profile=lambda group_id, user_id: SimpleNamespace(engagement_rate=1.0),
             get_group_profile=lambda group_id: None,
         ),
-        glossary_manager=SimpleNamespace(build_prompt_section=lambda *args, **kwargs: ""),
         style_adapter=SimpleNamespace(adapt=lambda **kwargs: SimpleNamespace()),
         persona=SimpleNamespace(),
         _other_ai_names=[],

@@ -816,7 +816,6 @@ async function loadPersonaMonitoring(name) {
       if ($('panelTokenOut')) $('panelTokenOut').textContent = (token.total_output || 0).toLocaleString();
       if ($('panelCalls')) $('panelCalls').textContent = (token.call_count || 0).toLocaleString();
       if ($('panelDiary')) $('panelDiary').textContent = (memory.diary_count || 0).toLocaleString();
-      if ($('panelGlossary')) $('panelGlossary').textContent = (memory.glossary_count || 0).toLocaleString();
       if ($('panelCognition')) $('panelCognition').textContent = (cognition.event_count || 0).toLocaleString();
     }
 

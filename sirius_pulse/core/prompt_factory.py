@@ -44,7 +44,6 @@ TAG_HISTORY_DIARY_END = "【历史日记结束】"
 
 TAG_CURRENT_TIME = "【当前时间】"
 TAG_PLUGIN_AWARENESS = "【插件能力】"
-TAG_GLOSSARY = "【名词解释】"
 
 # 最近消息标签
 TAG_RECENT_MESSAGES = "【最近消息】"

@@ -188,7 +188,6 @@ class PromptTokenBreakdown:
     participants: int = 0
     cross_group: int = 0
     tools: int = 0
-    glossary: int = 0
     output_format: int = 0
 
     # ContextAssembler sections
@@ -219,7 +218,6 @@ class PromptTokenBreakdown:
             "participants": self.participants,
             "cross_group": self.cross_group,
             "tools": self.tools,
-            "glossary": self.glossary,
             "output_format": self.output_format,
             "diary": self.diary,
             "history_xml": self.history_xml,
