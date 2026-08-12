@@ -21,6 +21,11 @@ let isLive = true;
 let isLoadingMessages = false;
 let needsReloadAfterLoad = false;
 let embeddedMode = false;
+
+function asArray(value) {
+  return Array.isArray(value) ? value : [];
+}
+
 const realtime = createRealtimeRefresh(() => loadMessages(true), {
   resources: ['conversations'],
   debounceMs: 500,
@@ -61,7 +66,6 @@ const TAG_COLORS = {
   cross_group:{ bg: '#85cdca22', color: '#85cdca', border: '#85cdca44' },
   conversation:{ bg: '#d8b4e222', color: '#d8b4e2', border: '#d8b4e244' },
   tool_result:{ bg: '#ff980022', color: '#ff9800', border: '#ff980044' },
-  glossary:   { bg: '#00bcd422', color: '#00bcd4', border: '#00bcd444' },
   biography:  { bg: '#79554822', color: '#795548', border: '#79554844' },
   memory:     { bg: '#607d8b22', color: '#607d8b', border: '#607d8b44' },
   compressed: { bg: '#cddc3922', color: '#cddc39', border: '#cddc3944' },
@@ -207,9 +211,9 @@ async function loadMessages(silent = false) {
 
   try {
     const data = await get(`/persona/conversations?${params}`);
-    messages = data.messages || [];
-    pinnedMessages = data.pinned_messages || [];
-    groups = data.groups || [];
+    messages = asArray(data?.messages);
+    pinnedMessages = asArray(data?.pinned_messages);
+    groups = asArray(data?.groups);
     rebuildCompressedMessageLookup();
     const total = data.total || 0;
 
@@ -573,7 +577,7 @@ const SECTION_COLORS = {
   '关系': '#00bcd4', '历史日记': '#e8a87c', '其他群近期记录': '#85cdca',
   '近期对话记录': '#d8b4e2', '工具执行结果': '#ff9800', '当前时间': '#9e9e9e',
   '氛围趋势': '#4caf50', '插件能力': '#2196f3',
-  '名词解释': '#00bcd4', '钉住的重要消息': '#e91e63', '最近消息': '#607d8b',
+  '钉住的重要消息': '#e91e63', '最近消息': '#607d8b',
 };
 
 const SECTION_ENDINGS = ['结束', '完毕', '完', '末', '尾', '终止', '关闭'];
@@ -698,7 +702,7 @@ function estimateTokens(text) {
 let msgIdCounter = 0;
 
 function renderMessageTags(tags) {
-  if (!tags || !tags.length) return '';
+  if (!Array.isArray(tags) || !tags.length) return '';
   const badges = tags.map(t => {
     const c = TAG_COLORS[t.type] || TAG_COLORS.reply;
     return `<span class="tag" style="font-size:10px;padding:1px 6px;background:${c.bg};color:${c.color};border:1px solid ${c.border}">${escapeHtml(t.label)}</span>`;
@@ -949,7 +953,7 @@ function buildEmbeddedTimelineItems(sourceMessages) {
   const seenCallIds = new Set();
   const seenResultIds = new Set();
 
-  sourceMessages.forEach((message, sourceIndex) => {
+  asArray(sourceMessages).forEach((message, sourceIndex) => {
     items.push({ kind: 'message', message, sourceIndex });
     if (message?.role !== 'assistant') return;
 

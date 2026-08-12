@@ -115,6 +115,7 @@ vm.runInNewContext(
   source
     .replace(/^import .*;$/gm, '')
     .replace(/^export /gm, '')
+    + '\nglobalThis.asArrayForTest = asArray;'
     + '\nglobalThis.renderChainMessagesForTest = renderChainMessages;'
     + '\nglobalThis.renderInjectedRequestPanelForTest = renderInjectedRequestPanel;'
     + '\nglobalThis.buildEmbeddedTimelineItemsForTest = buildEmbeddedTimelineItems;'
@@ -122,6 +123,10 @@ vm.runInNewContext(
     + '\nglobalThis.renderMemoryToolResultMessageForTest = renderMemoryToolResultMessage;',
   context,
 );
+
+assert.deepEqual(Array.from(context.asArrayForTest(undefined)), []);
+assert.deepEqual(Array.from(context.asArrayForTest({})), []);
+assert.deepEqual(Array.from(context.asArrayForTest(['message'])), ['message']);
 
 const renderedInjection = context.renderInjectedRequestPanelForTest(
   {
