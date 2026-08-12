@@ -105,6 +105,36 @@ def extract_keywords(text: str) -> set[str]:
     return keywords
 
 
+def topic_similarity(left: str, right: str) -> float:
+    """Return the character-bigram Jaccard score used for topic continuity."""
+
+    def _tokens(value: str) -> set[str]:
+        if str(value or "").lstrip().startswith("["):
+            try:
+                parsed = json.loads(value)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                parsed = None
+            if isinstance(parsed, list):
+                return {str(token) for token in parsed if str(token)}
+
+        normalized = "".join(
+            char.lower()
+            for char in str(value or "")
+            if char.isalnum() or "\u4e00" <= char <= "\u9fff"
+        )[:240]
+        if not normalized:
+            return set()
+        if len(normalized) < 2:
+            return {normalized}
+        return {normalized[index : index + 2] for index in range(len(normalized) - 1)}
+
+    left_tokens = _tokens(left)
+    right_tokens = _tokens(right)
+    if not left_tokens or not right_tokens:
+        return 0.0
+    return len(left_tokens & right_tokens) / len(left_tokens | right_tokens)
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # 辅助数据类
 # ═══════════════════════════════════════════════════════════════════════
@@ -506,9 +536,10 @@ class CognitionAnalyzer:
                 social_intent = SocialIntent.SOCIAL
                 social_intent_str = "social"
 
-        # 6. 紧迫度和相关性
+        # 6. 紧迫度、相关性和与上文的话题一致性
         urgency = self._calculate_urgency(message, user_id, group_id, emotion, context_messages)
         relevance = self._calculate_relevance(message, social_intent, user_id, group_id)
+        topic_similarity_score = self._topic_similarity_with_context(message, context_messages)
         if is_mentioned:
             is_question = "?" in message or "？" in message
             is_subjective = any(kw in message for kw in _SUBJECTIVE_KEYWORDS)
@@ -545,6 +576,7 @@ class CognitionAnalyzer:
             is_imperative=directed_scores.get("imperative_score", 0.0) >= 0.5,
             urgency_score=urgency,
             relevance_score=relevance,
+            topic_similarity_score=topic_similarity_score,
             social_intent=social_intent_str,
             sarcasm_score=sarcasm_score,
             entitlement_score=entitlement_score,
@@ -1249,6 +1281,17 @@ class CognitionAnalyzer:
         if len(message) <= 10:
             return SocialIntent.SILENT, SilentSubtype.FILLER, 0.6
         return SocialIntent.SOCIAL, SocialSubtype.TOPIC_DISCUSSION, 0.5
+
+    @staticmethod
+    def _topic_similarity_with_context(
+        message: str,
+        context_messages: list[dict[str, Any]] | None,
+    ) -> float:
+        """Compare the current message with the most recent assistant turn."""
+        for previous in reversed(context_messages or []):
+            if previous.get("user_id") == "assistant" or previous.get("role") == "assistant":
+                return topic_similarity(str(previous.get("content") or ""), message)
+        return 0.0
 
     # ------------------------------------------------------------------
     # Intent scoring

@@ -326,7 +326,7 @@ def test_group_dispatcher_keeps_peer_closed_when_all_human_candidates_are_silent
     asyncio.run(run())
 
 
-def test_group_dispatcher_continues_a_non_directed_open_topic(tmp_path: Path):
+def test_group_dispatcher_does_not_override_silent_persona_for_open_topic(tmp_path: Path):
     async def run() -> None:
         clock = _Clock()
         db_path = tmp_path / "dispatcher.db"
@@ -357,7 +357,7 @@ def test_group_dispatcher_continues_a_non_directed_open_topic(tmp_path: Path):
             sender_account_id="100",
             message_text="夜拍参数先调快门还是 ISO？",
         )
-        assert peer.granted
+        assert peer.reason == "all_candidates_silent"
 
     asyncio.run(run())
 

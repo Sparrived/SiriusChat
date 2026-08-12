@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from sirius_pulse.core.cognition import CognitionAnalyzer
+from sirius_pulse.core.cognition import CognitionAnalyzer, topic_similarity
 from sirius_pulse.core.engine_core import _EmotionalGroupChatEngineBase
 from sirius_pulse.core.participation import (
     ParticipationPolicy,
@@ -22,6 +22,49 @@ from sirius_pulse.models.signal import SignalAnalysis
 
 def _policy() -> ParticipationPolicy:
     return ParticipationPolicy()
+
+
+def test_persona_topic_similarity_uses_recent_assistant_turn():
+    analyzer = CognitionAnalyzer(ai_name="Luna")
+    signal = analyzer.compute_signal(
+        "夜拍参数先调快门还是 ISO？",
+        "u1",
+        "g1",
+        context_messages=[
+            {"user_id": "assistant", "content": "夜拍参数应该优先调整什么？"},
+        ],
+    )
+
+    assert topic_similarity("夜拍参数应该优先调整什么？", "夜拍参数先调快门还是 ISO？") > 0.18
+    assert signal.topic_similarity_score > 0.18
+
+
+def test_topic_similarity_boosts_persona_participation_score():
+    common = {
+        "is_question": True,
+        "urgency_score": 30,
+        "relevance_score": 0.4,
+        "social_intent": "social",
+        "heat_level": "warm",
+        "pace": "steady",
+        "turn_gap_readiness": 0.5,
+    }
+    without_context = _policy().evaluate(
+        signal=SignalAnalysis(**common, topic_similarity_score=0.0),
+        content="夜拍参数先调快门还是 ISO？",
+        is_private=False,
+        seconds_since_reply=120,
+    )
+    with_context = _policy().evaluate(
+        signal=SignalAnalysis(**common, topic_similarity_score=1.0),
+        content="夜拍参数先调快门还是 ISO？",
+        is_private=False,
+        seconds_since_reply=120,
+    )
+
+    assert with_context.reply_need_score > without_context.reply_need_score
+    assert with_context.conversation_fit_score > without_context.conversation_fit_score
+    assert with_context.score > without_context.score
 
 
 def test_platform_direct_address_has_same_score_as_at_persona():

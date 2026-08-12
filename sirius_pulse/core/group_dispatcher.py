@@ -45,17 +45,6 @@ def _topic_signature(text: str) -> str:
     return json.dumps(sorted(tokens), ensure_ascii=False, separators=(",", ":"))
 
 
-def _topic_similarity(left: str, right: str) -> float:
-    try:
-        left_tokens = set(json.loads(left or "[]"))
-        right_tokens = set(json.loads(right or "[]"))
-    except (TypeError, ValueError, json.JSONDecodeError):
-        return 0.0
-    if not left_tokens or not right_tokens:
-        return 0.0
-    return len(left_tokens & right_tokens) / len(left_tokens | right_tokens)
-
-
 @dataclass(frozen=True, slots=True)
 class DispatchDecision:
     action: str
@@ -546,7 +535,6 @@ class GroupDispatcher:
             first = candidates[0] if candidates else None
             sender_type = str(first["sender_type"] or "human") if first else "human"
             sender_account_id = str(first["sender_account_id"] or "") if first else ""
-            message_topic = str(first["topic_signature"] or "") if first else ""
             target_accounts: set[str] = set()
             text_target_worker_ids = {
                 str(row["preferred_worker_id"] or "").strip()
@@ -610,9 +598,7 @@ class GroupDispatcher:
                         eligible = directed
                 elif open_target:
                     eligible = [row for row in candidates if str(row["worker_id"]) == open_target]
-                elif peer_required or (
-                    open_topic and _topic_similarity(open_topic, message_topic) >= 0.18
-                ):
+                elif peer_required:
                     # A non-directed question keeps the topic open. The dispatcher
                     # selects a peer even when its local preview was initially silent.
                     eligible = list(candidates)
@@ -644,8 +630,6 @@ class GroupDispatcher:
                 return self._mark_candidate_observed(conn, event_id, now, "", reason)
             if is_peer:
                 interaction_expected = bool(known_targets or open_target or peer_required)
-                if not interaction_expected and open_topic:
-                    interaction_expected = _topic_similarity(open_topic, message_topic) >= 0.18
                 peer_reason = self._peer_gate(
                     state,
                     now,
@@ -866,7 +850,6 @@ class GroupDispatcher:
         now = self._clock()
         target_accounts = {str(value).strip() for value in target_account_ids if str(value).strip()}
         sender_account_id = str(sender_account_id or "").strip()
-        message_topic = _topic_signature(message_text)
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             conn.execute(
@@ -958,8 +941,6 @@ class GroupDispatcher:
                     eligible = [row for row in eligible if str(row["worker_id"]) == open_target]
                     preferred_worker_id = open_target
                 interaction_expected = bool(known_targets or open_target)
-                if not interaction_expected and open_topic:
-                    interaction_expected = _topic_similarity(open_topic, message_topic) >= 0.18
                 peer_reason = self._peer_gate(
                     state,
                     now,

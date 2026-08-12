@@ -298,6 +298,7 @@ class ParticipationPolicy:
                 "heat_level": signal.heat_level,
                 "pace": signal.pace,
                 "turn_gap_readiness": signal.turn_gap_readiness,
+                "topic_similarity_score": signal.topic_similarity_score,
                 "social_intent": signal.social_intent,
             },
         )
@@ -336,6 +337,7 @@ class ParticipationPolicy:
             score += 0.10
         score += (signal.urgency_score / 100.0) * 0.22
         score += signal.relevance_score * 0.16
+        score += signal.topic_similarity_score * 0.20
         return _clamp(score)
 
     def _social_opportunity_score(
@@ -376,7 +378,7 @@ class ParticipationPolicy:
     def _conversation_fit_score(
         self, signal: SignalAnalysis, text: str, affinity_score: float
     ) -> float:
-        score = signal.relevance_score * 0.60
+        score = signal.relevance_score * 0.60 + signal.topic_similarity_score * 0.30
         if signal.social_intent == "help_seeking":
             score += 0.18
         elif signal.social_intent == "emotional":

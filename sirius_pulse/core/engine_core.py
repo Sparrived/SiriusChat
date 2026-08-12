@@ -633,6 +633,9 @@ class _EmotionalGroupChatEngineBase:
             "directed_score": round(float(getattr(signal, "directed_score", 0.0)), 4),
             "urgency_score": round(float(getattr(signal, "urgency_score", 0.0)), 4),
             "relevance_score": round(float(getattr(signal, "relevance_score", 0.0)), 4),
+            "topic_similarity_score": round(
+                float(getattr(signal, "topic_similarity_score", 0.0)), 4
+            ),
             "sarcasm_score": round(float(getattr(signal, "sarcasm_score", 0.0)), 4),
             "entitlement_score": round(float(getattr(signal, "entitlement_score", 0.0)), 4),
             "turn_gap_readiness": round(float(getattr(signal, "turn_gap_readiness", 0.0)), 4),
@@ -1072,14 +1075,6 @@ class _EmotionalGroupChatEngineBase:
                 "strategy": "silent",
                 "delay_seconds": 0.0,
             }
-        if message.sender_type == "other_ai" and not explicitly_mentioned and len(content) < 30:
-            return {
-                "should_reply": False,
-                "score": 0.0,
-                "reason": "short_peer_message",
-                "strategy": "silent",
-                "delay_seconds": 0.0,
-            }
         if content.lstrip().startswith("/"):
             return {
                 "should_reply": True,
@@ -1180,16 +1175,7 @@ class _EmotionalGroupChatEngineBase:
             text = (message.content or "").lower()
             is_mentioned = any(name in text for name in names if name)
             if not is_mentioned:
-                # 混合方案：短消息直接静默（省 LLM 调用），长消息走完整 pipeline
-                if len(message.content or "") < 30:
-                    self._log_inner_thought(f"{speaker} 是另一个 AI，说得很短，我先默默听着～")
-                    return {
-                        "strategy": "silent",
-                        "reply": None,
-                        "emotion": {},
-                        "intent": {},
-                    }
-                self._log_inner_thought(f"{speaker} 是另一个 AI，但说得挺长，让我认真想想...")
+                self._log_inner_thought(f"{speaker} 是另一个 AI，让我先按自己的参与评分判断...")
 
         self._log_inner_thought(f"{speaker} 在群里说话了，让我仔细听听看～")
         await self.event_bus.emit(

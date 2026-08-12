@@ -31,6 +31,7 @@ class SignalAnalysis:
     # ── 紧迫度 ──
     urgency_score: float = 0.0  # 0-100
     relevance_score: float = 0.0  # 0.0-1.0
+    topic_similarity_score: float = 0.0  # current message vs recent conversation topic
     social_intent: str = "social"  # help_seeking|emotional|social|silent
 
     # ── 社交信号 ──
@@ -62,6 +63,7 @@ class SignalAnalysis:
             "is_imperative": self.is_imperative,
             "urgency_score": self.urgency_score,
             "relevance_score": self.relevance_score,
+            "topic_similarity_score": self.topic_similarity_score,
             "social_intent": self.social_intent,
             "sarcasm_score": self.sarcasm_score,
             "entitlement_score": self.entitlement_score,
