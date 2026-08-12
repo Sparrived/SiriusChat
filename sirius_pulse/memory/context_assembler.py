@@ -11,7 +11,7 @@ from __future__ import annotations
 import html
 import logging
 from collections.abc import Callable
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any
 
 from sirius_pulse.memory.basic.manager import BasicMemoryManager
@@ -62,7 +62,9 @@ class ContextAssembler:
         include_pending: bool = False,
         speaker_user_id: str = "",
         speaker_name: str = "",
+        identity_aliases: list[str] | None = None,
         mentioned_user_ids: list[str] | None = None,
+        cross_group_memory_enabled: bool = False,
         content_is_tagged: bool = False,
         platform_message_id: str = "",
         dynamic_context: str = "",
@@ -86,13 +88,19 @@ class ContextAssembler:
 
         memory_context = ""
         memory_count = 0
-        effective_memory_unit_top_k = diary_top_k if memory_unit_top_k is None else memory_unit_top_k
+        effective_memory_unit_top_k = (
+            diary_top_k if memory_unit_top_k is None else memory_unit_top_k
+        )
         if self._memory_units is not None:
             memory_units = self._memory_units.retrieve(
                 query=enriched_query,
                 group_id=group_id,
                 top_k=effective_memory_unit_top_k,
                 max_tokens_budget=diary_token_budget,
+                user_id=speaker_user_id,
+                identity_aliases=identity_aliases,
+                mentioned_user_ids=mentioned_user_ids,
+                cross_group_enabled=cross_group_memory_enabled,
             )
             memory_count = len(memory_units)
             memory_context = self._build_memory_unit_context(memory_units)
@@ -149,6 +157,8 @@ class ContextAssembler:
             xml_content = self._entries_to_xml(current_user_entries)
             messages.append({"role": "user", "content": xml_content})
 
+        message_timing = self._build_message_timing_context(recent, pending_entries)
+
         # 4. 构建当前用户消息：日记 + 动态上下文 + 消息内容
         def _with_user_context(content: str) -> str:
             """Prefix long-term memory and dynamic context to the user message."""
@@ -160,6 +170,11 @@ class ContextAssembler:
             if content:
                 parts.append(content)
             return "\n\n".join(parts) if parts else ""
+
+        def _with_message_timing(content: str) -> str:
+            if not message_timing:
+                return content
+            return f"{message_timing}\n\n{content}" if content else message_timing
 
         # 排除与当前发言者匹配的最后一条 pending 条目，避免 current_query 重复注入。
         filtered_pending = pending_entries
@@ -182,7 +197,12 @@ class ContextAssembler:
                     and not line.startswith("</pending_messages>")
                 ]
                 tagged_content = "\n".join(pending_lines) + "\n" + current_query
-            messages.append({"role": "user", "content": _with_user_context(tagged_content)})
+            messages.append(
+                {
+                    "role": "user",
+                    "content": _with_user_context(_with_message_timing(tagged_content)),
+                }
+            )
         else:
             if speaker_name or speaker_user_id:
                 from sirius_pulse.core.prompt_factory import PromptFactory
@@ -203,20 +223,37 @@ class ContextAssembler:
                         and not line.startswith("</pending_messages>")
                     ]
                     combined = "\n".join(pending_lines) + "\n" + current_xml
-                    messages.append({"role": "user", "content": _with_user_context(combined)})
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": _with_user_context(_with_message_timing(combined)),
+                        }
+                    )
                 else:
-                    messages.append({"role": "user", "content": _with_user_context(current_xml)})
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": _with_user_context(_with_message_timing(current_xml)),
+                        }
+                    )
             else:
                 if all_current:
                     pending_xml = self._entries_to_xml(all_current, tag="pending_messages")
                     messages.append(
                         {
                             "role": "user",
-                            "content": _with_user_context(pending_xml + "\n" + current_query),
+                            "content": _with_user_context(
+                                _with_message_timing(pending_xml + "\n" + current_query)
+                            ),
                         }
                     )
                 else:
-                    messages.append({"role": "user", "content": _with_user_context(current_query)})
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": _with_user_context(_with_message_timing(current_query)),
+                        }
+                    )
 
         return messages
 
@@ -236,7 +273,9 @@ class ContextAssembler:
         include_pending: bool = False,
         speaker_user_id: str = "",
         speaker_name: str = "",
+        identity_aliases: list[str] | None = None,
         mentioned_user_ids: list[str] | None = None,
+        cross_group_memory_enabled: bool = False,
         content_is_tagged: bool = False,
         platform_message_id: str = "",
         dynamic_context: str = "",
@@ -256,7 +295,9 @@ class ContextAssembler:
             include_pending=include_pending,
             speaker_user_id=speaker_user_id,
             speaker_name=speaker_name,
+            identity_aliases=identity_aliases,
             mentioned_user_ids=mentioned_user_ids,
+            cross_group_memory_enabled=cross_group_memory_enabled,
             content_is_tagged=content_is_tagged,
             platform_message_id=platform_message_id,
             dynamic_context=dynamic_context,
@@ -277,6 +318,10 @@ class ContextAssembler:
                     group_id=group_id,
                     top_k=effective_memory_unit_top_k,
                     max_tokens_budget=diary_token_budget,
+                    user_id=speaker_user_id,
+                    identity_aliases=identity_aliases,
+                    mentioned_user_ids=mentioned_user_ids,
+                    cross_group_enabled=cross_group_memory_enabled,
                 )
                 memory_text = "\n".join(getattr(unit, "summary", "") for unit in memory_units[:12])
             elif self._diary is not None:
@@ -357,6 +402,46 @@ class ContextAssembler:
         return "\n".join(lines)
 
     @staticmethod
+    def _format_message_gap(seconds: float) -> str:
+        seconds = max(0, round(seconds))
+        if seconds < 60:
+            return f"约 {seconds} 秒"
+        minutes = seconds // 60
+        if minutes < 60:
+            return f"约 {minutes} 分钟"
+        hours = minutes // 60
+        if hours < 24:
+            return f"约 {hours} 小时"
+        return f"约 {hours // 24} 天"
+
+    @staticmethod
+    def _parse_entry_timestamp(entry: Any) -> datetime | None:
+        raw_timestamp = str(getattr(entry, "timestamp", "") or "")
+        if not raw_timestamp:
+            return None
+        try:
+            parsed = datetime.fromisoformat(raw_timestamp.replace("Z", "+00:00"))
+        except (TypeError, ValueError):
+            return None
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+    @classmethod
+    def _build_message_timing_context(
+        cls,
+        recent: list[Any],
+        pending_entries: list[Any],
+    ) -> str:
+        visible = [*recent, *pending_entries]
+        if len(visible) < 2 or visible[-1].role == "assistant":
+            return ""
+        latest = cls._parse_entry_timestamp(visible[-1])
+        previous = cls._parse_entry_timestamp(visible[-2])
+        if latest is None or previous is None:
+            return ""
+        gap = max(0.0, (latest - previous).total_seconds())
+        return f"【消息间隔】当前消息与上一条消息相隔{cls._format_message_gap(gap)}。"
+
+    @staticmethod
     def _build_diary_context(diary_entries: list[Any]) -> str:
         """构建日记上下文，作为 user 消息链的一部分注入。"""
         if not diary_entries:
@@ -419,18 +504,8 @@ class ContextAssembler:
         include_group: bool = False,
         include_wrapper: bool = True,
     ) -> str:
-        _tz_cn = timezone(timedelta(hours=8))
         lines: list[str] = [f"<{tag}>"] if include_wrapper else []
         for entry in entries:
-            # 解析时间
-            ts_str = ""
-            raw_ts = getattr(entry, "timestamp", "")
-            if raw_ts:
-                try:
-                    ts_str = datetime.fromisoformat(raw_ts).astimezone(_tz_cn).strftime("%H:%M:%S")
-                except (ValueError, TypeError):
-                    ts_str = ""
-
             # 使用统一的 tag_message 生成 <message> 标签
             from sirius_pulse.core.prompt_factory import PromptFactory
 
@@ -443,7 +518,6 @@ class ContextAssembler:
                 speaker=entry.speaker_name or entry.user_id or "unknown",
                 user_id=entry.user_id or "",
                 platform_message_id=msg_id,
-                time_str=ts_str,
                 group_id=group,
             )
             lines.append(f"  {tagged}")

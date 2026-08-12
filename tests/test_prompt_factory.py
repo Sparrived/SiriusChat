@@ -29,13 +29,12 @@ def test_prompt_factory_when_message_is_tagged_then_escapes_content_and_attribut
         speaker='Alice "A"',
         user_id="u&1",
         platform_message_id='msg"1',
-        time_str="12:34:56",
         group_id='group"1',
     )
 
     assert tagged.startswith('<message speaker="Alice &quot;A&quot;"')
     assert 'user_id="u&amp;1"' in tagged
-    assert 'time="12:34:56"' in tagged
+    assert " time=" not in tagged
     assert 'group="group&quot;1"' in tagged
     assert 'msg_id="msg&quot;1"' in tagged
     assert 'hello &lt;world&gt; &amp; "friends"' in tagged
@@ -44,8 +43,8 @@ def test_prompt_factory_when_message_is_tagged_then_escapes_content_and_attribut
 def test_prompt_factory_when_extracting_last_message_then_reads_last_tag():
     content = "\n".join(
         [
-            PromptFactory.tag_message("first", speaker="Alice", time_str="00:00:01"),
-            PromptFactory.tag_message("second", speaker="Bob", time_str="00:00:02"),
+            PromptFactory.tag_message("first", speaker="Alice"),
+            PromptFactory.tag_message("second", speaker="Bob"),
         ]
     )
 
@@ -630,6 +629,48 @@ def test_context_assembler_tagged_current_keeps_pending_messages():
     current = messages[-1]["content"]
     assert "peer reply" in current
     assert current.count("current message") == 1
+
+
+def test_context_assembler_puts_only_latest_message_gap_outside_xml_attributes():
+    basic = BasicMemoryManager()
+    first = basic.add_entry(
+        "group_a",
+        "alice",
+        "human",
+        "first human",
+        speaker_name="Alice",
+        timestamp="2026-08-12T12:00:00+00:00",
+    )
+    basic.add_entry(
+        "group_a",
+        "assistant",
+        "assistant",
+        "first reply",
+        speaker_name="Bot",
+        timestamp="2026-08-12T12:00:10+00:00",
+    )
+    basic.add_entry(
+        "group_a",
+        "alice",
+        "human",
+        "current message",
+        speaker_name="Alice",
+        timestamp="2026-08-12T12:02:10+00:00",
+    )
+    assembler = ContextAssembler(basic, _NoopDiaryRetriever())
+
+    messages = assembler.build_messages(
+        group_id="group_a",
+        current_query="current message",
+        system_prompt="system",
+        speaker_user_id="alice",
+        speaker_name="Alice",
+    )
+
+    user_content = messages[-1]["content"]
+    assert 'time="' not in user_content
+    assert "【消息间隔】当前消息与上一条消息相隔约 2 分钟。" in user_content
+    assert first.content in messages[1]["content"]
 
 
 def test_context_assembler_removes_diarized_sources_from_system_prefix():
