@@ -229,7 +229,7 @@ sirius_pulse/
 │   └── builtin/             # 内置工具
 │       ├── web_lookup.py
 │       ├── qq_member_info.py
-│       ├── reminder.py（混合：主动 + 后台）
+│       ├── bash.py（含项目级 crontab 兼容调度）
 │       ├── github_monitor.py（纯被动）
 │       └── ...
 │
@@ -331,7 +331,7 @@ def run(query: str = "", data_store=None, **kwargs) -> dict:
     return {"success": True, "text": result}
 ```
 
-内置工具包括：`bash`（含受限 Docker 命令）、`web_lookup`、`qq_member_info`、`reminder`、`github_monitor`、`desktop_screenshot` 等。
+内置工具包括：`bash`（含受限 Docker 命令和项目级 crontab 调度）、`web_lookup`、`qq_member_info`、`github_monitor`、`desktop_screenshot` 等。
 
 支持**被动工具**：后台任务、事件触发器、生命周期回调。
 
