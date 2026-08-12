@@ -48,6 +48,7 @@ def test_engine_orchestration_custom_models_route_memory_extract_to_memory_model
 
     assert engine._task_models["cognition_analyze"] == "vision-model"
     assert engine._task_models["memory_extract"] == "memory-model"
+    assert engine._task_models["proactive_generate"] == "chat-model"
     assert "diary_generate" not in engine._task_models
     assert "diary_consolidate" not in engine._task_models
 

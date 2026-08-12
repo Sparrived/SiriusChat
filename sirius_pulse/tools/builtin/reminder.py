@@ -19,6 +19,8 @@ from sirius_pulse.config.config_builder import ConfigBuilder
 
 logger = logging.getLogger(__name__)
 
+REMINDER_TIMEZONE = timezone(timedelta(hours=8), name="Asia/Shanghai")
+
 _config = ConfigBuilder()
 _config.group("基础操作").add(
     "action",
@@ -188,8 +190,9 @@ async def _check_and_fire_reminders(ctx: Any) -> None:
     store = ctx.get_data_store("reminder")
     reminders = list(store.get("reminders", []))
     now = datetime.now(timezone.utc)
-    triggered: list[tuple[str, str, str, str, str, str, list[dict[str, Any]]]] = []
-    remaining: list[dict[str, Any]] = []
+    triggered: list[
+        tuple[dict[str, Any], str, str, str, str, str, str, list[dict[str, Any]]]
+    ] = []
 
     for r in reminders:
         if _is_reminder_due(r, now):
@@ -207,30 +210,28 @@ async def _check_and_fire_reminders(ctx: Any) -> None:
                         ctx, gid, user_id, user_name, r.get("id"), tool_chain
                     )
                 triggered.append(
-                    (gid, content, user_id, user_name, adapter_type, target, tool_results)
+                    (r, gid, content, user_id, user_name, adapter_type, target, tool_results)
                 )
-                r["last_fired_at"] = now.isoformat()
-                r["fire_count"] = r.get("fire_count", 0) + 1
-                mode = r.get("mode", "once")
-                if mode == "once":
-                    continue
-                if mode == "interval":
-                    interval = r.get("minutes_after", 1)
-                    next_fire = now + timedelta(minutes=interval)
-                    r["fire_at"] = next_fire.isoformat()
             else:
                 logger.warning("Reminder %s has no group_id, skipping", r.get("id"))
-        remaining.append(r)
 
-    if len(remaining) != len(reminders):
-        store.set("reminders", remaining)
-        store.save()
+    fired_once_ids: set[str] = set()
+    state_changed = False
 
-    for gid, content, user_id, user_name, adapter_type, target, tool_results in triggered:
+    for r, gid, content, user_id, user_name, adapter_type, target, tool_results in triggered:
         reply = await _generate_reminder_message(
             ctx, gid, content, user_id, user_name, target, tool_results
         )
         if reply:
+            r["last_fired_at"] = now.isoformat()
+            r["fire_count"] = r.get("fire_count", 0) + 1
+            mode = r.get("mode", "once")
+            if mode == "once":
+                fired_once_ids.add(str(r.get("id", "")))
+            elif mode == "interval":
+                interval = r.get("minutes_after", 1)
+                r["fire_at"] = (now + timedelta(minutes=interval)).isoformat()
+            state_changed = True
             ctx.queue_pending_message(gid, reply, adapter_type)
             ctx.log_inner_thought(f"AI 生成提醒：{reply[:40]}")
             if gid.startswith("private_"):
@@ -239,6 +240,11 @@ async def _check_and_fire_reminders(ctx: Any) -> None:
                 "reminder_triggered",
                 {"group_id": gid, "reply": reply, "adapter_type": adapter_type},
             )
+
+    if state_changed:
+        remaining = [r for r in reminders if str(r.get("id", "")) not in fired_once_ids]
+        store.set("reminders", remaining)
+        store.save()
 
 
 async def _execute_tool_chain(
@@ -385,20 +391,34 @@ def _is_reminder_due(reminder: dict[str, Any], now: datetime) -> bool:
             h, m = map(int, str(time_str).split(":"))
         except ValueError:
             return False
-        now_local = now.astimezone()
-        if now_local.hour != h or now_local.minute != m:
+        now_local = now.astimezone(REMINDER_TIMEZONE)
+        scheduled_minutes = h * 60 + m
+        current_minutes = now_local.hour * 60 + now_local.minute
+        if current_minutes < scheduled_minutes:
             return False
         last_fired = reminder.get("last_fired_at")
         if last_fired:
             try:
                 last_dt = datetime.fromisoformat(str(last_fired).replace("Z", "+00:00"))
-                last_local = last_dt.astimezone()
+                last_local = last_dt.astimezone(REMINDER_TIMEZONE)
                 if (
                     last_local.year == now_local.year
                     and last_local.month == now_local.month
                     and last_local.day == now_local.day
-                    and last_local.hour == now_local.hour
-                    and last_local.minute == now_local.minute
+                ):
+                    return False
+            except ValueError:
+                pass
+        created_at = reminder.get("created_at")
+        if created_at:
+            try:
+                created_local = datetime.fromisoformat(str(created_at).replace("Z", "+00:00"))
+                created_local = created_local.astimezone(REMINDER_TIMEZONE)
+                if (
+                    created_local.year == now_local.year
+                    and created_local.month == now_local.month
+                    and created_local.day == now_local.day
+                    and created_local.hour * 60 + created_local.minute > scheduled_minutes
                 ):
                     return False
             except ValueError:

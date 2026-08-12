@@ -148,6 +148,7 @@ class _EmotionalGroupChatEngineBase:
         self._task_models = {
             "cognition_analyze": analysis_model,
             "memory_extract": memory_model,
+            "proactive_generate": chat_model,
             "response_generate": chat_model,
             "passive_tool": chat_model,
             "github_monitor_notify": chat_model,
