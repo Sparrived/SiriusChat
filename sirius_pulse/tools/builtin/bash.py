@@ -3,47 +3,18 @@
 from __future__ import annotations
 
 import asyncio
-import base64
-import binascii
-import json
-import logging
-import os
-import re
-import shlex
-import shutil
 import subprocess
-import sys
-import uuid
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from sirius_pulse.config.config_builder import ConfigBuilder
-from sirius_pulse.tools.builtin import _container_status_card, _docker_cli
-from sirius_pulse.tools import cron_tasks
+from sirius_pulse.tools.builtin import _bash_cron, _bash_runtime, _container_status_card
 from sirius_pulse.tools.models import ToolInvocationContext
 
-logger = logging.getLogger(__name__)
-
-_SENSITIVE_ENV = re.compile(
-    r"(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|AUTH|COOKIE|SESSION)", re.IGNORECASE
-)
 _DEFAULT_MAX_TIMEOUT = 15.0
 _DEFAULT_MAX_OUTPUT = 12_000
 _MAX_COMMAND_LENGTH = 4_000
 _MIN_OUTPUT = 256
-_RUNTIME_DIR_NAME = "runtime"
-_RUNTIME_BIN_DIR = "bin"
-_RUNTIME_PYTHON_DIR = "python"
-_RUNTIME_NODE_DIR = "node"
-_RUNTIME_CACHE_DIR = "cache"
-_DOCKER_FUNCTION_TEMPLATE = """docker() {{
-    {python_executable} -m sirius_pulse.tools.builtin._docker_cli \"$@\"
-}}
-docker-compose() {{
-    {python_executable} -m sirius_pulse.tools.builtin._docker_cli compose \"$@\"
-}}
-"""
 
 _config = ConfigBuilder()
 _config.group("Bash 执行").add(
@@ -102,7 +73,7 @@ TOOL_META = {
         },
         "max_output_chars": {
             "type": "int",
-            "description": "单次 Bash 返回的最大字符数，范围 256 到 50000。",
+            "description": "单次 Bash 返回的最大输出字符数，范围 256 到 50000。",
             "default": _DEFAULT_MAX_OUTPUT,
             "group": "限制",
         },
@@ -111,19 +82,7 @@ TOOL_META = {
 
 
 def create_background_tasks(ctx: Any) -> list[Any]:
-    """Register the internal crontab-compatible scheduler under Bash."""
-    from sirius_pulse.tools.models import BackgroundTaskSpec
-
-    async def _check() -> None:
-        await _check_cron_tasks(ctx)
-
-    return [
-        BackgroundTaskSpec(
-            name="bash_cron_check",
-            interval_seconds=max(1.0, float(ctx.get_config_value("cron_check_interval_seconds", 10))),
-            task_func=_check,
-        )
-    ]
+    return _bash_cron.create_background_tasks(ctx, run)
 
 
 async def run(
@@ -137,7 +96,7 @@ async def run(
     invocation_context: ToolInvocationContext | None = None,
     **kwargs: Any,
 ) -> dict[str, Any]:
-    """Execute one Bash command with a Docker proxy function for other containers."""
+    """Execute one Bash command with the Sirius Docker bridge."""
     if data_store is not None and data_store.get("_enabled", True) is False:
         return {"success": False, "error": "bash Tool 已被当前人格禁用"}
 
@@ -161,8 +120,8 @@ async def run(
 
     if not kwargs.get("_skip_crontab", False):
         try:
-            cron_request = cron_tasks.parse_crontab_command(command_text)
-        except cron_tasks.CronParseError as exc:
+            cron_request = _bash_cron.parse_command(command_text)
+        except _bash_cron.CronParseError as exc:
             return {"success": False, "error": str(exc)}
         if cron_request is not None:
             if data_store is None:
@@ -255,258 +214,41 @@ async def run(
     }
 
 
-def _handle_crontab_request(
-    request: dict[str, Any],
-    *,
-    cwd: Path,
-    data_store: Any,
-    chat_context: dict[str, Any] | None,
-    engine_context: Any,
-    invocation_context: ToolInvocationContext | None,
-) -> dict[str, Any]:
-    context = dict(chat_context or {})
-    group_id = str(context.get("group_id") or context.get("chat_id") or "").strip()
-    if not group_id:
-        return {"success": False, "error": "crontab 任务必须绑定当前聊天会话"}
-    jobs = [
-        job
-        for job in (data_store.get("cron_jobs", []) if data_store else [])
-        if isinstance(job, dict)
-    ]
-    owner_id = (
-        invocation_context.caller_user_id
-        if invocation_context
-        else str(context.get("user_id", ""))
-    )
-    owner_name = invocation_context.caller_name if invocation_context else ""
-    adapter_type = str(context.get("adapter_type", ""))
-    if not adapter_type and engine_context is not None:
-        getter = getattr(engine_context, "get_current_adapter_type", None)
-        if callable(getter):
-            adapter_type = str(getter() or "")
-
-    scoped = [job for job in jobs if job.get("group_id") == group_id]
-    action = request.get("action")
-    if action == "list":
-        if not scoped:
-            return {
-                "success": True,
-                "summary": "当前聊天没有定时任务",
-                "text_blocks": ["当前没有定时任务。"],
-            }
-        lines = [
-            f"{job.get('expression', '')} {job.get('command', '')}".strip()
-            for job in scoped
-        ]
-        return {
-            "success": True,
-            "summary": f"列出 {len(scoped)} 个定时任务（标准 crontab 格式）",
-            "text_blocks": ["\n".join(lines)],
-        }
-
-    if action == "remove":
-        kept = [job for job in jobs if job.get("group_id") != group_id]
-        removed = len(jobs) - len(kept)
-        if data_store is not None:
-            data_store.set("cron_jobs", kept)
-            data_store.save()
-        return {
-            "success": True,
-            "summary": f"已删除 {removed} 个定时任务",
-            "text_blocks": [f"✅ 已删除当前聊天的 {removed} 个定时任务。"],
-        }
-
-    created: list[dict[str, Any]] = []
-    replacement = [job for job in jobs if job.get("group_id") != group_id]
-    for entry in request.get("entries", []):
-        job = {
-            "id": f"cron_{uuid.uuid4().hex[:12]}",
-            "schedule_type": "cron",
-            "expression": entry["expression"],
-            "command": entry["command"],
-            "cwd": str(cwd),
-            "group_id": group_id,
-            "owner_user_id": owner_id,
-            "owner_name": owner_name,
-            "owner_is_developer": bool(
-                invocation_context and invocation_context.caller_is_developer
-            ),
-            "adapter_type": adapter_type,
-            "created_at": datetime.now(timezone.utc).isoformat(),
-            "last_run_key": "",
-            "run_count": 0,
-        }
-        replacement.append(job)
-        created.append(job)
-    if data_store is not None:
-        data_store.set("cron_jobs", replacement)
-        data_store.save()
-    lines = ["✅ 已注册内部定时任务："]
-    lines.extend(f"[{job['id']}] {job['expression']} {job['command']}" for job in created)
-    return {
-        "success": True,
-        "summary": f"已注册 {len(created)} 个定时任务",
-        "text_blocks": ["\n".join(lines)],
-    }
+def _handle_crontab_request(request: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+    return _bash_cron.handle_request(request, **kwargs)
 
 
 async def _check_cron_tasks(ctx: Any) -> None:
-    store = ctx.get_data_store("bash")
-    jobs = [job for job in (store.get("cron_jobs", []) or []) if isinstance(job, dict)]
-    if not jobs:
-        return
-
-    now = datetime.now(cron_tasks.CRON_TIMEZONE)
-    changed = False
-    remaining: list[dict[str, Any]] = []
-    for job in jobs:
-        if not job.get("group_id") or not job.get("command"):
-            changed = True
-            continue
-        due, run_key = cron_tasks.task_is_due(job, now)
-        if not due or job.get("last_run_key") == run_key:
-            remaining.append(job)
-            continue
-
-        job["last_run_key"] = run_key
-        job["run_count"] = int(job.get("run_count", 0) or 0) + 1
-        changed = True
-        try:
-            await _run_cron_job(ctx, job)
-        except Exception:
-            logger.exception("内部 cron 任务执行失败: %s", job.get("id", "unknown"))
-        remaining.append(job)
-
-    if changed:
-        store.set("cron_jobs", remaining)
-        store.save()
+    await _bash_cron.check_tasks(ctx, run)
 
 
 async def _run_cron_job(ctx: Any, job: dict[str, Any]) -> None:
-    from sirius_pulse.memory.user.unified_models import UnifiedUser
-
-    group_id = str(job.get("group_id", ""))
-    user_id = str(job.get("owner_user_id", ""))
-    user_name = str(job.get("owner_name", ""))
-    adapter_type = str(job.get("adapter_type", ""))
-    if not adapter_type:
-        getter = getattr(ctx, "get_current_adapter_type", None)
-        if callable(getter):
-            adapter_type = str(getter() or "")
-    caller = UnifiedUser(
-        user_id=user_id,
-        name=user_name,
-        metadata={"is_developer": bool(job.get("owner_is_developer", False))},
-    )
-    invocation_context = ToolInvocationContext(caller=caller)
-    chat_context = {
-        "group_id": group_id,
-        "chat_id": group_id.replace("private_", "").replace("qq_", "")
-        if group_id.startswith("private_")
-        else group_id,
-        "chat_type": "private" if group_id.startswith("private_") else "group",
-        "user_id": user_id,
-        "adapter_type": adapter_type,
-    }
-    result = await run(
-        str(job["command"]),
-        cwd=str(job.get("cwd") or "."),
-        timeout_seconds=10.0,
-        max_output_chars=12_000,
-        data_store=ctx.get_data_store("bash"),
-        chat_context=chat_context,
-        engine_context=ctx,
-        invocation_context=invocation_context,
-        _skip_crontab=True,
-    )
-    output = result.get("text_blocks", [""])[0] if result.get("success") else result.get("error", "")
-    if not output:
-        output = "命令执行成功，但没有输出。"
-    message = await ctx.generate_scheduled_message(
-        job=job,
-        command_output=str(output),
-        group_id=group_id,
-        user_id=user_id,
-        user_name=user_name,
-        adapter_type=adapter_type,
-        caller_is_developer=bool(job.get("owner_is_developer", False)),
-    )
-    payload = message if isinstance(message, dict) else {"text": str(message)}
-    text = str(payload.get("text", "")).strip()
-    sticker_names = payload.get("sticker_names", [])
-    poke_user_ids = payload.get("poke_user_ids", [])
-    if text or sticker_names or poke_user_ids:
-        await ctx.dispatch_proactive_message(
-            group_id=group_id,
-            text=text,
-            adapter_type=adapter_type,
-            event_id=str(job.get("id", "")),
-            reply_references=payload.get("reply_references", []),
-            sticker_names=sticker_names,
-            poke_user_ids=poke_user_ids,
-        )
+    await _bash_cron._run_job(ctx, job, run)
 
 
 def _load_policy(data_store: Any) -> dict[str, Any]:
-    reload_store = getattr(data_store, "reload", None)
-    if callable(reload_store):
-        reload_store()
-
-    max_timeout = _bounded_number(
-        (
-            data_store.get("max_timeout_seconds", _DEFAULT_MAX_TIMEOUT)
-            if data_store
-            else _DEFAULT_MAX_TIMEOUT
-        ),
-        default=_DEFAULT_MAX_TIMEOUT,
-        minimum=1.0,
-        maximum=60.0,
+    return _bash_runtime.load_policy(
+        data_store,
+        default_timeout=_DEFAULT_MAX_TIMEOUT,
+        default_output=_DEFAULT_MAX_OUTPUT,
+        minimum_output=_MIN_OUTPUT,
     )
-    max_output = int(
-        _bounded_number(
-            (
-                data_store.get("max_output_chars", _DEFAULT_MAX_OUTPUT)
-                if data_store
-                else _DEFAULT_MAX_OUTPUT
-            ),
-            default=_DEFAULT_MAX_OUTPUT,
-            minimum=_MIN_OUTPUT,
-            maximum=50_000,
-        )
-    )
-    return {
-        "max_timeout_seconds": max_timeout,
-        "max_output_chars": max_output,
-    }
 
 
 def _validate_command(command: str) -> str:
-    text = str(command or "").strip()
-    if not text:
-        raise ValueError("command 不能为空")
-    if len(text) > _MAX_COMMAND_LENGTH:
-        raise ValueError(f"command 过长，最多 {_MAX_COMMAND_LENGTH} 个字符")
-    if "\0" in text:
-        raise ValueError("command 不能包含空字节")
-    return text
+    return _bash_runtime.validate_command(command, max_length=_MAX_COMMAND_LENGTH)
 
 
 def _resolve_cwd(cwd: str) -> Path:
-    requested = str(cwd or ".").strip() or "."
-    resolved = Path(requested).expanduser().resolve()
-    if not resolved.is_dir():
-        raise ValueError(f"cwd 不是目录: {cwd}")
-    return resolved
+    return _bash_runtime.resolve_cwd(cwd)
 
 
 def _find_bash() -> str | None:
-    configured = os.environ.get("SIRIUS_BASH_PATH", "").strip()
-    return configured or shutil.which("bash")
+    return _bash_runtime.find_bash()
 
 
 def _docker_function() -> str:
-    """Build the Docker shell function with the active Sirius interpreter."""
-    return _DOCKER_FUNCTION_TEMPLATE.format(python_executable=shlex.quote(sys.executable))
+    return _bash_runtime.docker_function()
 
 
 async def _send_inspect_status_cards(
@@ -517,173 +259,43 @@ async def _send_inspect_status_cards(
     engine_context: Any,
     invocation_context: ToolInvocationContext | None,
 ) -> list[dict[str, Any]]:
-    cards: list[dict[str, Any]] = []
-    for raw_status in statuses:
-        status = _container_status_card.normalize_status(raw_status)
-        record: dict[str, Any] = {"status": status, "sent": False, "error": "", "message_id": None}
-        cards.append(record)
-        if status is None:
-            record["error"] = "Docker 代理未返回有效的容器状态"
-            continue
-        if not _chat_target(chat_context)[1]:
-            record["error"] = "当前调用没有 QQ 会话上下文"
-            continue
-        registry = getattr(engine_context, "tool_registry", None)
-        executor = getattr(engine_context, "tool_executor", None)
-        if registry is None or executor is None:
-            record["error"] = "Tool 运行上下文未就绪，无法发送状态卡片"
-            continue
-        group_file_exec = registry.get("group_file_exec")
-        if group_file_exec is None:
-            record["error"] = "未找到 group_file_exec Tool，无法发送状态卡片"
-            continue
-        try:
-            image_path = await _container_status_card.render_status_card(status, data_store)
-            record["card_path"] = str(image_path)
-            sent = await executor.execute_async(
-                group_file_exec,
-                {"action": "image", "image_path": str(image_path)},
-                invocation_context=invocation_context,
-            )
-            if sent.success:
-                record["sent"] = True
-                record["message_id"] = sent.internal_metadata.get("message_id")
-            else:
-                record["error"] = sent.error or "状态卡片发送失败"
-        except Exception as exc:
-            record["error"] = str(exc)
-    return cards
+    return await _bash_runtime.send_inspect_status_cards(
+        statuses,
+        data_store=data_store,
+        chat_context=chat_context,
+        engine_context=engine_context,
+        invocation_context=invocation_context,
+        status_card=_container_status_card,
+    )
 
 
 def _chat_target(chat_context: dict[str, Any] | None) -> tuple[str, str]:
-    context = chat_context or {}
-    chat_type = str(context.get("chat_type") or "").strip()
-    if chat_type not in {"group", "private"}:
-        return "", ""
-    return chat_type, str(context.get("chat_id") or context.get("group_id") or "").strip()
+    return _bash_runtime.chat_target(chat_context)
 
 
 def _container_recovery_hint(command: str) -> str:
-    text = command.lower()
-    if not any(token in text for token in ("docker", "minecraft", "systemctl")):
-        return ""
-    return (
-        "\n容器排障请继续使用受支持命令，不要在 Sirius 容器中使用 systemctl 或宿主机 /var/log："
-        "\n1. docker ps -a"
-        "\n2. docker inspect <容器名称>"
-        "\n3. docker logs --tail 200 <容器名称>"
-        "\n4. docker exec <容器名称> tail -n 200 /data/logs/latest.log"
-        "\n5. docker exec <容器名称> ls -lt /data/crash-reports"
-    )
-
-
-def _safe_environment() -> dict[str, str]:
-    keep = {
-        "HOME",
-        "LANG",
-        "LC_ALL",
-        "PATH",
-        "SIRIUS_CONTAINER_ADMIN_SOCKET",
-        "SYSTEMROOT",
-        "TEMP",
-        "TMP",
-        "USER",
-        "USERPROFILE",
-    }
-    return {
-        key: value
-        for key, value in os.environ.items()
-        if key.upper() in keep and not _SENSITIVE_ENV.search(key)
-    }
+    return _bash_runtime.container_recovery_hint(command)
 
 
 def _runtime_environment(data_store: Any) -> dict[str, str]:
-    environment = _safe_environment()
-    runtime_root = _runtime_root(data_store)
-    if runtime_root is None:
-        return environment
-
-    runtime_bin = runtime_root / _RUNTIME_BIN_DIR
-    runtime_python = runtime_root / _RUNTIME_PYTHON_DIR
-    runtime_node = runtime_root / _RUNTIME_NODE_DIR
-    runtime_cache = runtime_root / _RUNTIME_CACHE_DIR
-    for directory in (
-        runtime_bin,
-        runtime_python,
-        runtime_node,
-        runtime_node / "bin",
-        runtime_cache,
-        runtime_cache / "pip",
-        runtime_cache / "npm",
-        runtime_cache / "go",
-    ):
-        directory.mkdir(parents=True, exist_ok=True)
-
-    environment["SIRIUS_RUNTIME_ROOT"] = str(runtime_root)
-    environment["SIRIUS_RUNTIME_BIN"] = str(runtime_bin)
-    environment["PIP_TARGET"] = str(runtime_python)
-    environment["PIP_CACHE_DIR"] = str(runtime_cache / "pip")
-    environment["NPM_CONFIG_PREFIX"] = str(runtime_node)
-    environment["NPM_CONFIG_CACHE"] = str(runtime_cache / "npm")
-    environment["GOBIN"] = str(runtime_bin)
-    environment["GOMODCACHE"] = str(runtime_cache / "go")
-    environment["PATH"] = os.pathsep.join(
-        [str(runtime_bin), str(runtime_node / "bin"), environment.get("PATH", "")]
-    )
-    environment["PYTHONPATH"] = _prepend_environment_path(
-        str(runtime_python), environment.get("PYTHONPATH", "")
-    )
-    return environment
-
-
-def _runtime_root(data_store: Any) -> Path | None:
-    store_path = getattr(data_store, "store_path", None)
-    if not store_path:
-        return None
-    path = Path(store_path).expanduser().resolve()
-    if path.parent.name != "tool_data":
-        return None
-    return path.parent.parent / _RUNTIME_DIR_NAME
-
-
-def _prepend_environment_path(value: str, existing: str) -> str:
-    return os.pathsep.join(item for item in (value, existing) if item)
+    return _bash_runtime.runtime_environment(data_store)
 
 
 def _bounded_number(value: Any, *, default: float, minimum: float, maximum: float) -> float:
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        number = default
-    return max(minimum, min(maximum, number))
+    return _bash_runtime.bounded_number(
+        value, default=default, minimum=minimum, maximum=maximum
+    )
 
 
 def _decode_output(raw: bytes, limit: int) -> str:
-    return _truncate_text(raw.decode("utf-8", errors="replace"), limit)[0]
+    return _bash_runtime.decode_output(raw, limit)
 
 
 def _decode_output_with_inspect_status(
     raw: bytes, limit: int
 ) -> tuple[str, list[dict[str, Any]], bool]:
-    statuses: list[dict[str, Any]] = []
-    kept_lines: list[str] = []
-    for line in raw.decode("utf-8", errors="replace").splitlines(keepends=True):
-        if not line.startswith(_docker_cli.INSPECT_STATUS_MARKER):
-            kept_lines.append(line)
-            continue
-        encoded = line[len(_docker_cli.INSPECT_STATUS_MARKER) :].strip()
-        try:
-            value = json.loads(base64.b64decode(encoded, validate=True).decode("utf-8"))
-        except (binascii.Error, ValueError, UnicodeDecodeError, json.JSONDecodeError):
-            kept_lines.append(line)
-            continue
-        if isinstance(value, dict):
-            statuses.append(value)
-    output, truncated = _truncate_text("".join(kept_lines), limit)
-    return output, statuses, truncated
+    return _bash_runtime.decode_output_with_inspect_status(raw, limit)
 
 
 def _truncate_text(text: str, limit: int) -> tuple[str, bool]:
-    if len(text) > limit:
-        return f"{text[:limit]}\n[输出已截断]", True
-    return text, False
+    return _bash_runtime.truncate_text(text, limit)
