@@ -50,7 +50,14 @@ class _Embedding:
 
 def test_memory_unit_generator_maps_source_indices_to_entry_ids():
     basic = BasicMemoryManager()
-    first = basic.add_entry("group_a", "alice", "human", "run tests", speaker_name="Alice")
+    first = basic.add_entry(
+        "group_a",
+        "alice",
+        "human",
+        "run tests",
+        speaker_name="Alice",
+        channel_user_id="2388389247",
+    )
     second = basic.add_entry(
         "group_a", "assistant", "assistant", "then redeploy", speaker_name="Bot"
     )
@@ -72,6 +79,11 @@ def test_memory_unit_generator_maps_source_indices_to_entry_ids():
     assert unit.unit_type == "event"
     assert unit.source_ids == [first.entry_id]
     assert unit.summary == "Alice agreed to redeploy after tests pass."
+    assert "alice" in unit.identity_aliases
+    assert "2388389247" in unit.identity_aliases
+    assert "qq_2388389247" in unit.identity_aliases
+    assert "Alice" in unit.identity_aliases
+    assert unit.event_time == first.timestamp
 
 
 def test_memory_unit_store_round_trips(tmp_path):
@@ -108,6 +120,29 @@ def test_memory_unit_manager_retrieves_and_tracks_checkpointed_sources(tmp_path)
 
     assert manager.is_source_checkpointed("group_a", "src_1") is True
     retrieved = manager.retrieve("deployment workflow", group_id="group_a", top_k=3)
+    assert retrieved == [unit]
+
+
+def test_memory_unit_manager_loads_cross_group_persona_units_when_enabled(tmp_path):
+    manager = MemoryUnitManager(tmp_path)
+    unit = MemoryUnit(
+        unit_id="mem-persona",
+        group_id="group_b",
+        created_at="2026-06-28T00:00:00+00:00",
+        scope="persona",
+        scope_id="sirius",
+        summary="Sirius prefers concise replies.",
+        keywords=["concise"],
+    )
+    manager.add_units("group_b", [unit])
+
+    retrieved = manager.retrieve(
+        "concise replies",
+        group_id="group_a",
+        cross_group_enabled=True,
+        top_k=3,
+    )
+
     assert retrieved == [unit]
 
 

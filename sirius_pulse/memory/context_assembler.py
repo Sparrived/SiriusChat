@@ -64,7 +64,6 @@ class ContextAssembler:
         speaker_name: str = "",
         identity_aliases: list[str] | None = None,
         mentioned_user_ids: list[str] | None = None,
-        cross_group_memory_enabled: bool = False,
         content_is_tagged: bool = False,
         platform_message_id: str = "",
         dynamic_context: str = "",
@@ -100,7 +99,7 @@ class ContextAssembler:
                 user_id=speaker_user_id,
                 identity_aliases=identity_aliases,
                 mentioned_user_ids=mentioned_user_ids,
-                cross_group_enabled=cross_group_memory_enabled,
+                cross_group_enabled=cross_group_enabled,
             )
             memory_count = len(memory_units)
             memory_context = self._build_memory_unit_context(memory_units)
@@ -275,7 +274,6 @@ class ContextAssembler:
         speaker_name: str = "",
         identity_aliases: list[str] | None = None,
         mentioned_user_ids: list[str] | None = None,
-        cross_group_memory_enabled: bool = False,
         content_is_tagged: bool = False,
         platform_message_id: str = "",
         dynamic_context: str = "",
@@ -297,7 +295,6 @@ class ContextAssembler:
             speaker_name=speaker_name,
             identity_aliases=identity_aliases,
             mentioned_user_ids=mentioned_user_ids,
-            cross_group_memory_enabled=cross_group_memory_enabled,
             content_is_tagged=content_is_tagged,
             platform_message_id=platform_message_id,
             dynamic_context=dynamic_context,
@@ -321,7 +318,7 @@ class ContextAssembler:
                     user_id=speaker_user_id,
                     identity_aliases=identity_aliases,
                     mentioned_user_ids=mentioned_user_ids,
-                    cross_group_enabled=cross_group_memory_enabled,
+                    cross_group_enabled=cross_group_enabled,
                 )
                 memory_text = "\n".join(getattr(unit, "summary", "") for unit in memory_units[:12])
             elif self._diary is not None:
@@ -393,11 +390,22 @@ class ContextAssembler:
             "The following are candidate background memory facts, not current chat messages. Use only directly relevant facts explicitly; indirect facts may only affect tone, and irrelevant facts must be ignored. Do not mention checking memory, reading logs, or remembering these facts. Do not repeat the same old event, preference, or time detail if it was already mentioned recently unless the user asks.",
         ]
         for unit in memory_units[:12]:
-            ts = (getattr(unit, "created_at", "") or "")[:16].replace("T", " ")
+            ts = (
+                getattr(unit, "event_time", "")
+                or getattr(unit, "created_at", "")
+                or ""
+            )[:16].replace("T", " ")
             unit_type = getattr(unit, "unit_type", "") or "event"
             summary = getattr(unit, "summary", "") or ""
+            status = getattr(unit, "status", "") or ""
+            valid_until = getattr(unit, "valid_until", "") or ""
             prefix = f"[{ts}] ({unit_type})" if ts else f"({unit_type})"
-            lines.append(f"{prefix} {summary}")
+            suffix = ""
+            if status and status != "unknown":
+                suffix += f" [{status}]"
+            if valid_until:
+                suffix += f" [valid_until={valid_until[:10]}]"
+            lines.append(f"{prefix} {summary}{suffix}")
         lines.append("</memory_units>")
         return "\n".join(lines)
 

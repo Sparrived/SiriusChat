@@ -28,6 +28,11 @@ _ADJUDICATION_FIELDS = (
     "participants",
     "topics",
     "keywords",
+    "retrieval_terms",
+    "identity_aliases",
+    "event_time",
+    "valid_until",
+    "status",
     "salience",
     "confidence",
     "lifespan",
@@ -174,7 +179,17 @@ def same_boundary(left: MemoryUnit, right: MemoryUnit) -> bool:
 
 
 def _index_text_fields(unit: MemoryUnit) -> tuple[object, ...]:
-    return (unit.summary, unit.participants, unit.topics, unit.keywords)
+    return (
+        unit.summary,
+        unit.participants,
+        unit.topics,
+        unit.keywords,
+        unit.retrieval_terms,
+        unit.identity_aliases,
+        unit.event_time,
+        unit.valid_until,
+        unit.status,
+    )
 
 
 def merge_memory_units(
@@ -201,6 +216,12 @@ def merge_memory_units(
     merged.participants = _union(canonical.participants, incoming.participants, 8)
     merged.topics = _union(canonical.topics, incoming.topics, 8)
     merged.keywords = _union(canonical.keywords, incoming.keywords, 12)
+    merged.retrieval_terms = _union(canonical.retrieval_terms, incoming.retrieval_terms, 16)
+    merged.identity_aliases = _union(canonical.identity_aliases, incoming.identity_aliases, 16)
+    event_times = [value for value in (canonical.event_time, incoming.event_time) if value]
+    merged.event_time = min(event_times) if event_times else ""
+    merged.valid_until = max(canonical.valid_until, incoming.valid_until)
+    merged.status = incoming.status or canonical.status
     merged.salience = max(canonical.salience, incoming.salience)
     merged.confidence = max(canonical.confidence, incoming.confidence)
     merged.lifespan = max(

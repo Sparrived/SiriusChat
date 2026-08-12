@@ -29,7 +29,7 @@ from sirius_pulse.core.plan_runtime import (
 from sirius_pulse.core.prompt_factory import PromptFactory
 from sirius_pulse.core.sticker_delivery import dedupe_sticker_names
 from sirius_pulse.providers.base import ToolCall
-from sirius_pulse.tools.builtin import _markdown_image
+from sirius_pulse.tools.builtin._internal import _markdown_image
 
 if TYPE_CHECKING:
     from sirius_pulse.core.engine_core import _EmotionalGroupChatEngineBase
@@ -586,7 +586,30 @@ class DelayedQueueTasks:
 
         # 获取当前发言者信息
         speaker_uid = resolved_uid or ""
-        speaker_display = triggered[0].user_id if triggered else ""
+        identity_aliases: list[str] = []
+        for merged_item in triggered:
+            for identity in (
+                getattr(merged_item, "user_id", ""),
+                getattr(merged_item, "channel_user_id", ""),
+                getattr(merged_item, "speaker_name", ""),
+            ):
+                identity = str(identity or "").strip()
+                if identity and identity not in identity_aliases:
+                    identity_aliases.append(identity)
+        if caller_profile is not None:
+            profile_identities = [
+                getattr(caller_profile, "user_id", ""),
+                getattr(caller_profile, "name", ""),
+                *getattr(caller_profile, "identities", {}).values(),
+                *getattr(caller_profile, "identity_anchors", []),
+            ]
+            for identity in profile_identities:
+                identity = str(identity or "").strip()
+                if identity and identity not in identity_aliases:
+                    identity_aliases.append(identity)
+                if identity.isdigit() and f"qq_{identity}" not in identity_aliases:
+                    identity_aliases.append(f"qq_{identity}")
+        speaker_display = getattr(triggered[0], "speaker_name", "") if triggered else ""
 
         # 提取原始聊天内容用于日记检索，避免 XML 标签干扰
         raw_parts = [
@@ -615,6 +638,16 @@ class DelayedQueueTasks:
             include_pending=False,
             speaker_user_id=speaker_uid,
             speaker_name=speaker_display,
+            identity_aliases=identity_aliases,
+            mentioned_user_ids=list(
+                dict.fromkeys(
+                    user_id
+                    for merged_item in triggered
+                    for user_id in getattr(merged_item, "related_user_ids", [])
+                    if user_id
+                )
+            ),
+            cross_group_enabled=bool(engine.config.get("cross_group_memory_enabled", True)),
             content_is_tagged=True,
             dynamic_context=bundle.dynamic_context,
         )

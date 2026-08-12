@@ -1,10 +1,12 @@
-"""In-memory retrieval for checkpoint memory units."""
+"""In-memory hybrid retrieval for checkpoint memory units."""
 
 from __future__ import annotations
 
 import logging
 import math
 import re
+import unicodedata
+from datetime import datetime, timezone
 
 from sirius_pulse.embedding.client import EmbeddingClient
 from sirius_pulse.memory.units.deduplicator import same_boundary
@@ -12,9 +14,49 @@ from sirius_pulse.memory.units.models import MemoryUnit
 
 logger = logging.getLogger(__name__)
 
+_QUERY_SPLIT_RE = re.compile(r"[\r\n]+|(?<=[。！？!?])")
+_TAG_RE = re.compile(r"<[^>]+>")
+_WORD_RE = re.compile(r"[0-9a-z_]+", re.IGNORECASE)
+_CJK_RE = re.compile(r"[\u4e00-\u9fff]")
+_TEMPORAL_TERMS = (
+    "现在",
+    "目前",
+    "当前",
+    "最近",
+    "上次",
+    "之前",
+    "后来",
+    "之后",
+    "计划",
+    "完成",
+    "还在",
+    "还没",
+    "多久",
+    "何时",
+    "什么时候",
+    "today",
+    "current",
+    "latest",
+    "recent",
+    "before",
+    "after",
+    "plan",
+    "done",
+)
+_STATUS_TERMS = {
+    "planned": ("计划", "打算", "准备", "将要"),
+    "active": ("正在", "进行", "当前", "还在"),
+    "completed": ("完成", "已经", "做过", "上线", "部署"),
+    "cancelled": ("取消", "放弃", "不做了"),
+}
+
 
 class MemoryUnitIndexer:
-    """Hybrid semantic/keyword index for memory units."""
+    """Hybrid semantic/keyword index for memory units.
+
+    The index stays in memory, so a larger candidate pool is cheap. Semantic
+    and lexical routes produce independent rankings before final fusion.
+    """
 
     def __init__(self, embedding_client: EmbeddingClient | None = None) -> None:
         self._units: list[MemoryUnit] = []
@@ -57,41 +99,78 @@ class MemoryUnitIndexer:
         *,
         group_id: str = "",
         top_k: int = 5,
+        user_id: str = "",
+        identity_aliases: list[str] | None = None,
+        mentioned_user_ids: list[str] | None = None,
+        cross_group_enabled: bool = False,
     ) -> list[tuple[MemoryUnit, float]]:
-        units = [u for u in self._units if u.should_prompt]
-        if group_id:
-            units = [u for u in units if u.group_id == group_id]
+        """Search with semantic, lexical, identity, scope, and time signals."""
+        units = [
+            unit
+            for unit in self._units
+            if unit.should_prompt
+            and self._scope_allowed(
+                unit,
+                query=query,
+                group_id=group_id,
+                user_id=user_id,
+                identity_aliases=[*(identity_aliases or []), *(mentioned_user_ids or [])],
+                cross_group_enabled=cross_group_enabled,
+            )
+        ]
         if not units:
             return []
 
+        queries = self._query_variants(query)
         semantic_scores: dict[str, float] = {}
-        if self.semantic_available:
+        if self.semantic_available and queries:
             try:
-                query_vec = (
-                    self._embedding_client.encode_single(query) if self._embedding_client else []
-                )
+                vectors = self._encode_queries(queries)
             except Exception as exc:
                 logger.warning("Memory unit semantic search failed: %s", exc)
-                query_vec = []
-            if query_vec:
-                for unit in units:
-                    if unit.embedding:
-                        semantic_scores[unit.unit_id] = self._cosine_sim(query_vec, unit.embedding)
+                vectors = []
+            for unit in units:
+                if not unit.embedding:
+                    continue
+                scores = [self._cosine_sim(vector, unit.embedding) for vector in vectors]
+                if scores:
+                    semantic_scores[unit.unit_id] = max(scores)
 
-        keyword_scores: dict[str, float] = {}
-        for unit in units:
-            keyword_scores[unit.unit_id] = self._keyword_score(query, unit)
+        keyword_scores = {
+            unit.unit_id: max((self._keyword_score(item, unit) for item in queries), default=0.0)
+            for unit in units
+        }
+        semantic_rank = self._rank(semantic_scores, reverse=True)
+        keyword_rank = self._rank(keyword_scores, reverse=True)
+        temporal_query = any(term in query.casefold() for term in _TEMPORAL_TERMS)
 
         scored: list[tuple[MemoryUnit, float]] = []
         for unit in units:
             semantic = semantic_scores.get(unit.unit_id, 0.0)
             keyword = keyword_scores.get(unit.unit_id, 0.0)
-            quality = max(0.0, min(1.0, unit.salience)) * max(0.0, min(1.0, unit.confidence))
-            score = (0.6 * semantic) + (0.4 * min(keyword / 3.0, 1.0)) + (0.2 * quality)
-            if score > 0.08:
-                scored.append((unit, score))
+            if semantic <= 0.12 and keyword <= 0.0:
+                continue
+            keyword_norm = min(keyword / 3.0, 1.0)
+            rank_fusion = self._rrf(semantic_rank.get(unit.unit_id), keyword_rank.get(unit.unit_id))
+            quality = max(0.0, min(1.0, unit.salience)) * max(
+                0.0, min(1.0, unit.confidence)
+            )
+            temporal = self._temporal_score(query, unit) if temporal_query else 0.0
+            score = (
+                0.55 * semantic
+                + 0.25 * keyword_norm
+                + 0.10 * rank_fusion
+                + 0.05 * quality
+                + 0.05 * temporal
+            )
+            scored.append((unit, score))
 
-        scored.sort(key=lambda item: item[1], reverse=True)
+        scored.sort(
+            key=lambda item: (item[1], self._parse_time(item[0].event_time or item[0].created_at)),
+            reverse=True,
+        )
+        # ponytail: in-memory O(n) scoring is enough for the current unit volume;
+        # add a persistent ANN index only when this scan becomes measurable.
         return scored[:top_k]
 
     def list_all(self) -> list[MemoryUnit]:
@@ -119,32 +198,147 @@ class MemoryUnitIndexer:
         unit.embedding = vec
         return True
 
-    @staticmethod
-    def _unit_text(unit: MemoryUnit) -> str:
+    def _encode_queries(self, queries: list[str]) -> list[list[float]]:
+        if not self._embedding_client:
+            return []
+        if hasattr(self._embedding_client, "encode"):
+            return [vector for vector in self._embedding_client.encode(queries) if vector]
+        return [self._embedding_client.encode_single(query) for query in queries]
+
+    @classmethod
+    def _query_variants(cls, query: str) -> list[str]:
+        text = _TAG_RE.sub(" ", unicodedata.normalize("NFKC", str(query or "")))
+        text = re.sub(r"\s+", " ", text).strip()
+        if not text:
+            return []
+        variants = [text]
+        for part in _QUERY_SPLIT_RE.split(text):
+            part = part.strip(" \t,，。！？!?;；")
+            if part and part not in variants and len(part) >= 2:
+                variants.append(part)
+        return variants[:8]
+
+    @classmethod
+    def _unit_text(cls, unit: MemoryUnit) -> str:
         return " ".join(
             [
                 unit.summary,
                 " ".join(unit.participants),
                 " ".join(unit.topics),
                 " ".join(unit.keywords),
+                " ".join(unit.retrieval_terms),
+                " ".join(unit.identity_aliases),
+                unit.status,
+                unit.event_time,
             ]
         ).strip()
 
     @classmethod
     def _keyword_score(cls, query: str, unit: MemoryUnit) -> float:
-        query_lower = query.lower()
-        text = cls._unit_text(unit).lower()
-        score = 0.0
-        if query_lower and query_lower in text:
-            score += 1.2
-        query_terms = [t for t in re.split(r"\s+", query_lower) if len(t) >= 2]
-        for term in query_terms:
-            if term in text:
-                score += 0.4
-        for keyword in unit.keywords + unit.topics + unit.participants:
-            if keyword and keyword.lower() in query_lower:
-                score += 0.8
+        query_text = cls._normalize_text(query)
+        text = cls._normalize_text(cls._unit_text(unit))
+        if not query_text or not text:
+            return 0.0
+        score = 1.5 if query_text in text else 0.0
+        query_tokens = cls._tokens(query_text)
+        text_tokens = cls._tokens(text)
+        if query_tokens:
+            score += min(len(query_tokens & text_tokens) * 0.18, 1.2)
+        for field in (
+            unit.identity_aliases,
+            unit.keywords,
+            unit.retrieval_terms,
+            unit.topics,
+            unit.participants,
+        ):
+            for value in field:
+                value = cls._normalize_text(value)
+                if value and value in query_text:
+                    score += 1.0 if value in unit.identity_aliases else 0.65
         return score
+
+    @staticmethod
+    def _normalize_text(value: str) -> str:
+        return re.sub(r"\s+", " ", unicodedata.normalize("NFKC", value).casefold()).strip()
+
+    @staticmethod
+    def _tokens(text: str) -> set[str]:
+        tokens = set(_WORD_RE.findall(text))
+        cjk = "".join(_CJK_RE.findall(text))
+        for size in (2, 3, 4):
+            tokens.update(cjk[index : index + size] for index in range(len(cjk) - size + 1))
+        return {token for token in tokens if len(token) >= 2}
+
+    @staticmethod
+    def _rank(scores: dict[str, float], *, reverse: bool) -> dict[str, int]:
+        ordered = sorted(scores.items(), key=lambda item: item[1], reverse=reverse)
+        return {unit_id: index for index, (unit_id, score) in enumerate(ordered, 1) if score > 0}
+
+    @staticmethod
+    def _rrf(semantic_rank: int | None, keyword_rank: int | None) -> float:
+        total = 0.0
+        if semantic_rank:
+            total += 1.0 / (20.0 + semantic_rank)
+        if keyword_rank:
+            total += 1.0 / (20.0 + keyword_rank)
+        return min(1.0, total * 10.0)
+
+    @classmethod
+    def _scope_allowed(
+        cls,
+        unit: MemoryUnit,
+        *,
+        query: str,
+        group_id: str,
+        user_id: str,
+        identity_aliases: list[str],
+        cross_group_enabled: bool,
+    ) -> bool:
+        same_group = not group_id or unit.group_id == group_id
+        if unit.scope in {"persona", "global"}:
+            return same_group or cross_group_enabled
+        if unit.scope != "user":
+            return same_group
+        keys = {cls._identity_key(value) for value in [user_id, *identity_aliases] if value}
+        unit_keys = {
+            cls._identity_key(value)
+            for value in [unit.scope_id, *unit.identity_aliases, *unit.participants]
+            if value
+        }
+        query_key = cls._normalize_text(query)
+        alias_keys = {cls._identity_key(value) for value in identity_aliases if value}
+        explicit_identity = any(
+            key and (key in query_key or key in alias_keys) for key in unit_keys
+        )
+        if same_group and (keys & unit_keys or explicit_identity):
+            return True
+        if not cross_group_enabled or unit.scope not in {"user", "persona", "global"}:
+            return False
+        return bool(keys & unit_keys)
+
+    @staticmethod
+    def _identity_key(value: str) -> str:
+        text = re.sub(r"[^0-9a-z\u4e00-\u9fff]+", "", unicodedata.normalize("NFKC", value).casefold())
+        return text[2:] if text.startswith("qq") and text[2:].isdigit() else text
+
+    @classmethod
+    def _temporal_score(cls, query: str, unit: MemoryUnit) -> float:
+        query_text = cls._normalize_text(query)
+        score = 0.0
+        for status, terms in _STATUS_TERMS.items():
+            if any(term.casefold() in query_text for term in terms):
+                score = max(score, 1.0 if unit.status == status else 0.0)
+        if unit.valid_until and cls._parse_time(unit.valid_until) >= datetime.now(timezone.utc).timestamp():
+            score = max(score, 0.5)
+        return score
+
+    @staticmethod
+    def _parse_time(value: str) -> float:
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            return parsed.replace(tzinfo=timezone.utc).timestamp() if parsed.tzinfo is None else parsed.timestamp()
+        except (TypeError, ValueError, AttributeError):
+            return 0.0
 
     @staticmethod
     def _cosine_sim(a: list[float], b: list[float]) -> float:
@@ -169,8 +363,20 @@ class MemoryUnitRetriever:
         group_id: str = "",
         top_k: int = 5,
         max_tokens_budget: int = 800,
+        user_id: str = "",
+        identity_aliases: list[str] | None = None,
+        mentioned_user_ids: list[str] | None = None,
+        cross_group_enabled: bool = False,
     ) -> list[MemoryUnit]:
-        results = self._indexer.search(query, group_id=group_id, top_k=top_k)
+        results = self._indexer.search(
+            query,
+            group_id=group_id,
+            top_k=top_k,
+            user_id=user_id,
+            identity_aliases=identity_aliases,
+            mentioned_user_ids=mentioned_user_ids,
+            cross_group_enabled=cross_group_enabled,
+        )
         if not results:
             return []
 
@@ -178,9 +384,9 @@ class MemoryUnitRetriever:
         total_chars = 0
         char_budget = int(max_tokens_budget * 1.5)
         for unit, _score in results:
-            added_chars = len(unit.summary) + sum(len(x) for x in unit.keywords[:5])
+            added_chars = len(unit.summary)
             if total_chars + added_chars > char_budget and selected:
-                break
+                continue
             selected.append(unit)
             total_chars += added_chars
         return selected

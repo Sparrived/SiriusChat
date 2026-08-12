@@ -231,14 +231,25 @@ class MemoryUnitManager:
         group_id: str | None = None,
         top_k: int = 5,
         max_tokens_budget: int = 800,
+        user_id: str = "",
+        identity_aliases: list[str] | None = None,
+        mentioned_user_ids: list[str] | None = None,
+        cross_group_enabled: bool = False,
     ) -> list[MemoryUnit]:
         if group_id is not None:
             self.ensure_group_loaded(group_id)
+        if cross_group_enabled:
+            for loaded_group_id in self._store.list_group_ids():
+                self.ensure_group_loaded(loaded_group_id)
         return self._retriever.retrieve(
             query=query,
             group_id=group_id or "",
             top_k=top_k,
             max_tokens_budget=max_tokens_budget,
+            user_id=user_id,
+            identity_aliases=identity_aliases,
+            mentioned_user_ids=mentioned_user_ids,
+            cross_group_enabled=cross_group_enabled,
         )
 
     def get_units_for_group(self, group_id: str) -> list[MemoryUnit]:

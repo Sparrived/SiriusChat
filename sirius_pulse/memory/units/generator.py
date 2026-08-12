@@ -32,6 +32,11 @@ Return strict JSON:
       "participants": ["stable user ids or display names"],
       "topics": ["short topic"],
       "keywords": ["short keyword"],
+      "retrieval_terms": ["alternative wording users may use"],
+      "identity_aliases": ["QQ id, qq_<id>, nickname, card, or QQ name"],
+      "event_time": "ISO timestamp or empty when unknown",
+      "valid_until": "ISO timestamp or empty when no expiry is known",
+      "status": "planned|active|completed|cancelled|unknown",
       "salience": 0.0,
       "confidence": 0.0,
       "lifespan": "short|medium|long",
@@ -56,7 +61,8 @@ def _build_user_prompt(
         if len(content) > 500:
             content = content[:500] + "..."
         lines.append(
-            f"{index}. source_id={entry.entry_id} user_id={entry.user_id} "
+            f"{index}. source_id={entry.entry_id} timestamp={entry.timestamp} "
+            f"user_id={entry.user_id} channel_user_id={entry.channel_user_id} "
             f"speaker={name} role={role}: {content}"
         )
 
@@ -65,7 +71,9 @@ def _build_user_prompt(
         f"{persona_line}\n\n"
         "Chat records:\n"
         + "\n".join(lines)
-        + "\n\nExtract memory units. Prefer fewer high-signal units over many vague units."
+        + "\n\nExtract memory units. Prefer fewer high-signal units over many vague units. "
+        "For every person, preserve all identity forms visible in the source records "
+        "(QQ number, qq_<number>, nickname, group card, and QQ name) in identity_aliases."
     )
 
 
@@ -93,6 +101,7 @@ class MemoryUnitGenerator:
         user_prompt = _build_user_prompt(persona_name, persona_description, candidates)
         index_to_source = {idx: entry.entry_id for idx, entry in enumerate(candidates, 1)}
         all_source_ids = {entry.entry_id for entry in candidates}
+        source_by_id = {entry.entry_id: entry for entry in candidates}
 
         parsed: dict[str, Any] | None = None
         system_prompt = _SYSTEM_PROMPT
@@ -134,6 +143,8 @@ class MemoryUnitGenerator:
             if not source_ids:
                 continue
 
+            participants = self._clean_list(item.get("participants"), limit=8)
+            source_entries = [source_by_id[source_id] for source_id in source_ids]
             unit = MemoryUnit(
                 unit_id=f"mem_{uuid.uuid4().hex[:12]}",
                 group_id=group_id,
@@ -142,9 +153,17 @@ class MemoryUnitGenerator:
                 scope=self._clean_choice(item.get("scope"), "group"),
                 scope_id=str(item.get("scope_id") or "").strip()[:80],
                 summary=summary[:180],
-                participants=self._clean_list(item.get("participants"), limit=8),
+                participants=participants,
                 topics=self._clean_list(item.get("topics"), limit=8),
                 keywords=self._clean_list(item.get("keywords"), limit=12),
+                retrieval_terms=self._clean_list(item.get("retrieval_terms"), limit=16),
+                identity_aliases=self._identity_aliases(
+                    item.get("identity_aliases"), source_entries
+                ),
+                event_time=self._clean_timestamp(item.get("event_time"))
+                or min((entry.timestamp for entry in source_entries if entry.timestamp), default=""),
+                valid_until=self._clean_timestamp(item.get("valid_until")),
+                status=self._clean_choice(item.get("status"), "")[:40],
                 salience=self._clean_float(item.get("salience"), default=0.5),
                 confidence=self._clean_float(item.get("confidence"), default=0.7),
                 lifespan=self._clean_choice(item.get("lifespan"), "medium"),
@@ -230,3 +249,55 @@ class MemoryUnitGenerator:
     def _clean_choice(value: Any, default: str) -> str:
         text = str(value or "").strip().lower()
         return text[:40] if text else default
+
+    @classmethod
+    def _identity_aliases(
+        cls,
+        value: Any,
+        sources: list[BasicMemoryEntry],
+    ) -> list[str]:
+        result: list[str] = []
+
+        def add_alias(identity: Any) -> bool:
+            text = str(identity or "").strip()
+            if not text or text in result:
+                return len(result) >= 16
+            result.append(text[:80])
+            return len(result) >= 16
+
+        for entry in sources:
+            if entry.role in {"assistant", "system"}:
+                continue
+            aliases = [entry.user_id, entry.channel_user_id, entry.speaker_name]
+            for alias in aliases:
+                identity_values = [str(alias).strip()] if alias else []
+                identity_key = cls._identity_key(alias)
+                if identity_key.isdigit():
+                    identity_values.extend([identity_key, f"qq_{identity_key}"])
+                for identity in identity_values:
+                    if add_alias(identity):
+                        return result
+        for identity in cls._clean_list(value, limit=16):
+            if add_alias(identity):
+                return result
+        return result
+
+    @staticmethod
+    def _identity_key(value: Any) -> str:
+        import re
+        import unicodedata
+
+        text = unicodedata.normalize("NFKC", str(value or "")).casefold()
+        text = re.sub(r"[^0-9a-z\u4e00-\u9fff]+", "", text)
+        return text[2:] if text.startswith("qq") and text[2:].isdigit() else text
+
+    @staticmethod
+    def _clean_timestamp(value: Any) -> str:
+        text = str(value or "").strip()
+        if not text:
+            return ""
+        try:
+            datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except (TypeError, ValueError):
+            return ""
+        return text[:40]

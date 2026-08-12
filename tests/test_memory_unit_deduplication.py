@@ -123,6 +123,93 @@ def test_indexer_replace_group_removes_stale_units():
     assert indexer.list_all() == [replacement]
 
 
+def test_indexer_retrieves_user_memory_across_qq_and_display_name_forms():
+    from sirius_pulse.memory.units import MemoryUnitIndexer
+
+    indexer = MemoryUnitIndexer()
+    target = _unit(
+        "mem-target",
+        "临雀确认测试通过后重新部署。",
+        scope_id="qq_2388389247",
+        participants=["临雀。"],
+        keywords=["重新部署"],
+        identity_aliases=["2388389247", "qq_2388389247", "临雀。", "临雀"],
+    )
+    other = _unit(
+        "mem-other",
+        "临雀确认测试通过后重新部署。",
+        scope_id="qq_2940667688",
+        participants=["月白"],
+        identity_aliases=["2940667688", "qq_2940667688"],
+    )
+    indexer.add(target)
+    indexer.add(other)
+
+    results = indexer.search(
+        "@临雀 之前是否重新部署",
+        group_id="group-a",
+        user_id="2388389247",
+        identity_aliases=["临雀。", "qq_2388389247"],
+        top_k=5,
+    )
+
+    assert [unit.unit_id for unit, _score in results] == ["mem-target"]
+
+
+def test_indexer_uses_cross_group_persona_memory_but_keeps_group_memory_local():
+    from sirius_pulse.memory.units import MemoryUnitIndexer
+
+    indexer = MemoryUnitIndexer()
+    persona = _unit(
+        "mem-persona",
+        "Sirius prefers concise replies.",
+        scope="persona",
+        scope_id="sirius",
+        group_id="group-b",
+        participants=[],
+        keywords=["concise"],
+    )
+    group = _unit(
+        "mem-group",
+        "Sirius prefers concise replies.",
+        scope="group",
+        group_id="group-b",
+        participants=[],
+        keywords=["concise"],
+    )
+    indexer.add(persona)
+    indexer.add(group)
+
+    results = indexer.search(
+        "concise replies",
+        group_id="group-a",
+        cross_group_enabled=True,
+        top_k=5,
+    )
+
+    assert [unit.unit_id for unit, _score in results] == ["mem-persona"]
+
+
+def test_indexer_splits_query_and_matches_chinese_ngrams():
+    from sirius_pulse.memory.units import MemoryUnitIndexer
+
+    indexer = MemoryUnitIndexer()
+    unit = _unit(
+        "mem-deploy",
+        "已完成服务重新部署。",
+        scope="group",
+        scope_id="",
+        keywords=["部署"],
+        retrieval_terms=["上线"],
+        status="completed",
+    )
+    indexer.add(unit)
+
+    results = indexer.search("上次情况如何？现在部署了吗？", group_id="group-a")
+
+    assert results and results[0][0].unit_id == "mem-deploy"
+
+
 class _Brain:
     def __init__(self, response=None, error=None):
         self.response = response

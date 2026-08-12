@@ -221,7 +221,7 @@ class PersonaExperienceConfig:
     # 日记检索参数
     diary_top_k: int = 5
     diary_token_budget: int = 800
-    memory_unit_top_k: int = 5
+    memory_unit_top_k: int = 8
 
     # 群里其他 AI/Bot 的名字（手动指定，防止抢话和身份混淆）
     other_ai_names: list[str] = field(default_factory=list)
@@ -297,7 +297,7 @@ class PersonaExperienceConfig:
             ),
             diary_top_k=int(data.get("diary_top_k", 5)),
             diary_token_budget=int(data.get("diary_token_budget", 800)),
-            memory_unit_top_k=int(data.get("memory_unit_top_k", data.get("diary_top_k", 5))),
+            memory_unit_top_k=int(data.get("memory_unit_top_k", data.get("diary_top_k", 8))),
             message_prefixes=[str(v) for v in data.get("message_prefixes", [])],
         )
 

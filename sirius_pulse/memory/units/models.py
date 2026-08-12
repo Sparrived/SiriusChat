@@ -22,6 +22,11 @@ class MemoryUnit(JsonSerializable):
     participants: list[str] = field(default_factory=list)
     topics: list[str] = field(default_factory=list)
     keywords: list[str] = field(default_factory=list)
+    retrieval_terms: list[str] = field(default_factory=list)
+    identity_aliases: list[str] = field(default_factory=list)
+    event_time: str = ""
+    valid_until: str = ""
+    status: str = ""
     salience: float = 0.5
     confidence: float = 0.7
     lifespan: str = "medium"
