@@ -26,10 +26,15 @@ napcat_instance_registry.json
 .coverage
 coverage.xml
 htmlcov/
+.mypy_cache/
+.ruff_cache/
+.codegraph/
+tmp-skill-check/
 
 # IDE & Editor
 .vscode/
 .idea/
+.claude/settings.local.json
 *.swp
 *.swo
 *~
@@ -43,7 +48,6 @@ htmlcov/
 # OS-specific
 Thumbs.db
 
-null
 Questions.md
 
 

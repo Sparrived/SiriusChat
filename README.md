@@ -2,7 +2,7 @@
 
 <div align="center">
 
-<img src="yuebai.png" alt="月白" width="200" style="border-radius: 16px; margin-bottom: 12px;">
+<img src="sirius_pulse/webui/static/yuebai.png" alt="月白" width="200" style="border-radius: 16px; margin-bottom: 12px;">
 
 <a href="https://www.python.org/"><img src="https://img.shields.io/badge/Python-3.12%2B-blue?style=flat-square&logo=python&logoColor=white" alt="Python 3.12+"></a>
 <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green?style=flat-square" alt="License"></a>
