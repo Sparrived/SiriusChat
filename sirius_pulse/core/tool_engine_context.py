@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
 from sirius_pulse.core.events import SessionEvent, SessionEventType
+from sirius_pulse.core.prompt_factory import PromptFactory
+from sirius_pulse.providers.base import ToolCall
+from sirius_pulse.tools.models import ToolInvocationContext
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +66,136 @@ class ToolEngineContextImpl:
             post_process=post_process,
         )
 
+    async def generate_scheduled_message(
+        self,
+        *,
+        job: dict[str, Any],
+        command_output: str,
+        group_id: str,
+        user_id: str,
+        user_name: str,
+        adapter_type: str,
+        caller_is_developer: bool = False,
+    ) -> dict[str, Any]:
+        """Run a scheduled message through the same tool-call loop as chat."""
+        identity = self._engine.persona.build_system_prompt() if self._engine.persona else ""
+        tool_desc = self.get_tool_descriptions(
+            caller_is_developer=caller_is_developer, adapter_type=adapter_type
+        )
+        system_prompt, messages = PromptFactory.build_scheduled_task_sections(
+            identity=identity,
+            job=job,
+            command_output=command_output,
+            tool_desc=tool_desc,
+        )
+        self._engine._tool_executor.set_chat_context(
+            group_id=group_id, user_id=user_id, adapter_type=adapter_type
+        )
+        caller = self._build_caller(user_id, user_name, caller_is_developer)
+        invocation_context = ToolInvocationContext(
+            caller=caller,
+            developer_profiles=[caller] if caller_is_developer else [],
+        )
+        max_rounds = max(1, int(self.get_config_value("max_tool_rounds", 8)))
+        last_result: Any = None
+
+        for _ in range(max_rounds):
+            result = await self._engine.brain.chat(
+                self._chat_request(
+                    group_id=group_id,
+                    user_id=user_id,
+                    system_prompt=system_prompt,
+                    messages=messages,
+                    task_name="proactive_generate",
+                    adapter_type=adapter_type,
+                    caller_is_developer=caller_is_developer,
+                )
+            )
+            last_result = result
+            tool_calls = list(getattr(result, "tool_calls", []) or [])
+            if not tool_calls:
+                return self._scheduled_result_payload(result)
+
+            messages.append(self._assistant_tool_message(result.raw_text, tool_calls))
+            tool_multimodal: list[dict[str, Any]] = []
+            for tool_call in tool_calls:
+                tool_name = tool_call.function_name
+                tool = self._engine._tool_registry.get(tool_name) if self._engine._tool_registry else None
+                if tool is None:
+                    tool_content = f"Tool '{tool_name}' not found"
+                else:
+                    try:
+                        params = json.loads(tool_call.function_arguments or "{}")
+                    except json.JSONDecodeError:
+                        params = {}
+                    if not isinstance(params, dict):
+                        params = {}
+                    try:
+                        timeout = float(self.get_config_value("tool_execution_timeout", 30.0))
+                    except (TypeError, ValueError):
+                        timeout = 30.0
+                    executed = await self._engine._tool_executor.execute_async(
+                        tool,
+                        params,
+                        timeout=timeout,
+                        invocation_context=invocation_context,
+                        max_retries=2 if getattr(tool, "retry_safe", False) else 0,
+                    )
+                    tool_content = executed.to_model_text()
+                    tool_multimodal.extend(
+                        {"type": "image_url", "image_url": {"url": block.value}}
+                        for block in executed.multimodal_blocks
+                    )
+                messages.append(
+                    {"role": "tool", "tool_call_id": tool_call.id, "content": tool_content}
+                )
+            if tool_multimodal:
+                messages.append({"role": "user", "content": tool_multimodal})
+
+        return self._scheduled_result_payload(last_result) if last_result else {}
+
+    @staticmethod
+    def _scheduled_result_payload(result: Any) -> dict[str, Any]:
+        return {
+            "text": str(getattr(result, "clean_text", "") or "").strip(),
+            "reply_references": list(getattr(result, "reply_references", []) or []),
+            "sticker_names": list(getattr(result, "sticker_names", []) or []),
+            "poke_user_ids": list(getattr(result, "poke_user_ids", []) or []),
+        }
+
+    def _chat_request(self, **kwargs: Any) -> Any:
+        from sirius_pulse.core.brain import ChatRequest
+
+        return ChatRequest(enable_tools=True, post_process=True, **kwargs)
+
+    @staticmethod
+    def _assistant_tool_message(reply: str, tool_calls: list[ToolCall]) -> dict[str, Any]:
+        return {
+            "role": "assistant",
+            "content": reply or None,
+            "tool_calls": [
+                {
+                    "id": call.id,
+                    "type": call.type or "function",
+                    "function": {
+                        "name": call.function_name,
+                        "arguments": call.function_arguments,
+                    },
+                }
+                for call in tool_calls
+            ],
+        }
+
+    @staticmethod
+    def _build_caller(user_id: str, user_name: str, caller_is_developer: bool) -> Any:
+        from sirius_pulse.memory.user.unified_models import UnifiedUser
+
+        return UnifiedUser(
+            user_id=user_id or "scheduled-task",
+            name=user_name or "scheduled-task",
+            metadata={"is_developer": caller_is_developer},
+        )
+
     def queue_pending_message(self, group_id: str, text: str, adapter_type: str = "") -> None:
         self._engine._pending_reminders.setdefault(group_id, []).append(
             {"text": text, "adapter_type": adapter_type}
@@ -73,6 +207,34 @@ class ToolEngineContextImpl:
             logger.warning("未知事件类型: %s", event_type)
             return
         await self._engine.event_bus.emit(SessionEvent(type=mapped, data=data))
+
+    async def dispatch_proactive_message(
+        self,
+        *,
+        group_id: str,
+        text: str,
+        adapter_type: str = "",
+        event_id: str = "",
+        reply_references: list[dict[str, Any]] | None = None,
+        sticker_names: list[str] | None = None,
+        poke_user_ids: list[str] | None = None,
+    ) -> None:
+        adapter = adapter_type or self._engine._current_adapter_type
+        self.queue_pending_message(group_id, text, adapter)
+        await self.emit_event(
+            "reminder_triggered",
+            {
+                "group_id": group_id,
+                "reply": text,
+                "adapter_type": adapter,
+                "reminder_id": event_id,
+                "reply_references": reply_references or [],
+                "sticker_names": sticker_names or [],
+                "poke_user_ids": poke_user_ids or [],
+            },
+        )
+        if group_id.startswith("private_"):
+            self.activate_private_group(group_id)
 
     def get_active_groups(self) -> list[str]:
         return list(self._engine._group_last_message_at.keys())
@@ -106,7 +268,9 @@ class ToolEngineContextImpl:
     def persist_group_state(self, group_id: str) -> None:
         self._engine._persist_group_state(group_id)
 
-    def get_tool_descriptions(self, caller_is_developer: bool = False) -> str:
+    def get_tool_descriptions(
+        self, caller_is_developer: bool = False, adapter_type: str | None = None
+    ) -> str:
         """获取工具描述文本（用于被动工具的 prompt 注入）。"""
         if self._engine._tool_registry is None:
             return ""
@@ -121,7 +285,7 @@ class ToolEngineContextImpl:
         ctx = ToolInvocationContext(caller=caller)
         tools = self._engine._tool_registry.build_tools_list(
             invocation_context=ctx,
-            adapter_type=self._engine._current_adapter_type or None,
+            adapter_type=adapter_type or self._engine._current_adapter_type or None,
         )
         if not tools:
             return ""

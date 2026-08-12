@@ -436,12 +436,40 @@ class ToolEngineContext(Protocol):
         """调用 LLM 生成文本。"""
         ...
 
+    async def generate_scheduled_message(
+        self,
+        *,
+        job: dict[str, Any],
+        command_output: str,
+        group_id: str,
+        user_id: str,
+        user_name: str,
+        adapter_type: str,
+        caller_is_developer: bool = False,
+    ) -> dict[str, Any]:
+        """Generate a proactive message with the normal multi-round tool loop."""
+        ...
+
     def queue_pending_message(self, group_id: str, text: str, adapter_type: str = "") -> None:
         """将待发送消息放入引擎的待处理队列。"""
         ...
 
     async def emit_event(self, event_type: str, data: dict[str, Any]) -> None:
         """通过引擎事件总线发送事件。"""
+        ...
+
+    async def dispatch_proactive_message(
+        self,
+        *,
+        group_id: str,
+        text: str,
+        adapter_type: str = "",
+        event_id: str = "",
+        reply_references: list[dict[str, Any]] | None = None,
+        sticker_names: list[str] | None = None,
+        poke_user_ids: list[str] | None = None,
+    ) -> None:
+        """Deliver a generated proactive message through the platform event bus."""
         ...
 
     def get_active_groups(self) -> list[str]:
@@ -474,7 +502,9 @@ class ToolEngineContext(Protocol):
         """持久化指定群组的运行时状态。"""
         ...
 
-    def get_tool_descriptions(self, caller_is_developer: bool = False) -> str:
+    def get_tool_descriptions(
+        self, caller_is_developer: bool = False, adapter_type: str | None = None
+    ) -> str:
         """获取当前可用的 TOOL 描述文本（用于注入 prompt）。"""
         ...
 

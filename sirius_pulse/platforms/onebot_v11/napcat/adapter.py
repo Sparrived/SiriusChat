@@ -1636,7 +1636,10 @@ class NapCatAdapter(BaseAdapter):
                 reply = event.data.get("reply", "")
                 adapter_type = event.data.get("adapter_type", "")
                 image_path = str(event.data.get("image_path", "")).strip()
-                if reply and adapter_type == self.adapter_type:
+                reply_refs = event.data.get("reply_references", [])
+                sticker_names = event.data.get("sticker_names", [])
+                poke_user_ids = event.data.get("poke_user_ids", [])
+                if (reply or sticker_names or poke_user_ids) and adapter_type == self.adapter_type:
                     dispatcher = self._get_dispatcher() if not gid.startswith("private_") else None
                     dispatch_lease_id = ""
                     dispatch_sent = False
@@ -1658,15 +1661,20 @@ class NapCatAdapter(BaseAdapter):
                     try:
                         if gid.startswith("private_"):
                             uid = gid.replace("private_", "").replace("qq_", "")
-                            await self._send_private_text(uid, reply)
-                            dispatch_sent = True
+                            if reply:
+                                await self._send_private_text(uid, reply, reply_refs)
+                                dispatch_sent = True
                             if image_path:
                                 await self._send_private_image(uid, image_path)
                         elif gid in self._get_allowed_group_ids():
-                            await self._send_group_text(gid, reply)
-                            dispatch_sent = True
+                            if reply:
+                                await self._send_group_text(gid, reply, reply_refs)
+                                dispatch_sent = True
                             if image_path:
                                 await self._send_group_image(gid, image_path)
+                        await self._send_stickers_after_reply(gid, sticker_names)
+                        await self._send_pokes_after_reply(gid, poke_user_ids)
+                        dispatch_sent = bool(sticker_names or poke_user_ids) or dispatch_sent
                     finally:
                         if dispatch_lease_id and dispatcher is not None:
                             dispatcher.finish(dispatch_lease_id, sent=dispatch_sent)

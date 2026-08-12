@@ -1061,7 +1061,9 @@ class DelayedQueueTasks:
                         developer_profiles.append(profile)
 
                 engine._tool_executor.set_chat_context(
-                    group_id=group_id, user_id=caller_user_id or ""
+                    group_id=group_id,
+                    user_id=caller_user_id or "",
+                    adapter_type=getattr(engine, "_current_adapter_type", ""),
                 )
 
                 # 构造 assistant 消息（含普通工具的 tool_calls）
@@ -1173,12 +1175,6 @@ class DelayedQueueTasks:
                                 tool_multimodal.append(
                                     {"type": "image_url", "image_url": {"url": block.value}}
                                 )
-                            # Inject group_id into newly created reminders
-                            if (
-                                tool_name == "reminder"
-                                and params.get("action", "").strip().lower() == "create"
-                            ):
-                                self._inject_group_id_into_latest_reminder(group_id)
                         else:
                             logger.warning(
                                 "TOOL '%s' 执行失败: %s",
@@ -1372,30 +1368,6 @@ class DelayedQueueTasks:
             tool_flow_mode=tool_flow_mode,
         )
         return bundle
-
-    def _inject_group_id_into_latest_reminder(self, group_id: str) -> None:
-        """Attach group_id and adapter_type to reminders that lack them."""
-        engine = self._engine
-        if engine._tool_executor is None:
-            return
-        try:
-            store = engine._tool_executor.get_data_store("reminder")
-            reminders = list(store.get("reminders", []))
-            if not reminders:
-                return
-            updated = False
-            for r in reminders:
-                if "group_id" not in r:
-                    r["group_id"] = group_id
-                    updated = True
-                if "adapter_type" not in r:
-                    r["adapter_type"] = engine._current_adapter_type
-                    updated = True
-            if updated:
-                store.set("reminders", reminders)
-                store.save()
-        except Exception as exc:
-            logger.warning("Failed to inject group_id into reminder: %s", exc)
 
     @staticmethod
     def _is_autonomous_message_tool(tool: Any, params: dict[str, Any] | None = None) -> bool:

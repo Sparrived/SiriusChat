@@ -66,6 +66,7 @@ class ChatRequest:
     # ── TOOL 控制 ──
     enable_tools: bool = True
     caller_is_developer: bool = False
+    adapter_type: str | None = None
     extra_tools: list[dict[str, Any]] | None = None
     tool_choice: str | None = None
 
@@ -467,11 +468,13 @@ class Brain:
                     metadata={"is_developer": request.caller_is_developer},
                 )
                 inv_ctx = ToolInvocationContext(caller=caller)
-                adapter_type = (
-                    self.current_adapter_type_fn()
-                    if self.current_adapter_type_fn is not None
-                    else None
-                )
+                adapter_type = request.adapter_type
+                if adapter_type is None:
+                    adapter_type = (
+                        self.current_adapter_type_fn()
+                        if self.current_adapter_type_fn is not None
+                        else None
+                    )
                 tool_kwargs = {
                     "invocation_context": inv_ctx,
                     "adapter_type": adapter_type,
@@ -657,6 +660,7 @@ class Brain:
         urgency: int = 0,
         enable_tools: bool = False,
         post_process: bool = False,
+        adapter_type: str | None = None,
     ) -> str:
         """便捷方法：单轮 chat() → 返回 raw_text。
 
@@ -674,6 +678,7 @@ class Brain:
                 style_params=style_params,
                 enable_tools=enable_tools,
                 post_process=post_process,
+                adapter_type=adapter_type,
             )
         )
         return result.clean_text

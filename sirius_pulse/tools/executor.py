@@ -48,7 +48,9 @@ class ToolExecutor:
         self._chat_context: dict[str, Any] = {}
         self._engine_context: Any | None = None
 
-    def set_chat_context(self, group_id: str = "", user_id: str = "") -> None:
+    def set_chat_context(
+        self, group_id: str = "", user_id: str = "", adapter_type: str = ""
+    ) -> None:
         """Set current chat context so tools know where they are being invoked from."""
         is_private = group_id.startswith("private_")
         if is_private:
@@ -63,6 +65,7 @@ class ToolExecutor:
             "chat_type": chat_type,
             "chat_id": chat_id,
             "is_private": is_private,
+            "adapter_type": adapter_type,
         }
 
     def set_bridge(self, adapter_type: str, bridge: Any) -> None:
