@@ -33,6 +33,16 @@ def _route_snapshot(app: web.Application) -> set[tuple[str, str]]:
     return routes
 
 
+@pytest.mark.asyncio
+async def test_webui_plugins_get_accepts_path_based_delegate(tmp_path):
+    server = WebUIServer(data_dir=tmp_path)
+
+    response = await server.api_plugins_get(SimpleNamespace())
+
+    assert response.status == 200
+    assert json.loads(response.text) == {"plugins": []}
+
+
 def test_webui_routes_when_server_is_created_then_all_declared_routes_are_registered(tmp_path):
     server = WebUIServer(data_dir=tmp_path)
 

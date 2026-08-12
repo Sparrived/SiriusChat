@@ -27,9 +27,14 @@ _plugin_definitions_cache: dict[str, tuple[float, list[PluginDefinition]]] = {}
 _CACHE_TTL = 60.0  # 秒
 
 
+def _data_dir(manager: Any) -> Path:
+    """Resolve the data directory from the current Path-based WebUI contract."""
+    return Path(getattr(manager, "data_path", manager))
+
+
 def _plugins_dir(manager: Any) -> Path:
     """获取项目根 plugins/ 目录。"""
-    return Path(manager.data_path).parent / "plugins"
+    return _data_dir(manager).parent / "plugins"
 
 
 def _get_config_manager(manager: Any) -> Any:
@@ -137,7 +142,7 @@ async def api_plugin_monitor_repos_get(request: web.Request, manager: Any) -> we
     import json as _json
     from pathlib import Path as _Path
 
-    data_path = _Path(manager.data_path)
+    data_path = _Path(_data_dir(manager))
     repo_names: list[str] = []
 
     for persona_dir in sorted(data_path.glob("personas/*")):
