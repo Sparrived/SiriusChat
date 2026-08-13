@@ -34,6 +34,32 @@ def test_parse_crontab_list_and_remove():
     assert cron_tasks.parse_crontab_command("crontab -r") == {"action": "remove"}
 
 
+def test_parse_crontab_list_with_redirect_and_status_probe():
+    assert cron_tasks.parse_crontab_command(
+        'crontab -l 2>/dev/null; echo "---exit: $?---"'
+    ) == {"action": "list"}
+
+
+def test_parse_crontab_install_with_follow_up_list():
+    request = cron_tasks.parse_crontab_command(
+        "printf '%s\\n' '0 9 * * * echo reminder' | crontab - && crontab -l"
+    )
+
+    assert request["entries"] == [
+        {"expression": "0 9 * * *", "command": "echo reminder"}
+    ]
+
+
+def test_parse_printf_literal_with_newline_escape():
+    request = cron_tasks.parse_crontab_command(
+        "printf '0 9 * * * echo reminder\\n' | crontab -"
+    )
+
+    assert request["entries"] == [
+        {"expression": "0 9 * * *", "command": "echo reminder"}
+    ]
+
+
 def test_cron_matches_common_fields_and_or_day_semantics():
     monday = datetime(2026, 8, 10, 8, 0, tzinfo=cron_tasks.CRON_TIMEZONE)
     assert cron_tasks.cron_matches("0 8 * * 1-5", monday)

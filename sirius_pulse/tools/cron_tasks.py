@@ -10,6 +10,11 @@ from typing import Any
 CRON_TIMEZONE = timezone(timedelta(hours=8), name="Asia/Shanghai")
 CRON_FIELD_COUNT = 5
 _CRONTAB_RE = re.compile(r"(?:^|[|;&])\s*crontab(?:\s|$)")
+_CRONTAB_LIST = r"crontab\s+-l(?:\s+2>/dev/null)?"
+_CRONTAB_LIST_WITH_PROBE = (
+    _CRONTAB_LIST
+    + r"(?:\s*;\s*echo\s+[\"']---exit:\s*\$\?\s*---[\"'])?"
+)
 _FIELD_NAMES = {
     3: {"JAN": 1, "FEB": 2, "MAR": 3, "APR": 4, "MAY": 5, "JUN": 6,
         "JUL": 7, "AUG": 8, "SEP": 9, "OCT": 10, "NOV": 11, "DEC": 12},
@@ -35,12 +40,16 @@ def parse_crontab_command(command: str) -> dict[str, Any] | None:
     text = command.strip()
     if not contains_crontab(text):
         return None
-    if re.fullmatch(r"crontab\s+-l", text):
+    if re.fullmatch(_CRONTAB_LIST_WITH_PROBE, text):
         return {"action": "list"}
     if re.fullmatch(r"crontab\s+-r", text):
         return {"action": "remove"}
 
-    match = re.fullmatch(r"(.+?)\s*\|\s*crontab\s+-", text, flags=re.DOTALL)
+    match = re.fullmatch(
+        rf"(.+?)\s*\|\s*crontab\s+-(?:\s*(?:&&|;)\s*{_CRONTAB_LIST})?",
+        text,
+        flags=re.DOTALL,
+    )
     if not match:
         raise CronParseError(
             "仅支持 crontab -l、crontab -r，以及 echo/printf 'cron条目' | crontab -"
@@ -59,12 +68,15 @@ def parse_crontab_command(command: str) -> dict[str, Any] | None:
             raise CronParseError("crontab 条目不能为空")
         payload = " ".join(values)
     else:
-        if len(producer) < 3 or "%s" not in producer[1]:
+        if len(producer) >= 3 and "%s" in producer[1]:
+            values = producer[2:]
+            payload = "\n".join(values) if "\\n" in producer[1] else " ".join(values)
+        elif len(producer) == 2 and producer[1]:
+            payload = producer[1].replace("\\n", "\n")
+        else:
             raise CronParseError("printf 形式应为 printf '%s\\n' 'cron条目' | crontab -")
-        values = producer[2:]
-        if not values:
+        if not payload:
             raise CronParseError("crontab 条目不能为空")
-        payload = "\n".join(values) if "\\n" in producer[1] else " ".join(values)
 
     entries = []
     for line in payload.splitlines():
