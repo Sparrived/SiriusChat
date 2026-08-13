@@ -39,10 +39,19 @@ def test_assistant_tool_message_when_reasoning_exists_then_keeps_it_private_to_m
     assert message["tool_calls"][0]["function"]["name"] == "lookup"
 
 
-def _agent_tool_tasks(queue, tool, chat_results, execute_tool):
+def _agent_tool_tasks(
+    queue,
+    tool,
+    chat_results,
+    execute_tool,
+    *,
+    max_tool_rounds: int = 2,
+):
     profile = SimpleNamespace(name="Alice", is_developer=False)
     engine = SimpleNamespace(
-        config={"max_tool_rounds": 2},
+        config={
+            "max_tool_rounds": max_tool_rounds,
+        },
         delayed_queue=queue,
         _helpers=SimpleNamespace(
             get_recent_messages=lambda group_id, n: [],
@@ -367,7 +376,7 @@ def test_delayed_queue_when_corrupted_entry_exists_then_tick_filters_it_out():
 
 
 @pytest.mark.asyncio
-async def test_delayed_queue_when_tool_call_has_text_then_partial_leads_final_reply(
+async def test_delayed_queue_when_tool_call_has_text_then_keeps_part_in_chain_before_final(
     monkeypatch,
 ):
     queue = DelayedResponseQueue()
@@ -456,14 +465,10 @@ async def test_delayed_queue_when_tool_call_has_text_then_partial_leads_final_re
         dynamic_context="",
     )
     partials: list[str] = []
-    partial_started = asyncio.Event()
-    allow_partial_to_finish = asyncio.Event()
 
     async def capture_partial(text: str) -> None:
         order.append("partial")
         partials.append(text)
-        partial_started.set()
-        await allow_partial_to_finish.wait()
 
     slept: list[float] = []
 
@@ -473,22 +478,20 @@ async def test_delayed_queue_when_tool_call_has_text_then_partial_leads_final_re
 
     monkeypatch.setattr("sirius_pulse.core.bg_tasks_delayed.asyncio.sleep", capture_sleep)
 
-    tick_task = asyncio.create_task(
-        tasks.tick_delayed_queue("group-1", on_partial_reply=capture_partial)
-    )
-    await partial_started.wait()
-    engine._tool_executor.execute_async.assert_not_awaited()
-    allow_partial_to_finish.set()
-    results = await tick_task
+    results = await tasks.tick_delayed_queue("group-1", on_partial_reply=capture_partial)
 
-    assert partials == ["I will check."]
-    assert order == ["partial", "tool", "lead_wait"]
-    assert slept[0] == pytest.approx(1.5, abs=0.1)
+    assert partials == []
+    assert order == ["tool"]
+    assert slept == []
     assert results[0]["reply"] == "Everything is ready."
     execute_kwargs = engine._tool_executor.execute_async.await_args.kwargs
     assert execute_kwargs["timeout"] == 12
     assert execute_kwargs["max_retries"] == 0
     second_request = engine.brain.chat.await_args_list[1].args[0]
+    assistant_message = next(
+        message for message in second_request.messages if message["role"] == "assistant"
+    )
+    assert assistant_message["content"] == "I will check."
     tool_message = next(message for message in second_request.messages if message["role"] == "tool")
     assert tool_message["content"].startswith("[Tool result: success]")
     assert "reference data" in tool_message["content"]
@@ -498,6 +501,242 @@ async def test_delayed_queue_when_tool_call_has_text_then_partial_leads_final_re
         if call.args[0].type.value == "agent_turn_updated"
     ]
     assert turn_events[-1]["phase"] == "complete"
+
+
+@pytest.mark.asyncio
+async def test_delayed_queue_when_tool_chain_has_many_statuses_then_keeps_them_in_chain():
+    queue = DelayedResponseQueue()
+    item = queue.enqueue(
+        "group-1",
+        "u1",
+        "check status",
+        _decision(ResponseStrategy.IMMEDIATE),
+    )
+    item.enqueue_time = _past(item.window_seconds + 1)
+
+    def chat_result(index: int, *, final: bool = False):
+        if final:
+            return SimpleNamespace(
+                raw_text="Everything is ready.",
+                clean_text="Everything is ready.",
+                tool_calls=[],
+                reply_references=[],
+            )
+        return SimpleNamespace(
+            raw_text=f"Checking step {index}.",
+            clean_text=f"Checking step {index}.",
+            tool_calls=[
+                ToolCall(
+                    id=f"call-{index}",
+                    function_name="lookup",
+                    function_arguments=f'{{"step": {index}}}',
+                )
+            ],
+            reply_references=[],
+        )
+
+    tool = SimpleNamespace(name="lookup", silent=False, developer_only=False)
+    tasks, engine = _agent_tool_tasks(
+        queue,
+        tool,
+        [chat_result(1), chat_result(2), chat_result(3), chat_result(4, final=True)],
+        AsyncMock(return_value=ToolResult(success=True, data={"ok": True})),
+        max_tool_rounds=4,
+    )
+    partials: list[str] = []
+
+    async def capture_partial(text: str) -> None:
+        partials.append(text)
+
+    results = await tasks.tick_delayed_queue("group-1", on_partial_reply=capture_partial)
+
+    assert partials == []
+    assert results[0]["reply"] == "Everything is ready."
+    final_request = engine.brain.chat.await_args_list[-1].args[0]
+    assert [
+        message["content"]
+        for message in final_request.messages
+        if message["role"] == "assistant"
+    ] == ["Checking step 1.", "Checking step 2.", "Checking step 3."]
+
+
+@pytest.mark.asyncio
+async def test_delayed_queue_when_tool_fails_then_sends_the_next_model_output():
+    queue = DelayedResponseQueue()
+    item = queue.enqueue(
+        "group-1",
+        "u1",
+        "check status",
+        _decision(ResponseStrategy.IMMEDIATE),
+    )
+    item.enqueue_time = _past(item.window_seconds + 1)
+    tool_calls = [
+        ToolCall(
+            id=f"call-{index}",
+            function_name="lookup",
+            function_arguments=f'{{"step": {index}}}',
+        )
+        for index in (1, 2)
+    ]
+    tool = SimpleNamespace(name="lookup", silent=False, developer_only=False, retry_safe=False)
+    tasks, engine = _agent_tool_tasks(
+        queue,
+        tool,
+        [
+            SimpleNamespace(
+                raw_text="I will check.",
+                clean_text="I will check.",
+                tool_calls=[tool_calls[0]],
+                reply_references=[],
+            ),
+            SimpleNamespace(
+                raw_text="The lookup failed, so I will try another way.",
+                clean_text="The lookup failed, so I will try another way.",
+                tool_calls=[tool_calls[1]],
+                reply_references=[],
+            ),
+            SimpleNamespace(
+                raw_text="I could not finish the check.",
+                clean_text="I could not finish the check.",
+                tool_calls=[],
+                reply_references=[],
+            ),
+        ],
+        AsyncMock(
+            side_effect=[
+                ToolResult(
+                    success=False,
+                    error="connection refused at https://10.0.0.7:8443 token=secret",
+                ),
+                ToolResult(success=True, data={"ok": True}),
+            ]
+        ),
+    )
+    partials: list[str] = []
+
+    async def capture_partial(text: str) -> None:
+        partials.append(text)
+
+    results = await tasks.tick_delayed_queue("group-1", on_partial_reply=capture_partial)
+
+    assert partials == ["The lookup failed, so I will try another way."]
+    assert results[0]["reply"] == "I could not finish the check."
+    second_request = engine.brain.chat.await_args_list[1].args[0]
+    assistant_message = next(
+        message for message in second_request.messages if message["role"] == "assistant"
+    )
+    assert assistant_message["content"] == "I will check."
+    tool_message = next(message for message in second_request.messages if message["role"] == "tool")
+    assert tool_message["content"] == ToolResult(
+        success=False,
+        error="connection refused at https://10.0.0.7:8443 token=secret",
+    ).to_model_text()
+    third_request = engine.brain.chat.await_args_list[2].args[0]
+    assert [
+        message["content"]
+        for message in third_request.messages
+        if message["role"] == "assistant"
+    ] == ["I will check.", "The lookup failed, so I will try another way."]
+
+
+@pytest.mark.asyncio
+async def test_delayed_queue_when_silent_tool_fails_then_still_requests_issue_output():
+    queue = DelayedResponseQueue()
+    item = queue.enqueue(
+        "group-1",
+        "u1",
+        "send the file",
+        _decision(ResponseStrategy.IMMEDIATE),
+    )
+    item.enqueue_time = _past(item.window_seconds + 1)
+    tool_call = ToolCall(
+        id="call-1",
+        function_name="group_file_exec",
+        function_arguments='{"action": "image", "file_id": "f1"}',
+    )
+    tasks, _engine = _agent_tool_tasks(
+        queue,
+        SimpleNamespace(name="group_file_exec", silent=False, developer_only=False),
+        [
+            SimpleNamespace(
+                raw_text="",
+                clean_text="",
+                tool_calls=[tool_call],
+                reply_references=[],
+            ),
+            SimpleNamespace(
+                raw_text="The file tool failed, so I could not send it.",
+                clean_text="The file tool failed, so I could not send it.",
+                tool_calls=[],
+                reply_references=[],
+            ),
+        ],
+        AsyncMock(return_value=ToolResult(success=False, error="upload timeout")),
+    )
+    partials: list[str] = []
+
+    async def capture_partial(text: str) -> None:
+        partials.append(text)
+
+    results = await tasks.tick_delayed_queue("group-1", on_partial_reply=capture_partial)
+
+    assert partials == []
+    assert results[0]["reply"] == "The file tool failed, so I could not send it."
+
+
+@pytest.mark.asyncio
+async def test_delayed_queue_when_tool_chain_hits_limit_then_model_writes_final_reply():
+    queue = DelayedResponseQueue()
+    item = queue.enqueue(
+        "group-1",
+        "u1",
+        "check status",
+        _decision(ResponseStrategy.IMMEDIATE),
+    )
+    item.enqueue_time = _past(item.window_seconds + 1)
+    tool_call = ToolCall(
+        id="call-1",
+        function_name="lookup",
+        function_arguments='{"query": "status"}',
+    )
+    tasks, engine = _agent_tool_tasks(
+        queue,
+        SimpleNamespace(name="lookup", silent=False, developer_only=False, retry_safe=False),
+        [
+            SimpleNamespace(
+                raw_text="",
+                clean_text="",
+                tool_calls=[tool_call],
+                reply_references=[],
+            ),
+            SimpleNamespace(
+                raw_text="我完成了能完成的检查，但还有一部分没有完成。",
+                clean_text="我完成了能完成的检查，但还有一部分没有完成。",
+                tool_calls=[],
+                reply_references=[],
+            ),
+        ],
+        AsyncMock(
+            return_value=ToolResult(
+                success=False,
+                error="connection refused at https://10.0.0.7:8443 token=secret",
+            )
+        ),
+        max_tool_rounds=0,
+    )
+
+    results = await tasks.tick_delayed_queue("group-1")
+
+    assert results[0]["reply"] == "我完成了能完成的检查，但还有一部分没有完成。"
+    final_request = engine.brain.chat.await_args_list[1].args[0]
+    assert final_request.enable_tools is True
+    assert final_request.extra_tools is None
+    assert final_request.tool_choice == "none"
+    assert final_request.messages[-1]["role"] == "user"
+    assert "达到工具调用轮次上限" in final_request.messages[-1]["content"]
+    assert "token=secret" in next(
+        message for message in final_request.messages if message["role"] == "tool"
+    )["content"]
 
 
 @pytest.mark.asyncio
@@ -613,7 +852,7 @@ async def test_delayed_queue_when_chat_round_has_no_completion_control_tool():
 
 
 @pytest.mark.asyncio
-async def test_delayed_queue_when_partial_send_fails_then_tool_is_not_executed():
+async def test_delayed_queue_when_normal_tool_part_is_suppressed_then_tool_still_executes():
     queue = DelayedResponseQueue()
     item = queue.enqueue(
         "group-1",
@@ -632,7 +871,7 @@ async def test_delayed_queue_when_partial_send_fails_then_tool_is_not_executed()
     profile = SimpleNamespace(name="Alice", is_developer=False)
     execute_tool = AsyncMock(return_value=ToolResult(success=True, data={"ok": True}))
     engine = SimpleNamespace(
-        config={"max_tool_rounds": 2},
+        config={"max_tool_rounds": 0},
         delayed_queue=queue,
         _helpers=SimpleNamespace(
             get_recent_messages=lambda group_id, n: [],
@@ -686,13 +925,13 @@ async def test_delayed_queue_when_partial_send_fails_then_tool_is_not_executed()
         dynamic_context="",
     )
 
-    async def fail_partial_send(text: str) -> None:
-        raise RuntimeError("send failed")
+    async def fail_if_called(text: str) -> None:
+        raise AssertionError(f"normal tool part should not be sent: {text}")
 
-    with pytest.raises(RuntimeError, match="send failed"):
-        await tasks.tick_delayed_queue("group-1", on_partial_reply=fail_partial_send)
+    results = await tasks.tick_delayed_queue("group-1", on_partial_reply=fail_if_called)
 
-    execute_tool.assert_not_awaited()
+    execute_tool.assert_awaited_once()
+    assert results[0]["reply"] == "本轮工具调用上限已到，部分操作尚未完成。"
 
 
 @pytest.mark.asyncio

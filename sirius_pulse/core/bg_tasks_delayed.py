@@ -445,8 +445,9 @@ class DelayedQueueTasks:
 
         Args:
             group_id: The group / private chat to tick.
-            on_partial_reply: Optional async callable invoked immediately
-                when non-tool text is extracted *before* tools are executed.
+            on_partial_reply: Optional async callable used for the model output
+                immediately following a failed or blocked tool call. Normal
+                tool-round text stays in the assistant/tool message chain.
         """
         engine = self._engine
         recent = engine._helpers.get_recent_messages(group_id, n=10)
@@ -679,8 +680,8 @@ class DelayedQueueTasks:
 
         max_tool_rounds = engine.config.get("max_tool_rounds", 8)
         partial_replies: list[str] = []
-        last_round_had_partial = False
         last_partial_sent_at: float | None = None
+        send_next_tool_output = False
         _round = 0
         tool_calls: list[ToolCall] = []
         reply = ""
@@ -689,6 +690,7 @@ class DelayedQueueTasks:
         poke_user_ids_accumulated: list[str] = []
         pending_chat_result: Any = None
         ended_because_max_rounds = False
+        max_round_reply: Any | None = None
         plan_mode_enabled = bool(engine.config.get("plan_mode_enabled", False))
         limit_normal_tools = bool(engine.config.get("plan_mode_limit_normal_tools", False))
         plan_mode = getattr(item, "lane", "chat") == "plan"
@@ -769,6 +771,8 @@ class DelayedQueueTasks:
 
             # 分类工具调用：计划控制 vs 普通工具
             tool_calls = chat_result.tool_calls or []
+            report_next_tool_output = send_next_tool_output and not plan_mode
+            send_next_tool_output = False
             plan_control = [tc for tc in tool_calls if tc.function_name in PLAN_CONTROL_TOOL_NAMES]
             regular_tools = [
                 tc
@@ -1055,18 +1059,17 @@ class DelayedQueueTasks:
 
             non_tool_text = round_clean
             all_silent = bool(regular_tools) and all(_tool_is_silent(tc) for tc in regular_tools)
-            last_round_had_partial = False
             if plan_mode and non_tool_text:
                 engine._log_inner_thought(f"计划模式中间文本已隐藏: {non_tool_text[:40]}...")
-            elif non_tool_text and not all_silent:
-                engine._log_inner_thought(f"先跟用户回一声：{non_tool_text[:40]}...")
-                last_round_had_partial = True
+            elif non_tool_text and report_next_tool_output:
+                engine._log_inner_thought(f"工具调用出现问题，转发下一轮模型输出：{non_tool_text[:40]}...")
                 if on_partial_reply is None:
-                    raise RuntimeError(
-                        "Tool execution requires on_partial_reply when partial text is present"
-                    )
-                await on_partial_reply(non_tool_text)
-                last_partial_sent_at = time.monotonic()
+                    logger.debug("工具异常后的模型输出没有可用发送回调，保留在消息链中")
+                else:
+                    await on_partial_reply(non_tool_text)
+                    last_partial_sent_at = time.monotonic()
+            elif non_tool_text and not all_silent:
+                engine._log_inner_thought(f"工具链中间文本保留在消息链，不发送：{non_tool_text[:40]}...")
 
             # 2. 执行普通工具
             tool_multimodal: list[dict[str, Any]] = []
@@ -1131,6 +1134,7 @@ class DelayedQueueTasks:
                     if tool is None:
                         err_msg = f"Tool '{tool_name}' not found"
                         logger.warning(err_msg)
+                        send_next_tool_output = not plan_mode
                         messages.append({"role": "tool", "tool_call_id": tc.id, "content": err_msg})
                         continue
 
@@ -1144,12 +1148,14 @@ class DelayedQueueTasks:
                     ):
                         err_msg = f"Tool '{tool_name}' 被拒绝：互动不足 (engagement={caller_engagement:.2f})"
                         logger.warning(err_msg)
+                        send_next_tool_output = not plan_mode
                         messages.append({"role": "tool", "tool_call_id": tc.id, "content": err_msg})
                         continue
 
                     if tool.developer_only and not caller_is_developer:
                         err_msg = f"Tool '{tool_name}' 被拒绝：caller 不是 developer"
                         logger.warning(err_msg)
+                        send_next_tool_output = not plan_mode
                         messages.append({"role": "tool", "tool_call_id": tc.id, "content": err_msg})
                         continue
 
@@ -1162,6 +1168,7 @@ class DelayedQueueTasks:
                     ):
                         err_msg = f"Tool '{tool_name}' 被拒绝：本轮相同副作用动作已经执行过。"
                         await self._emit_agent_turn(engine, agent_turn)
+                        send_next_tool_output = not plan_mode
                         messages.append({"role": "tool", "tool_call_id": tc.id, "content": err_msg})
                         continue
 
@@ -1214,12 +1221,14 @@ class DelayedQueueTasks:
                                 tool_name,
                                 result.error or "Unknown error",
                             )
+                            send_next_tool_output = not plan_mode
                     except Exception as exc:
                         tool_content = ToolResult(success=False, error=str(exc)).to_model_text()
                         agent_turn.finish_action(tc.id, success=False, summary=str(exc))
                         agent_turn.advance(AgentTurnPhase.VERIFY)
                         await self._emit_agent_turn(engine, agent_turn)
                         logger.error("TOOL '%s' 执行异常: %s", tool_name, exc)
+                        send_next_tool_output = not plan_mode
 
                     # 添加 tool 结果消息
                     messages.append(
@@ -1230,7 +1239,7 @@ class DelayedQueueTasks:
                     if idx < len(regular_tools) - 1:
                         await asyncio.sleep(2)
 
-            if all_silent:
+            if all_silent and not send_next_tool_output:
                 if not self._append_tool_chain_messages(engine, messages, group_id):
                     break
 
@@ -1243,19 +1252,52 @@ class DelayedQueueTasks:
             if callable(end_tool_chain):
                 end_tool_chain(group_id)
 
-        # If the loop ended because max rounds were exhausted and the last round
-        # already sent a partial reply, don't duplicate that text as the final reply.
-        if ended_because_max_rounds and last_round_had_partial:
+        # Let the model turn the accumulated tool results into the final reply.
+        if ended_because_max_rounds and not plan_mode:
             logger.debug(
-                "Chain hit max_tool_rounds=%d; last partial already sent, "
-                "clearing clean_reply to avoid duplication",
+                "Chain hit max_tool_rounds=%d; asking the model for a final reply",
                 max_tool_rounds,
             )
-            reply = ""
+            messages.append(
+                {
+                    "role": "user",
+                    "content": (
+                        "【工具链控制信息】本轮已经达到工具调用轮次上限。"
+                        "请停止调用工具，直接给出最终回复；根据上方工具结果说明已完成、"
+                        "未完成的内容及原因，不要声称未经验证的操作已经完成。"
+                    ),
+                }
+            )
+            try:
+                candidate = await engine.brain.chat(
+                    ChatRequest(
+                        group_id=group_id,
+                        user_id=item.user_id or "",
+                        system_prompt=system_prompt,
+                        messages=messages,
+                        task_name="response_generate",
+                        enable_tools=bool(engine.config.get("enable_tools", True)),
+                        caller_is_developer=caller_is_developer,
+                        post_process=True,
+                        tool_choice="none",
+                    )
+                )
+                if getattr(candidate, "tool_calls", None):
+                    logger.warning(
+                        "Final tool-limit reply unexpectedly requested tools; using fallback"
+                    )
+                else:
+                    max_round_reply = candidate
+            except Exception as exc:
+                logger.warning("Final tool-limit reply generation failed: %s", exc)
 
         # 最终回复：hooks 已处理 pin/dedup/memory/timestamp
-        if ended_because_max_rounds and last_round_had_partial:
-            clean_reply = ""
+        if ended_because_max_rounds:
+            if max_round_reply is not None:
+                chat_result = max_round_reply
+                clean_reply = max_round_reply.clean_text
+            else:
+                clean_reply = ""
         else:
             clean_reply = chat_result.clean_text if chat_result else ""
         if plan_mode and plan_session is not None and plan_final_reply is None:
@@ -1272,8 +1314,10 @@ class DelayedQueueTasks:
 
         if plan_final_reply is not None:
             final_reply = plan_final_reply if plan_send_to_group else ""
+        elif ended_because_max_rounds:
+            final_reply = clean_reply or "本轮工具调用上限已到，部分操作尚未完成。"
         else:
-            final_reply = clean_reply or (partial_replies[-1] if partial_replies else "")
+            final_reply = clean_reply
 
         # Fast tools can finish before the client has had time to visually render
         # the partial reply. Keep a minimum lead window without delaying tool work.
