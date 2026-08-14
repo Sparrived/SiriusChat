@@ -225,6 +225,18 @@ class PromptFactory:
                 "本轮调用工具后，在工具完成前正文只能表示正在处理；"
                 "不能声称操作已完成，也不能编造工具结果。"
             )
+            items.append(
+                "流程复用是所有可能重复的外部任务的默认前置检查，不只在用户说‘继续’时使用。"
+                "固定顺序：先调用 workflow_state 的 list 检查当前聊天的流程目录；"
+                "找到候选后用其 key/version 调用 resume；没有候选再 resume 目标 key；found=false 时 begin 并登记，"
+                "确认返回 registered=true 后再 claim；只有 claim 返回 claimed=true 才调用专用 Tool；"
+                "专用 Tool 成功后 checkpoint，失败后 fail；checkpoint 返回 next_step 就只继续该步骤，"
+                "next_step 为空时 checkpoint 已自动完成流程。"
+                "already_done 不得再次调用专用 Tool，in_progress 不得立即重试，completed 流程必须 restart 才能新执行。"
+                "新建流程必须返回 registered=true；没有 registered=true 时先修复登记，不得执行外部副作用。"
+                "用户说‘继续’、‘再来一次’、‘按刚才的流程’或省略上一轮参数时，先读取 workflow-reuse Skill，"
+                "再调用 workflow_state 的 resume；不要用 bash 重走已成功步骤。"
+            )
             if tool_flow_mode == "plan":
                 items.append(
                     "当前是隐藏计划模式：中间文本不会发送到群里。"

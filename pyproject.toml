@@ -98,3 +98,4 @@ include = ["sirius_pulse*"]
 
 [tool.setuptools.package-data]
 "sirius_pulse.webui" = ["static/*", "static/pages/*"]
+"sirius_pulse.tools.builtin" = ["_default_skills/*/SKILL.md"]

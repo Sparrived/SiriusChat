@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from threading import Event, Thread
 
 from sirius_pulse.tools.data_store import ToolDataStore
 
@@ -57,6 +58,42 @@ def test_tool_store_when_data_changes_then_dirty_flag_tracks_unsaved_state(tmp_p
     store = ToolDataStore(tmp_path / "tool_data" / "prefs.json")
 
     assert store.is_dirty is False
+
+
+def test_tool_store_transaction_holds_lock_across_read_modify_write(tmp_path: Path):
+    store = ToolDataStore(tmp_path / "tool_data" / "workflow.json")
+    entered = Event()
+    release = Event()
+    second_started = Event()
+    second_finished = Event()
+
+    def first_transaction():
+        with store.transaction():
+            entered.set()
+            release.wait(timeout=1)
+            store.set("value", 1)
+
+    def second_write():
+        second_started.set()
+        store.set("other", 2)
+        second_finished.set()
+
+    first = Thread(target=first_transaction)
+    second = Thread(target=second_write)
+    first.start()
+    assert entered.wait(timeout=1)
+    second.start()
+    assert second_started.wait(timeout=1)
+    assert second_finished.wait(timeout=0.05) is False
+    release.set()
+    first.join(timeout=1)
+    second.join(timeout=1)
+
+    assert first.is_alive() is False
+    assert second.is_alive() is False
+    assert second_finished.is_set() is True
+    assert store.get("value") == 1
+    assert store.get("other") == 2
     store.set("enabled", True)
     assert store.is_dirty is True
     store.save()

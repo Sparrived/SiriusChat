@@ -9,6 +9,8 @@ from __future__ import annotations
 import json
 import logging
 import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -81,6 +83,16 @@ class ToolDataStore:
                 self._dirty = True
                 return True
             return False
+
+    @contextmanager
+    def transaction(self) -> Iterator[None]:
+        """Hold the store lock across a read-modify-write operation.
+
+        Individual ``get`` and ``set`` calls are thread-safe, but a workflow
+        mutation also needs its revision check and write to be atomic.
+        """
+        with self._lock:
+            yield
 
     def keys(self) -> list[str]:
         """Return all stored keys."""

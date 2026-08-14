@@ -188,6 +188,27 @@ def test_reply_spec_when_function_call_enabled_then_requires_task_driven_tool_us
     assert "每次回复结束时必须调用" not in spec
 
 
+def test_reply_spec_when_task_repeats_then_requires_workflow_resume_and_claim():
+    spec = PromptFactory.build_reply_spec(supports_function_call=True)
+
+    assert "workflow-reuse Skill" in spec
+    assert "workflow_state 的 resume" in spec
+    assert "claim 返回 claimed=true" in spec
+    assert "成功后 checkpoint" in spec
+    assert "checkpoint 已自动完成流程" in spec
+
+
+def test_reply_spec_requires_workflow_directory_before_reusable_external_work():
+    spec = PromptFactory.build_reply_spec(supports_function_call=True)
+
+    assert "所有可能重复的外部任务" in spec
+    assert "workflow_state 的 list" in spec
+    assert "begin 并登记" in spec
+    assert "registered=true" in spec
+    assert "没有 registered=true" in spec
+    assert "不得执行外部副作用" in spec
+
+
 def test_persona_prompt_when_structured_response_is_needed_then_defines_fenced_delivery():
     spec = PromptFactory.build_persona_prompt(name="月白")
 

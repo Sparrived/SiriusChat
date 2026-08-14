@@ -182,6 +182,9 @@ def test_tool_registry_when_builtin_tools_load_then_napcat_tools_are_visible(
     group_file_exec = registry.get("group_file_exec")
     group_management = registry.get("group_management")
     web_lookup = registry.get("web_lookup")
+    read_skill = registry.get("read_skill")
+    qq_like = registry.get("qq_like")
+    workflow_state = registry.get("workflow_state")
     tools = registry.build_tools_list(adapter_type="napcat")
     regular_user_tools = registry.build_tools_list(
         adapter_type="napcat",
@@ -217,6 +220,31 @@ def test_tool_registry_when_builtin_tools_load_then_napcat_tools_are_visible(
     assert group_file_exec is not None
     assert group_management is not None
     assert web_lookup is not None
+    assert read_skill is not None
+    assert read_skill.retry_safe is True
+    assert read_skill.side_effect is ToolSideEffect.READ_ONLY
+    assert qq_like is not None
+    assert qq_like.adapter_types == ["napcat"]
+    assert qq_like.side_effect is ToolSideEffect.EXTERNAL_WRITE
+    assert workflow_state is not None
+    assert workflow_state.side_effect is ToolSideEffect.EXTERNAL_WRITE
+    assert "list" in workflow_state.parameters[0].choices
+    assert [param.name for param in workflow_state.parameters] == [
+        "action",
+        "key",
+        "version",
+        "step",
+        "tool_name",
+        "idempotency_key",
+        "claim_token",
+        "next_step",
+        "lease_seconds",
+        "expected_revision",
+        "state_json",
+        "summary",
+        "error",
+    ]
+    assert workflow_state.parameters[1].required is False
     assert [param.name for param in web_lookup.config_parameters] == ["tavily_api_key"]
     assert "tavily_api_key" not in web_lookup.to_tool_schema()["function"]["parameters"]["properties"]
     for old_name in (
