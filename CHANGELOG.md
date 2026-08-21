@@ -6,6 +6,7 @@
 
 ### Added
 
+- **OpenCode Provider**：新增 `OpenCodeProvider`（OpenCode Zen）与 `OpenCodeGoProvider`（OpenCode GO 订阅），适配 opencode.ai 官方 OpenAI 兼容接口（`https://opencode.ai/zen/v1` / `https://opencode.ai/zen/go/v1`，均走 `/chat/completions`）。支持 `opencode-zen`、`opencode_go` 等别名与 base URL 自动补全 `/v1`，WebUI Provider 页面已同步新增"OpenCode Zen"和"OpenCode GO"类型。
 - **小米 MiMo Provider**：新增 `MimoProvider` 和 `MimoTokenPlanProvider`，适配小米 MIMO 平台 OpenAI 兼容接口。`MimoProvider` 支持按量付费（`https://api.xiaomimimo.com/v1`，API Key 格式 `sk-xxx`），`MimoTokenPlanProvider` 支持 Token Plan 订阅制（`https://token-plan-cn.xiaomimimo.com/v1`，API Key 格式 `tp-xxx`）。WebUI Provider 页面已同步更新，支持选择"小米 MiMo"和"小米 MiMo Token Plan"类型。
 - **记忆可视化 WebUI 页面**：新增 `memory-viz.html` 记忆浏览器与知识图谱可视化，后端 `memory_api.py` 提供记忆 CRUD、搜索、知识图谱、统计 API。
 - **技能管理 WebUI 页面**：新增 `skills.html` 技能管理页面（状态/安装/配置卡片），后端 `server_skill_api.py` 提供技能状态、安装、配置管理 API。

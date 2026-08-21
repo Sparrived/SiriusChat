@@ -252,6 +252,7 @@ sirius_pulse/
 │   ├── openai_compatible.py
 │   ├── deepseek.py / siliconflow.py
 │   ├── aliyun_bailian.py / volcengine_ark.py / bigmodel.py
+│   ├── opencode.py / mimo.py
 │   └── mock.py              # Mock Provider（测试用）
 │
 ├── platforms/               # 平台适配
