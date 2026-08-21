@@ -20,6 +20,13 @@ def test_model_router_when_running_lightweight_cognition_then_uses_fast_model():
     assert config.timeout == 15.0
 
 
+def test_model_router_when_extracting_memory_units_then_reserves_json_output_budget():
+    config = ModelRouter().resolve("memory_extract")
+
+    assert config.max_tokens == 4096
+    assert config.timeout == 30.0
+
+
 def test_model_router_when_task_is_unknown_then_falls_back_to_reply_generation_config():
     config = ModelRouter().resolve("unknown_business_task")
 
@@ -96,6 +103,12 @@ def test_model_router_when_primary_provider_fails_then_task_has_fallback_model()
 
 def test_model_router_when_task_has_no_config_then_no_fallback_is_returned():
     assert ModelRouter().get_fallback("missing_task") is None
+
+
+def test_model_router_when_operator_overrides_task_retries_then_value_is_preserved():
+    router = ModelRouter(overrides={"memory_extract": {"retries": 0}})
+
+    assert router.resolve("memory_extract").retries == 0
 
 
 def test_model_router_when_mapping_to_stronger_model_then_known_tiers_upgrade():

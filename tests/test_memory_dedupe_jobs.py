@@ -33,17 +33,31 @@ class _CheckpointManager:
         self.checkpointed = set(checkpointed or [])
         self.generated_candidates = []
         self.generated_batches = []
+        self.generation_kwargs = []
+        self.deferred_batches = []
 
     def is_source_checkpointed(self, _group_id, entry_id):
         return entry_id in self.checkpointed
 
     async def generate_from_candidates(self, **kwargs):
+        self.generation_kwargs.append(dict(kwargs))
         candidates = list(kwargs["candidates"])
         self.generated_candidates = candidates
         self.generated_batches.append(candidates)
         return SimpleNamespace(
             units=[SimpleNamespace(source_ids=[entry.entry_id for entry in candidates])]
         )
+
+    def defer_checkpoint_retry(self, group_id, candidates, **kwargs):
+        self.deferred_batches.append((group_id, list(candidates)))
+
+
+class _NoProgressCheckpointManager(_CheckpointManager):
+    async def generate_from_candidates(self, **kwargs):
+        self.generation_kwargs.append(dict(kwargs))
+        candidates = list(kwargs["candidates"])
+        self.generated_batches.append(candidates)
+        return SimpleNamespace(units=[SimpleNamespace(source_ids=["not-a-candidate"])])
 
 
 def _tasks(tmp_path, manager):
@@ -127,7 +141,7 @@ def test_checkpoint_pass_prunes_covered_sources_and_consolidates_old_active_arch
         memory_unit_manager=manager,
         cold_detector=ColdDetector(),
         model_router=SimpleNamespace(resolve=lambda _: SimpleNamespace(model_name="memory-model")),
-            persona=SimpleNamespace(name="Sirius", full_system_prompt=""),
+        persona=SimpleNamespace(name="Sirius", full_system_prompt=""),
         brain=object(),
         _bg_running=False,
     )
@@ -136,9 +150,10 @@ def test_checkpoint_pass_prunes_covered_sources_and_consolidates_old_active_arch
 
     assert promoted == 1
     assert [entry.content for entry in manager.generated_candidates] == [
-        f"old message {index}" for index in range(2, 40)
+        f"old message {index}" for index in range(2, 34)
     ]
     assert [entry.content for entry in basic.get_all("group_a")] == [
+        *[f"old message {index}" for index in range(34, 40)],
         "recent archive message",
         *[f"current message {index}" for index in range(5)],
     ]
@@ -176,20 +191,27 @@ def test_checkpoint_pass_repeats_active_batches_until_token_target():
         basic_memory=basic,
         memory_unit_manager=manager,
         cold_detector=ColdDetector(),
-        model_router=SimpleNamespace(resolve=lambda _: SimpleNamespace(model_name="memory-model")),
-            persona=SimpleNamespace(name="Sirius", full_system_prompt=""),
+        model_router=SimpleNamespace(
+            resolve=lambda _: SimpleNamespace(
+                model_name="memory-model", temperature=0.4, max_tokens=777, retries=0
+            )
+        ),
+        persona=SimpleNamespace(name="Sirius", full_system_prompt=""),
         brain=object(),
         _bg_running=False,
     )
 
     promoted = asyncio.run(BackgroundTasks(engine)._checkpoint_memory_once())
 
-    assert promoted == 1
-    assert [len(batch) for batch in manager.generated_batches] == [64]
+    assert promoted == 2
+    assert [len(batch) for batch in manager.generated_batches] == [32, 32]
+    assert manager.generation_kwargs[0]["max_tokens"] == 777
+    assert manager.generation_kwargs[0]["temperature"] == 0.4
+    assert manager.generation_kwargs[0]["transport_retries"] == 0
     assert BackgroundTasks(engine)._estimate_group_history_tokens("group_a") <= 100
 
 
-def test_checkpoint_uses_latest_conversation_chain_tokens_for_trigger():
+def test_checkpoint_ignores_system_prompt_tokens_when_deciding_history_trigger():
     now = datetime.now(timezone.utc)
     basic = BasicMemoryManager(context_window=5)
     for index in range(40):
@@ -225,12 +247,51 @@ def test_checkpoint_uses_latest_conversation_chain_tokens_for_trigger():
         memory_unit_manager=manager,
         cold_detector=ColdDetector(),
         model_router=SimpleNamespace(resolve=lambda _: SimpleNamespace(model_name="memory-model")),
-            persona=SimpleNamespace(name="Sirius", full_system_prompt=""),
+        persona=SimpleNamespace(name="Sirius", full_system_prompt=""),
         brain=object(),
         _bg_running=False,
     )
 
     promoted = asyncio.run(BackgroundTasks(engine)._checkpoint_memory_once())
 
-    assert promoted == 1
+    assert promoted == 0
+    assert manager.generated_batches == []
+
+
+def test_checkpoint_backs_off_when_model_covers_no_current_source():
+    now = datetime.now(timezone.utc)
+    basic = BasicMemoryManager(context_window=5)
+    for index in range(16):
+        basic.add_entry(
+            "group_a",
+            "alice",
+            "human",
+            f"old message {index}",
+            timestamp=(now - timedelta(hours=2)).isoformat(),
+        )
+
+    manager = _NoProgressCheckpointManager()
+    engine = SimpleNamespace(
+        config={
+            "memory_idle_consolidation_seconds": 3600,
+            "memory_unit_volume_threshold": 8,
+            "memory_unit_token_trigger": 1,
+            "memory_unit_token_target": 1,
+        },
+        provider_async=object(),
+        basic_memory=basic,
+        memory_unit_manager=manager,
+        cold_detector=ColdDetector(),
+        model_router=SimpleNamespace(resolve=lambda _: SimpleNamespace(model_name="memory-model")),
+        persona=SimpleNamespace(name="Sirius", full_system_prompt=""),
+        brain=object(),
+        _bg_running=False,
+    )
+
+    promoted = asyncio.run(BackgroundTasks(engine)._checkpoint_memory_once())
+
+    assert promoted == 0
     assert len(manager.generated_batches) == 1
+    assert manager.deferred_batches[0][0] == "group_a"
+    assert len(manager.deferred_batches[0][1]) == 16
+    assert len(basic.get_all("group_a")) == 16

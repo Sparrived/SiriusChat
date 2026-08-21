@@ -256,8 +256,7 @@ def test_generation_caps_a_single_checkpoint_batch(tmp_path):
     manager = MemoryUnitManager(tmp_path)
     basic = BasicMemoryManager()
     candidates = [
-        basic.add_entry("group_a", "alice", "human", f"message {index}")
-        for index in range(40)
+        basic.add_entry("group_a", "alice", "human", f"message {index}") for index in range(40)
     ]
     brain = _FakeBrain()
 
@@ -275,9 +274,38 @@ def test_generation_caps_a_single_checkpoint_batch(tmp_path):
 
     request = next(item for item in brain.requests if item.purpose == "memory_unit_extract")
     content = request.messages[0]["content"]
+    assert request.max_tokens == 4096
+    assert request.retry_max == 0
     assert "source_id=" + candidates[0].entry_id in content
     assert "source_id=" + candidates[31].entry_id in content
     assert "source_id=" + candidates[32].entry_id not in content
+
+
+def test_generation_passes_task_token_budget_to_raw_request(tmp_path):
+    manager = MemoryUnitManager(tmp_path)
+    entry = BasicMemoryManager().add_entry("group_a", "alice", "human", "message")
+    brain = _FakeBrain()
+
+    result = asyncio.run(
+        manager.generate_from_candidates(
+            group_id="group_a",
+            candidates=[entry],
+            persona_name="Sirius",
+            persona_description="",
+            brain=brain,
+            model_name="memory-model",
+            min_candidate_count=1,
+            max_tokens=777,
+            temperature=0.4,
+            max_retries=0,
+        )
+    )
+
+    assert result is not None
+    request = next(item for item in brain.requests if item.purpose == "memory_unit_extract")
+    assert request.max_tokens == 777
+    assert request.temperature == 0.4
+    assert request.retry_max == 0
 
 
 def test_failed_checkpoint_batch_enters_backoff(tmp_path):
@@ -291,16 +319,19 @@ def test_failed_checkpoint_batch_enters_backoff(tmp_path):
     brain = _InvalidBrain()
 
     for _ in range(2):
-        assert asyncio.run(
-            manager.generate_from_candidates(
-                group_id="group_a",
-                candidates=[entry],
-                persona_name="Sirius",
-                persona_description="",
-                brain=brain,
-                model_name="memory-model",
-                min_candidate_count=1,
+        assert (
+            asyncio.run(
+                manager.generate_from_candidates(
+                    group_id="group_a",
+                    candidates=[entry],
+                    persona_name="Sirius",
+                    persona_description="",
+                    brain=brain,
+                    model_name="memory-model",
+                    min_candidate_count=1,
+                )
             )
-        ) is None
+            is None
+        )
 
     assert len(brain.requests) == 2
