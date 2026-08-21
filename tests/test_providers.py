@@ -17,9 +17,22 @@ from sirius_pulse.providers.base import (
     resolve_generation_timeout_seconds,
     set_last_generation_usage,
 )
-from sirius_pulse.providers.response_utils import extract_assistant_text
 from sirius_pulse.providers.openai_compatible import OpenAICompatibleProvider
-from sirius_pulse.providers.routing import AutoRoutingProvider, ProviderConfig
+from sirius_pulse.providers.opencode import (
+    DEFAULT_OPENCODE_BASE_URL,
+    DEFAULT_OPENCODE_GO_BASE_URL,
+    OpenCodeGoProvider,
+    OpenCodeProvider,
+)
+from sirius_pulse.providers.response_utils import extract_assistant_text
+from sirius_pulse.providers.routing import (
+    AutoRoutingProvider,
+    ProviderConfig,
+    _create_provider_instance,
+    ensure_provider_platform_supported,
+    get_supported_provider_platforms,
+    normalize_provider_type,
+)
 
 
 def test_generation_result_when_tool_calls_are_present_then_reports_tool_call_state():
@@ -110,6 +123,76 @@ def test_chat_payload_when_bailian_provider_then_uses_enable_thinking_flag():
     )
 
     assert payload["enable_thinking"] is False
+
+
+def test_chat_payload_when_opencode_provider_then_does_not_inject_unknown_params():
+    payload = build_chat_completion_payload(
+        GenerationRequest(
+            model="kimi-k3",
+            system_prompt="",
+            messages=[{"role": "user", "content": "hello"}],
+            reasoning_effort="low",
+        ),
+        provider_name="opencode-go",
+    )
+
+    assert "thinking" not in payload
+    assert "enable_thinking" not in payload
+    assert "reasoning_effort" not in payload
+
+
+def test_opencode_provider_when_building_url_then_uses_zen_chat_completions_endpoint():
+    request = GenerationRequest(model="kimi-k3", system_prompt="", messages=[])
+
+    assert (
+        OpenCodeProvider(api_key="sk-opencode")._build_url(request)
+        == f"{DEFAULT_OPENCODE_BASE_URL}/chat/completions"
+    )
+    # 省略 /v1 的 base URL 会被自动补全
+    provider = OpenCodeProvider(api_key="sk-opencode", base_url="https://opencode.ai/zen")
+    assert provider._build_url(request) == "https://opencode.ai/zen/v1/chat/completions"
+
+
+def test_opencode_go_provider_when_building_url_then_uses_go_chat_completions_endpoint():
+    request = GenerationRequest(model="kimi-k3", system_prompt="", messages=[])
+
+    assert (
+        OpenCodeGoProvider(api_key="sk-opencode-go")._build_url(request)
+        == f"{DEFAULT_OPENCODE_GO_BASE_URL}/chat/completions"
+    )
+    # 省略 /v1 的 base URL 会被自动补全
+    provider = OpenCodeGoProvider(api_key="sk-opencode-go", base_url="https://opencode.ai/zen/go")
+    assert provider._build_url(request) == "https://opencode.ai/zen/go/v1/chat/completions"
+
+
+def test_provider_platform_when_opencode_types_are_used_then_normalized_and_supported():
+    assert normalize_provider_type("opencode") == "opencode"
+    assert normalize_provider_type("opencode-zen") == "opencode"
+    assert normalize_provider_type("opencode-go") == "opencode-go"
+    assert normalize_provider_type("opencode_go") == "opencode-go"
+    assert normalize_provider_type("opencodego") == "opencode-go"
+
+    assert ensure_provider_platform_supported("opencode-go") == "opencode-go"
+
+    platforms = get_supported_provider_platforms()
+    assert platforms["opencode"]["default_base_url"] == "https://opencode.ai/zen/v1"
+    assert platforms["opencode-go"]["default_base_url"] == "https://opencode.ai/zen/go/v1"
+
+
+def test_provider_factory_when_opencode_configs_used_then_creates_matching_providers():
+    zen = _create_provider_instance(
+        ProviderConfig(provider_type="opencode", api_key="sk-opencode", base_url="")
+    )
+    go = _create_provider_instance(
+        ProviderConfig(provider_type="opencode-go", api_key="sk-opencode-go", base_url="")
+    )
+
+    assert isinstance(zen, OpenCodeProvider)
+    assert isinstance(go, OpenCodeGoProvider)
+    assert zen._provider_name == "opencode"
+    assert go._provider_name == "opencode-go"
+    assert zen._base_url == "https://opencode.ai/zen/v1"
+    assert go._base_url == "https://opencode.ai/zen/go/v1"
 
 
 def test_openai_compatible_messages_preserve_tool_call_results():
@@ -369,3 +452,86 @@ def test_auto_routing_provider_when_bare_model_matches_multiple_providers_then_e
 
     with pytest.raises(RuntimeError, match="同时存在于多个 provider"):
         router._pick_provider("shared-model")
+
+
+@pytest.mark.asyncio
+async def test_opencode_go_provider_when_generating_then_posts_to_go_chat_completions(monkeypatch):
+    class _Response:
+        status_code = 200
+        headers = {"Content-Type": "application/json"}
+        text = json.dumps(
+            {
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {"role": "assistant", "content": "ok", "reasoning_content": ""},
+                    }
+                ],
+                "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8},
+            }
+        )
+
+    captured: dict[str, object] = {}
+
+    class _Client:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def post(self, url, content=None, headers=None, **kwargs):
+            captured["url"] = url
+            captured["headers"] = headers
+            return _Response()
+
+    monkeypatch.setattr("sirius_pulse.providers.openai_compatible.httpx.AsyncClient", _Client)
+    provider = OpenCodeGoProvider(api_key="sk-opencode-go")
+
+    result = await provider.generate_async(
+        GenerationRequest(
+            model="kimi-k3",
+            system_prompt="",
+            messages=[{"role": "user", "content": "hi"}],
+        )
+    )
+
+    assert captured["url"] == "https://opencode.ai/zen/go/v1/chat/completions"
+    assert captured["headers"]["Authorization"] == "Bearer sk-opencode-go"
+    assert result.content == "ok"
+    assert get_last_generation_usage()["total_tokens"] == 8
+
+
+@pytest.mark.asyncio
+async def test_auto_routing_provider_when_opencode_models_are_provider_scoped_then_route_works():
+    router = _CapturingRoutingProvider(
+        {
+            "opencode": ProviderConfig(
+                provider_type="opencode",
+                api_key="sk-opencode",
+                base_url="",
+                models=["big-pickle"],
+            ),
+            "opencode-go": ProviderConfig(
+                provider_type="opencode-go",
+                api_key="sk-opencode-go",
+                base_url="",
+                models=["kimi-k3"],
+            ),
+        }
+    )
+
+    await router.generate_async(
+        GenerationRequest(
+            model="opencode-go/kimi-k3",
+            system_prompt="",
+            messages=[{"role": "user", "content": "hi"}],
+        )
+    )
+
+    assert set(router.created) == {"opencode-go"}
+    assert router.created["opencode-go"].request is not None
+    assert router.created["opencode-go"].request.model == "kimi-k3"
