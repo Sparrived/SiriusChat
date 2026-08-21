@@ -90,8 +90,9 @@ class MemoryUnitGenerator:
         brain: Any,
         model_name: str,
         temperature: float = 0.2,
-        max_tokens: int = 2048,
+        max_tokens: int = 4096,
         max_retries: int = 1,
+        transport_retries: int = 0,
     ) -> MemoryUnitGenerationResult | None:
         if not candidates:
             return None
@@ -114,6 +115,10 @@ class MemoryUnitGenerator:
                 max_tokens=max_tokens,
                 purpose="memory_unit_extract",
                 response_format={"type": "json_object"},
+                # Keep transport retries task-configurable.  In particular, an
+                # empty provider message must not silently consume the Brain
+                # default of three calls on every background checkpoint.
+                retry_max=max(0, int(transport_retries)),
             )
             try:
                 raw = await brain.raw_call(raw_request)
@@ -161,7 +166,9 @@ class MemoryUnitGenerator:
                     item.get("identity_aliases"), source_entries
                 ),
                 event_time=self._clean_timestamp(item.get("event_time"))
-                or min((entry.timestamp for entry in source_entries if entry.timestamp), default=""),
+                or min(
+                    (entry.timestamp for entry in source_entries if entry.timestamp), default=""
+                ),
                 valid_until=self._clean_timestamp(item.get("valid_until")),
                 status=self._clean_choice(item.get("status"), "")[:40],
                 salience=self._clean_float(item.get("salience"), default=0.5),

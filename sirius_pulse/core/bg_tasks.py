@@ -21,7 +21,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-MEMORY_CHECKPOINT_BATCH_SIZE = 64
+# Keep extraction prompts bounded.  Each candidate can contain up to 500
+# characters plus provenance fields, so 64 candidates can exhaust a provider's
+# context before the JSON response is generated.
+MEMORY_CHECKPOINT_BATCH_SIZE = 32
 MEMORY_CHECKPOINT_TOKEN_TRIGGER = 80_000
 MEMORY_CHECKPOINT_TOKEN_TARGET = 20_000
 
@@ -112,7 +115,7 @@ class BackgroundTasks:
         Cold groups are consolidated immediately. Active groups can also
         consolidate archive entries once the selected batch is at least one
         hour old and history exceeds the token trigger. High-token groups keep
-        processing 64-entry batches until the target budget is restored.
+        processing bounded batches until the target budget is restored.
         """
         engine = self._engine
         interval = engine.config.get("memory_promote_interval_seconds", 180)
@@ -146,6 +149,9 @@ class BackgroundTasks:
         token_target = int(
             engine.config.get("memory_unit_token_target", MEMORY_CHECKPOINT_TOKEN_TARGET)
         )
+        max_checkpoint_batches = max(
+            1, int(engine.config.get("memory_unit_max_batches_per_group", 8))
+        )
         promoted_total = 0
         for group_id in list(engine.basic_memory.list_groups()):
             entries = engine.basic_memory.get_all(group_id)
@@ -171,13 +177,17 @@ class BackgroundTasks:
             cold_state = engine.cold_detector.check(heat, seconds_since_last)
 
             raw_history_tokens = self._estimate_group_history_tokens(group_id)
-            token_scale = self._history_token_scale(group_id, raw_history_tokens)
-            history_tokens = round(raw_history_tokens * token_scale)
+            # A conversation_chain may contain the prompt's system instructions and
+            # tool schemas.  Count only its dialogue portion for the initial trigger;
+            # never turn that prompt overhead into a multiplier for raw memory.
+            conversation_tokens = self._latest_conversation_tokens(group_id)
+            history_tokens = max(raw_history_tokens, conversation_tokens)
             repeat_until_target = history_tokens > token_trigger
             if cold_state != ColdState.COLD and not repeat_until_target:
                 continue
 
-            while True:
+            batches_processed = 0
+            while batches_processed < max_checkpoint_batches:
                 include_context = (
                     cold_state == ColdState.COLD
                     and seconds_since_last >= idle_consolidation_seconds
@@ -205,6 +215,7 @@ class BackgroundTasks:
                     break
 
                 cfg = engine.model_router.resolve("memory_extract")
+                batches_processed += 1
                 result = await engine.memory_unit_manager.generate_from_candidates(
                     group_id=group_id,
                     candidates=checkpoint_batch,
@@ -212,24 +223,46 @@ class BackgroundTasks:
                     persona_description=getattr(engine.persona, "full_system_prompt", ""),
                     brain=engine.brain,
                     model_name=cfg.model_name,
+                    temperature=float(getattr(cfg, "temperature", 0.2)),
+                    max_tokens=max(1, int(getattr(cfg, "max_tokens", 4096))),
+                    transport_retries=max(0, int(getattr(cfg, "retries", 0))),
                     min_candidate_count=volume_threshold,
                     max_candidate_count=MEMORY_CHECKPOINT_BATCH_SIZE,
                 )
                 if not result:
                     break
 
+                candidate_ids = {entry.entry_id for entry in checkpoint_batch}
                 covered_source_ids: set[str] = set()
                 for unit in result.units:
-                    covered_source_ids.update(unit.source_ids)
+                    covered_source_ids.update(
+                        source_id for source_id in unit.source_ids if source_id in candidate_ids
+                    )
                 removed = engine.basic_memory.remove_entries_by_ids(group_id, covered_source_ids)
                 if not removed:
+                    # Do not call the same failed batch on every background tick
+                    # when the model returned no usable provenance.
+                    defer_retry = getattr(
+                        engine.memory_unit_manager, "defer_checkpoint_retry", None
+                    )
+                    if callable(defer_retry):
+                        defer_retry(group_id, checkpoint_batch)
+                    logger.warning(
+                        "Memory checkpoint made no progress for group=%s batch=%d; backing off",
+                        group_id,
+                        len(checkpoint_batch),
+                    )
                     break
 
                 promoted_total += len(result.units)
+                # Recompute from the current raw window.  The latest assistant
+                # conversation_chain is a snapshot of an older prompt and must
+                # not keep the loop above its target after covered entries are
+                # removed.
                 raw_history_tokens = self._estimate_group_history_tokens(group_id)
-                history_tokens = round(raw_history_tokens * token_scale)
+                history_tokens = raw_history_tokens
                 logger.info(
-                    "Memory checkpoint group=%s batch=%d removed=%d history_tokens=%d",
+                    "Memory checkpoint group=%s batch=%d removed=%d raw_history_tokens=%d",
                     group_id,
                     len(checkpoint_batch),
                     removed,
@@ -262,47 +295,42 @@ class BackgroundTasks:
             for entry in self._engine.basic_memory.get_all(group_id)
         )
 
-    def _history_token_scale(self, group_id: str, raw_history_tokens: int) -> float:
-        """Calibrate raw history estimates against the latest real prompt."""
-        if raw_history_tokens <= 0:
-            return 1.0
-
-        conversation_tokens = self._latest_conversation_tokens(group_id)
-        if conversation_tokens > raw_history_tokens:
-            return conversation_tokens / raw_history_tokens
-
-        records = getattr(self._engine, "token_usage_records", [])
-        for record in reversed(records):
-            if (
-                getattr(record, "task_name", "") == "response_generate"
-                and getattr(record, "group_id", "") == group_id
-            ):
-                prompt_tokens = int(getattr(record, "prompt_tokens", 0) or 0)
-                if prompt_tokens > raw_history_tokens:
-                    return prompt_tokens / raw_history_tokens
-                break
-        return 1.0
-
     def _latest_conversation_tokens(self, group_id: str) -> int:
-        """Read the same approximate token count shown for an LLM message chain."""
+        """Estimate dialogue tokens without counting prompt instructions or schemas."""
+        from sirius_pulse.token.utils import estimate_tokens
+
         entries = self._engine.basic_memory.get_all(group_id)
         for entry in reversed(entries):
             chain = getattr(entry, "conversation_chain", None)
             if not isinstance(chain, list) or not chain:
                 continue
-            chars = sum(
-                len(str(message.get("content", "") or ""))
-                for message in chain
-                if isinstance(message, dict)
-            )
-            if chars:
-                return (chars + 1) // 2
+            token_total = 0
+            for message in chain:
+                if not isinstance(message, dict):
+                    continue
+                # The stored chain includes the complete system prompt and may
+                # include tool schemas.  Those are request overhead, not chat
+                # history, and must not inflate the checkpoint trigger.
+                if str(message.get("role", "")).strip().lower() not in {
+                    "user",
+                    "assistant",
+                    "tool",
+                }:
+                    continue
+                content = message.get("content", "")
+                if isinstance(content, list):
+                    content = " ".join(
+                        str(part.get("text", ""))
+                        for part in content
+                        if isinstance(part, dict) and part.get("type") == "text"
+                    )
+                token_total += estimate_tokens(str(content or ""))
+            if token_total:
+                return token_total
         return 0
 
     @staticmethod
-    def _candidates_are_old_enough(
-        candidates: list[Any], *, min_age_seconds: float
-    ) -> bool:
+    def _candidates_are_old_enough(candidates: list[Any], *, min_age_seconds: float) -> bool:
         if min_age_seconds <= 0:
             return True
         timestamps: list[float] = []
@@ -352,15 +380,23 @@ class BackgroundTasks:
                     job_id = str(request.get("job_id") or "")
                     action = str(request.get("action") or "")
                     status_path = job_dir / "status.json"
-                    report_path = Path(engine.work_path) / "logs" / "memory-dedupe" / f"{job_id}.json"
+                    report_path = (
+                        Path(engine.work_path) / "logs" / "memory-dedupe" / f"{job_id}.json"
+                    )
                     cfg = engine.model_router.resolve("memory_extract")
                     if action == "scan":
-                        atomic_write_json(status_path, {"job_id": job_id, "status": "scanning", "progress": 0})
+                        atomic_write_json(
+                            status_path, {"job_id": job_id, "status": "scanning", "progress": 0}
+                        )
 
                         def update_progress(done: int, total: int) -> None:
                             atomic_write_json(
                                 status_path,
-                                {"job_id": job_id, "status": "scanning", "progress": int(done * 100 / total) if total else 100},
+                                {
+                                    "job_id": job_id,
+                                    "status": "scanning",
+                                    "progress": int(done * 100 / total) if total else 100,
+                                },
                             )
 
                         report = await engine.memory_unit_manager.scan_duplicates(
@@ -368,19 +404,42 @@ class BackgroundTasks:
                         )
                         report_path.parent.mkdir(parents=True, exist_ok=True)
                         atomic_write_json(report_path, report)
-                        atomic_write_json(status_path, {"job_id": job_id, "status": "ready", "progress": 100, "report_path": str(report_path)})
+                        atomic_write_json(
+                            status_path,
+                            {
+                                "job_id": job_id,
+                                "status": "ready",
+                                "progress": 100,
+                                "report_path": str(report_path),
+                            },
+                        )
                     elif action == "apply":
-                        atomic_write_json(status_path, {"job_id": job_id, "status": "applying", "progress": 0})
+                        atomic_write_json(
+                            status_path, {"job_id": job_id, "status": "applying", "progress": 0}
+                        )
                         report = json.loads(report_path.read_text(encoding="utf-8"))
                         result = await engine.memory_unit_manager.apply_duplicate_report(report)
                         atomic_write_json(
                             status_path,
-                            {"job_id": job_id, "status": result["status"], "progress": 100, "report_path": str(report_path), **{key: value for key, value in result.items() if key != "status"}},
+                            {
+                                "job_id": job_id,
+                                "status": result["status"],
+                                "progress": 100,
+                                "report_path": str(report_path),
+                                **{key: value for key, value in result.items() if key != "status"},
+                            },
                         )
                     else:
                         raise ValueError(f"unknown memory dedupe action: {action}")
                 except Exception as exc:
-                    atomic_write_json(job_dir / "status.json", {"job_id": locals().get("job_id", ""), "status": "failed", "error": str(exc)})
+                    atomic_write_json(
+                        job_dir / "status.json",
+                        {
+                            "job_id": locals().get("job_id", ""),
+                            "status": "failed",
+                            "error": str(exc),
+                        },
+                    )
                 finally:
                     claimed.unlink(missing_ok=True)
 

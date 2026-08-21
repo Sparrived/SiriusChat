@@ -16,8 +16,8 @@ from sirius_pulse.memory.units.deduplicator import (
 )
 from sirius_pulse.memory.units.generator import MemoryUnitGenerator
 from sirius_pulse.memory.units.indexer import MemoryUnitIndexer, MemoryUnitRetriever
-from sirius_pulse.memory.units.models import MemoryUnit, MemoryUnitGenerationResult
 from sirius_pulse.memory.units.maintenance import MemoryUnitDedupeMaintenance
+from sirius_pulse.memory.units.models import MemoryUnit, MemoryUnitGenerationResult
 from sirius_pulse.memory.units.store import MemoryUnitFileStore
 
 logger = logging.getLogger(__name__)
@@ -57,6 +57,10 @@ class MemoryUnitManager:
         model_name: str,
         min_candidate_count: int = 8,
         max_candidate_count: int = 32,
+        temperature: float = 0.2,
+        max_tokens: int = 4096,
+        max_retries: int = 1,
+        transport_retries: int = 0,
         failure_backoff_seconds: float = 3600.0,
     ) -> MemoryUnitGenerationResult | None:
         candidates = list(candidates[: max(1, int(max_candidate_count))])
@@ -69,7 +73,10 @@ class MemoryUnitManager:
             )
             return None
 
-        candidate_key = tuple(entry.entry_id for entry in candidates)
+        # Candidate order is an implementation detail of the basic-memory window.
+        # A stable key prevents a failed batch from bypassing backoff merely because
+        # the caller rebuilt the same candidate list in another order.
+        candidate_key = tuple(sorted(entry.entry_id for entry in candidates))
         blocked = self._generation_backoff.get(group_id)
         if blocked and blocked[0] == candidate_key and time.monotonic() < blocked[1]:
             logger.debug("Skipping memory checkpoint retry for group %s", group_id)
@@ -82,6 +89,10 @@ class MemoryUnitManager:
             persona_description=persona_description,
             brain=brain,
             model_name=model_name,
+            temperature=float(temperature),
+            max_tokens=max(1, int(max_tokens)),
+            max_retries=max(0, int(max_retries)),
+            transport_retries=max(0, int(transport_retries)),
         )
         if result is None or not result.units:
             self._generation_backoff[group_id] = (
@@ -98,6 +109,22 @@ class MemoryUnitManager:
         )
         self._generation_backoff.pop(group_id, None)
         return MemoryUnitGenerationResult(units=canonical_results)
+
+    def defer_checkpoint_retry(
+        self,
+        group_id: str,
+        candidates: list[BasicMemoryEntry],
+        *,
+        failure_backoff_seconds: float = 3600.0,
+    ) -> None:
+        """Back off a checkpoint batch that produced no removable progress."""
+        candidate_key = tuple(sorted(entry.entry_id for entry in candidates))
+        if not candidate_key:
+            return
+        self._generation_backoff[group_id] = (
+            candidate_key,
+            time.monotonic() + max(0.0, float(failure_backoff_seconds)),
+        )
 
     async def reconcile_units(
         self,
