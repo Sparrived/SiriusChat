@@ -17,6 +17,7 @@ from sirius_pulse.providers.models_dev import (
     parse_model_cost,
 )
 from sirius_pulse.providers.openai_compatible import OpenAICompatibleProvider
+from sirius_pulse.providers.opencode import OpenCodeGoProvider, OpenCodeProvider
 from sirius_pulse.providers.routing import (
     AutoRoutingProvider,
     ProviderConfig,
@@ -56,6 +57,8 @@ __all__ = [
     "register_provider_with_validation",
     "SiliconFlowProvider",
     "VolcengineArkProvider",
+    "OpenCodeProvider",
+    "OpenCodeGoProvider",
     "ModelsDevCache",
     "ModelCost",
     "ModelFilter",

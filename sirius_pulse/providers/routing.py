@@ -18,6 +18,12 @@ from sirius_pulse.providers.deepseek import DeepSeekProvider
 from sirius_pulse.providers.mimo import MimoProvider, MimoTokenPlanProvider
 from sirius_pulse.providers.models_dev import auto_fill_models_from_dev
 from sirius_pulse.providers.openai_compatible import OpenAICompatibleProvider
+from sirius_pulse.providers.opencode import (
+    DEFAULT_OPENCODE_BASE_URL,
+    DEFAULT_OPENCODE_GO_BASE_URL,
+    OpenCodeGoProvider,
+    OpenCodeProvider,
+)
 from sirius_pulse.providers.siliconflow import SiliconFlowProvider
 from sirius_pulse.providers.volcengine_ark import VolcengineArkProvider
 from sirius_pulse.providers.ytea import YTeaProvider
@@ -35,6 +41,8 @@ _VOLCENGINE_ARK_PROVIDER_TYPES = {"volcengine-ark", "ark"}
 _YTEA_PROVIDER_TYPES = {"ytea"}
 _MIMO_PROVIDER_TYPES = {"mimo", "xiaomi-mimo"}
 _MIMO_TOKENPLAN_PROVIDER_TYPES = {"mimo-tokenplan", "xiaomi-mimo-tokenplan"}
+_OPENCODE_PROVIDER_TYPES = {"opencode", "opencode-zen"}
+_OPENCODE_GO_PROVIDER_TYPES = {"opencode-go", "opencode_go", "opencodego"}
 
 _SUPPORTED_PROVIDER_PLATFORMS: dict[str, dict[str, str]] = {
     "openai-compatible": {
@@ -73,6 +81,14 @@ _SUPPORTED_PROVIDER_PLATFORMS: dict[str, dict[str, str]] = {
         "default_base_url": "https://api.ytea.top",
         "notes": "YTea OpenAI-compatible endpoint",
     },
+    "opencode": {
+        "default_base_url": "https://opencode.ai/zen/v1",
+        "notes": "OpenCode Zen 网关 OpenAI 兼容端点（按量计费），API Key 在 https://opencode.ai/auth 获取",
+    },
+    "opencode-go": {
+        "default_base_url": "https://opencode.ai/zen/go/v1",
+        "notes": "OpenCode GO 订阅 OpenAI 兼容端点（需在 Zen 控制台订阅 GO），与 Zen 共用 API Key",
+    },
 }
 
 _PROVIDER_HEALTHCHECK_USER_MESSAGE = "?"
@@ -109,6 +125,10 @@ def normalize_provider_type(provider_type: str) -> str:
         return "mimo"
     if normalized == "xiaomi-mimo-tokenplan":
         return "mimo-tokenplan"
+    if normalized == "opencode-zen":
+        return "opencode"
+    if normalized in {"opencode_go", "opencodego"}:
+        return "opencode-go"
     return normalized
 
 
@@ -445,6 +465,16 @@ def _create_provider_instance(config: ProviderConfig) -> Any:
         return MimoTokenPlanProvider(
             api_key=config.api_key,
             base_url=config.base_url or "https://token-plan-cn.xiaomimimo.com/v1",
+        )
+    if provider_type in _OPENCODE_PROVIDER_TYPES:
+        return OpenCodeProvider(
+            api_key=config.api_key,
+            base_url=config.base_url or DEFAULT_OPENCODE_BASE_URL,
+        )
+    if provider_type in _OPENCODE_GO_PROVIDER_TYPES:
+        return OpenCodeGoProvider(
+            api_key=config.api_key,
+            base_url=config.base_url or DEFAULT_OPENCODE_GO_BASE_URL,
         )
     if provider_type in _OPENAI_PROVIDER_TYPES:
         return OpenAICompatibleProvider(
