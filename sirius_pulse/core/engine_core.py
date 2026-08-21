@@ -165,6 +165,7 @@ class _EmotionalGroupChatEngineBase:
         self._orch_task_temperatures = orch.get("task_temperatures")
         self._orch_task_max_tokens = orch.get("task_max_tokens")
         self._orch_task_timeout = orch.get("task_timeout")
+        self._orch_task_retries = orch.get("task_retries")
         self._orch_task_fallback_model = orch.get("task_fallback_model")
 
     def _init_memory_system(self) -> None:
@@ -239,6 +240,10 @@ class _EmotionalGroupChatEngineBase:
                 to = self._orch_task_timeout.get(task)
                 if isinstance(to, (int, float)):
                     override["timeout"] = float(to)
+            if isinstance(self._orch_task_retries, dict):
+                retries = self._orch_task_retries.get(task)
+                if isinstance(retries, int):
+                    override["retries"] = max(0, retries)
             if isinstance(self._orch_task_fallback_model, dict):
                 fb = self._orch_task_fallback_model.get(task)
                 if isinstance(fb, str) and fb.strip():

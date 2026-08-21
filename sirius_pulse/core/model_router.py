@@ -20,6 +20,7 @@ class TaskConfig:
     max_tokens: int
     timeout: float = 30.0
     fallback_model: str | None = None
+    retries: int = 1
 
 
 # ---------------------------------------------------------------------------
@@ -38,9 +39,12 @@ _DEFAULT_TASK_REGISTRY: dict[str, TaskConfig] = {
     "memory_extract": TaskConfig(
         model_name="gpt-4o-mini",
         temperature=0.3,
-        max_tokens=1024,
-        timeout=20.0,
+        # Structured memory extraction must have enough room to finish JSON;
+        # 1024 is easily consumed by a large checkpoint batch.
+        max_tokens=4096,
+        timeout=30.0,
         fallback_model="deepseek-chat",
+        retries=0,
     ),
     # High-quality tasks 鈫?stronger models
     "response_generate": TaskConfig(
@@ -163,6 +167,7 @@ class ModelRouter:
                         max_tokens=patch.get("max_tokens", base.max_tokens),
                         timeout=patch.get("timeout", base.timeout),
                         fallback_model=patch.get("fallback_model", base.fallback_model),
+                        retries=patch.get("retries", base.retries),
                     )
 
     # ------------------------------------------------------------------
@@ -212,6 +217,7 @@ class ModelRouter:
             max_tokens=max_tokens,
             timeout=timeout,
             fallback_model=fallback,
+            retries=base.retries,
         )
 
     def get_fallback(self, task_name: str) -> TaskConfig | None:
@@ -223,6 +229,7 @@ class ModelRouter:
                 temperature=base.temperature,
                 max_tokens=base.max_tokens,
                 timeout=base.timeout,
+                retries=base.retries,
             )
         return None
 
