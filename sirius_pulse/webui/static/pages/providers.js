@@ -18,7 +18,7 @@ const $ = scopedPage.$;
 
 const BUILTIN_TYPES = [
   'deepseek', 'aliyun-bailian', 'bigmodel', 'mimo', 'mimo-tokenplan', 'siliconflow',
-  'volcengine-ark', 'ytea',
+  'volcengine-ark', 'ytea', 'opencode', 'opencode-go',
 ];
 
 const TYPE_OPTIONS = [
@@ -31,6 +31,8 @@ const TYPE_OPTIONS = [
   { value: 'siliconflow', label: 'SiliconFlow' },
   { value: 'volcengine-ark', label: '火山方舟' },
   { value: 'ytea', label: 'YTea' },
+  { value: 'opencode', label: 'OpenCode Zen' },
+  { value: 'opencode-go', label: 'OpenCode GO' },
 ];
 
 const DEFAULT_URLS = {
@@ -43,6 +45,8 @@ const DEFAULT_URLS = {
   'siliconflow': 'https://api.siliconflow.cn',
   'volcengine-ark': 'https://ark.cn-beijing.volces.com/api/v3',
   'ytea': 'https://api.ytea.top',
+  'opencode': 'https://opencode.ai/zen/v1',
+  'opencode-go': 'https://opencode.ai/zen/go/v1',
 };
 
 const TYPE_LABEL_MAP = Object.fromEntries(TYPE_OPTIONS.map(o => [o.value, o.label]));
