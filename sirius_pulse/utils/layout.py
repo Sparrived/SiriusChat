@@ -48,6 +48,10 @@ class WorkspaceLayout:
     def provider_registry_path(self) -> Path:
         return self.providers_dir() / "provider_keys.json"
 
+    def provider_proxy_path(self) -> Path:
+        """全局网络代理配置文件路径。"""
+        return self.providers_dir() / "proxy.json"
+
     def sessions_dir(self) -> Path:
         return self.data_root / "sessions"
 

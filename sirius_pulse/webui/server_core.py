@@ -14,12 +14,20 @@ from typing import Any, cast
 from aiohttp import web
 
 from sirius_pulse.providers.base import AsyncLLMProvider
+from sirius_pulse.providers.proxy import (
+    ProxySettings,
+    load_proxy_settings,
+    save_proxy_settings,
+)
 from sirius_pulse.providers.routing import (
     ProviderConfig,
+    ProviderRegistry,
     WorkspaceProviderManager,
     _create_provider_instance,
     ensure_provider_platform_supported,
+    normalize_provider_name,
     probe_provider_availability,
+    probe_provider_models,
 )
 from sirius_pulse.webui.app_keys import AUTH_MANAGER_KEY, DATA_DIR_KEY, WS_MANAGER_KEY
 from sirius_pulse.webui.auth import AuthManager
@@ -96,6 +104,7 @@ class WebUIServer:
         self._embedding_error: str = ""
         self._embedding_port: int = 18900
         self._load_global_config()
+        load_proxy_settings(self.data_dir)
         self.auth_manager.get_or_create_admin_password()
         self._setup_routes()
         setup_ws_routes(self.app, self.ws_manager)
@@ -363,14 +372,18 @@ class WebUIServer:
 
     @staticmethod
     def _provider_mapping_from_payload(payload: Any) -> dict[str, dict[str, Any]]:
+        """Normalize registry mappings/lists while retaining explicit names."""
         if isinstance(payload, dict) and "providers" in payload:
             payload = payload["providers"]
 
         if isinstance(payload, dict):
             providers: dict[str, dict[str, Any]] = {}
-            for name, cfg in payload.items():
-                if isinstance(cfg, dict):
-                    providers[str(name)] = dict(cfg)
+            for source_name, cfg in payload.items():
+                if not isinstance(cfg, dict):
+                    continue
+                item = dict(cfg)
+                item.setdefault("name", str(source_name))
+                providers[str(source_name)] = item
             return providers
 
         if isinstance(payload, list):
@@ -378,20 +391,70 @@ class WebUIServer:
             for idx, cfg in enumerate(payload):
                 if not isinstance(cfg, dict):
                     continue
-                name = str(
-                    cfg.get("name")
-                    or cfg.get("type")
-                    or cfg.get("platform_type")
-                    or f"provider-{idx}"
-                ).strip()
-                if not name:
-                    name = f"provider-{idx}"
-                if name in providers:
-                    name = f"{name}-{idx}"
-                providers[name] = {k: v for k, v in cfg.items() if k != "name"}
+                name = (
+                    str(
+                        cfg.get("name")
+                        or cfg.get("type")
+                        or cfg.get("platform_type")
+                        or f"provider-{idx + 1}"
+                    ).strip()
+                    or f"provider-{idx + 1}"
+                )
+                if name.casefold() in {key.casefold() for key in providers}:
+                    suffix = 2
+                    while f"{name}-{suffix}".casefold() in {key.casefold() for key in providers}:
+                        suffix += 1
+                    name = f"{name}-{suffix}"
+                item = dict(cfg)
+                item["name"] = name
+                providers[name] = item
             return providers
 
         return {}
+
+    @staticmethod
+    def _replace_provider_model_scopes(value: Any, renames: dict[str, str]) -> Any:
+        """Recursively replace ``old-provider/model`` references."""
+        if isinstance(value, str):
+            scope, separator, model = value.partition("/")
+            if separator and model:
+                replacement = next(
+                    (new for old, new in renames.items() if old.casefold() == scope.casefold()),
+                    None,
+                )
+                if replacement is not None:
+                    return f"{replacement}/{model}"
+            return value
+        if isinstance(value, list):
+            return [WebUIServer._replace_provider_model_scopes(item, renames) for item in value]
+        if isinstance(value, dict):
+            return {
+                key: WebUIServer._replace_provider_model_scopes(item, renames)
+                for key, item in value.items()
+            }
+        return value
+
+    def _migrate_provider_model_references(self, renames: dict[str, str]) -> None:
+        """Update persisted persona orchestration after Provider renames."""
+        if not renames:
+            return
+        personas_dir = self.data_dir / "personas"
+        if not personas_dir.exists():
+            return
+        for path in personas_dir.rglob("orchestration.json"):
+            try:
+                original = json.loads(path.read_text(encoding="utf-8"))
+                migrated = self._replace_provider_model_scopes(original, renames)
+                if migrated == original:
+                    continue
+                tmp = path.with_suffix(path.suffix + ".tmp")
+                tmp.write_text(
+                    json.dumps(migrated, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+                tmp.replace(path)
+            except Exception:
+                LOG.warning("迁移 Provider 模型引用失败: %s", path, exc_info=True)
 
     def _notify_provider_reload(self) -> None:
         """向当前人格写入 provider 重载标志。"""
@@ -446,23 +509,77 @@ class WebUIServer:
                 pass
 
         existing_providers = self._provider_mapping_from_payload(data)
-        incoming_providers = self._provider_mapping_from_payload(body.get("providers", {}))
+        incoming_payload = body.get("providers", {})
+        if isinstance(incoming_payload, list):
+            incoming_names: set[str] = set()
+            for idx, cfg in enumerate(incoming_payload):
+                if not isinstance(cfg, dict):
+                    continue
+                raw_name = str(
+                    cfg.get("name")
+                    or cfg.get("type")
+                    or cfg.get("platform_type")
+                    or f"provider-{idx + 1}"
+                )
+                try:
+                    checked_name = normalize_provider_name(raw_name)
+                except ValueError as exc:
+                    return _json_response({"error": str(exc)}, 400)
+                name_key = checked_name.casefold()
+                if name_key in incoming_names:
+                    return _json_response({"error": f"Provider 名称重复：{checked_name}"}, 400)
+                incoming_names.add(name_key)
+        incoming_providers = self._provider_mapping_from_payload(incoming_payload)
         saved_providers: dict[str, dict[str, Any]] = {}
-        for provider, cfg in incoming_providers.items():
-            existing = existing_providers.get(provider, {})
+        seen_names: set[str] = set()
+        renames: dict[str, str] = {}
+        for source_name, cfg in incoming_providers.items():
+            requested_name = str(cfg.get("name") or source_name).strip()
+            try:
+                provider_name = normalize_provider_name(requested_name)
+            except ValueError as exc:
+                return _json_response({"error": str(exc)}, 400)
+            name_key = provider_name.casefold()
+            if name_key in seen_names:
+                return _json_response({"error": f"Provider 名称重复：{provider_name}"}, 400)
+            seen_names.add(name_key)
+
+            # original_name identifies the stored entry during a rename.  It
+            # is deliberately separate from the new display/routing name.
+            original_name = str(cfg.get("original_name") or source_name).strip()
+            existing_key = next(
+                (key for key in existing_providers if key.casefold() == original_name.casefold()),
+                None,
+            )
+            if existing_key is None:
+                existing_key = next(
+                    (
+                        key
+                        for key in existing_providers
+                        if key.casefold() == provider_name.casefold()
+                    ),
+                    None,
+                )
+            existing = existing_providers.get(existing_key, {}) if existing_key else {}
+            if existing_key is not None and existing_key != provider_name:
+                renames[existing_key] = provider_name
             saved = dict(existing)
             provider_type = str(
                 cfg.get("type")
                 or cfg.get("platform_type")
                 or existing.get("type")
                 or existing.get("platform_type")
-                or provider
+                or provider_name
             ).strip()
             if provider_type:
                 saved["type"] = provider_type
+            # The mapping key is the canonical persisted name.  Do not
+            # duplicate it in the entry; ProviderRegistry exposes it as the
+            # explicit ``ProviderConfig.name`` field when loaded.
+            saved.pop("name", None)
             saved.pop("platform_type", None)
             for key, value in cfg.items():
-                if key in {"name", "platform_type"}:
+                if key in {"name", "original_name", "platform_type"}:
                     continue
                 if key == "api_key":
                     api_key = str(value or "").strip()
@@ -470,14 +587,17 @@ class WebUIServer:
                         continue
                     saved["api_key"] = api_key
                     continue
+                if key == "models_url" and not str(value or "").strip() and saved.get("models_url"):
+                    continue
                 saved[key] = value
-            saved_providers[provider] = saved
+            saved_providers[provider_name] = saved
         data["providers"] = saved_providers
 
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(path.suffix + ".tmp")
         tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         tmp.replace(path)
+        self._migrate_provider_model_references(renames)
         self._notify_provider_reload()
         return _json_response({"success": True})
 
@@ -505,8 +625,15 @@ class WebUIServer:
         except Exception:
             return _json_response({"error": "读取 Provider 配置失败"}, 500)
 
-        raw_providers = data.get("providers", {}) if isinstance(data, dict) else {}
-        provider_cfg = raw_providers.get(provider_name)
+        raw_providers = self._provider_mapping_from_payload(data)
+        provider_cfg = next(
+            (
+                cfg
+                for key, cfg in raw_providers.items()
+                if key.casefold() == provider_name.casefold()
+            ),
+            None,
+        )
         if not provider_cfg or not isinstance(provider_cfg, dict):
             return _json_response({"error": f"未找到 Provider: {provider_name}"}, 404)
 
@@ -533,6 +660,7 @@ class WebUIServer:
             base_url=base_url,
             healthcheck_model=healthcheck_model,
             enabled=True,
+            name=provider_name,
         )
 
         try:
@@ -548,6 +676,110 @@ class WebUIServer:
         except Exception as exc:
             latency = round((time.monotonic() - t0) * 1000)
             return _json_response({"success": False, "error": str(exc), "latency_ms": latency})
+
+    # ─── 全局 API: Provider 模型探测 / 网络代理 ───────────────
+
+    async def api_providers_models_probe(self, request: web.Request) -> web.Response:
+        """通过 Provider 的 models 接口探测可用模型列表。
+
+        请求体两种形态：
+        - ``{"name": "<已保存 provider 名>"}``：使用磁盘上的真实配置
+          （API Key 由服务端读取，前端脱敏值不会被回传）。
+        - ``{"type": ..., "base_url": ..., "api_key": ..., "models_url": ...}``：
+          直接使用草稿配置探测（用于新建或未保存的 Provider）。
+        """
+        try:
+            body = await request.json()
+        except Exception:
+            return _json_response({"error": "Invalid JSON"}, 400)
+
+        provider_type = str(body.get("type", "")).strip()
+        base_url = str(body.get("base_url", "")).strip()
+        api_key = str(body.get("api_key", "")).strip()
+        models_url = str(body.get("models_url", "")).strip()
+        provider_name = str(body.get("name", "")).strip()
+
+        if provider_name:
+            path = self._provider_keys_path()
+            if not path.exists():
+                return _json_response({"error": "Provider 配置文件不存在"}, 404)
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except Exception:
+                return _json_response({"error": "读取 Provider 配置失败"}, 500)
+            raw_providers = self._provider_mapping_from_payload(data)
+            raw_cfg = next(
+                (
+                    cfg
+                    for key, cfg in raw_providers.items()
+                    if key.casefold() == provider_name.casefold()
+                ),
+                None,
+            )
+            if not isinstance(raw_cfg, dict):
+                return _json_response({"error": f"未找到 Provider: {provider_name}"}, 404)
+            provider_type = (
+                str(raw_cfg.get("type") or raw_cfg.get("platform_type") or provider_name)
+            ).strip()
+            api_key = str(raw_cfg.get("api_key", "")).strip()
+            inline_key = str(body.get("api_key", "") or "").strip()
+            if inline_key and "****" not in inline_key:
+                # 用户在编辑卡片里重新输入了真实 Key（未脱敏），以用户输入为准
+                api_key = inline_key
+            if not base_url:
+                base_url = str(raw_cfg.get("base_url", "")).strip()
+            if not models_url:
+                models_url = str(raw_cfg.get("models_url", "")).strip()
+        else:
+            # 草稿探测：body 中的 api_key 是前端刚输入的真实值
+            if not provider_type:
+                return _json_response({"error": "缺少 provider 类型"}, 400)
+
+        if not provider_type:
+            return _json_response({"error": "缺少 provider 类型"}, 400)
+
+        try:
+            normalized_type = ensure_provider_platform_supported(provider_type)
+        except Exception as exc:
+            return _json_response({"error": str(exc)}, 400)
+
+        try:
+            model_ids, used_url = await probe_provider_models(
+                provider_type=normalized_type,
+                api_key=api_key,
+                base_url=base_url,
+                models_url=models_url,
+            )
+        except Exception as exc:
+            LOG.warning("models 接口探测失败: %s", exc)
+            return _json_response({"success": False, "error": str(exc)})
+        return _json_response({"success": True, "models": model_ids, "models_url": used_url})
+
+    async def api_providers_proxy_get(self, request: web.Request) -> web.Response:
+        """返回全局网络代理配置。"""
+        settings = load_proxy_settings(self.data_dir)
+        return _json_response({"proxy": settings.to_dict()})
+
+    async def api_providers_proxy_post(self, request: web.Request) -> web.Response:
+        """保存全局网络代理配置（http / https / no_proxy）。"""
+        try:
+            body = await request.json()
+        except Exception:
+            return _json_response({"error": "Invalid JSON"}, 400)
+
+        settings = ProxySettings(
+            http=str(body.get("http", "")).strip(),
+            https=str(body.get("https", "")).strip(),
+            no_proxy=str(body.get("no_proxy", "")).strip(),
+        )
+        try:
+            save_proxy_settings(self.data_dir, settings)
+        except Exception as exc:
+            LOG.warning("保存代理配置失败", exc_info=True)
+            return _json_response({"error": f"保存代理配置失败: {exc}"}, 500)
+        # 通知各人格子进程重建 provider，使代理配置立即生效
+        self._notify_provider_reload()
+        return _json_response({"success": True, "proxy": settings.to_dict()})
 
     async def api_providers_refresh_models(self, request: web.Request) -> web.Response:
         """从 models.dev 刷新模型数据。
@@ -615,26 +847,29 @@ class WebUIServer:
         return _json_response({"provider_type": provider_type, "models": models})
 
     def _load_providers_raw(self) -> list[dict[str, Any]]:
-        """读取 provider 列表（API Key 脱敏），供多个端点复用。"""
-        path = self._provider_keys_path()
-        if not path.exists():
-            return []
+        """读取已规范化的 Provider 列表（API Key 脱敏）。"""
         try:
-            data = json.loads(path.read_text(encoding="utf-8"))
+            loaded = ProviderRegistry(self.data_dir).load()
             providers: list[dict[str, Any]] = []
-            raw_providers = self._provider_mapping_from_payload(data)
-            for k, v in raw_providers.items():
-                if isinstance(v, dict):
-                    provider_type = str(v.get("type") or v.get("platform_type") or k).strip()
-                    providers.append(
-                        {
-                            **v,
-                            "name": k,
-                            "type": provider_type,
-                            "platform_type": provider_type,
-                            "api_key": self._mask_api_key(v.get("api_key", "")),
-                        }
-                    )
+            for name, config in loaded.items():
+                item: dict[str, Any] = {
+                    "name": name,
+                    "type": config.provider_type,
+                    "platform_type": config.provider_type,
+                    "api_key": self._mask_api_key(config.api_key),
+                }
+                # Keep the compact legacy response shape for empty optional
+                # fields while exposing every configured value to the UI.
+                if config.base_url:
+                    item["base_url"] = config.base_url
+                if config.models:
+                    item["models"] = list(config.models)
+                if config.healthcheck_model:
+                    item["healthcheck_model"] = config.healthcheck_model
+                if config.models_url:
+                    item["models_url"] = config.models_url
+                item["enabled"] = config.enabled
+                providers.append(item)
             return providers
         except Exception:
             LOG.warning("读取 provider_keys 失败", exc_info=True)

@@ -19,6 +19,7 @@ _SESSION_CONFIG_COMMENTS = {
     "max_recent_participant_messages": "每个参与者额外保留的最近发言条数。",
     "enable_auto_compression": "超过上下文预算时是否自动压缩历史。",
     "provider": "旧版单 provider 兼容字段。新配置优先使用 providers 列表。",
+    "provider.name": "Provider 全局唯一识别名称，用于 name/model 路由。",
     "provider.type": "Provider 类型，例如 openai-compatible / deepseek / opencode / opencode-go。",
     "provider.base_url": "Provider 基地址。留空时使用该平台默认值。",
     "provider.api_key": "Provider API Key。",
@@ -26,6 +27,7 @@ _SESSION_CONFIG_COMMENTS = {
     "provider.enabled": "是否启用该 provider。",
     "provider.models": "显式声明该 provider 可处理的模型列表；自动路由时优先按这里精确匹配。",
     "providers": "Provider 列表。main.py 和 sirius-chat CLI 会优先读取这个字段。",
+    "providers[].name": "Provider 全局唯一识别名称，用于 name/model 路由。",
     "providers[].type": "Provider 类型，例如 openai-compatible / deepseek / opencode / opencode-go。",
     "providers[].base_url": "Provider 基地址。留空时使用该平台默认值。",
     "providers[].api_key": "Provider API Key。",
@@ -152,6 +154,7 @@ def build_default_orchestration_payload() -> dict[str, Any]:
 
 def build_default_session_config_payload() -> dict[str, Any]:
     sample_provider = {
+        "name": "openai-compatible",
         "type": "openai-compatible",
         "base_url": "https://api.openai.com",
         "api_key": "your-api-key-here",

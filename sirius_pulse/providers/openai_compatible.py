@@ -18,6 +18,7 @@ from sirius_pulse.providers.base import (
     resolve_generation_timeout_seconds,
     set_last_generation_usage,
 )
+from sirius_pulse.providers.proxy import httpx_proxy_kwargs
 from sirius_pulse.providers.response_utils import extract_assistant_text
 
 logger = logging.getLogger(__name__)
@@ -77,7 +78,7 @@ class OpenAICompatibleProvider(AsyncLLMProvider):
         }
 
         try:
-            async with httpx.AsyncClient(timeout=timeout_seconds) as client:
+            async with httpx.AsyncClient(timeout=timeout_seconds, **httpx_proxy_kwargs()) as client:
                 response = await client.post(url, content=body, headers=headers)
                 status_code = response.status_code
                 content_type = str(response.headers.get("Content-Type", "")).strip()
@@ -172,9 +173,7 @@ class OpenAICompatibleProvider(AsyncLLMProvider):
             finish_reason=finish_reason,
         )
 
-        logger.info(
-            f"{self._provider_name} 的 {request.model} 回复我了，写了 {len(content or '')} 个字～"
-        )
+        logger.info(f"{self._provider_name} 的 {request.model} 回复我了，写了 {len(content or '')} 个字～")
         logger.debug(
             f"[模型输出] {request.model} | Provider: {self._provider_name} | URL: {url} | 响应内容:\n{content}"
         )
@@ -199,7 +198,7 @@ class OpenAICompatibleProvider(AsyncLLMProvider):
             "Authorization": f"Bearer {self._api_key}",
         }
 
-        async with httpx.AsyncClient(timeout=timeout_seconds) as client:
+        async with httpx.AsyncClient(timeout=timeout_seconds, **httpx_proxy_kwargs()) as client:
             async with client.stream("POST", url, json=wire_payload, headers=headers) as response:
                 if response.status_code >= 400:
                     body = await response.aread()

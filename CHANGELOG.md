@@ -6,6 +6,9 @@
 
 ### Added
 
+- **Provider 唯一名称与同端点多 Key 路由**：Provider 新增可修改且全局唯一的 `name`，模型选择与运行时统一使用 `name/model` 路由；相同平台和 API 端点的不同 API Key 可并存。旧配置会自动生成并写回唯一名称，改名时同步迁移人格编排中的模型引用。
+- **WebUI 网络代理设置**：Provider 页面新增「网络代理设置」卡片（http / https / no_proxy），配置持久化到 `providers/proxy.json`。OpenAI 兼容请求、models 接口探测与 models.dev 拉取统一生效，保存后通过 provider 重载通知立即应用。
+- **models 接口模型探测**：Provider 编辑卡片与添加弹窗新增「探测模型」按钮，`POST /api/providers/models-probe` 调用 Provider 自身的 `models` 接口（支持 `models_url` 显式指定与 `<base>/models`、`<base>/v1/models` 候选回退，兼容 OpenAI / Ollama / 数组响应格式），自动合并模型到列表；已保存 Provider 由服务端读取真实 API Key。
 - **OpenCode Provider**：新增 `OpenCodeProvider`（OpenCode Zen）与 `OpenCodeGoProvider`（OpenCode GO 订阅），适配 opencode.ai 官方 OpenAI 兼容接口（`https://opencode.ai/zen/v1` / `https://opencode.ai/zen/go/v1`，均走 `/chat/completions`）。支持 `opencode-zen`、`opencode_go` 等别名与 base URL 自动补全 `/v1`，WebUI Provider 页面已同步新增"OpenCode Zen"和"OpenCode GO"类型。
 - **小米 MiMo Provider**：新增 `MimoProvider` 和 `MimoTokenPlanProvider`，适配小米 MIMO 平台 OpenAI 兼容接口。`MimoProvider` 支持按量付费（`https://api.xiaomimimo.com/v1`，API Key 格式 `sk-xxx`），`MimoTokenPlanProvider` 支持 Token Plan 订阅制（`https://token-plan-cn.xiaomimimo.com/v1`，API Key 格式 `tp-xxx`）。WebUI Provider 页面已同步更新，支持选择"小米 MiMo"和"小米 MiMo Token Plan"类型。
 - **记忆可视化 WebUI 页面**：新增 `memory-viz.html` 记忆浏览器与知识图谱可视化，后端 `memory_api.py` 提供记忆 CRUD、搜索、知识图谱、统计 API。

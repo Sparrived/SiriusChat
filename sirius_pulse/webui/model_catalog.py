@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from pathlib import Path
 from typing import Any, TypedDict
@@ -31,64 +30,45 @@ def build_model_catalog(data_path: Any) -> ModelCatalog:
     seen_models: set[str] = set()
     seen_choices: set[str] = set()
     provider_models: dict[str, list[str]] = {}
+    provider_types: dict[str, str] = {}
 
     try:
-        for provider_type, models in _configured_provider_models(Path(data_path)):
-            if provider_type not in provider_models:
-                provider_models[provider_type] = []
-            provider_models[provider_type].extend(models)
+        for provider_name, provider_type, models in _configured_provider_models(Path(data_path)):
+            provider_models[provider_name] = list(models)
+            provider_types[provider_name] = provider_type
             for model in models:
                 if model not in seen_models:
                     seen_models.add(model)
                     available_models.append(model)
-                composite = format_model_choice_value(provider_type, model)
+                composite = format_model_choice_value(provider_name, model)
                 if composite in seen_choices:
                     continue
                 seen_choices.add(composite)
-                model_choices.append({"label": composite, "value": composite})
+                model_choices.append(
+                    {
+                        "label": f"{provider_name}/{model}",
+                        "value": composite,
+                    }
+                )
     except Exception:
         LOG.warning("获取模型列表失败", exc_info=True)
 
-    enrich_model_choices(data_path, model_choices, provider_models)
+    enrich_model_choices(data_path, model_choices, provider_models, provider_types)
     return {"available_models": available_models, "model_choices": model_choices}
 
 
-def format_model_choice_value(provider_type: str, model_id: str) -> str:
-    return f"{provider_type}/{model_id}"
+def format_model_choice_value(provider_name: str, model_id: str) -> str:
+    return f"{provider_name}/{model_id}"
 
 
-def _configured_provider_models(data_path: Path) -> list[tuple[str, list[str]]]:
-    path = WorkspaceProviderManager(data_path).path
-    if not path.exists():
-        return []
-
-    raw = json.loads(path.read_text(encoding="utf-8"))
-    providers = raw.get("providers", {}) if isinstance(raw, dict) else {}
-    entries: list[tuple[str, dict[str, Any]]] = []
-    if isinstance(providers, dict):
-        entries = [(str(name), cfg) for name, cfg in providers.items() if isinstance(cfg, dict)]
-    elif isinstance(providers, list):
-        entries = [
-            (str(cfg.get("name") or cfg.get("type") or cfg.get("platform_type") or idx), cfg)
-            for idx, cfg in enumerate(providers)
-            if isinstance(cfg, dict)
-        ]
-
-    result: list[tuple[str, list[str]]] = []
-    for name, cfg in entries:
-        if not bool(cfg.get("enabled", True)):
+def _configured_provider_models(data_path: Path) -> list[tuple[str, str, list[str]]]:
+    """Return enabled models keyed by the registry's canonical Provider name."""
+    providers = WorkspaceProviderManager(data_path).load()
+    result: list[tuple[str, str, list[str]]] = []
+    for provider_name, config in providers.items():
+        if not config.enabled or not config.api_key.strip() or not config.models:
             continue
-        if not str(cfg.get("api_key", "")).strip():
-            continue
-        provider_type = normalize_provider_type(
-            str(cfg.get("type") or cfg.get("platform_type") or name)
-        )
-        models_raw = cfg.get("models", [])
-        if not isinstance(models_raw, list):
-            continue
-        models = [str(model).strip() for model in models_raw if str(model).strip()]
-        if models:
-            result.append((provider_type, models))
+        result.append((provider_name, config.provider_type, list(config.models)))
     return result
 
 
@@ -96,21 +76,27 @@ def enrich_model_choices(
     data_path: Any,
     model_choices: list[ModelChoice],
     provider_models: dict[str, list[str]] | None = None,
+    provider_types: dict[str, str] | None = None,
 ) -> None:
     """Enrich model choices with provider-aware models.dev capability tags."""
     try:
         data = ModelsDevCache(Path(data_path)).get()
         if not data:
             return
-        provider_types = (
+        provider_names = (
             list(provider_models) if provider_models is not None else _provider_types(model_choices)
         )
-        tag_index = _build_capability_tag_index(data, provider_types)
+        type_by_name = provider_types or {
+            provider_name: normalize_provider_type(provider_name)
+            for provider_name in provider_names
+        }
+        tag_index = _build_capability_tag_index(data, type_by_name)
         for choice in model_choices:
             parsed = parse_model_choice_value(choice["value"])
             if parsed is None:
                 continue
-            tags = tag_index.get(parsed)
+            provider_name, model_id = parsed
+            tags = tag_index.get((provider_name, model_id))
             if tags:
                 choice["tags"] = tags
     except Exception:
@@ -140,17 +126,17 @@ def _provider_types(model_choices: list[ModelChoice]) -> list[str]:
 
 def _build_capability_tag_index(
     data: dict[str, Any],
-    provider_types: list[str],
+    provider_types: dict[str, str],
 ) -> dict[tuple[str, str], list[str]]:
     index: dict[tuple[str, str], list[str]] = {}
-    for provider_type in provider_types:
+    for provider_name, provider_type in provider_types.items():
         for item in list_provider_model_details(data, provider_type):
             model_id = str(item.get("id", "")).strip()
             if not model_id:
                 continue
             tags = _capability_tags(item)
             if tags:
-                index[(provider_type, model_id)] = tags
+                index[(provider_name, model_id)] = tags
     return index
 
 

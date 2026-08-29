@@ -6,10 +6,11 @@ from types import SimpleNamespace
 import pytest
 from aiohttp import web
 
-from sirius_pulse.utils.json_io import atomic_write_json
 from sirius_pulse.config import TokenUsageRecord
 from sirius_pulse.token.token_store import TokenUsageStore
+from sirius_pulse.utils.json_io import atomic_write_json
 from sirius_pulse.webui import persona_manager_api as persona_manager
+from sirius_pulse.webui.app_keys import DATA_DIR_KEY
 from sirius_pulse.webui.memory_api import api_persona_tokens_get
 from sirius_pulse.webui.persona_api import (
     _resolve_persona_log_file,
@@ -17,7 +18,6 @@ from sirius_pulse.webui.persona_api import (
     api_persona_logs_get,
     api_system_logs_get,
 )
-from sirius_pulse.webui.app_keys import DATA_DIR_KEY
 from sirius_pulse.webui.routes import WEBUI_ROUTES
 from sirius_pulse.webui.server import DELEGATED_HANDLERS, WebUIServer
 
@@ -31,6 +31,16 @@ def _route_snapshot(app: web.Application) -> set[tuple[str, str]]:
             continue
         routes.add((route.method, path))
     return routes
+
+
+class _FakeJsonRequest:
+    """最小 aiohttp 请求替身：只提供 await request.json()。"""
+
+    def __init__(self, payload: dict[str, object]) -> None:
+        self._payload = payload
+
+    async def json(self) -> dict[str, object]:
+        return self._payload
 
 
 @pytest.mark.asyncio
@@ -180,7 +190,9 @@ async def test_webui_persona_stop_when_worker_is_injected_then_shutdown_is_reque
 
 
 @pytest.mark.asyncio
-async def test_webui_persona_stop_when_worker_targets_other_persona_then_shutdown_is_skipped(tmp_path):
+async def test_webui_persona_stop_when_worker_targets_other_persona_then_shutdown_is_skipped(
+    tmp_path,
+):
     active_dir = tmp_path / "personas" / "sirius"
     other_dir = tmp_path / "personas" / "other"
     active_dir.mkdir(parents=True)
@@ -268,7 +280,12 @@ async def test_persona_start_when_not_running_then_spawns_worker_process(tmp_pat
     assert payload["started"] is True
     assert payload["pid"] == 24680
     assert saved["active_persona"] == "sirius"
-    assert calls[0]["command"][1:5] == ["-m", "sirius_pulse.persona_worker", "--config", str(persona_dir)]
+    assert calls[0]["command"][1:5] == [
+        "-m",
+        "sirius_pulse.persona_worker",
+        "--config",
+        str(persona_dir),
+    ]
     assert calls[0]["command"][-2:] == ["--log-level", "DEBUG"]
     assert calls[0]["kwargs"]["cwd"] == str(tmp_path.parent)
 
@@ -303,7 +320,9 @@ async def test_persona_start_when_previous_spawn_is_starting_then_does_not_spawn
 
 
 @pytest.mark.asyncio
-async def test_persona_start_when_two_personas_are_requested_then_spawns_both_workers(tmp_path, monkeypatch):
+async def test_persona_start_when_two_personas_are_requested_then_spawns_both_workers(
+    tmp_path, monkeypatch
+):
     first_dir = tmp_path / "personas" / "first"
     second_dir = tmp_path / "personas" / "second"
     for persona_dir in (first_dir, second_dir):
@@ -331,8 +350,12 @@ async def test_persona_start_when_two_personas_are_requested_then_spawns_both_wo
     assert len(calls) == 2
     assert str(first_dir) in calls[0]
     assert str(second_dir) in calls[1]
-    assert json.loads((first_dir / "engine_state" / "worker_status.json").read_text())["pid"] == 30001
-    assert json.loads((second_dir / "engine_state" / "worker_status.json").read_text())["pid"] == 30002
+    assert (
+        json.loads((first_dir / "engine_state" / "worker_status.json").read_text())["pid"] == 30001
+    )
+    assert (
+        json.loads((second_dir / "engine_state" / "worker_status.json").read_text())["pid"] == 30002
+    )
     config = json.loads((tmp_path / "global_config.json").read_text())
     assert config["active_personas"] == ["first", "second"]
     assert config["active_persona"] == "first"
@@ -411,7 +434,9 @@ async def test_webui_monitoring_overview_includes_all_personas(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_persona_stop_when_external_worker_is_running_then_sends_sigterm(tmp_path, monkeypatch):
+async def test_persona_stop_when_external_worker_is_running_then_sends_sigterm(
+    tmp_path, monkeypatch
+):
     persona_dir = tmp_path / "personas" / "sirius"
     persona_dir.mkdir(parents=True)
     atomic_write_json(tmp_path / "global_config.json", {"active_persona": "sirius"})
@@ -472,6 +497,32 @@ async def test_webui_providers_get_when_registry_exists_then_returns_masked_prov
 
 
 @pytest.mark.asyncio
+async def test_webui_providers_get_when_legacy_list_has_duplicate_names_then_migrates_unique_names(
+    tmp_path,
+):
+    path = tmp_path / "providers" / "provider_keys.json"
+    atomic_write_json(
+        path,
+        {
+            "providers": [
+                {"name": "openai", "type": "openai-compatible", "api_key": "sk-one"},
+                {"name": "openai", "type": "openai-compatible", "api_key": "sk-two"},
+            ]
+        },
+    )
+    server = WebUIServer(data_dir=tmp_path)
+
+    response = await server.api_providers_get(SimpleNamespace())
+    payload = json.loads(response.text)
+    saved = json.loads(path.read_text(encoding="utf-8"))
+
+    assert response.status == 200
+    assert [item["name"] for item in payload["providers"]] == ["openai", "openai-2"]
+    assert [item["api_key"] for item in payload["providers"]] == ["sk-o****", "sk-t****"]
+    assert list(saved["providers"]) == ["openai", "openai-2"]
+
+
+@pytest.mark.asyncio
 async def test_webui_providers_get_when_registry_uses_legacy_list_then_returns_providers(tmp_path):
     atomic_write_json(
         tmp_path / "providers" / "provider_keys.json",
@@ -526,9 +577,7 @@ async def test_orchestration_get_when_persona_scoped_then_uses_global_provider_m
     )
     payload = json.loads(response.text)
 
-    assert [choice["value"] for choice in payload["model_choices"]] == [
-        "deepseek/deepseek-chat"
-    ]
+    assert [choice["value"] for choice in payload["model_choices"]] == ["deepseek/deepseek-chat"]
 
 
 @pytest.mark.asyncio
@@ -589,7 +638,84 @@ async def test_webui_providers_post_when_key_is_masked_then_preserves_secret_and
             }
         }
     }
-    assert (tmp_path / "engine_state" / "reload_requested").read_text(encoding="utf-8") == "provider"
+    assert (tmp_path / "engine_state" / "reload_requested").read_text(
+        encoding="utf-8"
+    ) == "provider"
+
+
+@pytest.mark.asyncio
+async def test_webui_providers_post_when_name_changes_then_rekeys_and_migrates_models(tmp_path):
+    provider_path = tmp_path / "providers" / "provider_keys.json"
+    orchestration_path = tmp_path / "personas" / "sirius" / "engine_state" / "orchestration.json"
+    atomic_write_json(
+        provider_path,
+        {
+            "providers": {
+                "team-a": {
+                    "type": "openai-compatible",
+                    "api_key": "sk-secret",
+                    "models": ["shared-model"],
+                }
+            }
+        },
+    )
+    atomic_write_json(
+        orchestration_path,
+        {
+            "chat_model": "team-a/shared-model",
+            "task_models": {"memory_extract": "team-a/shared-model"},
+        },
+    )
+    server = WebUIServer(data_dir=tmp_path)
+
+    async def json_body():
+        return {
+            "providers": [
+                {
+                    "name": "team-b",
+                    "original_name": "team-a",
+                    "type": "openai-compatible",
+                    "api_key": "sk-s****",
+                    "models": ["shared-model"],
+                    "enabled": True,
+                }
+            ]
+        }
+
+    response = await server.api_providers_post(SimpleNamespace(json=json_body))
+    providers = json.loads(provider_path.read_text(encoding="utf-8"))["providers"]
+    orchestration = json.loads(orchestration_path.read_text(encoding="utf-8"))
+
+    assert response.status == 200
+    assert list(providers) == ["team-b"]
+    assert providers["team-b"]["api_key"] == "sk-secret"
+    assert orchestration["chat_model"] == "team-b/shared-model"
+    assert orchestration["task_models"]["memory_extract"] == "team-b/shared-model"
+
+
+@pytest.mark.asyncio
+async def test_webui_providers_post_when_names_duplicate_then_rejects(tmp_path):
+    path = tmp_path / "providers" / "provider_keys.json"
+    atomic_write_json(
+        path,
+        {"providers": {"existing": {"type": "deepseek", "api_key": "sk-existing"}}},
+    )
+    before = path.read_text(encoding="utf-8")
+    server = WebUIServer(data_dir=tmp_path)
+
+    async def json_body():
+        return {
+            "providers": [
+                {"name": "team-a", "type": "deepseek", "api_key": "sk-a"},
+                {"name": "TEAM-A", "type": "deepseek", "api_key": "sk-b"},
+            ]
+        }
+
+    response = await server.api_providers_post(SimpleNamespace(json=json_body))
+
+    assert response.status == 400
+    assert "名称重复" in json.loads(response.text)["error"]
+    assert path.read_text(encoding="utf-8") == before
 
 
 @pytest.mark.asyncio
@@ -601,3 +727,91 @@ async def test_engine_reload_writes_worker_reload_requested_flag(tmp_path):
     assert response.status == 200
     assert (tmp_path / "engine_state" / "reload_requested").read_text(encoding="utf-8") == "all"
     assert not (tmp_path / "engine_state" / "reload.flag").exists()
+
+
+@pytest.mark.asyncio
+async def test_webui_proxy_when_empty_then_returns_blank_and_posts_persist(tmp_path):
+    server = WebUIServer(data_dir=tmp_path)
+
+    response = await server.api_providers_proxy_get(SimpleNamespace())
+    payload = json.loads(response.text)
+    assert payload == {"proxy": {"http": "", "https": "", "no_proxy": ""}}
+
+    post_response = await server.api_providers_proxy_post(
+        _FakeJsonRequest({"http": "http://127.0.0.1:7890", "https": "", "no_proxy": "localhost"})
+    )
+    payload = json.loads(post_response.text)
+    assert payload["success"] is True
+    assert payload["proxy"]["http"] == "http://127.0.0.1:7890"
+
+    saved = json.loads((tmp_path / "providers" / "proxy.json").read_text(encoding="utf-8"))
+    assert saved == {"http": "http://127.0.0.1:7890", "https": "", "no_proxy": "localhost"}
+
+    get_response = await server.api_providers_proxy_get(SimpleNamespace())
+    assert json.loads(get_response.text)["proxy"]["http"] == "http://127.0.0.1:7890"
+
+
+@pytest.mark.asyncio
+async def test_webui_models_probe_when_draft_config_then_passes_inline_credentials(
+    tmp_path, monkeypatch
+):
+    captured: dict[str, object] = {}
+
+    async def _fake_probe(**kwargs):
+        captured.update(kwargs)
+        return ["kimi-k3", "glm-5.2"], "https://opencode.ai/zen/v1/models"
+
+    monkeypatch.setattr("sirius_pulse.webui.server_core.probe_provider_models", _fake_probe)
+    server = WebUIServer(data_dir=tmp_path)
+
+    response = await server.api_providers_models_probe(
+        _FakeJsonRequest(
+            {
+                "type": "opencode-go",
+                "base_url": "https://opencode.ai/zen/go/v1",
+                "api_key": "sk-draft",
+            }
+        )
+    )
+    payload = json.loads(response.text)
+
+    assert payload["success"] is True
+    assert payload["models"] == ["kimi-k3", "glm-5.2"]
+    assert captured["provider_type"] == "opencode-go"
+    assert captured["api_key"] == "sk-draft"
+    assert captured["base_url"] == "https://opencode.ai/zen/go/v1"
+
+
+@pytest.mark.asyncio
+async def test_webui_models_probe_when_named_provider_then_uses_stored_key(tmp_path, monkeypatch):
+    atomic_write_json(
+        tmp_path / "providers" / "provider_keys.json",
+        {
+            "providers": {
+                "deepseek": {
+                    "type": "deepseek",
+                    "api_key": "sk-stored-secret",
+                    "base_url": "https://api.deepseek.com",
+                    "models": ["deepseek-chat"],
+                }
+            }
+        },
+    )
+    captured: dict[str, object] = {}
+
+    async def _fake_probe(**kwargs):
+        captured.update(kwargs)
+        return ["deepseek-chat", "deepseek-reasoner"], "https://api.deepseek.com/models"
+
+    monkeypatch.setattr("sirius_pulse.webui.server_core.probe_provider_models", _fake_probe)
+    server = WebUIServer(data_dir=tmp_path)
+
+    # 前端对已保存 Provider 只回传脱敏 Key（含 ****），服务端应使用磁盘真实 Key
+    response = await server.api_providers_models_probe(
+        _FakeJsonRequest({"name": "deepseek", "api_key": "sk-****cret"})
+    )
+    payload = json.loads(response.text)
+
+    assert payload["success"] is True
+    assert captured["api_key"] == "sk-stored-secret"
+    assert captured["base_url"] == "https://api.deepseek.com"

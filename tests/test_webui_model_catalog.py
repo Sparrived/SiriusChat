@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from sirius_pulse.utils.json_io import atomic_write_json
 from sirius_pulse.webui.model_catalog import build_model_catalog, enrich_model_choices
@@ -191,6 +191,6 @@ def test_webui_model_catalog_when_same_type_providers_exist_then_keeps_all_confi
 
     assert catalog["available_models"] == ["gpt-primary", "gpt-secondary"]
     assert catalog["model_choices"] == [
-        {"label": "openai-compatible/gpt-primary", "value": "openai-compatible/gpt-primary"},
-        {"label": "openai-compatible/gpt-secondary", "value": "openai-compatible/gpt-secondary"},
+        {"label": "openai-primary/gpt-primary", "value": "openai-primary/gpt-primary"},
+        {"label": "openai-secondary/gpt-secondary", "value": "openai-secondary/gpt-secondary"},
     ]

@@ -22,11 +22,16 @@ from sirius_pulse.core.persona_store import PersonaStore
 from sirius_pulse.embedding.client import EmbeddingClient
 from sirius_pulse.memory.diary.vector_store import DiaryVectorStore
 from sirius_pulse.persona_config import PersonaConfigPaths, PersonaExperienceConfig
-from sirius_pulse.providers.routing import AutoRoutingProvider, ProviderConfig
+from sirius_pulse.providers.routing import (
+    AutoRoutingProvider,
+    ProviderConfig,
+    normalize_provider_name,
+    normalize_provider_type,
+)
+from sirius_pulse.token.token_store import TokenUsageStore
 from sirius_pulse.tools.executor import ToolExecutor
 from sirius_pulse.tools.mcp_client import MCPClientManager, load_mcp_config
 from sirius_pulse.tools.registry import ToolRegistry
-from sirius_pulse.token.token_store import TokenUsageStore
 
 LOG = logging.getLogger("sirius.platforms.runtime")
 MCP_STARTUP_TIMEOUT_SECONDS = 30.0
@@ -52,10 +57,13 @@ def _build_provider_from_config(config: dict[str, Any]) -> AutoRoutingProvider |
     for idx, item in enumerate(providers):
         if not isinstance(item, dict):
             continue
-        ptype = str(item.get("type", "")).strip()
+        ptype = normalize_provider_type(str(item.get("type") or item.get("platform_type") or ""))
         api_key = _resolve_api_key(str(item.get("api_key", "")))
         if not ptype or not api_key:
             continue
+        provider_name = normalize_provider_name(
+            str(item.get("name", "")).strip() or f"{ptype}-{idx + 1}"
+        )
         cfg = ProviderConfig(
             provider_type=ptype,
             api_key=api_key,
@@ -63,8 +71,9 @@ def _build_provider_from_config(config: dict[str, Any]) -> AutoRoutingProvider |
             healthcheck_model=str(item.get("healthcheck_model", "")).strip(),
             enabled=bool(item.get("enabled", True)),
             models=list(item.get("models", []) or []),
+            name=provider_name,
         )
-        entries[f"{ptype}_{idx}"] = cfg
+        entries[provider_name] = cfg
 
     if not entries:
         return None
@@ -73,10 +82,11 @@ def _build_provider_from_config(config: dict[str, Any]) -> AutoRoutingProvider |
 
 def _build_provider_from_env() -> AutoRoutingProvider | None:
     """从环境变量构建 provider（快速测试模式）。"""
-    ptype = os.getenv("SIRIUS_PROVIDER_TYPE", "openai-compatible").strip()
+    ptype = normalize_provider_type(os.getenv("SIRIUS_PROVIDER_TYPE", "openai-compatible").strip())
     api_key = _resolve_api_key(os.getenv("SIRIUS_API_KEY", ""))
     base_url = os.getenv("SIRIUS_BASE_URL", "").strip()
     model = os.getenv("SIRIUS_MODEL", "gpt-4o-mini").strip()
+    provider_name = os.getenv("SIRIUS_PROVIDER_NAME", "").strip() or ptype
 
     if not api_key:
         return None
@@ -88,8 +98,9 @@ def _build_provider_from_env() -> AutoRoutingProvider | None:
         healthcheck_model=model,
         enabled=True,
         models=[model] if model else [],
+        name=provider_name,
     )
-    return AutoRoutingProvider({ptype: cfg})
+    return AutoRoutingProvider({provider_name: cfg})
 
 
 class EngineRuntime:
@@ -291,9 +302,7 @@ class EngineRuntime:
         executor = getattr(self._engine, "_tool_executor", None)
         if executor is not None:
             executor.set_bridge(adapter_type, bridge)
-            LOG.info(
-                "平台 bridge 已注入 tool executor: %s → %s", adapter_type, type(bridge).__name__
-            )
+            LOG.info("平台 bridge 已注入 tool executor: %s → %s", adapter_type, type(bridge).__name__)
         # 同时直接存储在引擎上，方便 plugin 直接取用
         self._engine._adapter = bridge
 

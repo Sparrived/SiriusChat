@@ -24,15 +24,35 @@ from sirius_pulse.providers.opencode import (
     OpenCodeGoProvider,
     OpenCodeProvider,
 )
+from sirius_pulse.providers.proxy import (
+    ProxySettings,
+    get_current_proxy,
+    httpx_proxy_kwargs,
+    load_proxy_settings,
+    save_proxy_settings,
+    set_current_proxy,
+)
 from sirius_pulse.providers.response_utils import extract_assistant_text
 from sirius_pulse.providers.routing import (
     AutoRoutingProvider,
     ProviderConfig,
+    ProviderRegistry,
     _create_provider_instance,
     ensure_provider_platform_supported,
     get_supported_provider_platforms,
+    merge_provider_sources,
+    normalize_provider_name,
     normalize_provider_type,
+    probe_provider_models,
 )
+
+
+@pytest.fixture(autouse=True)
+def _reset_proxy_settings():
+    """每个用例前后重置进程级代理配置，避免用例间泄漏。"""
+    set_current_proxy(ProxySettings())
+    yield
+    set_current_proxy(ProxySettings())
 
 
 def test_generation_result_when_tool_calls_are_present_then_reports_tool_call_state():
@@ -67,10 +87,13 @@ def test_prompt_cache_usage_when_provider_shapes_vary_then_normalizes_hit_and_mi
         "uncached_prompt_tokens": 30,
         "cache_creation_prompt_tokens": 0,
     }
-    assert extract_prompt_cache_usage(
-        {"prompt_tokens_details": {"cached_tokens": 12}},
-        prompt_tokens=20,
-    )["uncached_prompt_tokens"] == 8
+    assert (
+        extract_prompt_cache_usage(
+            {"prompt_tokens_details": {"cached_tokens": 12}},
+            prompt_tokens=20,
+        )["uncached_prompt_tokens"]
+        == 8
+    )
 
 
 def test_chat_payload_when_deepseek_request_uses_defaults_then_enables_low_reasoning():
@@ -432,6 +455,173 @@ async def test_auto_routing_provider_when_model_is_provider_scoped_then_uses_tha
     assert router.created["aliyun-bailian"].request.model == "shared-model"
 
 
+def test_provider_names_when_normalized_then_reject_ambiguous_values():
+    assert normalize_provider_name(" team-a ") == "team-a"
+    with pytest.raises(ValueError, match="不能为空"):
+        normalize_provider_name("")
+    with pytest.raises(ValueError, match="不能包含"):
+        normalize_provider_name("team/a")
+
+
+def test_provider_registry_when_same_type_has_different_names_then_round_trips(tmp_path):
+    registry = ProviderRegistry(tmp_path)
+    registry.save(
+        {
+            "team-a": ProviderConfig(
+                name="team-a",
+                provider_type="openai-compatible",
+                api_key="key-a",
+                base_url="https://same.example/v1",
+                models=["shared-model"],
+            ),
+            "team-b": ProviderConfig(
+                name="team-b",
+                provider_type="openai-compatible",
+                api_key="key-b",
+                base_url="https://same.example/v1",
+                models=["shared-model"],
+            ),
+        }
+    )
+
+    loaded = registry.load()
+
+    assert list(loaded) == ["team-a", "team-b"]
+    assert loaded["team-a"].api_key == "key-a"
+    assert loaded["team-b"].api_key == "key-b"
+
+
+@pytest.mark.asyncio
+async def test_auto_routing_provider_when_same_type_has_different_names_then_routes_by_name():
+    router = _CapturingRoutingProvider(
+        {
+            "team-a": ProviderConfig(
+                name="team-a",
+                provider_type="openai-compatible",
+                api_key="key-a",
+                base_url="https://same.example/v1",
+                models=["shared-model"],
+            ),
+            "team-b": ProviderConfig(
+                name="team-b",
+                provider_type="openai-compatible",
+                api_key="key-b",
+                base_url="https://same.example/v1",
+                models=["shared-model"],
+            ),
+        }
+    )
+
+    await router.generate_async(
+        GenerationRequest(
+            model="team-b/shared-model",
+            system_prompt="",
+            messages=[{"role": "user", "content": "hi"}],
+        )
+    )
+
+    assert set(router.created) == {"openai-compatible"}
+    assert router._last_provider_name == "team-b"
+    assert router.created["openai-compatible"].request.model == "shared-model"
+
+
+@pytest.mark.asyncio
+async def test_auto_routing_provider_when_legacy_type_scope_has_one_model_match_then_resolves_name():
+    router = _CapturingRoutingProvider(
+        {
+            "team-a": ProviderConfig(
+                name="team-a",
+                provider_type="openai-compatible",
+                api_key="key-a",
+                base_url="",
+                models=["model-a"],
+            ),
+            "team-b": ProviderConfig(
+                name="team-b",
+                provider_type="openai-compatible",
+                api_key="key-b",
+                base_url="",
+                models=["model-b"],
+            ),
+        }
+    )
+
+    await router.generate_async(
+        GenerationRequest(
+            model="openai-compatible/model-b",
+            system_prompt="",
+            messages=[{"role": "user", "content": "hi"}],
+        )
+    )
+
+    assert router._last_provider_name == "team-b"
+    assert router.created["openai-compatible"].request.model == "model-b"
+
+
+def test_provider_registry_when_legacy_entries_are_loaded_then_adds_unique_names(tmp_path):
+    path = tmp_path / "providers" / "provider_keys.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        json.dumps(
+            {
+                "providers": [
+                    {"name": "same", "type": "deepseek", "api_key": "key-a"},
+                    {"name": "same", "type": "deepseek", "api_key": "key-b"},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    loaded = ProviderRegistry(tmp_path).load()
+
+    assert list(loaded) == ["same", "same-2"]
+    assert loaded["same"].api_key == "key-a"
+    assert loaded["same-2"].api_key == "key-b"
+
+
+def test_merge_provider_sources_when_legacy_same_type_entries_are_unnamed_then_keeps_both(tmp_path):
+    merged = merge_provider_sources(
+        work_path=tmp_path,
+        providers_config=[
+            {
+                "type": "openai-compatible",
+                "api_key": "key-a",
+                "base_url": "https://same.example/v1",
+                "models": ["model-a"],
+            },
+            {
+                "type": "openai-compatible",
+                "api_key": "key-b",
+                "base_url": "https://same.example/v1",
+                "models": ["model-b"],
+            },
+        ],
+    )
+
+    assert list(merged) == ["openai-compatible", "openai-compatible-2"]
+    assert merged["openai-compatible"].api_key == "key-a"
+    assert merged["openai-compatible-2"].api_key == "key-b"
+
+
+def test_auto_routing_provider_when_provider_is_disabled_then_it_is_not_routable():
+    router = AutoRoutingProvider(
+        {
+            "disabled": ProviderConfig(
+                name="disabled",
+                provider_type="deepseek",
+                api_key="sk-disabled",
+                base_url="",
+                models=["disabled-model"],
+                enabled=False,
+            )
+        }
+    )
+
+    with pytest.raises(RuntimeError, match="未配置任何提供商"):
+        router._pick_provider("disabled/disabled-model")
+
+
 def test_auto_routing_provider_when_bare_model_matches_multiple_providers_then_errors():
     router = AutoRoutingProvider(
         {
@@ -535,3 +725,241 @@ async def test_auto_routing_provider_when_opencode_models_are_provider_scoped_th
     assert set(router.created) == {"opencode-go"}
     assert router.created["opencode-go"].request is not None
     assert router.created["opencode-go"].request.model == "kimi-k3"
+
+
+# ─── 网络代理配置 ────────────────────────────────────────
+
+
+def test_proxy_settings_when_saved_and_loaded_then_round_trips(tmp_path):
+    settings = ProxySettings(http="http://127.0.0.1:7890", https="", no_proxy="localhost")
+
+    save_proxy_settings(tmp_path, settings)
+    loaded = load_proxy_settings(tmp_path)
+
+    assert loaded == settings
+    assert get_current_proxy() == settings
+    assert (tmp_path / "providers" / "proxy.json").exists()
+
+
+def test_httpx_proxy_kwargs_when_proxy_disabled_then_empty():
+    set_current_proxy(ProxySettings())
+    assert httpx_proxy_kwargs() == {}
+
+    set_current_proxy(ProxySettings(http="http://127.0.0.1:7890"))
+    assert httpx_proxy_kwargs() == {"proxy": "http://127.0.0.1:7890"}
+
+    # https 优先
+    set_current_proxy(ProxySettings(http="http://h:1", https="https://h:2"))
+    assert httpx_proxy_kwargs() == {"proxy": "https://h:2"}
+
+
+@pytest.mark.asyncio
+async def test_openai_compatible_provider_when_proxy_configured_then_client_uses_proxy(monkeypatch):
+    captured: dict[str, object] = {}
+
+    class _Response:
+        status_code = 200
+        headers = {"Content-Type": "application/json"}
+        text = json.dumps(
+            {
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {"role": "assistant", "content": "ok"},
+                    }
+                ]
+            }
+        )
+
+    class _Client:
+        def __init__(self, *args, **kwargs):
+            captured["kwargs"] = kwargs
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def post(self, *args, **kwargs):
+            return _Response()
+
+    monkeypatch.setattr("sirius_pulse.providers.openai_compatible.httpx.AsyncClient", _Client)
+    set_current_proxy(ProxySettings(https="https://proxy.example:7890"))
+
+    provider = OpenAICompatibleProvider(base_url="https://api.example.test", api_key="sk-x")
+    await provider.generate_async(
+        GenerationRequest(model="m", system_prompt="", messages=[{"role": "user", "content": "hi"}])
+    )
+
+    assert captured["kwargs"].get("proxy") == "https://proxy.example:7890"
+
+
+# ─── models 接口探测 ─────────────────────────────────────
+
+
+class _ModelsProbeResponse:
+    def __init__(self, status_code: int, payload: object) -> None:
+        self.status_code = status_code
+        self._payload = payload
+
+    def json(self) -> object:
+        return self._payload
+
+
+@pytest.mark.asyncio
+async def test_probe_provider_models_when_openai_format_then_returns_ids(monkeypatch):
+    seen_urls: list[str] = []
+
+    class _Client:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def get(self, url, headers=None):
+            seen_urls.append(url)
+            return _ModelsProbeResponse(
+                200,
+                {"object": "list", "data": [{"id": "kimi-k3"}, {"id": "glm-5.2"}]},
+            )
+
+    monkeypatch.setattr("sirius_pulse.providers.routing.httpx.AsyncClient", _Client)
+
+    models, used_url = await probe_provider_models(
+        provider_type="opencode",
+        api_key="sk-x",
+        base_url="https://opencode.ai/zen/v1",
+    )
+
+    assert models == ["kimi-k3", "glm-5.2"]
+    assert used_url == "https://opencode.ai/zen/v1/models"
+    assert seen_urls == ["https://opencode.ai/zen/v1/models"]
+
+
+@pytest.mark.asyncio
+async def test_probe_provider_models_when_first_candidate_fails_then_falls_back(monkeypatch):
+    seen_urls: list[str] = []
+
+    class _Client:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def get(self, url, headers=None):
+            seen_urls.append(url)
+            if url.endswith("/v1/models"):
+                return _ModelsProbeResponse(
+                    200, {"models": [{"name": "gpt-test"}, {"id": "claude-test"}]}
+                )
+            return _ModelsProbeResponse(404, {"error": "not found"})
+
+    monkeypatch.setattr("sirius_pulse.providers.routing.httpx.AsyncClient", _Client)
+
+    models, used_url = await probe_provider_models(
+        provider_type="openai-compatible",
+        api_key="sk-x",
+        base_url="https://api.openai.com",
+    )
+
+    assert models == ["gpt-test", "claude-test"]
+    assert used_url == "https://api.openai.com/v1/models"
+    assert seen_urls == [
+        "https://api.openai.com/models",
+        "https://api.openai.com/v1/models",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_probe_provider_models_when_explicit_models_url_then_used_first(monkeypatch):
+    seen_urls: list[str] = []
+
+    class _Client:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def get(self, url, headers=None):
+            seen_urls.append(url)
+            return _ModelsProbeResponse(200, ["model-a", "model-b"])
+
+    monkeypatch.setattr("sirius_pulse.providers.routing.httpx.AsyncClient", _Client)
+
+    models, used_url = await probe_provider_models(
+        provider_type="deepseek",
+        api_key="sk-x",
+        base_url="https://api.deepseek.com",
+        models_url="https://api.deepseek.com/custom/models",
+    )
+
+    assert models == ["model-a", "model-b"]
+    assert used_url == "https://api.deepseek.com/custom/models"
+    assert seen_urls == ["https://api.deepseek.com/custom/models"]
+
+
+@pytest.mark.asyncio
+async def test_probe_provider_models_when_all_candidates_fail_then_raises(monkeypatch):
+    class _Client:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def get(self, url, headers=None):
+            return _ModelsProbeResponse(401, {"error": "unauthorized"})
+
+    monkeypatch.setattr("sirius_pulse.providers.routing.httpx.AsyncClient", _Client)
+
+    with pytest.raises(RuntimeError, match="models 接口探测失败"):
+        await probe_provider_models(
+            provider_type="deepseek",
+            api_key="sk-x",
+            base_url="https://api.deepseek.com",
+        )
+
+
+@pytest.mark.asyncio
+async def test_probe_provider_models_when_proxy_configured_then_client_uses_proxy(monkeypatch):
+    captured: dict[str, object] = {}
+
+    class _Client:
+        def __init__(self, *args, **kwargs):
+            captured["kwargs"] = kwargs
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def get(self, url, headers=None):
+            return _ModelsProbeResponse(200, {"data": [{"id": "m1"}]})
+
+    monkeypatch.setattr("sirius_pulse.providers.routing.httpx.AsyncClient", _Client)
+    set_current_proxy(ProxySettings(http="http://127.0.0.1:7890"))
+
+    await probe_provider_models(
+        provider_type="deepseek",
+        api_key="sk-x",
+        base_url="https://api.deepseek.com",
+    )
+
+    assert captured["kwargs"].get("proxy") == "http://127.0.0.1:7890"

@@ -139,8 +139,10 @@ class ModelsDevCache:
 
     def _fetch_from_network(self) -> dict[str, Any] | None:
         """通过 HTTP GET 拉取 models.dev 数据。"""
+        from sirius_pulse.providers.proxy import httpx_proxy_kwargs
+
         try:
-            with httpx.Client(timeout=30.0) as client:
+            with httpx.Client(timeout=30.0, **httpx_proxy_kwargs()) as client:
                 resp = client.get(MODELS_DEV_URL)
                 resp.raise_for_status()
                 data = resp.json()
@@ -383,7 +385,7 @@ def auto_fill_models_from_dev(
 
     Args:
         config_root: 配置根目录（用于缓存路径）
-        providers: {provider_type: ProviderConfig} 字典，原地修改
+        providers: {provider_name: ProviderConfig} 字典，原地修改
         tool_call_only: 是否只填充支持 tool_call 的模型
 
     Returns:
@@ -396,18 +398,19 @@ def auto_fill_models_from_dev(
         return False
 
     changed = False
-    for provider_type, config in providers.items():
+    for provider_name, config in providers.items():
         if config.models:
             # 已有模型列表，跳过
             continue
 
+        provider_type = str(getattr(config, "provider_type", provider_name)).strip()
         model_ids = list_provider_model_ids(data, provider_type, tool_call_only=tool_call_only)
         if model_ids:
             config.models = model_ids
             changed = True
             logger.info(
                 "自动填充 %s 的模型列表（%d 个模型，tool_call_only=%s）",
-                provider_type,
+                provider_name,
                 len(model_ids),
                 tool_call_only,
             )

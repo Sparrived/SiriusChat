@@ -23,7 +23,9 @@ DATA_DIR = PROJECT_ROOT / "data"
 
 
 def load_providers(
-    *, include_disabled: bool = False, only: str | None = None,
+    *,
+    include_disabled: bool = False,
+    only: str | None = None,
 ) -> list[tuple[str, str, str, str, bool]]:
     """
     加载已配置的供应商列表。
@@ -40,11 +42,18 @@ def load_providers(
     providers = raw.get("providers", {})
     results: list[tuple[str, str, str, str, bool]] = []
 
+    if isinstance(providers, list):
+        providers = {
+            str(payload.get("name") or payload.get("type") or f"provider-{idx + 1}"): payload
+            for idx, payload in enumerate(providers)
+            if isinstance(payload, dict)
+        }
+
     for name, payload in providers.items():
         if not isinstance(payload, dict):
             continue
 
-        provider_name = str(payload.get("type", name)).strip()
+        provider_name = str(payload.get("name") or name).strip()
         api_key = str(payload.get("api_key", "")).strip()
         enabled = bool(payload.get("enabled", True))
         base_url = str(payload.get("base_url", "")).strip()
@@ -113,6 +122,7 @@ def format_model_info(model: dict) -> str:
         parts.append(f"  所有者: {model['owned_by']}")
     if model.get("created"):
         import datetime
+
         ts = model["created"]
         try:
             dt = datetime.datetime.fromtimestamp(ts, tz=datetime.timezone.utc)
@@ -139,7 +149,8 @@ def main() -> int:
         help="查询所有供应商（包括已禁用的）",
     )
     parser.add_argument(
-        "--provider", "-p",
+        "--provider",
+        "-p",
         type=str,
         default=None,
         help="仅查询指定供应商（如 deepseek、aliyun-bailian）",

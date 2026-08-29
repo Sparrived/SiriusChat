@@ -65,6 +65,24 @@ let saveTimer = null;
 let isSavingProviders = false;
 let queuedProviderSave = false;
 
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function validateProviderName(name, idx = null) {
+  const value = String(name ?? '').trim();
+  if (!value) return 'Provider 名称不能为空';
+  if (value.includes('/') || value.includes('\\')) return "Provider 名称不能包含 '/' 或 '\\\\'";
+  if (value.length > 100) return 'Provider 名称不能超过 100 个字符';
+  const duplicate = providers.some((p, i) => i !== idx && String(p.name || '').trim().toLowerCase() === value.toLowerCase());
+  return duplicate ? `Provider 名称重复：${value}` : '';
+}
+
 function _getModelTags(modelId, providerType = '') {
   const modelSets = providerType
     ? [getModelDevCache(providerType)]
@@ -134,22 +152,54 @@ export async function init(container, params = {}) {
       </div>
       <div id="providerList" style="display:flex;flex-direction:column;gap:16px"></div>
     </div>
+    <div class="card" style="margin-top:16px">
+      <div class="card-header">
+        <div>
+          <div class="card-title">网络代理设置</div>
+          <div style="font-size:12px;color:var(--text-3);margin-top:4px">
+            Provider 请求、models 接口探测与 models.dev 拉取统一走该代理（留空表示直连）
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <span id="proxyStatus" style="font-size:12px;color:var(--text-3)"></span>
+          <button class="btn btn-primary btn-sm" id="saveProxyBtn">保存代理</button>
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;padding:0 20px 20px">
+        <div class="form-group" style="margin:0">
+          <label>HTTP 代理</label>
+          <input type="text" id="proxyHttp" placeholder="http://127.0.0.1:7890 或 http://user:pass@host:port">
+        </div>
+        <div class="form-group" style="margin:0">
+          <label>HTTPS 代理</label>
+          <input type="text" id="proxyHttps" placeholder="https://127.0.0.1:7890（优先使用）">
+        </div>
+        <div class="form-group" style="margin:0">
+          <label>直连白名单（no_proxy）</label>
+          <input type="text" id="proxyNoProxy" placeholder="localhost,127.0.0.1,10.0.0.0/8">
+        </div>
+      </div>
+    </div>
   `;
 
   scopedPage.on($('addProviderBtn'), 'click', addProvider);
   scopedPage.on($('probeAllBtn'), 'click', () => probeAll({ force: true }));
   scopedPage.on($('refreshModelsBtn'), 'click', refreshModels);
+  scopedPage.on($('saveProxyBtn'), 'click', saveProxySettings);
 
   await loadProviders();
+  await loadProxySettings();
   await autoProbeAll();
 }
 
 async function loadProviders() {
   try {
-    const data = await get('/providers');
+    const data = await get('/providers'); // load named providers
     const raw = Array.isArray(data.providers) ? data.providers : [];
     providers = raw.map(p => ({
       ...p,
+      name: p.name || p.type || 'provider',
+      original_name: p.name || p.type || 'provider',
       platform_type: p.platform_type || p.type || 'openai-compatible',
     }));
     editingIdx = null;
@@ -212,11 +262,12 @@ function renderReadonlyCard(p, i) {
       <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px">
         <div style="display:flex;align-items:center;gap:10px">
           <span class="tag ${p.enabled ? 'tag-success' : 'tag-danger'}" data-action="toggle-enabled" data-idx="${i}" style="cursor:pointer;user-select:none">${p.enabled ? '已启用' : '已禁用'}</span>
-          <span class="tag tag-accent">${typeLabel}</span>
+          <span class="tag tag-accent">${escapeHtml(name)}</span>
+           <span style="font-size:11px;color:var(--text-3)">${escapeHtml(typeLabel)}</span>
           ${probeHtml}
         </div>
         <div style="display:flex;gap:8px">
-          <button class="btn btn-sm" data-action="probe" data-idx="${i}" data-name="${name}"${!hasKey ? ' disabled title="请先配置 API Key"' : ''}>可用性检查</button>
+          <button class="btn btn-sm" data-action="probe" data-idx="${i}" data-name="${escapeHtml(name)}"${!hasKey ? ' disabled title="请先配置 API Key"' : ''}>可用性检查</button>
           <button class="btn btn-sm" data-action="edit" data-idx="${i}">编辑</button>
           <button class="btn btn-sm btn-danger" data-action="delete" data-idx="${i}">删除</button>
         </div>
@@ -241,6 +292,11 @@ function renderEditCard(p, i) {
     <div class="stat-card" data-idx="${i}" style="text-align:left;border:1px solid var(--accent)">
       <div style="display:flex;flex-direction:column;gap:14px">
         <div class="form-group" style="margin:0">
+          <label>唯一名称</label>
+          <input type="text" id="pv_name_${i}" value="${escapeHtml(p.name || '')}" placeholder="例如 openai-team-a" maxlength="100">
+          <div style="font-size:11px;color:var(--text-3);margin-top:4px">用于模型路由（名称/模型），必须唯一且不能包含斜杠</div>
+        </div>
+        <div class="form-group" style="margin:0">
           <label>平台类型</label>
           <select id="pv_type_${i}" ${readonly ? 'disabled' : ''}>
             ${TYPE_OPTIONS.map(o => `<option value="${o.value}" ${o.value === p.platform_type ? 'selected' : ''}>${o.label}</option>`).join('')}
@@ -262,6 +318,8 @@ function renderEditCard(p, i) {
           <div style="display:flex;gap:8px;margin-bottom:8px">
             <input type="text" id="pv_newModel_${i}" placeholder="输入模型名后回车添加" style="flex:1">
             <button type="button" class="btn btn-sm" data-action="addModel" data-idx="${i}">添加</button>
+            <button type="button" class="btn btn-sm" data-action="modelsProbe" data-idx="${i}"
+              title="调用该 Provider 的 models 接口探测可用模型并自动添加到列表">探测模型</button>
           </div>
           ${devModels.length ? `
           <div style="border:1px solid var(--border);border-radius:6px;padding:10px;background:var(--bg-1)">
@@ -310,6 +368,7 @@ function bindCardEvents() {
       else if (action === 'cancel') cancelEdit(idx);
       else if (action === 'delete') deleteProvider(idx);
       else if (action === 'addModel') addModelToProvider(idx);
+      else if (action === 'modelsProbe') probeModelsFromCard(idx);
       else if (action === 'probe') probeProvider(btn);
       else if (action === 'toggle-enabled') toggleEnabled(idx);
     });
@@ -342,9 +401,9 @@ function bindCardEvents() {
     });
   });
 
-  el.querySelectorAll('[id^="pv_url_"], [id^="pv_key_"]').forEach(input => {
+  el.querySelectorAll('[id^="pv_name_"], [id^="pv_url_"], [id^="pv_key_"]').forEach(input => {
     input.addEventListener('input', () => {
-      const idx = parseInt(input.id.replace(/^pv_(url|key)_/, ''), 10);
+      const idx = parseInt(input.id.replace(/^pv_(name|url|key)_/, ''), 10);
       saveProviderDraft(idx);
       scheduleSaveAll();
     });
@@ -483,6 +542,15 @@ function openAddModal() {
 
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
+  const suggestedName = () => {
+    const base = modal$('modal_type')?.value || 'openai-compatible';
+    let candidate = base;
+    let suffix = 2;
+    while (providers.some(p => String(p.name || '').toLowerCase() === candidate.toLowerCase())) {
+      candidate = `${base}-${suffix++}`;
+    }
+    return candidate;
+  };
   overlay.innerHTML = `
     <div class="modal" style="max-width:560px">
       <div class="modal-header">
@@ -491,6 +559,11 @@ function openAddModal() {
       </div>
       <div class="modal-body">
         <div style="display:flex;flex-direction:column;gap:14px">
+          <div class="form-group" style="margin:0">
+            <label>唯一名称</label>
+            <input type="text" id="modal_name" placeholder="例如 openai-team-a" maxlength="100">
+            <div style="font-size:11px;color:var(--text-3);margin-top:4px">用于模型路由（名称/模型），必须唯一且不能包含斜杠</div>
+          </div>
           <div class="form-group" style="margin:0">
             <label>平台类型</label>
             <select id="modal_type">
@@ -515,6 +588,8 @@ function openAddModal() {
             <div style="display:flex;gap:8px">
               <input type="text" id="modal_newModel" placeholder="输入模型名后回车添加" style="flex:1">
               <button type="button" class="btn btn-sm" id="modalAddModelBtn">添加</button>
+              <button type="button" class="btn btn-sm" id="modalProbeBtn"
+                title="调用该 Provider 的 models 接口探测可用模型并自动添加到列表">探测模型</button>
             </div>
           </div>
           <div style="display:flex;align-items:center;gap:8px">
@@ -531,6 +606,8 @@ function openAddModal() {
   `;
   document.body.appendChild(overlay);
   currentModal = overlay;
+  let generatedName = suggestedName();
+  modal$('modal_name').value = generatedName;
 
   overlay.addEventListener('click', (e) => { if (e.target === overlay) closeModal(); });
   modal$('modalClose').addEventListener('click', closeModal);
@@ -543,9 +620,15 @@ function openAddModal() {
     if (BUILTIN_TYPES.includes(newType)) {
       urlInput.value = DEFAULT_URLS[newType] || '';
     }
+    const nameInput = modal$('modal_name');
+    if (nameInput && nameInput.value === generatedName) {
+      generatedName = suggestedName();
+      nameInput.value = generatedName;
+    }
   });
 
   modal$('modalAddModelBtn').addEventListener('click', addModelToModal);
+  modal$('modalProbeBtn').addEventListener('click', probeModelsFromModal);
   modal$('modal_newModel').addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
       e.preventDefault();
@@ -599,17 +682,25 @@ function closeModal() {
 
 async function saveFromModal() {
   const platformType = modal$('modal_type')?.value || '';
+  const providerName = modal$('modal_name')?.value?.trim() || '';
   const baseUrl = modal$('modal_url')?.value?.trim() || '';
   const apiKey = modal$('modal_key')?.value?.trim() || '';
   const healthcheckModel = modal$('modal_health')?.value?.trim() || '';
   const enabled = modal$('modal_enabled')?.checked || false;
 
+  const nameError = validateProviderName(providerName);
+  if (nameError) {
+    toast(nameError, 'warning');
+    return;
+  }
   if (!apiKey) {
     toast('请填写 API Key', 'warning');
     return;
   }
 
   providers.push({
+    name: providerName,
+    original_name: providerName,
     platform_type: platformType,
     base_url: baseUrl,
     api_key: apiKey,
@@ -626,9 +717,17 @@ async function saveFromModal() {
 function saveProviderDraft(idx) {
   const p = providers[idx];
   if (!p) return;
+  const nameInput = _root.querySelector(`#pv_name_${idx}`);
   const typeInput = _root.querySelector(`#pv_type_${idx}`);
   const urlInput = _root.querySelector(`#pv_url_${idx}`);
   const keyInput = _root.querySelector(`#pv_key_${idx}`);
+  if (nameInput) {
+    const nextName = nameInput.value.trim();
+    if (nextName !== p.name) {
+      delete probeStatus[p.name];
+      p.name = nextName;
+    }
+  }
   if (typeInput) p.platform_type = typeInput.value;
   if (urlInput) p.base_url = urlInput.value.trim();
   if (keyInput) p.api_key = keyInput.value.trim();
@@ -691,17 +790,37 @@ async function saveAll() {
   saveTimer = null;
   isSavingProviders = true;
   setProviderSaveStatus('保存中…');
-  const clean = providers.map(p => ({
-    name: p.name || undefined,
+  providers.forEach((p, idx) => saveProviderDraft(idx));
+  const names = new Set();
+  for (let idx = 0; idx < providers.length; idx++) {
+    const p = providers[idx];
+    const error = validateProviderName(p.name, idx);
+    if (error || names.has(p.name.toLowerCase())) {
+      const message = error || `Provider 名称重复：${p.name}`;
+      setProviderSaveStatus('等待修正名称');
+      isSavingProviders = false;
+      toast(message, 'warning');
+      return;
+    }
+    names.add(p.name.toLowerCase());
+  }
+  const savingProviders = providers.map(provider => ({ provider, name: provider.name }));
+  const clean = savingProviders.map(({ provider: p }) => ({
+    name: p.name,
+    original_name: p.original_name || p.name,
     type: p.platform_type,
     base_url: p.base_url,
     api_key: p.api_key,
     models: p.models || [],
     enabled: p.enabled,
     healthcheck_model: p.healthcheck_model || '',
+    models_url: p.models_url || '',
   }));
   try {
     await post('/providers', { providers: clean });
+    savingProviders.forEach(({ provider, name }) => {
+      if (provider.name === name) provider.original_name = name;
+    });
     setProviderSaveStatus('已自动保存');
   } catch (e) {
     if (e?.name === 'AbortError') return;
@@ -829,6 +948,8 @@ async function refreshModels() {
       const raw = Array.isArray(res.providers) ? res.providers : [];
       providers = raw.map(p => ({
         ...p,
+        name: p.name || p.type || 'provider',
+        original_name: p.name || p.type || 'provider',
         platform_type: p.platform_type || p.type || 'openai-compatible',
       }));
       const providerTypes = [...new Set(providers.map(p => p.platform_type).filter(Boolean))];
@@ -847,4 +968,158 @@ async function refreshModels() {
 
   btn.disabled = false;
   btn.textContent = '刷新模型';
+}
+
+// ─── 网络代理设置 ──────────────────────────────────────────
+
+async function loadProxySettings() {
+  try {
+    const res = await get('/providers/proxy');
+    const proxy = res.proxy || {};
+    const httpInput = _root.querySelector('#proxyHttp');
+    const httpsInput = _root.querySelector('#proxyHttps');
+    const noProxyInput = _root.querySelector('#proxyNoProxy');
+    if (httpInput) httpInput.value = proxy.http || '';
+    if (httpsInput) httpsInput.value = proxy.https || '';
+    if (noProxyInput) noProxyInput.value = proxy.no_proxy || '';
+    const status = _root.querySelector('#proxyStatus');
+    if (status) status.textContent = proxy.http || proxy.https ? '已启用' : '未启用';
+  } catch (e) {
+    if (e?.name === 'AbortError') return;
+    console.error('[providers] loadProxySettings 失败:', e);
+    toast('加载代理设置失败', 'error');
+  }
+}
+
+async function saveProxySettings() {
+  const btn = _root.querySelector('#saveProxyBtn');
+  if (!btn) return;
+  btn.disabled = true;
+  btn.textContent = '保存中…';
+  try {
+    const res = await post('/providers/proxy', {
+      http: _root.querySelector('#proxyHttp')?.value?.trim() || '',
+      https: _root.querySelector('#proxyHttps')?.value?.trim() || '',
+      no_proxy: _root.querySelector('#proxyNoProxy')?.value?.trim() || '',
+    });
+    if (res.success) {
+      toast('代理配置已保存并生效', 'success');
+      const status = _root.querySelector('#proxyStatus');
+      if (status) status.textContent = res.proxy && (res.proxy.http || res.proxy.https) ? '已启用' : '未启用';
+    } else {
+      toast(`保存失败: ${res.error || '未知错误'}`, 'error');
+    }
+  } catch (e) {
+    if (e?.name === 'AbortError') return;
+    console.error('[providers] saveProxySettings 失败:', e);
+    toast(`保存失败: ${e.message}`, 'error');
+  }
+  btn.disabled = false;
+  btn.textContent = '保存代理';
+}
+
+// ─── models 接口探测 ──────────────────────────────────────
+
+function _mergeProbedModels(targetList, probed) {
+  const existing = new Set(targetList);
+  const added = probed.filter(m => !existing.has(m));
+  targetList.push(...added);
+  return added;
+}
+
+async function probeModelsFromCard(idx) {
+  const p = providers[idx];
+  if (!p) return;
+  saveProviderDraft(idx);
+
+  const payload = {};
+  const key = p.api_key || '';
+  if (p.name && key.includes('****')) {
+    // 已保存的 Provider：Key 已脱敏，由服务端读取磁盘真实配置
+    payload.name = p.name;
+    payload.type = p.platform_type;
+    payload.base_url = p.base_url || '';
+    payload.models_url = p.models_url || '';
+  } else {
+    if (!key) {
+      toast('请先填写 API Key 再进行探测', 'warning');
+      return;
+    }
+    payload.type = p.platform_type;
+    payload.base_url = p.base_url || '';
+    payload.api_key = key;
+    payload.models_url = p.models_url || '';
+  }
+
+  const btn = _root.querySelector(`[data-action="modelsProbe"][data-idx="${idx}"]`);
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = '探测中…';
+  }
+  try {
+    const res = await post('/providers/models-probe', payload);
+    if (res.success) {
+      if (!p.models) p.models = [];
+      const added = _mergeProbedModels(p.models, res.models || []);
+      renderList();
+      scheduleSaveAll();
+      toast(
+        `探测到 ${res.models.length} 个模型，新增 ${added.length} 个${res.models_url ? `（${res.models_url}）` : ''}`,
+        'success'
+      );
+    } else {
+      toast(`探测失败: ${res.error || '未知错误'}`, 'error');
+    }
+  } catch (e) {
+    if (e?.name === 'AbortError') return;
+    console.error('[providers] probeModelsFromCard 失败:', e);
+    toast(`探测失败: ${e.message}`, 'error');
+  }
+  if (btn) {
+    btn.disabled = false;
+    btn.textContent = '探测模型';
+  }
+}
+
+async function probeModelsFromModal() {
+  const payload = {
+    type: modal$('modal_type')?.value || '',
+    base_url: modal$('modal_url')?.value?.trim() || '',
+    api_key: modal$('modal_key')?.value?.trim() || '',
+    models_url: '',
+  };
+  if (!payload.type) {
+    toast('请先选择平台类型', 'warning');
+    return;
+  }
+  if (!payload.api_key) {
+    toast('请先填写 API Key 再进行探测', 'warning');
+    return;
+  }
+  const btn = modal$('modalProbeBtn');
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = '探测中…';
+  }
+  try {
+    const res = await post('/providers/models-probe', payload);
+    if (res.success) {
+      const added = _mergeProbedModels(modalModels, res.models || []);
+      renderModalModels();
+      toast(
+        `探测到 ${res.models.length} 个模型，新增 ${added.length} 个${res.models_url ? `（${res.models_url}）` : ''}`,
+        'success'
+      );
+    } else {
+      toast(`探测失败: ${res.error || '未知错误'}`, 'error');
+    }
+  } catch (e) {
+    if (e?.name === 'AbortError') return;
+    console.error('[providers] probeModelsFromModal 失败:', e);
+    toast(`探测失败: ${e.message}`, 'error');
+  }
+  if (btn) {
+    btn.disabled = false;
+    btn.textContent = '探测模型';
+  }
 }
