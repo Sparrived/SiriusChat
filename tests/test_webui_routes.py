@@ -488,6 +488,8 @@ async def test_webui_repository_plaintext_token_is_rejected_without_persisting(t
         "https://example.invalid/path?api-key=secret",
         "plans?accessToken=secret",
         "plans#refresh-token=secret",
+        "https://user:password@[invalid/path",
+        "https://[invalid/path?api_key=secret",
     ],
 )
 async def test_webui_plugin_settings_reject_credentials_embedded_in_urls(tmp_path, url):

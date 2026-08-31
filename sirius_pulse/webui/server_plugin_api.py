@@ -91,17 +91,32 @@ def _url_contains_plaintext_secret(value: Any) -> bool:
     """Detect credentials embedded in an otherwise non-secret URL setting."""
     if not isinstance(value, str) or not any(marker in value for marker in ("://", "?", "#")):
         return False
+
+    raw_components: list[str] = []
+    if "?" in value:
+        query_and_fragment = value.split("?", 1)[1]
+        query, separator, fragment = query_and_fragment.partition("#")
+        raw_components.append(query)
+        if separator:
+            raw_components.append(fragment)
+    elif "#" in value:
+        raw_components.append(value.split("#", 1)[1])
+    if any(
+        _is_secret_setting_key(query_key) and bool(query_value)
+        for component in raw_components
+        for query_key, query_value in parse_qsl(component, keep_blank_values=True)
+    ):
+        return True
+
     try:
         parsed = urlsplit(value)
     except ValueError:
-        return False
-    if parsed.username is not None or parsed.password is not None:
-        return True
-    return any(
-        _is_secret_setting_key(query_key) and bool(query_value)
-        for component in (parsed.query, parsed.fragment)
-        for query_key, query_value in parse_qsl(component, keep_blank_values=True)
-    )
+        if "://" not in value:
+            return False
+        authority = value.split("://", 1)[1]
+        authority = re.split(r"[/\\?#]", authority, maxsplit=1)[0]
+        return "@" in authority
+    return parsed.username is not None or parsed.password is not None
 
 
 def _contains_plaintext_secret(
