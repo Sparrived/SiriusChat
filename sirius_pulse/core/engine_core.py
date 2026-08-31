@@ -29,14 +29,14 @@ from sirius_pulse.core.events import SessionEvent, SessionEventBus, SessionEvent
 from sirius_pulse.core.helpers import Helpers
 from sirius_pulse.core.identity_resolver import IdentityResolver
 from sirius_pulse.core.model_router import ModelRouter
+from sirius_pulse.core.participation import get_group_reply_strategy
+from sirius_pulse.core.pipeline import Pipeline
 from sirius_pulse.core.plan_runtime import (
     append_plan_event,
     finish_plan_session,
     get_active_plan_session,
     route_message_for_active_plan,
 )
-from sirius_pulse.core.pipeline import Pipeline
-from sirius_pulse.core.participation import get_group_reply_strategy
 from sirius_pulse.core.prompt_factory import PromptFactory, StyleAdapter
 from sirius_pulse.core.rhythm import RhythmAnalyzer
 
@@ -150,7 +150,6 @@ class _EmotionalGroupChatEngineBase:
             "response_generate": chat_model,
             "proactive_generate": chat_model,
             "passive_tool": chat_model,
-            "github_monitor_notify": chat_model,
             "plugin_generate": plugin_model,
             "plugin_analyze": plugin_model,
             "plugin_render": plugin_model,
@@ -337,6 +336,11 @@ class _EmotionalGroupChatEngineBase:
 
         self._pending_reminders: dict[str, list[dict[str, Any]]] = {}
         self._current_adapter_type: str = ""
+        # Adapter registrations are used by background/proactive messages.  A
+        # single engine can have several platform connections, so the current
+        # message's adapter is not a reliable routing hint for a background
+        # task.  Each adapter supplies the groups it is configured to serve.
+        self._adapter_routes: list[tuple[str, Any, set[str] | None, set[str] | None]] = []
         # Bot 在各平台的 UID（如 {"qq_native_sirius_pulse": "123456"}）
         self._bot_platform_uids: dict[str, str] = {}
         self._qq_group_members: dict[str, tuple[float, list[dict[str, str]]]] = {}
@@ -446,6 +450,205 @@ class _EmotionalGroupChatEngineBase:
             plugin_dispatcher=plugin_dispatcher,
         )
 
+    def register_adapter(
+        self,
+        adapter: Any,
+        *,
+        adapter_type: str | None = None,
+        group_ids: list[str] | set[str] | tuple[str, ...] | None = None,
+        private_user_ids: list[str] | set[str] | tuple[str, ...] | None = None,
+    ) -> None:
+        """Register an adapter and the destinations it is configured to serve.
+
+        The engine only stores platform-neutral destination strings.  Concrete
+        adapters may use any configuration format and pass their normalized
+        group/private-user allowlists here.  ``None`` means that a route was
+        not declared (legacy bridges may use the current-adapter fallback),
+        while an empty list explicitly means no group/private destinations.
+        An empty private-user list means all private users, matching the
+        existing private-chat allowlist convention.
+        """
+        resolved_type = (
+            str(adapter_type or "").strip()
+            or str(getattr(adapter, "adapter_type", "") or "").strip()
+        )
+        if not resolved_type:
+            return
+
+        def _clean(values: Any, *, private: bool = False) -> set[str]:
+            if isinstance(values, str):
+                values = [values]
+            try:
+                iterator = iter(values)
+            except TypeError:
+                return set()
+            result: set[str] = set()
+            for value in iterator:
+                item = str(value or "").strip()
+                if private:
+                    item = item.removeprefix("private_").removeprefix("qq_")
+                if item:
+                    result.add(item)
+            return result
+
+        # Preserve the distinction between an undeclared route (None) and an
+        # explicitly empty allowlist.  This lets legacy bridges retain the
+        # current-adapter fallback without making them a wildcard broadcast.
+        groups = _clean(group_ids) if group_ids is not None else None
+        # ``None`` means that the adapter does not declare private routing;
+        # an explicit empty list retains NapCat's legacy "all users" rule.
+        private_users = (
+            _clean(private_user_ids, private=True) if private_user_ids is not None else None
+        )
+        registrations = [
+            item for item in getattr(self, "_adapter_routes", []) if item[1] is not adapter
+        ]
+        registrations.append((resolved_type, adapter, groups, private_users))
+        self._adapter_routes = registrations
+
+    def unregister_adapter(self, adapter: Any) -> None:
+        """Remove a previously registered adapter."""
+        self._adapter_routes = [
+            item for item in getattr(self, "_adapter_routes", []) if item[1] is not adapter
+        ]
+
+    def has_registered_adapters(self) -> bool:
+        """Return whether an adapter has declared a destination route."""
+        return any(
+            groups is not None or private_users is not None
+            for _, _, groups, private_users in getattr(self, "_adapter_routes", [])
+        )
+
+    def resolve_adapter_route_counts(self, group_id: str) -> dict[str, int]:
+        """Count concrete adapter instances eligible for a destination."""
+        gid = str(group_id or "").strip()
+        if not gid:
+            return {}
+        is_private = gid.startswith("private_")
+        target = gid.removeprefix("private_").removeprefix("qq_")
+        counts: dict[str, int] = {}
+        for adapter_type, adapter, groups, private_users in getattr(self, "_adapter_routes", []):
+            checker = getattr(adapter, "is_proactive_destination_allowed", None)
+            if callable(checker):
+                try:
+                    matched = bool(checker(gid))
+                except Exception:
+                    matched = False
+            elif is_private:
+                matched = private_users is not None and (
+                    not private_users or target in private_users
+                )
+            else:
+                matched = groups is not None and target in groups
+            if matched:
+                counts[adapter_type] = counts.get(adapter_type, 0) + 1
+        return counts
+
+    def resolve_adapter_types(self, group_id: str) -> list[str]:
+        """Return adapter types configured to serve ``group_id``.
+
+        Results preserve registration order and are deduplicated.  Private
+        destinations use the ``private_<user_id>`` group-key convention.  A
+        registered adapter with no private-user allowlist is eligible for any
+        private destination; group allowlists remain explicit.
+        """
+        gid = str(group_id or "").strip()
+        if not gid:
+            return []
+        is_private = gid.startswith("private_")
+        target = gid.removeprefix("private_").removeprefix("qq_")
+        result: list[str] = []
+
+        def _normalize_ids(values: Any, *, private: bool = False) -> set[str]:
+            if isinstance(values, str):
+                values = [values]
+            if not isinstance(values, (list, tuple, set)):
+                return set()
+            normalized: set[str] = set()
+            for value in values:
+                item = str(value or "").strip()
+                if private:
+                    item = item.removeprefix("private_").removeprefix("qq_")
+                if item:
+                    normalized.add(item)
+            return normalized
+
+        for adapter_type, adapter, groups, private_users in getattr(self, "_adapter_routes", []):
+            # A concrete adapter may expose its current allowlists and a
+            # destination permission check.  Prefer those values when
+            # available so configuration changes are visible without
+            # rebuilding the engine; stored sets remain the generic fallback.
+            current_groups = groups
+            current_private_users = private_users
+            group_getter = getattr(adapter, "get_configured_group_ids", None)
+            private_getter = getattr(adapter, "get_configured_private_user_ids", None)
+            if callable(group_getter):
+                try:
+                    configured_groups = group_getter()
+                    if configured_groups is not None:
+                        current_groups = _normalize_ids(configured_groups)
+                except Exception:
+                    pass
+            if callable(private_getter):
+                try:
+                    configured_private_users = private_getter()
+                    if configured_private_users is not None:
+                        current_private_users = _normalize_ids(
+                            configured_private_users, private=True
+                        )
+                except Exception:
+                    pass
+
+            destination_checker = getattr(adapter, "is_proactive_destination_allowed", None)
+            if callable(destination_checker):
+                try:
+                    if not destination_checker(gid):
+                        continue
+                except Exception:
+                    # A failing permission check must not turn into a
+                    # broadcast to a destination that may be disabled.
+                    continue
+
+            if is_private:
+                if current_private_users is None:
+                    continue
+                matched = not current_private_users or target in current_private_users
+            else:
+                if current_groups is None:
+                    continue
+                matched = target in current_groups
+            if matched and adapter_type not in result:
+                result.append(adapter_type)
+        return result
+
+    async def dispatch_proactive_message(
+        self,
+        *,
+        group_id: str,
+        text: str,
+        adapter_type: str = "",
+        event_id: str = "",
+        image_path: str = "",
+        reply_references: list[dict[str, Any]] | None = None,
+        sticker_names: list[str] | None = None,
+        poke_user_ids: list[str] | None = None,
+    ) -> bool:
+        """通过统一事件管线发送插件或其他扩展的主动消息。"""
+        return await self._helpers.dispatch_proactive_message(
+            group_id=group_id,
+            text=text,
+            adapter_type=adapter_type,
+            event_id=event_id,
+            image_path=image_path,
+            reply_references=reply_references,
+            sticker_names=sticker_names,
+            poke_user_ids=poke_user_ids,
+        )
+
+    def get_active_groups(self) -> list[str]:
+        """返回当前引擎已观测到的活跃群组。"""
+        return self._helpers.get_active_groups()
+
     async def _execute_plugin_command(
         self,
         decision: Any,
@@ -526,9 +729,17 @@ class _EmotionalGroupChatEngineBase:
         self,
         group_id: str,
         on_partial_reply: Any | None = None,
+        *,
+        adapter_type: str | None = None,
+        adapter_route_id: str | None = None,
     ) -> list[dict[str, Any]]:
-        """Process delayed response queue for a group."""
-        return await self._bg_tasks_mgr.tick_delayed_queue(group_id, on_partial_reply)
+        """Process a delayed queue partition for one source adapter."""
+        return await self._bg_tasks_mgr.tick_delayed_queue(
+            group_id,
+            on_partial_reply,
+            adapter_type=adapter_type,
+            adapter_route_id=adapter_route_id,
+        )
 
     def pop_reminders(self, group_id: str, adapter_type: str | None = None) -> list[str]:
         """Pop pending reminder messages for a group."""
@@ -892,9 +1103,7 @@ class _EmotionalGroupChatEngineBase:
                 return
 
             poke_pattern = re.compile(r"\[POKE:\s*(\d+)\s*\]", re.IGNORECASE)
-            sticker_pattern = re.compile(
-                r"\[STICKER:\s*([^\[\]\r\n]+?)\s*\]", re.IGNORECASE
-            )
+            sticker_pattern = re.compile(r"\[STICKER:\s*([^\[\]\r\n]+?)\s*\]", re.IGNORECASE)
             legacy_sticker_pattern = re.compile(
                 r"\[STICKERS[：:]\s*([^\[\]\r\n]+?)\s*\]", re.IGNORECASE
             )
@@ -1230,9 +1439,7 @@ class _EmotionalGroupChatEngineBase:
                         platform_message_id=message.message_id or "",
                     )
                     self._background_update(group_id, message, None, None, user_id)
-                    self._log_inner_thought(
-                        f"{speaker} 的新消息并入计划模式事件: {route.event_type}"
-                    )
+                    self._log_inner_thought(f"{speaker} 的新消息并入计划模式事件: {route.event_type}")
                     return {
                         "strategy": "plan_event",
                         "reply": None,
@@ -1281,6 +1488,7 @@ class _EmotionalGroupChatEngineBase:
                     channel_user_id=message.channel_user_id,
                     multimodal_inputs=message.multimodal_inputs,
                     adapter_type=message.adapter_type,
+                    adapter_route_id=message.adapter_route_id,
                     heat_level="warm",
                     pace="steady",
                     speaker_name=message.speaker or "",
@@ -1305,7 +1513,11 @@ class _EmotionalGroupChatEngineBase:
 
         # ── 管线短路：已有 pending 队列项时，直接合并消息，跳过认知/决策 ──
         # 插件命令需要走完整管线，不参与短路合并
-        if self.delayed_queue.has_pending(group_id):
+        if self.delayed_queue.has_pending(
+            group_id,
+            adapter_type=message.adapter_type,
+            adapter_route_id=message.adapter_route_id,
+        ):
             is_plugin_cmd, plugin_result = await self._check_plugin_intent(content, group_id)
             if is_plugin_cmd:
                 # 向量匹配 + LLM 验证通过，直接执行插件（跳过完整管线）
@@ -1322,26 +1534,38 @@ class _EmotionalGroupChatEngineBase:
                     channel_user_id=message.channel_user_id,
                     multimodal_inputs=message.multimodal_inputs,
                     platform_message_id=getattr(message, "message_id", "") or "",
+                    adapter_type=message.adapter_type,
+                    adapter_route_id=message.adapter_route_id,
                 )
                 promoted = self.delayed_queue.promote_pending(
                     group_id,
                     max_window_seconds=0.0,
                     reason="pending_promoted_by_explicit_mention",
+                    adapter_type=message.adapter_type,
+                    adapter_route_id=message.adapter_route_id,
                 )
                 if merged and promoted is not None:
                     emitted = self._delayed_event_emitted.setdefault(group_id, set())
                     if promoted.item_id not in emitted:
-                        emitted.add(promoted.item_id)
-                        await self.event_bus.emit(
+                        event_data = {
+                            "group_id": group_id,
+                            "item_id": promoted.item_id,
+                            "adapter_type": promoted.adapter_type or "",
+                            "reason": "pending_promoted_by_explicit_mention",
+                        }
+                        if promoted.adapter_route_id:
+                            event_data["adapter_route_id"] = promoted.adapter_route_id
+                        accepted = await self.event_bus.emit(
                             SessionEvent(
                                 type=SessionEventType.DELAYED_RESPONSE_TRIGGERED,
-                                data={
-                                    "group_id": group_id,
-                                    "item_id": promoted.item_id,
-                                    "reason": "pending_promoted_by_explicit_mention",
-                                },
+                                data=event_data,
                             )
                         )
+                        # Keep an unaccepted promotion eligible for the ticker
+                        # rather than marking it as consumed before a listener
+                        # has accepted the trigger.
+                        if accepted:
+                            emitted.add(promoted.item_id)
                     self._background_update(group_id, message, None, None, user_id)
                     return {
                         "strategy": "promoted",
@@ -1368,6 +1592,8 @@ class _EmotionalGroupChatEngineBase:
                     channel_user_id=message.channel_user_id,
                     multimodal_inputs=message.multimodal_inputs,
                     platform_message_id=getattr(message, "message_id", "") or "",
+                    adapter_type=message.adapter_type,
+                    adapter_route_id=message.adapter_route_id,
                 )
                 if merged:
                     self._log_inner_thought(f"已有待回复的消息，把 {speaker} 的话也合进去～")

@@ -9,8 +9,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from sirius_pulse.tools.builtin._internal import _bash_runtime, _container_status_card, _docker_cli
 from sirius_pulse.tools.builtin import bash
+from sirius_pulse.tools.builtin._internal import _bash_runtime, _container_status_card, _docker_cli
 from sirius_pulse.tools.models import ToolResult
 
 

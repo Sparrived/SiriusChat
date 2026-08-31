@@ -100,5 +100,4 @@ WEBUI_ROUTES: tuple[RouteSpec, ...] = (
     RouteSpec("POST", "/api/plugins/{plugin_name}/settings/{key}", "api_plugin_setting_post"),
     RouteSpec("DELETE", "/api/plugins/{plugin_name}/settings/{key}", "api_plugin_setting_delete"),
     RouteSpec("POST", "/api/plugins/reload", "api_plugins_reload"),
-    RouteSpec("GET", "/api/plugins/monitor_repos", "api_plugin_monitor_repos_get"),
 )

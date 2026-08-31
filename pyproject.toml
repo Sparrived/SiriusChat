@@ -1,6 +1,6 @@
 [project]
 name = "sirius-pulse"
-version = "1.1.0"
+version = "1.3.0"
 description = "A multi-user RPG dialogue LLM framework compatible with OpenAI providers"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -25,6 +25,7 @@ dependencies = [
 	"tiktoken>=0.5.0",
 	"chromadb>=0.5.0",
 	"aiohttp>=3.8.0",
+	"httpx>=0.24.0",  # 核心 Provider 使用的异步 HTTP 客户端
 	"websockets>=11.0.0",
 	"textual>=0.89.0",
 	"playwright>=1.57.0",
@@ -36,10 +37,10 @@ sirius-pulse = "sirius_pulse.cli:main"
 sirius-chat = "sirius_pulse.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/Sparrived/SiriusChat"
-Documentation = "https://github.com/Sparrived/SiriusChat"
-Repository = "https://github.com/Sparrived/SiriusChat.git"
-Issues = "https://github.com/Sparrived/SiriusChat/issues"
+Homepage = "https://github.com/Sparrived/SiriusPulse"
+Documentation = "https://sirius-pulse-docs.vercel.app/"
+Repository = "https://github.com/Sparrived/SiriusPulse.git"
+Issues = "https://github.com/Sparrived/SiriusPulse/issues"
 
 [project.optional-dependencies]
 test = [
@@ -50,12 +51,11 @@ test = [
 	"psutil>=5.9.0",  # 性能监控和系统信息
 ]
 provider = [
-	"httpx>=0.24.0",  # 异步HTTP客户端，用于LLM API调用
 	"tenacity>=8.0.0",  # 重试库，用于提高可靠性
 ]
 dev = [
 	"sirius-pulse[test]",  # 继承测试依赖（pytest 系列 + psutil）
-	"sirius-pulse[provider]",  # 继承 provider 依赖（httpx + tenacity）
+	"sirius-pulse[provider]",  # 继承 provider 附加依赖（tenacity；httpx 为核心依赖）
 	"sirius-pulse[quality]",  # 继承质量依赖（tiktoken）
 	"black==23.12.1",  # 代码格式化
 	"isort>=5.13.0",  # Import排序

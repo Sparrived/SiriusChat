@@ -12,9 +12,13 @@ from sirius_pulse.core.bg_tasks_delayed import (
     _build_assistant_tool_message,
 )
 from sirius_pulse.core.delayed_response_queue import DelayedResponseQueue
+from sirius_pulse.core.events import SessionEventType
+from sirius_pulse.core.pipeline import Pipeline
 from sirius_pulse.core.plan_runtime import start_plan_session, update_plan_progress
 from sirius_pulse.core.prompt_factory import StyleAdapter
+from sirius_pulse.models.models import Message
 from sirius_pulse.models.response_strategy import ResponseStrategy, StrategyDecision
+from sirius_pulse.models.signal import SignalAnalysis
 from sirius_pulse.providers.base import ToolCall
 from sirius_pulse.tools.models import ToolResult
 
@@ -128,7 +132,7 @@ def test_delayed_queue_when_immediate_messages_share_group_then_merges_into_one_
 
     assert merged is item
     assert len(queue.get_pending("group-1")) == 1
-    assert item.window_seconds == 6.0
+    assert item.window_seconds == 0.0
     assert item.user_id == "u2"
     assert item.channel_user_id == "qq-2"
     assert item.related_user_ids == ["u1", "u2"]
@@ -139,6 +143,89 @@ def test_delayed_queue_when_immediate_messages_share_group_then_merges_into_one_
     ]
     assert "first" in item.message_content
     assert "second" in item.message_content
+
+
+def test_delayed_queue_keeps_same_group_adapter_partitions_independent():
+    queue = DelayedResponseQueue()
+    napcat_item = queue.enqueue(
+        "group-1",
+        "u1",
+        "from napcat",
+        _decision(ResponseStrategy.IMMEDIATE),
+        adapter_type="napcat",
+    )
+    discord_item = queue.enqueue(
+        "group-1",
+        "u2",
+        "from discord",
+        _decision(ResponseStrategy.IMMEDIATE),
+        adapter_type="discord",
+    )
+
+    assert napcat_item is not discord_item
+    assert queue.has_pending("group-1", adapter_type="napcat")
+    assert queue.has_pending("group-1", adapter_type="discord")
+    assert len(queue.get_pending("group-1", adapter_type="napcat")) == 1
+    assert len(queue.get_pending("group-1", adapter_type="discord")) == 1
+
+    triggered = queue.tick("group-1", [], adapter_type="napcat")
+
+    assert triggered == [napcat_item]
+    assert queue.get_pending("group-1", adapter_type="napcat") == []
+    assert queue.get_pending("group-1", adapter_type="discord") == [discord_item]
+
+
+def test_delayed_queue_keeps_same_type_adapter_instances_independent():
+    queue = DelayedResponseQueue()
+    first = queue.enqueue(
+        "group-1",
+        "u1",
+        "from account one",
+        _decision(ResponseStrategy.IMMEDIATE),
+        adapter_type="napcat",
+        adapter_route_id="napcat:100",
+    )
+    second = queue.enqueue(
+        "group-1",
+        "u2",
+        "from account two",
+        _decision(ResponseStrategy.IMMEDIATE),
+        adapter_type="napcat",
+        adapter_route_id="napcat:200",
+    )
+    legacy = queue.enqueue(
+        "group-1",
+        "u3",
+        "from a legacy bridge",
+        _decision(ResponseStrategy.IMMEDIATE),
+        adapter_type="napcat",
+    )
+
+    assert first is not second
+    assert legacy is not first
+    assert legacy is not second
+    assert queue.get_pending("group-1", adapter_route_id="napcat:100") == [first]
+    assert queue.get_pending("group-1", adapter_route_id="napcat:200") == [second]
+
+    triggered = queue.tick(
+        "group-1",
+        [],
+        adapter_type="napcat",
+        adapter_route_id="napcat:100",
+    )
+
+    assert triggered == [first]
+    assert queue.get_pending("group-1", adapter_route_id="napcat:100") == []
+    assert queue.get_pending("group-1", adapter_route_id="napcat:200") == [second]
+
+    legacy_triggered = queue.tick(
+        "group-1",
+        [],
+        adapter_type="napcat",
+        adapter_route_id="",
+    )
+    assert legacy_triggered == [legacy]
+    assert queue.get_pending("group-1", adapter_route_id="napcat:200") == [second]
 
 
 @pytest.mark.asyncio
@@ -216,26 +303,121 @@ async def test_tool_chain_injects_explicit_group_text_into_next_model_round():
     assert active == set()
 
 
-def test_delayed_queue_when_immediate_window_expires_then_triggers_item():
+def test_delayed_queue_when_immediate_is_enqueued_then_triggers_without_waiting():
     queue = DelayedResponseQueue()
     item = queue.enqueue("group-1", "u1", "hello", _decision(ResponseStrategy.IMMEDIATE))
-    item.enqueue_time = _past(item.window_seconds + 1)
 
     triggered = queue.tick("group-1", [])
 
+    assert item.window_seconds == 0.0
     assert triggered == [item]
     assert item.status == "triggered"
     assert queue.has_pending("group-1") is False
 
 
-def test_delayed_queue_when_hard_immediate_then_uses_short_window():
+@pytest.mark.asyncio
+async def test_pipeline_when_strategy_is_immediate_then_notifies_delivery_in_same_turn():
+    queue = DelayedResponseQueue()
+    event_bus = SimpleNamespace(emit=AsyncMock())
+    engine = SimpleNamespace(
+        delayed_queue=queue,
+        event_bus=event_bus,
+        _persist_group_state=lambda group_id: None,
+        assistant_emotion=SimpleNamespace(update_from_interaction=lambda emotion, user_id: None),
+        semantic_memory=SimpleNamespace(
+            settle_engagement=lambda **kwargs: None,
+            record_interaction=lambda **kwargs: None,
+        ),
+    )
+    signal = SignalAnalysis(
+        is_mentioned=True,
+        urgency_score=80.0,
+        relevance_score=0.8,
+        participation={
+            "strategy": "immediate",
+            "reason": "addressed",
+            "score": 1.0,
+            "threshold": 0.5,
+            "delay_seconds": 0.0,
+        },
+    )
+
+    result = await Pipeline(engine).generate(
+        signal,
+        Message(role="user", content="hello"),
+        "group-1",
+        "u1",
+    )
+
+    pending = queue.get_pending("group-1")
+    assert result["strategy"] == "immediate"
+    assert len(pending) == 1
+    assert pending[0].window_seconds == 0.0
+    event_bus.emit.assert_awaited_once()
+    event = event_bus.emit.await_args.args[0]
+    assert event.type == SessionEventType.DELAYED_RESPONSE_TRIGGERED
+    assert event.data == {
+        "group_id": "group-1",
+        "item_id": pending[0].item_id,
+        "adapter_type": "",
+        "reason": "immediate",
+    }
+
+
+@pytest.mark.asyncio
+async def test_pipeline_preserves_adapter_instance_route_in_delayed_event():
+    queue = DelayedResponseQueue()
+    event_bus = SimpleNamespace(emit=AsyncMock(return_value=True))
+    engine = SimpleNamespace(
+        delayed_queue=queue,
+        event_bus=event_bus,
+        _persist_group_state=lambda group_id: None,
+        assistant_emotion=SimpleNamespace(update_from_interaction=lambda emotion, user_id: None),
+        semantic_memory=SimpleNamespace(
+            settle_engagement=lambda **kwargs: None,
+            record_interaction=lambda **kwargs: None,
+        ),
+    )
+    signal = SignalAnalysis(
+        is_mentioned=True,
+        urgency_score=80.0,
+        relevance_score=0.8,
+        participation={
+            "strategy": "immediate",
+            "reason": "addressed",
+            "score": 1.0,
+            "threshold": 0.5,
+            "delay_seconds": 0.0,
+        },
+    )
+
+    await Pipeline(engine).generate(
+        signal,
+        Message(
+            role="user",
+            content="hello",
+            adapter_type="napcat",
+            adapter_route_id="napcat:100",
+        ),
+        "group-1",
+        "u1",
+    )
+
+    event = event_bus.emit.await_args.args[0]
+    assert event.data["adapter_type"] == "napcat"
+    assert event.data["adapter_route_id"] == "napcat:100"
+    pending = queue.get_pending("group-1", adapter_route_id="napcat:100")
+    assert len(pending) == 1
+
+
+def test_delayed_queue_when_hard_immediate_then_still_has_no_wait_window():
     queue = DelayedResponseQueue()
     decision = _decision(ResponseStrategy.IMMEDIATE)
     decision.context["hard_immediate"] = True
 
     item = queue.enqueue("group-1", "u1", "hello", decision)
 
-    assert item.window_seconds == 1.0
+    assert item.window_seconds == 0.0
 
 
 def test_delayed_queue_when_estimated_delay_is_set_then_limits_window():
@@ -554,9 +736,7 @@ async def test_delayed_queue_when_tool_chain_has_many_statuses_then_keeps_them_i
     assert results[0]["reply"] == "Everything is ready."
     final_request = engine.brain.chat.await_args_list[-1].args[0]
     assert [
-        message["content"]
-        for message in final_request.messages
-        if message["role"] == "assistant"
+        message["content"] for message in final_request.messages if message["role"] == "assistant"
     ] == ["Checking step 1.", "Checking step 2.", "Checking step 3."]
 
 
@@ -627,15 +807,16 @@ async def test_delayed_queue_when_tool_fails_then_sends_the_next_model_output():
     )
     assert assistant_message["content"] == "I will check."
     tool_message = next(message for message in second_request.messages if message["role"] == "tool")
-    assert tool_message["content"] == ToolResult(
-        success=False,
-        error="connection refused at https://10.0.0.7:8443 token=secret",
-    ).to_model_text()
+    assert (
+        tool_message["content"]
+        == ToolResult(
+            success=False,
+            error="connection refused at https://10.0.0.7:8443 token=secret",
+        ).to_model_text()
+    )
     third_request = engine.brain.chat.await_args_list[2].args[0]
     assert [
-        message["content"]
-        for message in third_request.messages
-        if message["role"] == "assistant"
+        message["content"] for message in third_request.messages if message["role"] == "assistant"
     ] == ["I will check.", "The lookup failed, so I will try another way."]
 
 
@@ -734,9 +915,12 @@ async def test_delayed_queue_when_tool_chain_hits_limit_then_model_writes_final_
     assert final_request.tool_choice == "none"
     assert final_request.messages[-1]["role"] == "user"
     assert "达到工具调用轮次上限" in final_request.messages[-1]["content"]
-    assert "token=secret" in next(
-        message for message in final_request.messages if message["role"] == "tool"
-    )["content"]
+    assert (
+        "token=secret"
+        in next(message for message in final_request.messages if message["role"] == "tool")[
+            "content"
+        ]
+    )
 
 
 @pytest.mark.asyncio

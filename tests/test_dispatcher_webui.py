@@ -51,7 +51,9 @@ async def test_dispatcher_overview_when_workers_are_running_then_returns_live_st
 
 
 @pytest.mark.asyncio
-async def test_dispatcher_overview_when_database_is_missing_then_returns_configured_empty_state(tmp_path: Path):
+async def test_dispatcher_overview_when_database_is_missing_then_returns_configured_empty_state(
+    tmp_path: Path,
+):
     _write_adapters(tmp_path / "personas" / "alpha" / "adapters.json")
 
     response = await api_dispatcher_overview(SimpleNamespace(), tmp_path)

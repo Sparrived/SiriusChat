@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+import json
+import logging
 import re
 import unicodedata
 from dataclasses import dataclass
-import json
-import logging
 from typing import TYPE_CHECKING, Any
 
 from sirius_pulse.memory.units.models import MemoryUnit
@@ -128,9 +128,7 @@ class MemoryUnitDeduplicator:
             return DedupVerdict("DUPLICATE", exact.unit_id, reason="normalized exact match")
         candidates = [
             unit
-            for unit, _score in indexer.semantic_candidates(
-                incoming, top_k=5, min_similarity=0.80
-            )
+            for unit, _score in indexer.semantic_candidates(incoming, top_k=5, min_similarity=0.80)
         ]
         if not candidates:
             return DedupVerdict("NEW")

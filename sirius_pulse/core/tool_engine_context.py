@@ -120,7 +120,11 @@ class ToolEngineContextImpl:
             tool_multimodal: list[dict[str, Any]] = []
             for tool_call in tool_calls:
                 tool_name = tool_call.function_name
-                tool = self._engine._tool_registry.get(tool_name) if self._engine._tool_registry else None
+                tool = (
+                    self._engine._tool_registry.get(tool_name)
+                    if self._engine._tool_registry
+                    else None
+                )
                 if tool is None:
                     tool_content = f"Tool '{tool_name}' not found"
                 else:
@@ -201,12 +205,19 @@ class ToolEngineContextImpl:
             {"text": text, "adapter_type": adapter_type}
         )
 
-    async def emit_event(self, event_type: str, data: dict[str, Any]) -> None:
+    async def emit_event(self, event_type: str, data: dict[str, Any]) -> bool:
         mapped = _EVENT_TYPE_MAP.get(event_type)
+        event_bus = getattr(self._engine, "event_bus", None)
         if mapped is None:
             logger.warning("未知事件类型: %s", event_type)
-            return
-        await self._engine.event_bus.emit(SessionEvent(type=mapped, data=data))
+            return False
+        if event_bus is None or bool(getattr(event_bus, "closed", False)):
+            return False
+        subscriber_count = getattr(event_bus, "subscriber_count", None)
+        if isinstance(subscriber_count, int) and subscriber_count <= 0:
+            return False
+        result = await event_bus.emit(SessionEvent(type=mapped, data=dict(data)))
+        return result is not False
 
     async def dispatch_proactive_message(
         self,
@@ -215,19 +226,36 @@ class ToolEngineContextImpl:
         text: str,
         adapter_type: str = "",
         event_id: str = "",
+        image_path: str = "",
         reply_references: list[dict[str, Any]] | None = None,
         sticker_names: list[str] | None = None,
         poke_user_ids: list[str] | None = None,
-    ) -> None:
+    ) -> bool:
+        handler = getattr(self._engine, "dispatch_proactive_message", None)
+        if callable(handler):
+            result = await handler(
+                group_id=group_id,
+                text=text,
+                adapter_type=adapter_type,
+                event_id=event_id,
+                image_path=image_path,
+                reply_references=reply_references,
+                sticker_names=sticker_names,
+                poke_user_ids=poke_user_ids,
+            )
+            return bool(result)
+
+        # 兼容旧宿主：公共引擎方法不存在时保留原有实现。
         adapter = adapter_type or self._engine._current_adapter_type
         self.queue_pending_message(group_id, text, adapter)
-        await self.emit_event(
+        emitted = await self.emit_event(
             "reminder_triggered",
             {
                 "group_id": group_id,
                 "reply": text,
                 "adapter_type": adapter,
                 "reminder_id": event_id,
+                "image_path": image_path,
                 "reply_references": reply_references or [],
                 "sticker_names": sticker_names or [],
                 "poke_user_ids": poke_user_ids or [],
@@ -235,6 +263,7 @@ class ToolEngineContextImpl:
         )
         if group_id.startswith("private_"):
             self.activate_private_group(group_id)
+        return bool(emitted)
 
     def get_active_groups(self) -> list[str]:
         return list(self._engine._group_last_message_at.keys())

@@ -52,7 +52,9 @@ class MemoryUnitFileStore:
             staged: dict[str, Path] = {}
             for group_id, units in groups.items():
                 path = stage_dir / f"{self._safe_name(group_id)}.json"
-                atomic_write_json(path, {"group_id": group_id, "units": [u.to_dict() for u in units]})
+                atomic_write_json(
+                    path, {"group_id": group_id, "units": [u.to_dict() for u in units]}
+                )
                 staged[group_id] = path
             self._base_dir.mkdir(parents=True, exist_ok=True)
             for group_id, path in staged.items():

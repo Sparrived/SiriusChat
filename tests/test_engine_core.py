@@ -53,6 +53,30 @@ def test_engine_orchestration_custom_models_route_memory_extract_to_memory_model
     assert "diary_consolidate" not in engine._task_models
 
 
+def test_engine_adapter_routes_when_registered_then_resolve_groups_and_private_users():
+    engine = _EmotionalGroupChatEngineBase.__new__(_EmotionalGroupChatEngineBase)
+    engine._adapter_routes = []
+    first = SimpleNamespace(adapter_type="napcat")
+    second = SimpleNamespace(adapter_type="discord")
+
+    third = SimpleNamespace(adapter_type="napcat")
+    engine.register_adapter(first, group_ids=["g1", "g2"], private_user_ids=[])
+    engine.register_adapter(second, group_ids=["g2"], private_user_ids=["u2"])
+    engine.register_adapter(third, group_ids=["g1"], private_user_ids=[])
+
+    assert engine.resolve_adapter_types("g1") == ["napcat"]
+    assert engine.resolve_adapter_types("g2") == ["napcat", "discord"]
+    assert engine.resolve_adapter_types("g3") == []
+    assert engine.resolve_adapter_types("private_u2") == ["napcat", "discord"]
+    assert engine.resolve_adapter_types("private_u1") == ["napcat"]
+    assert engine.resolve_adapter_route_counts("g1") == {"napcat": 2}
+    assert engine.resolve_adapter_route_counts("g2") == {"napcat": 1, "discord": 1}
+
+    engine.unregister_adapter(first)
+    assert engine.resolve_adapter_types("g1") == ["napcat"]
+    assert engine.resolve_adapter_route_counts("g1") == {"napcat": 1}
+
+
 def test_engine_records_delivered_markdown_card_in_basic_history():
     engine = _EmotionalGroupChatEngineBase.__new__(_EmotionalGroupChatEngineBase)
     stored = []

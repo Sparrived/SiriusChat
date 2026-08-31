@@ -11,7 +11,7 @@ body:
         
         文档写得不够清楚，或者有错误？欢迎提出来让月白修正～
         
-        > 📚 项目文档托管在：https://docs.sparrived.xyz/
+        > 📚 项目文档托管在：https://sirius-pulse-docs.vercel.app/
 
   - type: dropdown
     id: type
@@ -33,7 +33,7 @@ body:
     attributes:
       label: "📍 文档位置"
       description: "问题所在的文档路径或 URL"
-      placeholder: "例如：README.md / docs/architecture.md / https://docs.sparrived.xyz/..."
+      placeholder: "例如：README.md / docs/architecture.md / https://sirius-pulse-docs.vercel.app/..."
     validations:
       required: true
 

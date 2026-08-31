@@ -11,7 +11,6 @@ from aiohttp import web
 from sirius_pulse.core.group_dispatcher import GroupDispatcher
 from sirius_pulse.webui.server_utils import _json_response
 
-
 _DEFAULT_DB_NAME = "dispatcher/dispatcher.db"
 _POLICY_KEYS = (
     "dispatch_min_reply_interval_seconds",
@@ -92,12 +91,16 @@ def _merge_snapshots(snapshots: list[dict[str, object]], paths: list[Path]) -> d
                     **previous,
                     **item,
                     "online": bool(previous.get("online") or item.get("online")),
-                    "last_seen": max(float(previous.get("last_seen") or 0), float(item.get("last_seen") or 0)),
+                    "last_seen": max(
+                        float(previous.get("last_seen") or 0), float(item.get("last_seen") or 0)
+                    ),
                     "last_reply_at": max(
                         float(previous.get("last_reply_at") or 0),
                         float(item.get("last_reply_at") or 0),
                     ),
-                    "reply_count": max(int(previous.get("reply_count") or 0), int(item.get("reply_count") or 0)),
+                    "reply_count": max(
+                        int(previous.get("reply_count") or 0), int(item.get("reply_count") or 0)
+                    ),
                     "recent_reply_count": max(
                         int(previous.get("recent_reply_count") or 0),
                         int(item.get("recent_reply_count") or 0),
@@ -107,18 +110,41 @@ def _merge_snapshots(snapshots: list[dict[str, object]], paths: list[Path]) -> d
             if isinstance(item, dict):
                 group_id = str(item.get("group_id") or "")
                 previous = groups.get(group_id)
-                if previous is None or bool(item.get("active")) or float(item.get("last_reply_at") or 0) > float(previous.get("last_reply_at") or 0):
+                if (
+                    previous is None
+                    or bool(item.get("active"))
+                    or float(item.get("last_reply_at") or 0)
+                    > float(previous.get("last_reply_at") or 0)
+                ):
                     groups[group_id] = item
         for item in snapshot.get("events", []):
             if isinstance(item, dict):
                 event_id = str(item.get("event_id") or "")
                 previous = events.get(event_id)
-                if previous is None or float(item.get("updated_at") or 0) > float(previous.get("updated_at") or 0):
+                if previous is None or float(item.get("updated_at") or 0) > float(
+                    previous.get("updated_at") or 0
+                ):
                     events[event_id] = item
 
-    merged_events = sorted(events.values(), key=lambda item: float(item.get("updated_at") or 0), reverse=True)[:200]
-    merged_workers = sorted(workers.values(), key=lambda item: (-int(bool(item.get("online"))), -float(item.get("priority") or 0), str(item.get("worker_id") or "")))
-    merged_groups = sorted(groups.values(), key=lambda item: (-int(bool(item.get("active"))), -float(item.get("last_reply_at") or 0), str(item.get("group_id") or "")))[:200]
+    merged_events = sorted(
+        events.values(), key=lambda item: float(item.get("updated_at") or 0), reverse=True
+    )[:200]
+    merged_workers = sorted(
+        workers.values(),
+        key=lambda item: (
+            -int(bool(item.get("online"))),
+            -float(item.get("priority") or 0),
+            str(item.get("worker_id") or ""),
+        ),
+    )
+    merged_groups = sorted(
+        groups.values(),
+        key=lambda item: (
+            -int(bool(item.get("active"))),
+            -float(item.get("last_reply_at") or 0),
+            str(item.get("group_id") or ""),
+        ),
+    )[:200]
     now = max(float(snapshot.get("updated_at") or 0) for snapshot in snapshots)
     day_ago = now - 86400.0
     recent = [item for item in merged_events if float(item.get("updated_at") or 0) >= day_ago]
@@ -126,7 +152,10 @@ def _merge_snapshots(snapshots: list[dict[str, object]], paths: list[Path]) -> d
         "available": True,
         "db_path": str(snapshots[0].get("db_path") or paths[0]),
         "updated_at": now,
-        "databases": [{"path": str(snapshot.get("db_path") or ""), "available": True} for snapshot in snapshots],
+        "databases": [
+            {"path": str(snapshot.get("db_path") or ""), "available": True}
+            for snapshot in snapshots
+        ],
         "workers": merged_workers,
         "groups": merged_groups,
         "events": merged_events,
@@ -136,7 +165,11 @@ def _merge_snapshots(snapshots: list[dict[str, object]], paths: list[Path]) -> d
             "groups_total": len(merged_groups),
             "active_turns": sum(1 for item in merged_groups if item.get("active")),
             "decisions_24h": len(recent),
-            "granted_24h": sum(1 for item in recent if item.get("status") in {"granted", "sent", "silent", "expired"}),
+            "granted_24h": sum(
+                1
+                for item in recent
+                if item.get("status") in {"granted", "sent", "silent", "expired"}
+            ),
             "sent_24h": sum(1 for item in recent if item.get("status") == "sent"),
             "observed_24h": sum(1 for item in recent if item.get("status") == "observed"),
         },
@@ -147,8 +180,7 @@ def _policy(configs: list[tuple[Path, dict[str, Any]]]) -> dict[str, object]:
     enabled = [
         config
         for _, config in configs
-        if bool(config.get("enabled", True))
-        and bool(config.get("group_dispatch_enabled", True))
+        if bool(config.get("enabled", True)) and bool(config.get("group_dispatch_enabled", True))
     ]
     values: dict[str, list[float | int]] = {key: [] for key in _POLICY_KEYS}
     for config in enabled:

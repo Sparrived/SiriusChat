@@ -18,19 +18,15 @@ from pathlib import Path
 from typing import Callable
 from uuid import uuid4
 
-
 _OPEN_LOOP_RE = re.compile(
-    r"(?:[?？]|你(?:怎么看|觉得|认为|说|来|接着|继续|补充)|"
-    r"(?:轮到你|请你|想听你|能不能|要不要|是不是|对吧))"
+    r"(?:[?？]|你(?:怎么看|觉得|认为|说|来|接着|继续|补充)|" r"(?:轮到你|请你|想听你|能不能|要不要|是不是|对吧))"
 )
 _CONTINUATION_RE = re.compile(r"(?:不过|但是|不太同意|不同意|补充|反而|确实|有道理|我也觉得)")
 
 
 def _normalized_topic(text: str) -> str:
     return "".join(
-        char.lower()
-        for char in str(text or "")
-        if char.isalnum() or "\u4e00" <= char <= "\u9fff"
+        char.lower() for char in str(text or "") if char.isalnum() or "\u4e00" <= char <= "\u9fff"
     )[:240]
 
 
@@ -327,7 +323,9 @@ class GroupDispatcher:
                 return decision
             if time.monotonic() >= deadline:
                 decision = self._finalize_candidate(event_id, group_id, force=True)
-                return decision or DispatchDecision("observe", event_id, reason="collection_timeout")
+                return decision or DispatchDecision(
+                    "observe", event_id, reason="collection_timeout"
+                )
             await asyncio.sleep(0.01)
 
     def _submit_candidate(
@@ -529,7 +527,11 @@ class GroupDispatcher:
                 "SELECT COUNT(*) FROM dispatcher_workers WHERE last_seen > ?",
                 (now - self.registry_ttl_seconds,),
             ).fetchone()[0]
-            if not force and len(candidates) < max(1, int(expected)) and now < float(event["created_at"]) + self.score_collection_seconds:
+            if (
+                not force
+                and len(candidates) < max(1, int(expected))
+                and now < float(event["created_at"]) + self.score_collection_seconds
+            ):
                 return None
 
             first = candidates[0] if candidates else None
@@ -564,10 +566,7 @@ class GroupDispatcher:
                 row
                 for row in candidates
                 if bool(row["eligible"])
-                and (
-                    not known_targets
-                    or str(row["account_id"] or "") in known_targets
-                )
+                and (not known_targets or str(row["account_id"] or "") in known_targets)
             ]
             is_peer = sender_type == "other_ai" or (
                 sender_account_id
@@ -580,7 +579,9 @@ class GroupDispatcher:
                 "SELECT * FROM dispatcher_groups WHERE group_id=?", (group_id,)
             ).fetchone()
             if state is None:
-                conn.execute("INSERT OR IGNORE INTO dispatcher_groups(group_id) VALUES (?)", (group_id,))
+                conn.execute(
+                    "INSERT OR IGNORE INTO dispatcher_groups(group_id) VALUES (?)", (group_id,)
+                )
                 state = conn.execute(
                     "SELECT * FROM dispatcher_groups WHERE group_id=?", (group_id,)
                 ).fetchone()
@@ -590,9 +591,7 @@ class GroupDispatcher:
             if is_peer:
                 if known_targets:
                     directed = [
-                        row
-                        for row in candidates
-                        if str(row["account_id"] or "") in known_targets
+                        row for row in candidates if str(row["account_id"] or "") in known_targets
                     ]
                     if directed:
                         eligible = directed
@@ -608,7 +607,9 @@ class GroupDispatcher:
                     return self._mark_candidate_deferred(
                         conn, event_id, now, active_worker, "group_busy"
                     )
-                return self._mark_candidate_observed(conn, event_id, now, active_worker, "group_busy")
+                return self._mark_candidate_observed(
+                    conn, event_id, now, active_worker, "group_busy"
+                )
 
             if is_human:
                 conn.execute(
@@ -673,9 +674,7 @@ class GroupDispatcher:
                 strategy_rank = {"immediate": 0, "delayed": 1}.get(response_strategy, 2)
                 text_target_adjustment = 0.0
                 if text_target_worker_id:
-                    text_target_adjustment = (
-                        0.55 if worker_id == text_target_worker_id else -0.35
-                    )
+                    text_target_adjustment = 0.55 if worker_id == text_target_worker_id else -0.35
                 final_score = (
                     base_score + priority_bonus - activity_penalty + text_target_adjustment
                 )
@@ -898,7 +897,9 @@ class GroupDispatcher:
                 self._record_event(
                     conn, event_id, group_id, "", "observed", now, reason="group_busy"
                 )
-                return DispatchDecision("observe", event_id, worker_id=active_worker, reason="group_busy")
+                return DispatchDecision(
+                    "observe", event_id, worker_id=active_worker, reason="group_busy"
+                )
 
             workers = conn.execute(
                 """
@@ -985,12 +986,16 @@ class GroupDispatcher:
                     "",
                     "observed",
                     now,
-                    reason="peer_target_unavailable" if is_peer and open_target else "target_unavailable",
+                    reason="peer_target_unavailable"
+                    if is_peer and open_target
+                    else "target_unavailable",
                 )
                 return DispatchDecision(
                     "observe",
                     event_id,
-                    reason="peer_target_unavailable" if is_peer and open_target else "target_unavailable",
+                    reason="peer_target_unavailable"
+                    if is_peer and open_target
+                    else "target_unavailable",
                 )
 
             selected = eligible[0]
@@ -1077,9 +1082,7 @@ class GroupDispatcher:
                     source_targeted = True
                     break
                 try:
-                    target_accounts = set(
-                        json.loads(str(candidate["target_account_ids"] or "[]"))
-                    )
+                    target_accounts = set(json.loads(str(candidate["target_account_ids"] or "[]")))
                 except (TypeError, ValueError, json.JSONDecodeError):
                     target_accounts = set()
                 if target_accounts & live_accounts:
@@ -1213,9 +1216,13 @@ class GroupDispatcher:
             }
             reason_sql = "reason" if "reason" in event_columns else "'' AS reason"
             base_score_sql = "base_score" if "base_score" in event_columns else "0 AS base_score"
-            final_score_sql = "final_score" if "final_score" in event_columns else "0 AS final_score"
+            final_score_sql = (
+                "final_score" if "final_score" in event_columns else "0 AS final_score"
+            )
             activity_penalty_sql = (
-                "activity_penalty" if "activity_penalty" in event_columns else "0 AS activity_penalty"
+                "activity_penalty"
+                if "activity_penalty" in event_columns
+                else "0 AS activity_penalty"
             )
             response_strategy_sql = (
                 "response_strategy"

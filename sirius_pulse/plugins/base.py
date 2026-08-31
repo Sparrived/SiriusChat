@@ -20,6 +20,8 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Awaitable
 
+from sirius_pulse.extension_runtime import BackgroundTaskSpec
+
 if TYPE_CHECKING:
     from sirius_pulse.plugins.context import PluginContext
     from sirius_pulse.plugins.models import CommandAST
@@ -60,15 +62,15 @@ class PluginBase:
     _plugin_version: str = "1.0.0"
     _plugin_author: str = ""
     _plugin_events: list[dict[str, Any]] = []
-    _plugin_schedule: list[dict[str, Any]] = (
-        []
-    )  # [{"time": "HH:MM", "duration": 1440}, ...] 声明式定时，由 from_class() 自动转为 PluginEventDef
+    _plugin_schedule: list[
+        dict[str, Any]
+    ] = []  # [{"time": "HH:MM", "duration": 1440}, ...] 声明式定时，由 from_class() 自动转为 PluginEventDef
     _plugin_permissions: dict[str, Any] | None = None
     _plugin_nl_examples: list[str] = []
     _plugin_nl_slots: dict[str, dict[str, Any]] = {}
-    _plugin_parameters: list[dict[str, Any]] = (
-        []
-    )  # 参数定义列表（v1.3+），由 from_class() 自动解析为 PluginParameterDef
+    _plugin_parameters: list[
+        dict[str, Any]
+    ] = []  # 参数定义列表（v1.3+），由 from_class() 自动解析为 PluginParameterDef
     _plugin_dependencies: list[str] = []
     _plugin_prompt_inject: str = ""  # 注入到人格 prompt 的额外提示词（v1.3+）
 
@@ -118,6 +120,15 @@ class PluginBase:
         支持同步和异步子类覆写。
         """
 
+    def create_background_tasks(self) -> list[BackgroundTaskSpec]:
+        """创建由框架托管的插件后台任务。
+
+        插件可以返回 ``BackgroundTaskSpec``，以复用被动 Tool 的可靠循环语义，
+        但任务仍归属于当前 Plugin，并会在 ``on_unload`` 前被取消。后台任务
+        不应直接创建无法追踪的 ``asyncio.create_task``。
+        """
+        return []
+
     async def on_event(self, event_type: str, event_data: dict) -> None:
         """定时事件触发时调用。
 
@@ -155,8 +166,7 @@ class PluginBase:
             # 有装饰器命令但 execute 未被覆写 → 返回未调度错误
             # （装饰器命令应通过 execute_async 异步调度）
             return PluginResponse.fail(
-                f"Plugin '{self._name}' 使用了 @command 装饰器但未通过异步调度。"
-                f" 请使用 execute_async() 方法。"
+                f"Plugin '{self._name}' 使用了 @command 装饰器但未通过异步调度。" f" 请使用 execute_async() 方法。"
             )
 
         return PluginResponse.fail(f"Plugin '{self._name}' 未实现 execute() 方法")
@@ -258,6 +268,10 @@ class PluginBase:
         if self._ctx and self._ctx.data_store:
             return self._ctx.data_store
         raise RuntimeError("PluginDataStore 不可用")
+
+    def get_artifact_dir(self) -> Path:
+        """获取 Plugin 专用附件目录，并确保目录存在。"""
+        return self.get_data_store().artifact_dir
 
     def get_adapter(self):
         """获取平台适配器实例（BaseAdapter）。"""

@@ -169,9 +169,7 @@ def test_persona_prompt_includes_the_complete_identity_anchor_prompt():
 
 
 def test_persona_prompt_does_not_rebuild_removed_structured_persona_fields():
-    custom_prompt = PromptFactory.build_persona_prompt(
-        name="Bot", full_system_prompt="这是自定义人格。"
-    )
+    custom_prompt = PromptFactory.build_persona_prompt(name="Bot", full_system_prompt="这是自定义人格。")
 
     assert "这是自定义人格。" in custom_prompt
     assert custom_prompt.count("【身份锚定】") == 1

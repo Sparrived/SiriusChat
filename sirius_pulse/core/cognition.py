@@ -816,10 +816,7 @@ class CognitionAnalyzer:
 
         # Excessive laughter emoji/punctuation
         laugh_count = (
-            text_lower.count("哈哈")
-            + text_lower.count("haha")
-            + text.count("😂")
-            + text.count("🤣")
+            text_lower.count("哈哈") + text_lower.count("haha") + text.count("😂") + text.count("🤣")
         )
         if laugh_count >= 3:
             indicators += 0.15
@@ -1071,8 +1068,7 @@ class CognitionAnalyzer:
         ed_count = sum(1 for w in emotional_markers if w in text_lower)
         scores["emotional_disclosure_score"] = min(
             1.0,
-            ed_count * 0.25
-            + (0.15 if any(w in text_lower for w in ["感觉", "觉得", "心情"]) else 0.0),
+            ed_count * 0.25 + (0.15 if any(w in text_lower for w in ["感觉", "觉得", "心情"]) else 0.0),
         )
 
         # attention_seeking_score: attention-seeking phrases

@@ -78,6 +78,11 @@ class PluginConfigManager:
         self._listeners: list[ConfigChangeListener] = []
         self._load()
 
+    @property
+    def plugins_dir(self) -> Path:
+        """获取插件代码和配置所在目录。"""
+        return self._plugins_dir
+
     def _load(self) -> None:
         """从磁盘加载配置。"""
         if self._config_path.exists():
@@ -102,6 +107,9 @@ class PluginConfigManager:
         result: dict[str, PluginConfig] = {}
 
         for plugin_name, plugin_data in data.items():
+            if not isinstance(plugin_data, dict):
+                logger.warning("忽略非法 Plugin 配置: %s", plugin_name)
+                continue
             # 检查是否为旧格式（没有 enabled/permissions/settings 结构）
             if "enabled" not in plugin_data or "permissions" not in plugin_data:
                 # 旧格式迁移
@@ -193,8 +201,16 @@ class PluginConfigManager:
         self._save()
         self._notify_change(plugin_name)
 
+    def replace_settings(self, plugin_name: str, settings: dict[str, Any]) -> None:
+        """Replace all plugin settings atomically at the configuration level."""
+        if plugin_name not in self._config:
+            self._config[plugin_name] = PluginConfig(enabled=True, permissions={}, settings={})
+        self._config[plugin_name]["settings"] = dict(settings)
+        self._save()
+        self._notify_change(plugin_name)
+
     def set_setting(self, plugin_name: str, key: str, value: Any) -> None:
-        """设置插件单个配置项。"""
+        """设置单个配置项。"""
         if plugin_name not in self._config:
             self._config[plugin_name] = PluginConfig(enabled=True, permissions={}, settings={})
         self._config[plugin_name]["settings"][key] = value
@@ -269,30 +285,33 @@ class PluginConfigManager:
 # ═══════════════════════════════════════════════════════════════════════
 
 _global_config_manager: PluginConfigManager | None = None
+_config_managers: dict[str, PluginConfigManager] = {}
 
 
 def get_config_manager(plugins_dir: Path | None = None) -> PluginConfigManager:
-    """获取全局配置管理器单例。
+    """按插件目录返回配置管理器。
 
-    Args:
-        plugins_dir: 插件目录路径，首次调用时如未提供则自动推断
-
-    Returns:
-        PluginConfigManager 实例
+    Runtime 和 WebUI 可能在同一进程中处理不同 workspace；不能因为首次
+    调用创建了一个单例，就把后续 workspace 的配置误读成第一个 workspace。
     """
     global _global_config_manager
 
+    if plugins_dir is None:
+        if _global_config_manager is not None:
+            return _global_config_manager
+        plugins_dir = Path(__file__).resolve().parent.parent.parent / "plugins"
+    key = str(Path(plugins_dir).resolve())
+    manager = _config_managers.get(key)
+    if manager is None:
+        manager = PluginConfigManager(Path(plugins_dir))
+        _config_managers[key] = manager
     if _global_config_manager is None:
-        if plugins_dir is None:
-            # 自动推断：本文件位于 sirius_pulse/plugins/config.py
-            # 项目根目录 / plugins 即为插件目录
-            plugins_dir = Path(__file__).resolve().parent.parent.parent / "plugins"
-        _global_config_manager = PluginConfigManager(plugins_dir)
-
-    return _global_config_manager
+        _global_config_manager = manager
+    return manager
 
 
 def set_config_manager(manager: PluginConfigManager) -> None:
-    """设置全局配置管理器（用于测试或依赖注入）。"""
+    """设置指定插件目录的配置管理器（用于测试或依赖注入）。"""
     global _global_config_manager
     _global_config_manager = manager
+    _config_managers[str(manager.plugins_dir.resolve())] = manager

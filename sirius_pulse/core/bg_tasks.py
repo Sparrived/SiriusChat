@@ -273,9 +273,7 @@ class BackgroundTasks:
 
         return promoted_total
 
-    def _get_uncheckpointed_candidates(
-        self, group_id: str, *, include_context: bool
-    ) -> list[Any]:
+    def _get_uncheckpointed_candidates(self, group_id: str, *, include_context: bool) -> list[Any]:
         engine = self._engine
         candidates = engine.basic_memory.get_consolidation_candidates(
             group_id,
@@ -471,9 +469,17 @@ class BackgroundTasks:
         self,
         group_id: str,
         on_partial_reply: Any | None = None,
+        *,
+        adapter_type: str | None = None,
+        adapter_route_id: str | None = None,
     ) -> list[dict[str, Any]]:
-        """Process delayed response queue for a group."""
-        return await self.delayed.tick_delayed_queue(group_id, on_partial_reply)
+        """Process one source-adapter partition of a delayed response queue."""
+        return await self.delayed.tick_delayed_queue(
+            group_id,
+            on_partial_reply,
+            adapter_type=adapter_type,
+            adapter_route_id=adapter_route_id,
+        )
 
     def pop_reminders(self, group_id: str, adapter_type: str | None = None) -> list[str]:
         """Pop pending reminder messages for a group."""

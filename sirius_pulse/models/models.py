@@ -36,6 +36,8 @@ class Message(JsonSerializable):
     dispatch_lease_id: str = ""
     dispatch_response_strategy: str = "immediate"
     dispatch_response_delay_seconds: float = 0.0
+    # 同类型多实例的稳定来源路由键；不参与 Tool 能力过滤。
+    adapter_route_id: str | None = None
 
     @staticmethod
     def _trim_content_tail(content: str) -> str:

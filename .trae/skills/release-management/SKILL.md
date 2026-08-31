@@ -84,7 +84,7 @@ pytest -q
    - 填入以下信息：
      - PyPI Project Name: `sirius-pulse`
      - GitHub Owner: `Sparrived`
-     - GitHub Repository: `SiriusChat`
+     - GitHub Repository: `SiriusPulse`
      - Workflow Name: `publish.yml`
      - Environment Name: `pypi`
 
@@ -151,7 +151,7 @@ git push origin v1.1.0
 
 ### 步骤 6：验证发布
 
-- 访问 GitHub Actions：https://github.com/Sparrived/SiriusChat/actions/workflows/publish.yml
+- 访问 GitHub Actions：https://github.com/Sparrived/SiriusPulse/actions/workflows/publish.yml
 - 等待 workflow 完成（约 1-2 分钟）
 - 访问 PyPI：https://pypi.org/project/sirius-pulse/
 - 确认新版本已出现

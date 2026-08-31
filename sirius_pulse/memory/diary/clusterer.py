@@ -149,11 +149,7 @@ class TopicClusterer:
             lines.append(f"[{i}] [{name}] {e.content}")
         conversation = "\n".join(lines)
 
-        user_prompt = (
-            f"以下是对话记录，格式：[序号] [发言人] 内容\n\n"
-            f"{conversation}\n\n"
-            f"请按话题分组。"
-        )
+        user_prompt = f"以下是对话记录，格式：[序号] [发言人] 内容\n\n" f"{conversation}\n\n" f"请按话题分组。"
 
         raw_request = RawRequest(
             model=model_name,

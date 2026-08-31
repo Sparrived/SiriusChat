@@ -20,9 +20,9 @@
 
 from __future__ import annotations
 
+from sirius_pulse.extension_runtime import BackgroundTaskSpec
 from sirius_pulse.tools.data_store import ToolDataStore
 from sirius_pulse.tools.models import (
-    BackgroundTaskSpec,
     ToolChainContext,
     ToolEngineContext,
     ToolInvocationContext,

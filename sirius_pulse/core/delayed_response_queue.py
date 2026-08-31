@@ -3,8 +3,8 @@
 Monitors conversation during the wait window:
 - If topic gap appears → trigger immediately
 
-IMMEDIATE 策略使用 5s 防抖窗口，窗口期内每收到一条新消息增加 1s，上限 12s。
-在同 group 内合并连续消息，避免刷屏。
+IMMEDIATE 策略不设置等待窗口，入队后可立即触发 API 请求。
+DELAYED 策略仍会在同 group 内合并连续消息，避免刷屏。
 """
 
 from __future__ import annotations
@@ -16,13 +16,13 @@ from typing import Any
 
 from sirius_pulse.core.prompt_factory import PromptFactory
 from sirius_pulse.core.rhythm import RhythmAnalysis
-from sirius_pulse.models.response_strategy import DelayedResponseItem, ResponseStrategy, StrategyDecision
+from sirius_pulse.models.response_strategy import (
+    DelayedResponseItem,
+    ResponseStrategy,
+    StrategyDecision,
+)
 
 logger = logging.getLogger(__name__)
-
-_IMMEDIATE_DEBOUNCE_SECONDS = 5.0
-_HARD_IMMEDIATE_DEBOUNCE_SECONDS = 1.0
-_IMMEDIATE_WINDOW_MAX = 12.0
 
 # Heat-based window multipliers: hotter groups = longer wait
 _HEAT_WINDOW_MULT = {
@@ -56,6 +56,25 @@ class DelayedResponseQueue:
         # group_id -> list of items
         self._queues: dict[str, list[DelayedResponseItem]] = {}
 
+    @staticmethod
+    def _matches_source(
+        item: DelayedResponseItem,
+        *,
+        adapter_type: str | None,
+        adapter_route_id: str | None,
+        query_all_when_unspecified: bool = False,
+    ) -> bool:
+        """Match the stable instance route before the coarse adapter type."""
+        if adapter_route_id is not None:
+            route_matches = (item.adapter_route_id or "") == str(adapter_route_id or "")
+            type_matches = adapter_type is None or (item.adapter_type or "") == str(
+                adapter_type or ""
+            )
+            return route_matches and type_matches
+        if adapter_type is not None:
+            return (item.adapter_type or "") == str(adapter_type or "")
+        return query_all_when_unspecified or not item.adapter_type and not item.adapter_route_id
+
     def enqueue(
         self,
         group_id: str,
@@ -67,6 +86,7 @@ class DelayedResponseQueue:
         channel_user_id: str | None = None,
         multimodal_inputs: list[dict[str, str]] | None = None,
         adapter_type: str | None = None,
+        adapter_route_id: str | None = None,
         heat_level: str = "warm",
         pace: str = "steady",
         speaker_name: str = "",
@@ -76,9 +96,9 @@ class DelayedResponseQueue:
     ) -> DelayedResponseItem:
         """Add an item to the delayed queue.
 
-        For IMMEDIATE strategy, if the same group already has a pending
-        item, merge the message content.  Each additional IMMEDIATE
-        message extends the window by 1 second (capped at 12s).
+        If the same group already has a pending item, merge the message
+        content. An incoming IMMEDIATE decision promotes that item to a
+        zero-second window so it can trigger without debounce.
         """
         from sirius_pulse.core.utils import now_iso
 
@@ -90,19 +110,25 @@ class DelayedResponseQueue:
             platform_message_id=platform_message_id,
         )
 
-        # Debounce: merge with any existing pending item in the same group.
-        # This prevents multiple independent replies during high-frequency
-        # message bursts; all messages within the debounce window are
-        # consolidated into one prompt.
+        # Merge with any existing pending item in the same group. DELAYED
+        # messages keep burst consolidation; IMMEDIATE messages promote the
+        # shared item to a zero-second window.
         queue = self._queues.get(group_id, [])
         for item in queue:
-            if item.status == "pending" and getattr(item, "lane", "chat") == lane:
+            if (
+                item.status == "pending"
+                and getattr(item, "lane", "chat") == lane
+                and self._matches_source(
+                    item,
+                    adapter_type=adapter_type,
+                    # Enqueue never merges an unrouted legacy source into a
+                    # concrete same-type adapter instance partition.
+                    adapter_route_id=str(adapter_route_id or ""),
+                )
+            ):
                 item.message_content += f"\n{tagged}"
                 if strategy_decision.strategy == ResponseStrategy.IMMEDIATE:
-                    if item.strategy_decision.strategy == ResponseStrategy.IMMEDIATE:
-                        item.window_seconds = min(item.window_seconds + 1.0, _IMMEDIATE_WINDOW_MAX)
-                    else:
-                        item.window_seconds = _IMMEDIATE_DEBOUNCE_SECONDS
+                    item.window_seconds = 0.0
                     item.strategy_decision = strategy_decision
                 else:
                     new_window = self._window_for_item(strategy_decision, heat_level)
@@ -120,6 +146,8 @@ class DelayedResponseQueue:
                 item.channel_user_id = channel_user_id
                 if adapter_type:
                     item.adapter_type = adapter_type
+                if adapter_route_id:
+                    item.adapter_route_id = adapter_route_id
                 # Track all users whose messages were merged into this item
                 if user_id and user_id not in item.related_user_ids:
                     item.related_user_ids.append(user_id)
@@ -151,6 +179,7 @@ class DelayedResponseQueue:
             status="pending",
             multimodal_inputs=list(multimodal_inputs or []),
             adapter_type=adapter_type,
+            adapter_route_id=adapter_route_id,
             heat_level=heat_level,
             pace=pace,
             related_user_ids=[user_id] if user_id else [],
@@ -176,6 +205,8 @@ class DelayedResponseQueue:
         group_id: str,
         recent_messages: list[dict[str, Any]],
         rhythm: RhythmAnalysis | None = None,
+        adapter_type: str | None = None,
+        adapter_route_id: str | None = None,
     ) -> list[DelayedResponseItem]:
         """Process queue for a group based on recent conversation.
 
@@ -205,6 +236,18 @@ class DelayedResponseQueue:
         for item in clean_queue:
             if item.status != "pending":
                 continue
+            # A group can be served by more than one adapter instance/type.
+            # A delivery event must only destructively consume the partition
+            # created by its source adapter; legacy callers without a source
+            # retain the historical all-partitions behavior.
+            if not self._matches_source(
+                item,
+                adapter_type=adapter_type,
+                adapter_route_id=adapter_route_id,
+                query_all_when_unspecified=True,
+            ):
+                remaining.append(item)
+                continue
 
             action = self._evaluate_item(item, recent_messages, rhythm)
             if action == "trigger":
@@ -228,13 +271,41 @@ class DelayedResponseQueue:
                 cancelled += 1
         return cancelled
 
-    def get_pending(self, group_id: str) -> list[DelayedResponseItem]:
-        """Get all pending items for a group."""
-        return [i for i in self._queues.get(group_id, []) if i.status == "pending"]
+    def get_pending(
+        self,
+        group_id: str,
+        *,
+        adapter_type: str | None = None,
+        adapter_route_id: str | None = None,
+    ) -> list[DelayedResponseItem]:
+        """Get pending items, optionally for one source adapter instance."""
+        return [
+            item
+            for item in self._queues.get(group_id, [])
+            if item.status == "pending"
+            and self._matches_source(
+                item,
+                adapter_type=adapter_type,
+                adapter_route_id=adapter_route_id,
+                query_all_when_unspecified=True,
+            )
+        ]
 
-    def has_pending(self, group_id: str) -> bool:
-        """检查指定 group 是否有等待中的队列项。"""
-        return any(i.status == "pending" for i in self._queues.get(group_id, []))
+    def has_pending(
+        self,
+        group_id: str,
+        *,
+        adapter_type: str | None = None,
+        adapter_route_id: str | None = None,
+    ) -> bool:
+        """Return whether one source-adapter partition has pending items."""
+        return bool(
+            self.get_pending(
+                group_id,
+                adapter_type=adapter_type,
+                adapter_route_id=adapter_route_id,
+            )
+        )
 
     def cancel_item(self, item_id: str) -> bool:
         """Cancel one stale item that lost its group-level dispatch lease."""
@@ -249,14 +320,24 @@ class DelayedResponseQueue:
         self,
         group_id: str,
         *,
-        max_window_seconds: float = _HARD_IMMEDIATE_DEBOUNCE_SECONDS,
+        max_window_seconds: float = 0.0,
         reason: str = "pending_promoted",
         lane: str = "chat",
+        adapter_type: str | None = None,
+        adapter_route_id: str | None = None,
     ) -> DelayedResponseItem | None:
-        """Shorten the wait window for an existing pending item."""
+        """Shorten the wait window for one source-adapter pending item."""
         queue = self._queues.get(group_id, [])
         for item in queue:
-            if item.status != "pending" or getattr(item, "lane", "chat") != lane:
+            if (
+                item.status != "pending"
+                or getattr(item, "lane", "chat") != lane
+                or not self._matches_source(
+                    item,
+                    adapter_type=adapter_type,
+                    adapter_route_id=str(adapter_route_id or ""),
+                )
+            ):
                 continue
             item.window_seconds = min(item.window_seconds, max(0.0, max_window_seconds))
             item.strategy_decision.strategy = ResponseStrategy.IMMEDIATE
@@ -284,6 +365,8 @@ class DelayedResponseQueue:
         multimodal_inputs: list[dict[str, str]] | None = None,
         platform_message_id: str = "",
         lane: str = "chat",
+        adapter_type: str | None = None,
+        adapter_route_id: str | None = None,
     ) -> bool:
         """轻量合并：将新消息合并进已有 pending 项，跳过完整管线。
 
@@ -295,7 +378,15 @@ class DelayedResponseQueue:
         """
         queue = self._queues.get(group_id, [])
         for item in queue:
-            if item.status != "pending" or getattr(item, "lane", "chat") != lane:
+            if (
+                item.status != "pending"
+                or getattr(item, "lane", "chat") != lane
+                or not self._matches_source(
+                    item,
+                    adapter_type=adapter_type,
+                    adapter_route_id=str(adapter_route_id or ""),
+                )
+            ):
                 continue
             # 使用统一的 tag_message 生成 <message> 标签
             tagged = PromptFactory.tag_message(
@@ -408,12 +499,7 @@ class DelayedResponseQueue:
     def _window_for_item(strategy_decision: StrategyDecision, heat_level: str = "warm") -> float:
         """Return debounce/wait window based on strategy, urgency, and heat."""
         if strategy_decision.strategy == ResponseStrategy.IMMEDIATE:
-            if strategy_decision.context.get("hard_immediate"):
-                return _HARD_IMMEDIATE_DEBOUNCE_SECONDS
-            delay = float(strategy_decision.estimated_delay_seconds or 0.0)
-            if delay > 0:
-                return min(_IMMEDIATE_DEBOUNCE_SECONDS, delay)
-            return _IMMEDIATE_DEBOUNCE_SECONDS
+            return 0.0
         if strategy_decision.urgency >= 70:
             base = 15.0
         elif strategy_decision.urgency >= 40:

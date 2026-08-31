@@ -48,7 +48,9 @@ async def render_status_card(status: dict[str, Any], data_store: Any) -> Path:
     async with async_playwright() as playwright:
         browser = await playwright.chromium.launch(headless=True)
         try:
-            page = await browser.new_page(viewport={"width": 800, "height": 800}, device_scale_factor=1)
+            page = await browser.new_page(
+                viewport={"width": 800, "height": 800}, device_scale_factor=1
+            )
             await page.set_content(build_status_card_html(status), wait_until="load")
             await page.locator("#container-status-card").screenshot(path=str(output_path))
         finally:
@@ -63,7 +65,13 @@ def status_summary(status: dict[str, Any]) -> str:
 
 def build_status_card_html(status: dict[str, Any]) -> str:
     status_key = status["status"].lower()
-    tone = "healthy" if status_key == "running" else "warning" if status_key == "paused" else "critical"
+    tone = (
+        "healthy"
+        if status_key == "running"
+        else "warning"
+        if status_key == "paused"
+        else "critical"
+    )
     labels = {
         "running": "运行中",
         "paused": "已暂停",

@@ -20,8 +20,8 @@ from sirius_pulse.core.identity_resolver import IdentityContext
 from sirius_pulse.core.plan_runtime import (
     consume_plan_events,
     finish_plan_session,
-    format_public_plan_status,
     format_plan_events_for_model,
+    format_public_plan_status,
     get_active_plan_session,
     start_plan_session,
     update_plan_progress,
@@ -88,6 +88,7 @@ def _build_assistant_tool_message(
 def _reasoning_memory_kwargs(chat_result: Any) -> dict[str, str]:
     reasoning_content = str(getattr(chat_result, "reasoning_content", "") or "").strip()
     return {"reasoning_content": reasoning_content} if reasoning_content else {}
+
 
 # ── 内置流程控制工具定义 ──────────────────────────────────────────────
 
@@ -354,16 +355,26 @@ class DelayedQueueTasks:
                     if newly_expired:
                         engine._log_inner_thought("之前记下的延迟回复，现在该开口了～")
                         for item in newly_expired:
-                            emitted.add(item.item_id)
-                            await engine.event_bus.emit(
+                            event_data = {
+                                "group_id": group_id,
+                                "item_id": item.item_id,
+                                "adapter_type": item.adapter_type or "",
+                            }
+                            if item.adapter_route_id:
+                                event_data["adapter_route_id"] = item.adapter_route_id
+                            accepted = await engine.event_bus.emit(
                                 SessionEvent(
                                     type=SessionEventType.DELAYED_RESPONSE_TRIGGERED,
-                                    data={
-                                        "group_id": group_id,
-                                        "item_id": item.item_id,
-                                    },
+                                    data=event_data,
                                 )
                             )
+                            # Queue admission is not platform delivery, but it
+                            # is the first required hand-off.  A closed/full/
+                            # unsubscribed bus must leave the item eligible for
+                            # a later ticker retry instead of suppressing it
+                            # forever in the emitted set.
+                            if accepted:
+                                emitted.add(item.item_id)
                 except Exception as exc:
                     logger.warning("Delayed queue tick failed for %s: %s", group_id, exc)
 
@@ -436,6 +447,9 @@ class DelayedQueueTasks:
         self,
         group_id: str,
         on_partial_reply: Any | None = None,
+        *,
+        adapter_type: str | None = None,
+        adapter_route_id: str | None = None,
     ) -> list[dict[str, Any]]:
         """Process delayed response queue for a group.
 
@@ -452,7 +466,13 @@ class DelayedQueueTasks:
         engine = self._engine
         recent = engine._helpers.get_recent_messages(group_id, n=10)
         rhythm = engine.rhythm_analyzer.analyze(group_id, recent)
-        triggered = engine.delayed_queue.tick(group_id, recent, rhythm)
+        triggered = engine.delayed_queue.tick(
+            group_id,
+            recent,
+            rhythm,
+            adapter_type=adapter_type,
+            adapter_route_id=adapter_route_id,
+        )
         if not triggered:
             return []
 
@@ -503,6 +523,8 @@ class DelayedQueueTasks:
                 window_seconds=float(item.get("window_seconds", 30.0)),
                 status=item.get("status", "pending"),
                 multimodal_inputs=item.get("multimodal_inputs", []),
+                adapter_type=item.get("adapter_type"),
+                adapter_route_id=item.get("adapter_route_id"),
                 lane=item.get("lane", "chat"),
                 plan_id=item.get("plan_id", ""),
             )
@@ -775,9 +797,7 @@ class DelayedQueueTasks:
             send_next_tool_output = False
             plan_control = [tc for tc in tool_calls if tc.function_name in PLAN_CONTROL_TOOL_NAMES]
             regular_tools = [
-                tc
-                for tc in tool_calls
-                if tc.function_name not in PLAN_CONTROL_TOOL_NAMES
+                tc for tc in tool_calls if tc.function_name not in PLAN_CONTROL_TOOL_NAMES
             ]
             agent_turn.advance(
                 AgentTurnPhase.PLAN if regular_tools or plan_control else AgentTurnPhase.RESPOND
@@ -977,9 +997,7 @@ class DelayedQueueTasks:
                 if plan_session is not None:
                     finish_plan_session(engine, group_id)
                 engine._log_inner_thought(
-                    "计划模式结束，准备发送最终回复"
-                    if plan_send_to_group
-                    else "计划模式结束，不发送群消息"
+                    "计划模式结束，准备发送最终回复" if plan_send_to_group else "计划模式结束，不发送群消息"
                 )
                 break
 
@@ -1146,7 +1164,9 @@ class DelayedQueueTasks:
                         and not caller_is_developer
                         and not self._is_autonomous_message_tool(tool, params)
                     ):
-                        err_msg = f"Tool '{tool_name}' 被拒绝：互动不足 (engagement={caller_engagement:.2f})"
+                        err_msg = (
+                            f"Tool '{tool_name}' 被拒绝：互动不足 (engagement={caller_engagement:.2f})"
+                        )
                         logger.warning(err_msg)
                         send_next_tool_output = not plan_mode
                         messages.append({"role": "tool", "tool_call_id": tc.id, "content": err_msg})
@@ -1343,18 +1363,23 @@ class DelayedQueueTasks:
         await self._emit_agent_turn(engine, agent_turn)
         agent_turn.advance(AgentTurnPhase.COMPLETE)
         await self._emit_agent_turn(engine, agent_turn)
+        event_data = {
+            "group_id": group_id,
+            "item_id": triggered[0].item_id,
+            "adapter_type": getattr(triggered[0], "adapter_type", None) or "",
+            "reply": final_reply,
+            "partial_replies": partial_replies,
+            "sticker_names": sticker_names,
+            "poke_user_ids": poke_user_ids,
+            "agent_turn_id": agent_turn.turn_id,
+        }
+        triggered_route = getattr(triggered[0], "adapter_route_id", None)
+        if triggered_route:
+            event_data["adapter_route_id"] = triggered_route
         await engine.event_bus.emit(
             SessionEvent(
                 type=SessionEventType.DELAYED_RESPONSE_TRIGGERED,
-                data={
-                    "group_id": group_id,
-                    "item_id": triggered[0].item_id,
-                    "reply": final_reply,
-                    "partial_replies": partial_replies,
-                    "sticker_names": sticker_names,
-                    "poke_user_ids": poke_user_ids,
-                    "agent_turn_id": agent_turn.turn_id,
-                },
+                data=event_data,
             )
         )
 

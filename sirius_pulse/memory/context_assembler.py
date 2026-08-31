@@ -390,11 +390,9 @@ class ContextAssembler:
             "The following are candidate background memory facts, not current chat messages. Use only directly relevant facts explicitly; indirect facts may only affect tone, and irrelevant facts must be ignored. Do not mention checking memory, reading logs, or remembering these facts. Do not repeat the same old event, preference, or time detail if it was already mentioned recently unless the user asks.",
         ]
         for unit in memory_units[:12]:
-            ts = (
-                getattr(unit, "event_time", "")
-                or getattr(unit, "created_at", "")
-                or ""
-            )[:16].replace("T", " ")
+            ts = (getattr(unit, "event_time", "") or getattr(unit, "created_at", "") or "")[
+                :16
+            ].replace("T", " ")
             unit_type = getattr(unit, "unit_type", "") or "event"
             summary = getattr(unit, "summary", "") or ""
             status = getattr(unit, "status", "") or ""

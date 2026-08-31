@@ -59,7 +59,7 @@ const PARAM_GROUPS = [
     tasks: [
       { key: 'response_generate', label: '回复生成' },
       { key: 'passive_tool', label: '被动工具' },
-      { key: 'github_monitor_notify', label: 'GitHub 监控' },
+
     ],
   },
   {

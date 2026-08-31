@@ -22,6 +22,7 @@ from sirius_pulse.config.config_builder import (
     config_param,
     secret,
 )
+from sirius_pulse.extension_runtime import BackgroundTaskSpec
 from sirius_pulse.plugins.base import PluginBase
 from sirius_pulse.plugins.context import (
     EngineProxy,
@@ -74,6 +75,7 @@ from sirius_pulse.plugins.scheduler import PluginScheduler, ScheduledTask
 __all__ = [
     # 核心类
     "PluginBase",
+    "BackgroundTaskSpec",
     "PluginContext",
     # 配置构建
     "ConfigBuilder",

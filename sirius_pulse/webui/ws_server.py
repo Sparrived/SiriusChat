@@ -9,15 +9,23 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections import defaultdict
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from aiohttp import web
+
+from sirius_pulse.webui.middleware import _WS_AUTH_PROTOCOL
 
 LOG = logging.getLogger("sirius.webui.ws")
 
 # 心跳间隔（秒）
 _PING_INTERVAL = 30
+# Bound long-lived browser connections so one authenticated browser/user cannot
+# consume the WebUI's file-event fan-out capacity indefinitely.
+_MAX_CONNECTIONS = 64
+_MAX_CONNECTIONS_PER_USER = 8
 
 
 def _path_event_payload(data_dir: Path, path: Path) -> dict[str, Any] | None:
@@ -65,27 +73,123 @@ def _path_event_payload(data_dir: Path, path: Path) -> dict[str, Any] | None:
     }
 
 
+def _normalized_origin(origin: str) -> tuple[str, str, int | None] | None:
+    """Return a strict scheme/host/port tuple for an HTTP Origin value."""
+    try:
+        parsed = urlsplit(origin)
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.hostname
+            or parsed.username
+            or parsed.password
+            or parsed.path not in {"", "/"}
+            or parsed.query
+            or parsed.fragment
+        ):
+            return None
+        scheme = parsed.scheme.casefold()
+        port = parsed.port
+        if (scheme == "http" and port == 80) or (scheme == "https" and port == 443):
+            port = None
+        return (scheme, parsed.hostname.casefold().rstrip("."), port)
+    except ValueError:
+        return None
+
+
+def _request_origin_allowed(request: web.Request) -> bool:
+    """Accept only same-origin browser WebSocket upgrades.
+
+    A real browser always sends Origin for a WebSocket handshake.  Requiring it
+    rejects cross-site scripts even when an attacker has access to an existing
+    credential.  The comparison uses Host plus socket scheme; reverse proxies
+    should pass a correct Host and terminate TLS before forwarding.
+    """
+    origin = request.headers.get("Origin", "").strip()
+    if not origin:
+        return False
+    expected = _normalized_origin(f"{request.scheme}://{request.host}")
+    supplied = _normalized_origin(origin)
+    return expected is not None and _origin_matches(expected, supplied)
+
+
+def _origin_matches(
+    expected: tuple[str, str, int | None],
+    supplied: tuple[str, str, int | None] | None,
+) -> bool:
+    """Compare parsed public origin fields without accepting malformed values."""
+    return supplied == expected
+
+
 class WebSocketManager:
     """WebSocket 连接管理器，桥接引擎事件到前端。"""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        max_connections: int = _MAX_CONNECTIONS,
+        max_connections_per_user: int = _MAX_CONNECTIONS_PER_USER,
+    ) -> None:
         # 人格名称 -> 连接列表；"*" 表示全局订阅
         self._connections: dict[str, list[web.WebSocketResponse]] = {}
+        self._connection_users: dict[web.WebSocketResponse, str] = {}
+        self._connections_by_user: dict[str, int] = defaultdict(int)
+        # Handshake preparation awaits.  Reserve capacity before that await so
+        # concurrent upgrades cannot all pass the same stale count check.
+        self._pending_connections = 0
+        self._pending_connections_by_user: dict[str, int] = defaultdict(int)
+        self._max_connections = max(1, int(max_connections))
+        self._max_connections_per_user = max(1, int(max_connections_per_user))
 
-    async def handle_ws(self, request: web.Request) -> web.WebSocketResponse:
-        """处理 WebSocket 连接请求。
+    async def handle_ws(self, request: web.Request) -> web.StreamResponse:
+        """Authenticate and handle one same-origin WebSocket subscription.
 
-        URL 模式：
-            /ws/events        → 全局订阅（接收所有人格事件）
-            /ws/events/{name} → 按人格订阅
+        JWT validation is performed by :func:`auth_middleware` before this
+        method is entered.  This method repeats only the WebSocket-specific
+        authorization invariants (role, Origin and bounded connections) before
+        calling ``prepare()``, so no unauthorized caller can complete an
+        upgrade.
         """
+        role = str(request.get("auth_role", ""))
+        user = str(request.get("auth_user", ""))
+        if role not in {"admin", "viewer"} or not user:
+            return web.json_response({"error": "WebSocket 认证无效"}, status=403)
+        if not _request_origin_allowed(request):
+            LOG.warning("拒绝跨域或缺失 Origin 的 WebSocket upgrade")
+            return web.json_response({"error": "WebSocket Origin 不被允许"}, status=403)
+        if self.connection_count + self._pending_connections >= self._max_connections:
+            return web.json_response({"error": "WebSocket 连接数已达上限"}, status=503)
+        if (
+            self._connections_by_user[user] + self._pending_connections_by_user[user]
+            >= self._max_connections_per_user
+        ):
+            return web.json_response({"error": "该用户 WebSocket 连接数已达上限"}, status=429)
+
         name = request.match_info.get("name", "*").strip() or "*"
+        self._pending_connections += 1
+        self._pending_connections_by_user[user] += 1
+        registered = False
+        try:
+            # The middleware has already checked the offered token protocol.
+            # Only negotiate the constant capability label, never a client-
+            # supplied JWT.
+            ws = web.WebSocketResponse(heartbeat=_PING_INTERVAL, protocols=(_WS_AUTH_PROTOCOL,))
+            await ws.prepare(request)
 
-        ws = web.WebSocketResponse(heartbeat=_PING_INTERVAL)
-        await ws.prepare(request)
-
-        # 注册连接
-        self._connections.setdefault(name, []).append(ws)
+            self._connections.setdefault(name, []).append(ws)
+            self._connection_users[ws] = user
+            self._connections_by_user[user] += 1
+            registered = True
+        finally:
+            self._pending_connections -= 1
+            pending_for_user = self._pending_connections_by_user[user] - 1
+            if pending_for_user > 0:
+                self._pending_connections_by_user[user] = pending_for_user
+            else:
+                self._pending_connections_by_user.pop(user, None)
+        if not registered:
+            # ws.prepare() either raised or returned a failed response; the
+            # aiohttp exception/response owns the handshake outcome.
+            raise RuntimeError("WebSocket upgrade did not complete")
         LOG.info("WebSocket 已连接: persona=%s, 当前连接数=%d", name, self.connection_count)
 
         # 发送握手确认
@@ -148,17 +252,20 @@ class WebSocketManager:
     async def close_all(self) -> None:
         """关闭所有 WebSocket 连接。"""
         for name, conns in list(self._connections.items()):
-            for ws in conns:
-                if not ws.closed:
-                    try:
+            for ws in list(conns):
+                try:
+                    if not ws.closed:
                         await ws.close(
                             code=web.WSCloseCode.GOING_AWAY,  # type: ignore[attr-defined]
                             message=b"server shutting down",
                         )
-                    except (ConnectionResetError, asyncio.CancelledError):
-                        pass
-            conns.clear()
+                except (ConnectionResetError, asyncio.CancelledError):
+                    pass
+                finally:
+                    self._unregister(name, ws)
         self._connections.clear()
+        self._connection_users.clear()
+        self._connections_by_user.clear()
         LOG.info("所有 WebSocket 连接已关闭")
 
     @property
@@ -169,17 +276,24 @@ class WebSocketManager:
     # ─── 内部辅助方法 ─────────────────────────────────────
 
     def _unregister(self, name: str, ws: web.WebSocketResponse) -> None:
-        """从连接表中移除指定连接。"""
+        """Remove a connection and its per-user admission reservation."""
         conns = self._connections.get(name)
-        if conns is None:
-            return
-        try:
-            conns.remove(ws)
-        except ValueError:
-            pass
-        # 清理空列表，避免键堆积
-        if not conns:
-            self._connections.pop(name, None)
+        if conns is not None:
+            try:
+                conns.remove(ws)
+            except ValueError:
+                pass
+            # 清理空列表，避免键堆积
+            if not conns:
+                self._connections.pop(name, None)
+
+        user = self._connection_users.pop(ws, "")
+        if user:
+            remaining = self._connections_by_user.get(user, 0) - 1
+            if remaining > 0:
+                self._connections_by_user[user] = remaining
+            else:
+                self._connections_by_user.pop(user, None)
 
     async def _broadcast(
         self,

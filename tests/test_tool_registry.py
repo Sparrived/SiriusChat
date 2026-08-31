@@ -204,7 +204,9 @@ def test_tool_registry_when_builtin_tools_load_then_napcat_tools_are_visible(
         "max_output_chars",
     ]
     assert bash.developer_only is False
-    assert "max_timeout_seconds" not in bash.to_tool_schema()["function"]["parameters"]["properties"]
+    assert (
+        "max_timeout_seconds" not in bash.to_tool_schema()["function"]["parameters"]["properties"]
+    )
     assert any(tool["function"]["name"] == "bash" for tool in regular_user_tools)
     assert any(tool["function"]["name"] == "interaction_with_master" for tool in tools)
     assert registry.get("container_admin") is None
@@ -213,7 +215,9 @@ def test_tool_registry_when_builtin_tools_load_then_napcat_tools_are_visible(
         "base_url",
         "timeout_seconds",
     ]
-    assert "public_status_token" not in tool.to_tool_schema()["function"]["parameters"]["properties"]
+    assert (
+        "public_status_token" not in tool.to_tool_schema()["function"]["parameters"]["properties"]
+    )
     assert [param.name for param in tool.parameters] == ["action", "message", "device_id"]
     assert registry.get("chat_with_developer") is None
     assert registry.get("developer_status") is None
@@ -246,7 +250,9 @@ def test_tool_registry_when_builtin_tools_load_then_napcat_tools_are_visible(
     ]
     assert workflow_state.parameters[1].required is False
     assert [param.name for param in web_lookup.config_parameters] == ["tavily_api_key"]
-    assert "tavily_api_key" not in web_lookup.to_tool_schema()["function"]["parameters"]["properties"]
+    assert (
+        "tavily_api_key" not in web_lookup.to_tool_schema()["function"]["parameters"]["properties"]
+    )
     for old_name in (
         "poke",
         "send_sticker",

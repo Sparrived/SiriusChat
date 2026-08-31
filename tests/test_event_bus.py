@@ -97,6 +97,50 @@ async def test_event_bus_when_closed_then_late_engine_events_are_ignored():
 
 
 @pytest.mark.asyncio
+@pytest.mark.asyncio
+async def test_event_bus_when_queue_is_full_then_close_still_finishes_consumer():
+    bus = SessionEventBus()
+    received: list[int] = []
+    first_received = asyncio.Event()
+    allow_finish = asyncio.Event()
+
+    async def slow_monitor() -> None:
+        async for event in bus.subscribe(max_queue_size=1):
+            received.append(int(event.data["index"]))
+            first_received.set()
+            await allow_finish.wait()
+
+    task = asyncio.create_task(slow_monitor())
+    await _wait_for_subscriber(bus)
+    assert await bus.emit(SessionEvent(type=SessionEventType.CUSTOM, data={"index": 1}))
+    await first_received.wait()
+    assert await bus.emit(SessionEvent(type=SessionEventType.CUSTOM, data={"index": 2}))
+
+    await bus.close()
+    allow_finish.set()
+    await asyncio.wait_for(task, timeout=1.0)
+    assert received == [1, 2]
+
+
+@pytest.mark.asyncio
+async def test_event_bus_when_closed_before_first_iteration_then_subscription_finishes():
+    bus = SessionEventBus()
+    iterator = bus.subscribe()
+    await bus.close()
+
+    with pytest.raises(StopAsyncIteration):
+        await iterator.__anext__()
+
+
+@pytest.mark.asyncio
+async def test_event_bus_rejects_nonpositive_queue_capacity():
+    bus = SessionEventBus()
+
+    with pytest.raises(ValueError, match="max_queue_size"):
+        await bus.subscribe(max_queue_size=0).__anext__()
+
+
+@pytest.mark.asyncio
 async def test_event_bus_when_monitor_is_slow_then_session_keeps_running():
     bus = SessionEventBus()
     first_event_received = asyncio.Event()

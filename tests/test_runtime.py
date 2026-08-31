@@ -2,14 +2,64 @@ from __future__ import annotations
 
 import asyncio
 import os
+import threading
+import time
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
 from sirius_pulse.persona_config import PersonaExperienceConfig
 from sirius_pulse.persona_worker import PersonaWorker
-from sirius_pulse.platforms.runtime import EngineRuntime
+from sirius_pulse.platforms.runtime import EngineRuntime, _wait_for_embedding_health
 from sirius_pulse.utils.json_io import atomic_write_json
+
+
+def test_engine_runtime_when_workspace_has_shared_plugins_then_uses_shared_directory(tmp_path):
+    data_dir = tmp_path / "data"
+    persona_dir = data_dir / "personas" / "sirius"
+    persona_dir.mkdir(parents=True)
+    shared_plugins = tmp_path / "plugins"
+    shared_plugins.mkdir()
+
+    runtime = EngineRuntime(persona_dir)
+
+    assert runtime._plugins_dir() == shared_plugins
+
+
+def test_engine_runtime_when_tool_bridge_has_routes_then_registers_proactive_destinations(tmp_path):
+    registrations = []
+
+    class Engine:
+        _tool_executor = None
+
+        def register_adapter(self, *args, **kwargs):
+            registrations.append((args, kwargs))
+
+    class Adapter:
+        def get_configured_group_ids(self):
+            return ["g1"]
+
+        def get_configured_private_user_ids(self):
+            return ["u1"]
+
+    runtime = EngineRuntime(tmp_path)
+    runtime._engine = Engine()
+    adapter = Adapter()
+
+    runtime.add_tool_bridge("custom", adapter)
+
+    assert registrations == [
+        (
+            (adapter,),
+            {
+                "adapter_type": "custom",
+                "group_ids": ["g1"],
+                "private_user_ids": ["u1"],
+            },
+        )
+    ]
+    assert runtime._engine._adapter is adapter
 
 
 def test_engine_runtime_when_work_path_is_persona_dir_then_loads_global_providers(tmp_path):
@@ -106,6 +156,108 @@ def test_persona_worker_config_reload_consumes_experience_flag(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_embedding_health_wait_does_not_block_persona_event_loop():
+    entered = threading.Event()
+    release = threading.Event()
+
+    class BlockingClient:
+        def check_health(self):
+            entered.set()
+            release.wait(timeout=1)
+            return False
+
+    ticker_ran = asyncio.Event()
+    health_task = asyncio.create_task(
+        _wait_for_embedding_health(
+            BlockingClient(),
+            total_timeout_seconds=0.05,
+            per_attempt_timeout_seconds=0.02,
+            retry_seconds=0,
+        )
+    )
+    await asyncio.to_thread(entered.wait, 0.5)
+    await asyncio.sleep(0)
+    ticker_ran.set()
+
+    assert ticker_ran.is_set()
+    assert await health_task is False
+    release.set()
+
+
+@pytest.mark.asyncio
+async def test_engine_runtime_warmup_failure_resets_running_for_retry(tmp_path, monkeypatch):
+    runtime = EngineRuntime(tmp_path)
+    monkeypatch.setattr(runtime, "has_provider_config", lambda: True)
+    monkeypatch.setattr(runtime, "has_persona", lambda: True)
+
+    async def failing_ensure():
+        raise RuntimeError("embedding unavailable")
+
+    runtime._ensure_engine_locked = failing_ensure  # type: ignore[method-assign]
+
+    with pytest.raises(RuntimeError, match="embedding unavailable"):
+        await runtime.start()
+
+    assert runtime._running is False
+    assert runtime.engine is None
+
+
+@pytest.mark.asyncio
+async def test_engine_runtime_failed_build_preserves_embedding_backoff(tmp_path):
+    runtime = EngineRuntime(tmp_path)
+    runtime._embedding_build_failed = True
+    runtime._embedding_fail_count = 2
+
+    await runtime._reload_engine_locked(reset_embedding_backoff=False)
+
+    assert runtime._embedding_build_failed is True
+    assert runtime._embedding_fail_count == 2
+
+
+@pytest.mark.asyncio
+async def test_persona_worker_when_runtime_has_no_engine_then_does_not_start_adapters(tmp_path):
+    started = []
+
+    class Runtime:
+        engine = None
+
+        async def start(self):
+            started.append("runtime")
+
+    worker = PersonaWorker(tmp_path)
+    worker._runtime = Runtime()
+    worker._start_adapter = AsyncMock()  # type: ignore[method-assign]
+
+    await worker._start_runtime_and_adapters(
+        SimpleNamespace(adapters=[SimpleNamespace(enabled=True, type="napcat")]), {}
+    )
+
+    assert started == ["runtime"]
+    worker._start_adapter.assert_not_awaited()
+
+
+def test_persona_worker_all_reload_schedules_engine_rebuild(tmp_path):
+    worker = PersonaWorker(tmp_path)
+    engine = SimpleNamespace(config={}, brain=SimpleNamespace(config={}))
+    worker._runtime = SimpleNamespace(engine=engine)
+    flag = tmp_path / "engine_state" / "reload_requested"
+    flag.parent.mkdir()
+    flag.write_text("all", encoding="utf-8")
+    os.utime(flag, (0, 0))
+    scheduled = []
+    worker._reload_persona = lambda _engine: None  # type: ignore[method-assign]
+    worker._reload_orchestration = lambda _engine: None  # type: ignore[method-assign]
+    worker._reload_experience = lambda _engine: None  # type: ignore[method-assign]
+    worker._reload_provider = lambda _engine: None  # type: ignore[method-assign]
+    worker._reload_global_config = lambda _engine: None  # type: ignore[method-assign]
+    worker._schedule_engine_rebuild = lambda: scheduled.append(True)  # type: ignore[method-assign]
+
+    worker._check_config_reload()
+
+    assert scheduled == [True]
+
+
+@pytest.mark.asyncio
 async def test_persona_worker_rebuild_engine_rebinds_adapters(tmp_path):
     replacement = object()
     bridges = []
@@ -157,12 +309,132 @@ def test_engine_runtime_includes_group_reply_strategies_in_engine_config(tmp_pat
 
 
 @pytest.mark.asyncio
+async def test_engine_runtime_concurrent_ensure_builds_one_engine(tmp_path):
+    runtime = EngineRuntime(tmp_path)
+    builds = []
+
+    class Engine:
+        def __init__(self):
+            self._bg_running = False
+
+        def start_background_tasks(self):
+            self._bg_running = True
+
+        def stop_background_tasks(self):
+            self._bg_running = False
+
+    async def build_engine():
+        builds.append(object())
+        await asyncio.sleep(0)
+        return Engine()
+
+    runtime._build_engine = build_engine  # type: ignore[method-assign]
+
+    first, second = await asyncio.gather(runtime._ensure_engine(), runtime._ensure_engine())
+
+    assert first is second
+    assert len(builds) == 1
+    assert runtime.engine is first
+
+
+@pytest.mark.asyncio
+async def test_engine_runtime_ensure_waits_for_in_progress_rebuild(tmp_path):
+    runtime = EngineRuntime(tmp_path)
+    builds = []
+    build_started = asyncio.Event()
+    allow_build = asyncio.Event()
+
+    class Engine:
+        def __init__(self, name):
+            self.name = name
+            self._bg_running = False
+            self.stop_calls = 0
+
+        def save_state(self):
+            return None
+
+        def start_background_tasks(self):
+            self._bg_running = True
+
+        def stop_background_tasks(self):
+            self.stop_calls += 1
+            self._bg_running = False
+
+    old_engine = Engine("old")
+    runtime._engine = old_engine
+
+    async def build_engine():
+        builds.append(object())
+        build_started.set()
+        await allow_build.wait()
+        return Engine("replacement")
+
+    runtime._build_engine = build_engine  # type: ignore[method-assign]
+    rebuild_task = asyncio.create_task(runtime.rebuild_engine())
+    await build_started.wait()
+    ensure_task = asyncio.create_task(runtime._ensure_engine())
+    await asyncio.sleep(0)
+
+    assert ensure_task.done() is False
+    assert len(builds) == 1
+
+    allow_build.set()
+    replacement = await rebuild_task
+    ensured = await ensure_task
+
+    assert replacement is ensured
+    assert runtime.engine is replacement
+    assert old_engine.stop_calls == 1
+    assert len(builds) == 1
+
+
+@pytest.mark.asyncio
+async def test_engine_runtime_queued_ensure_is_fenced_after_stop(tmp_path):
+    runtime = EngineRuntime(tmp_path)
+    build_calls = []
+
+    async def build_engine():
+        build_calls.append(True)
+        raise AssertionError("closed runtime must not build an engine")
+
+    runtime._build_engine = build_engine  # type: ignore[method-assign]
+    await runtime._engine_lock.acquire()
+    stop_task = asyncio.create_task(runtime.stop())
+    await asyncio.sleep(0)
+    ensure_task = asyncio.create_task(runtime._ensure_engine())
+    await asyncio.sleep(0)
+    runtime._engine_lock.release()
+
+    await stop_task
+    with pytest.raises(RuntimeError, match="已关闭"):
+        await ensure_task
+    assert build_calls == []
+
+
+@pytest.mark.asyncio
+async def test_engine_runtime_reload_retires_and_closes_old_event_bus(tmp_path):
+    runtime = EngineRuntime(tmp_path)
+    event_bus = SimpleNamespace(close=AsyncMock())
+    stopped = []
+    engine = SimpleNamespace(
+        event_bus=event_bus,
+        save_state=lambda: None,
+        stop_background_tasks=lambda: stopped.append(True),
+    )
+    runtime._engine = engine
+
+    await runtime.reload_engine()
+
+    assert engine._runtime_retiring is True
+    assert stopped == [True]
+    event_bus.close.assert_awaited_once()
+    assert runtime.engine is None
+
+
+@pytest.mark.asyncio
 async def test_persona_worker_startup_lock_serializes_initialization(tmp_path):
     lock = asyncio.Lock()
-    workers = [
-        PersonaWorker(tmp_path / name, startup_lock=lock)
-        for name in ("sunspot", "sirius")
-    ]
+    workers = [PersonaWorker(tmp_path / name, startup_lock=lock) for name in ("sunspot", "sirius")]
     state = {"active": 0, "max_active": 0}
 
     async def fake_start(_adapters_cfg, _plugin_config):

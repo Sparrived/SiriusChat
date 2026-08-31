@@ -25,6 +25,25 @@ class BaseAdapter(ABC):
 
     adapter_type: str = ""  # 子类必须覆写，如 "napcat"、"discord"
 
+    # ── 主动消息路由（可选） ──
+    #
+    # EngineRuntime uses these hooks when an adapter is attached to an engine.
+    # Returning None from an allowlist hook means that the registration's
+    # supplied snapshot (if any) should be retained.  Concrete adapters may
+    # override these methods when their configuration supports group-aware
+    # proactive delivery.
+    def get_configured_group_ids(self) -> list[str] | None:
+        """Return groups eligible for blank-target proactive messages."""
+        return None
+
+    def get_configured_private_user_ids(self) -> list[str] | None:
+        """Return private users eligible for blank-target proactive messages."""
+        return None
+
+    def is_proactive_destination_allowed(self, destination_id: str) -> bool:
+        """Return whether proactive delivery is enabled for a destination."""
+        return bool(str(destination_id or "").strip())
+
     # ── 图片缓存（通用，子类可覆写 _cache_image_headers） ──
 
     async def cache_image(self, url: str, *, is_sticker: bool = False) -> str:

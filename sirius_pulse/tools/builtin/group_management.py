@@ -41,9 +41,7 @@ _config.group("QQ群管理").add(
 _config.group("QQ群管理").add(
     "enable", type="bool", description="action=mute_all 时是否开启全员禁言。", default=True
 )
-_config.group("QQ群管理").add(
-    "card", type="str", description="action=set_group_card 时的新群名片。"
-)
+_config.group("QQ群管理").add("card", type="str", description="action=set_group_card 时的新群名片。")
 
 TOOL_META = {
     "name": "group_management",

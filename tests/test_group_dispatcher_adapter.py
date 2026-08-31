@@ -5,6 +5,7 @@ import asyncio
 import pytest
 
 from sirius_pulse.adapters.models import ParsedEvent
+from sirius_pulse.core.events import SessionEvent, SessionEventType
 from sirius_pulse.platforms.onebot_v11.napcat.adapter import NapCatAdapter
 
 
@@ -75,6 +76,86 @@ def _adapter(tmp_path, persona: str, account: str, engine: _Engine) -> NapCatAda
 
 async def _async_noop():
     return None
+
+
+@pytest.mark.asyncio
+async def test_stop_handling_cancels_tracked_raw_event_handlers(tmp_path):
+    adapter = _adapter(tmp_path, "alpha", "100", _Engine())
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    async def block_handler(_event):
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+
+    adapter.on_event(block_handler)
+    await adapter._dispatch({"post_type": "notice"})
+    await started.wait()
+
+    await adapter.stop_handling()
+
+    assert cancelled.is_set()
+    assert adapter._event_handler_tasks == set()
+
+
+@pytest.mark.asyncio
+async def test_rebind_cancels_and_drains_tracked_event_bus_handlers(tmp_path):
+    first_engine = _EventEngine()
+    second_engine = _EventEngine()
+    adapter = _adapter(tmp_path, "alpha", "100", first_engine)
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    async def block_handler(_event, *, engine=None):
+        assert engine is first_engine
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+
+    adapter._handle_event = block_handler  # type: ignore[method-assign]
+    adapter._track_event_handler(
+        SessionEvent(type=SessionEventType.CUSTOM),
+        first_engine,
+    )
+    await started.wait()
+
+    await adapter.rebind_engine(second_engine)
+
+    assert cancelled.is_set()
+    assert adapter._event_handler_tasks == set()
+    assert adapter._engine is second_engine
+
+
+@pytest.mark.asyncio
+async def test_stale_dispatch_retry_does_not_process_rebound_engine(tmp_path):
+    old_engine = _Engine()
+    new_engine = _Engine()
+    adapter = _adapter(tmp_path, "alpha", "100", new_engine)
+    adapter._running = True
+    adapter._engine_generation = 2
+    processed = []
+
+    async def fake_process_event(event):
+        processed.append(event)
+        return True
+
+    adapter._process_event = fake_process_event  # type: ignore[method-assign]
+    await adapter._retry_dispatch_event(
+        {"post_type": "message"},
+        "event-1",
+        60.0,
+        engine=old_engine,
+        generation=1,
+    )
+
+    assert processed == []
 
 
 @pytest.mark.asyncio

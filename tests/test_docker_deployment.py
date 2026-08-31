@@ -1,6 +1,5 @@
 from pathlib import Path
 
-
 ROOT = Path(__file__).parents[1]
 
 
@@ -12,7 +11,7 @@ def test_dockerfile_reuses_the_complete_environment_before_application_source():
     assert "FROM ${SIRIUS_BROWSER_CACHE_IMAGE} AS browser-cache" in dockerfile
     assert "COPY --from=browser-cache /ms-playwright/ /ms-playwright/" in dockerfile
     assert "FROM ${SIRIUS_ENV_CACHE_IMAGE} AS runtime" in dockerfile
-    runtime = dockerfile[dockerfile.index("FROM ${SIRIUS_ENV_CACHE_IMAGE} AS runtime"):]
+    runtime = dockerfile[dockerfile.index("FROM ${SIRIUS_ENV_CACHE_IMAGE} AS runtime") :]
     assert "COPY pyproject.toml uv.lock README.md ./" in runtime
     assert "uv sync --frozen --no-dev --no-install-project" in runtime
     assert dockerfile.index("playwright install --with-deps chromium") < dockerfile.index(

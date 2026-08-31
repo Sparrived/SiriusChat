@@ -2,19 +2,16 @@
 
 from __future__ import annotations
 
-import asyncio
-from copy import deepcopy
 import enum
-import logging
 import re
+from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Protocol
 
 from sirius_pulse.config.models import ConfigParameter
+from sirius_pulse.extension_runtime import BackgroundTaskSpec
 from sirius_pulse.memory.user.unified_models import UnifiedUser
-
-logger = logging.getLogger(__name__)
 
 # Pre-compiled regex for tool-chain template placeholders (${tool_name} / ${tool_name.field})
 _TEMPLATE_RE = re.compile(r"\$\{([^}]+)\}")
@@ -371,32 +368,6 @@ class ToolPassiveType(enum.Enum):
 
 
 @dataclass(slots=True)
-class BackgroundTaskSpec:
-    """描述一个由被动 TOOL 注册的后台定时任务。"""
-
-    name: str
-    interval_seconds: float
-    task_func: Callable[..., Awaitable[None]]
-
-    async def run_loop(self, running_check: Callable[[], bool]) -> None:
-        """在循环中周期性执行 task_func，直到 running_check() 返回 False。"""
-        while running_check():
-            await asyncio.sleep(self.interval_seconds)
-            if not running_check():
-                break
-            try:
-                await self.task_func()
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                logger.exception(
-                    "BackgroundTaskSpec '%s' 运行异常: %s",
-                    self.name,
-                    exc,
-                )
-
-
-@dataclass(slots=True)
 class TriggerSpec:
     """描述一个由被动 TOOL 注册的事件触发器。
 
@@ -458,8 +429,8 @@ class ToolEngineContext(Protocol):
         """将待发送消息放入引擎的待处理队列。"""
         ...
 
-    async def emit_event(self, event_type: str, data: dict[str, Any]) -> None:
-        """通过引擎事件总线发送事件。"""
+    async def emit_event(self, event_type: str, data: dict[str, Any]) -> bool:
+        """通过引擎事件总线发送事件，返回是否交给事件总线。"""
         ...
 
     async def dispatch_proactive_message(
@@ -469,10 +440,11 @@ class ToolEngineContext(Protocol):
         text: str,
         adapter_type: str = "",
         event_id: str = "",
+        image_path: str = "",
         reply_references: list[dict[str, Any]] | None = None,
         sticker_names: list[str] | None = None,
         poke_user_ids: list[str] | None = None,
-    ) -> None:
+    ) -> bool:
         """Deliver a generated proactive message through the platform event bus."""
         ...
 

@@ -85,9 +85,7 @@ class MemoryUnitIndexer:
         candidates = [
             (unit, self._cosine_sim(incoming.embedding, unit.embedding))
             for unit in self._units
-            if unit.embedding
-            and unit.unit_id != incoming.unit_id
-            and same_boundary(unit, incoming)
+            if unit.embedding and unit.unit_id != incoming.unit_id and same_boundary(unit, incoming)
         ]
         candidates = [item for item in candidates if item[1] >= min_similarity]
         candidates.sort(key=lambda item: item[1], reverse=True)
@@ -152,9 +150,7 @@ class MemoryUnitIndexer:
                 continue
             keyword_norm = min(keyword / 3.0, 1.0)
             rank_fusion = self._rrf(semantic_rank.get(unit.unit_id), keyword_rank.get(unit.unit_id))
-            quality = max(0.0, min(1.0, unit.salience)) * max(
-                0.0, min(1.0, unit.confidence)
-            )
+            quality = max(0.0, min(1.0, unit.salience)) * max(0.0, min(1.0, unit.confidence))
             temporal = self._temporal_score(query, unit) if temporal_query else 0.0
             score = (
                 0.55 * semantic
@@ -318,7 +314,9 @@ class MemoryUnitIndexer:
 
     @staticmethod
     def _identity_key(value: str) -> str:
-        text = re.sub(r"[^0-9a-z\u4e00-\u9fff]+", "", unicodedata.normalize("NFKC", value).casefold())
+        text = re.sub(
+            r"[^0-9a-z\u4e00-\u9fff]+", "", unicodedata.normalize("NFKC", value).casefold()
+        )
         return text[2:] if text.startswith("qq") and text[2:].isdigit() else text
 
     @classmethod
@@ -328,7 +326,10 @@ class MemoryUnitIndexer:
         for status, terms in _STATUS_TERMS.items():
             if any(term.casefold() in query_text for term in terms):
                 score = max(score, 1.0 if unit.status == status else 0.0)
-        if unit.valid_until and cls._parse_time(unit.valid_until) >= datetime.now(timezone.utc).timestamp():
+        if (
+            unit.valid_until
+            and cls._parse_time(unit.valid_until) >= datetime.now(timezone.utc).timestamp()
+        ):
             score = max(score, 0.5)
         return score
 
@@ -336,7 +337,11 @@ class MemoryUnitIndexer:
     def _parse_time(value: str) -> float:
         try:
             parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-            return parsed.replace(tzinfo=timezone.utc).timestamp() if parsed.tzinfo is None else parsed.timestamp()
+            return (
+                parsed.replace(tzinfo=timezone.utc).timestamp()
+                if parsed.tzinfo is None
+                else parsed.timestamp()
+            )
         except (TypeError, ValueError, AttributeError):
             return 0.0
 

@@ -179,9 +179,7 @@ def compute_baseline(
     cached = int(row["cached_prompt_tokens"]) if row["cached_prompt_tokens"] else 0
     uncached = int(row["uncached_prompt_tokens"]) if row["uncached_prompt_tokens"] else 0
     cache_creation = (
-        int(row["cache_creation_prompt_tokens"])
-        if row["cache_creation_prompt_tokens"]
-        else 0
+        int(row["cache_creation_prompt_tokens"]) if row["cache_creation_prompt_tokens"] else 0
     )
     observed_prompt = cached + uncached
     return BaselineDict(

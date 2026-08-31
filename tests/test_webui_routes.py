@@ -5,8 +5,10 @@ from types import SimpleNamespace
 
 import pytest
 from aiohttp import web
+from aiohttp.test_utils import make_mocked_request
 
 from sirius_pulse.config import TokenUsageRecord
+from sirius_pulse.plugins.models import PluginDefinition, PluginParameterDef, PluginPermissionDef
 from sirius_pulse.token.token_store import TokenUsageStore
 from sirius_pulse.utils.json_io import atomic_write_json
 from sirius_pulse.webui import persona_manager_api as persona_manager
@@ -20,6 +22,23 @@ from sirius_pulse.webui.persona_api import (
 )
 from sirius_pulse.webui.routes import WEBUI_ROUTES
 from sirius_pulse.webui.server import DELEGATED_HANDLERS, WebUIServer
+from sirius_pulse.webui.server_plugin_api import (
+    MaskedSecretUpdateError,
+    _effective_permissions,
+    _masked_parameter,
+    _masked_settings,
+    _request_plugin_reload,
+    _settings_update_without_masked_secrets,
+    api_plugin_config_get,
+    api_plugin_config_post,
+    api_plugin_detail_get,
+    api_plugin_setting_delete,
+    api_plugin_setting_post,
+    api_plugin_settings_get,
+    api_plugin_settings_post,
+    api_plugin_toggle,
+    api_plugins_get,
+)
 
 
 def _route_snapshot(app: web.Application) -> set[tuple[str, str]]:
@@ -33,14 +52,701 @@ def _route_snapshot(app: web.Application) -> set[tuple[str, str]]:
     return routes
 
 
+def _demo_plugin_definition() -> PluginDefinition:
+    return PluginDefinition(
+        name="demo",
+        parameters=[
+            PluginParameterDef(name="api_key", type="password"),
+            PluginParameterDef(name="label", type="str"),
+            PluginParameterDef(
+                name="credentials",
+                type="object",
+                fields=[
+                    {"name": "access_token", "type": "password"},
+                    {"name": "label", "type": "str"},
+                ],
+            ),
+            PluginParameterDef(
+                name="repos",
+                type="object_array",
+                fields=[
+                    {"name": "name", "type": "str"},
+                    {"name": "repository_token", "type": "password"},
+                ],
+            ),
+        ],
+    )
+
+
 class _FakeJsonRequest:
     """最小 aiohttp 请求替身：只提供 await request.json()。"""
 
-    def __init__(self, payload: dict[str, object]) -> None:
+    def __init__(
+        self,
+        payload: dict[str, object],
+        match_info: dict[str, str] | None = None,
+    ) -> None:
         self._payload = payload
+        self.match_info = match_info or {}
 
     async def json(self) -> dict[str, object]:
         return self._payload
+
+
+def test_webui_plugin_settings_mask_secrets_and_preserve_masked_updates():
+    settings = {
+        "password": "real-password",
+        "api_key": "real-key",
+        "nested": {"accessToken": "real-token", "label": "safe"},
+        "repos": [{"name": "demo", "repository_token": "repo-token"}],
+    }
+
+    masked = _masked_settings(settings)
+    assert masked == {
+        "password": "********",
+        "api_key": "********",
+        "nested": {"accessToken": "********", "label": "safe"},
+        "repos": [{"name": "demo", "repository_token": "********"}],
+    }
+
+    updated = _settings_update_without_masked_secrets(
+        {
+            "password": "********",
+            "api_key": "",
+            "nested": {"accessToken": "********", "label": "updated"},
+            "repos": [{"name": "demo", "repository_token": "********"}],
+        },
+        existing=settings,
+    )
+    assert updated == {
+        "password": "real-password",
+        "api_key": "real-key",
+        "nested": {"accessToken": "real-token", "label": "updated"},
+        "repos": [{"name": "demo", "repository_token": "repo-token"}],
+    }
+    with pytest.raises(MaskedSecretUpdateError):
+        _settings_update_without_masked_secrets(
+            {"repos": [{"name": "renamed", "repository_token": "********"}]},
+            existing=settings,
+        )
+
+
+def test_webui_plugin_parameter_masks_password_defaults_and_nested_fields():
+    parameter = SimpleNamespace(
+        name="credentials",
+        type="object_array",
+        description="",
+        required=False,
+        default=None,
+        choices=None,
+        fields=[
+            {"name": "repository_token", "type": "password", "default": "secret"},
+            {"name": "label", "type": "str", "default": "demo"},
+        ],
+        group="",
+    )
+
+    masked = _masked_parameter(parameter)
+    assert masked["fields"][0]["default"] == "********"
+    assert masked["fields"][1]["default"] == "demo"
+
+
+@pytest.mark.asyncio
+async def test_webui_plugin_settings_post_rejects_plaintext_secret_without_persisting(tmp_path):
+    manager = SimpleNamespace(
+        data_path=tmp_path / "data",
+        plugin_definitions={"demo": _demo_plugin_definition()},
+    )
+    plugins_dir = tmp_path / "plugins"
+    plugins_dir.mkdir()
+    config_path = plugins_dir / "_config.json"
+    atomic_write_json(
+        config_path,
+        {
+            "demo": {
+                "enabled": True,
+                "permissions": {},
+                "settings": {"api_key": "stored-secret", "label": "old"},
+            }
+        },
+    )
+    before = config_path.read_text(encoding="utf-8")
+    request = _FakeJsonRequest(
+        {"settings": {"api_key": "new-secret", "label": "new"}},
+        {"plugin_name": "demo"},
+    )
+
+    response = await api_plugin_settings_post(request, manager)
+
+    assert response.status == 400
+    assert "new-secret" not in response.text
+    assert config_path.read_text(encoding="utf-8") == before
+    saved = json.loads(config_path.read_text(encoding="utf-8"))
+    assert saved["demo"]["settings"] == {"api_key": "stored-secret", "label": "old"}
+
+
+@pytest.mark.asyncio
+async def test_webui_plugin_setting_post_handles_nested_secrets_and_masks_response(tmp_path):
+    manager = SimpleNamespace(
+        data_path=tmp_path / "data",
+        plugin_definitions={"demo": _demo_plugin_definition()},
+    )
+    plugins_dir = tmp_path / "plugins"
+    plugins_dir.mkdir()
+    config_path = plugins_dir / "_config.json"
+    atomic_write_json(
+        config_path,
+        {
+            "demo": {
+                "enabled": True,
+                "permissions": {},
+                "settings": {
+                    "credentials": {"access_token": "object-secret", "label": "old"},
+                    "repos": [{"name": "demo", "repository_token": "list-secret"}],
+                },
+            }
+        },
+    )
+
+    rejected = await api_plugin_setting_post(
+        _FakeJsonRequest(
+            {"value": {"access_token": "new-object-secret", "label": "new"}},
+            {"plugin_name": "demo", "key": "credentials"},
+        ),
+        manager,
+    )
+    assert rejected.status == 400
+    assert "new-object-secret" not in rejected.text
+    assert "list-secret" not in rejected.text
+
+    rejected_list = await api_plugin_setting_post(
+        _FakeJsonRequest(
+            {"value": [{"name": "new", "repository_token": "new-list-secret"}]},
+            {"plugin_name": "demo", "key": "repos"},
+        ),
+        manager,
+    )
+    assert rejected_list.status == 400
+    assert "new-list-secret" not in rejected_list.text
+
+    accepted_single = await api_plugin_setting_post(
+        _FakeJsonRequest(
+            {"value": {"access_token": "********", "label": "single"}},
+            {"plugin_name": "demo", "key": "credentials"},
+        ),
+        manager,
+    )
+    single_payload = json.loads(accepted_single.text)
+    single_saved = json.loads(config_path.read_text(encoding="utf-8"))
+    assert accepted_single.status == 200
+    assert "object-secret" not in accepted_single.text
+    assert single_payload["value"] == {"access_token": "********", "label": "single"}
+    assert single_saved["demo"]["settings"]["credentials"] == {
+        "access_token": "object-secret",
+        "label": "single",
+    }
+
+    accepted = await api_plugin_settings_post(
+        _FakeJsonRequest(
+            {
+                "settings": {
+                    "credentials": {"access_token": "********", "label": "new"},
+                    "repos": [{"name": "demo", "repository_token": "********"}],
+                }
+            },
+            {"plugin_name": "demo"},
+        ),
+        manager,
+    )
+    payload = json.loads(accepted.text)
+    saved = json.loads(config_path.read_text(encoding="utf-8"))
+
+    assert accepted.status == 200
+    assert "object-secret" not in accepted.text
+    assert "list-secret" not in accepted.text
+    assert payload["settings"] == {
+        "credentials": {"access_token": "********", "label": "new"},
+        "repos": [{"name": "demo", "repository_token": "********"}],
+    }
+    assert saved["demo"]["settings"] == {
+        "credentials": {"access_token": "object-secret", "label": "new"},
+        "repos": [{"name": "demo", "repository_token": "list-secret"}],
+    }
+
+
+def test_webui_plugin_parameter_masks_sensitive_names_even_if_mislabeled():
+    parameter = SimpleNamespace(
+        name="api_key",
+        type="str",
+        description="",
+        required=False,
+        default="should-not-leak",
+        choices=None,
+        fields=[
+            {"name": "repository_token", "type": "str", "default": "also-secret"},
+            {"name": "label", "type": "str", "default": "visible"},
+        ],
+        group="",
+    )
+
+    masked = _masked_parameter(parameter)
+
+    assert masked["default"] == "********"
+    assert masked["fields"][0]["default"] == "********"
+    assert masked["fields"][1]["default"] == "visible"
+
+
+def test_webui_masked_object_array_secrets_follow_stable_identity_not_position():
+    definition = PluginDefinition(
+        name="demo",
+        parameters=[
+            PluginParameterDef(
+                name="repos",
+                type="object_array",
+                fields=[
+                    {"name": "owner", "type": "str"},
+                    {"name": "repo", "type": "str"},
+                    {"name": "repository_token", "type": "password"},
+                ],
+            )
+        ],
+    )
+    existing = {
+        "repos": [
+            {"owner": "alpha", "repo": "one", "repository_token": "token-alpha"},
+            {"owner": "beta", "repo": "two", "repository_token": "token-beta"},
+        ]
+    }
+
+    removed_first = _settings_update_without_masked_secrets(
+        {"repos": [{"owner": "beta", "repo": "two", "repository_token": "********"}]},
+        definition,
+        existing,
+    )
+    reordered = _settings_update_without_masked_secrets(
+        {
+            "repos": [
+                {"owner": "beta", "repo": "two", "repository_token": "********"},
+                {"owner": "alpha", "repo": "one", "repository_token": "********"},
+            ]
+        },
+        definition,
+        existing,
+    )
+
+    assert removed_first["repos"] == [
+        {"owner": "beta", "repo": "two", "repository_token": "token-beta"}
+    ]
+    assert reordered["repos"] == [
+        {"owner": "beta", "repo": "two", "repository_token": "token-beta"},
+        {"owner": "alpha", "repo": "one", "repository_token": "token-alpha"},
+    ]
+    with pytest.raises(MaskedSecretUpdateError):
+        _settings_update_without_masked_secrets(
+            {
+                "repos": [
+                    {"owner": "changed", "repo": "one", "repository_token": "********"},
+                    {"owner": "beta", "repo": "two", "repository_token": "********"},
+                ]
+            },
+            definition,
+            existing,
+        )
+
+
+def test_webui_repository_masks_follow_casefolded_owner_repo_identity():
+    definition = PluginDefinition(
+        name="repository_monitor",
+        parameters=[
+            PluginParameterDef(
+                name="repos",
+                type="object_array",
+                fields=[
+                    {"name": "owner", "type": "str"},
+                    {"name": "repo", "type": "str"},
+                    {"name": "repository_token", "type": "password"},
+                ],
+            )
+        ],
+    )
+    existing = {
+        "repos": [
+            {"owner": "Alpha", "repo": "One", "repository_token": "alpha-token"},
+            {"owner": "Beta", "repo": "Two", "repository_token": "beta-token"},
+        ]
+    }
+
+    updated = _settings_update_without_masked_secrets(
+        {
+            "repos": [
+                {"owner": "beta", "repo": "TWO", "repository_token": "********"},
+                {"owner": "ALPHA", "repo": "one", "repository_token": "********"},
+                # A new repository does not receive any existing credential.
+                {"owner": "Gamma", "repo": "Three"},
+            ]
+        },
+        definition,
+        existing,
+    )
+
+    assert updated["repos"] == [
+        {"owner": "beta", "repo": "TWO", "repository_token": "beta-token"},
+        {"owner": "ALPHA", "repo": "one", "repository_token": "alpha-token"},
+        {"owner": "Gamma", "repo": "Three"},
+    ]
+
+
+def test_webui_repository_masks_reject_new_invalid_or_duplicate_identity():
+    definition = PluginDefinition(
+        name="repository_monitor",
+        parameters=[
+            PluginParameterDef(
+                name="repos",
+                type="object_array",
+                fields=[
+                    {"name": "owner", "type": "str"},
+                    {"name": "repo", "type": "str"},
+                    {"name": "repository_token", "type": "password"},
+                ],
+            )
+        ],
+    )
+    existing = {
+        "repos": [
+            {"owner": "alpha", "repo": "one", "repository_token": "alpha-token"},
+            {"owner": "beta", "repo": "two", "repository_token": "beta-token"},
+        ]
+    }
+
+    for rows in (
+        [{"owner": "gamma", "repo": "three", "repository_token": "********"}],
+        [{"owner": "bad/name", "repo": "three", "repository_token": "********"}],
+        [
+            {"owner": "alpha", "repo": "one", "repository_token": "********"},
+            {"owner": "ALPHA", "repo": "ONE", "repository_token": "********"},
+        ],
+    ):
+        with pytest.raises(MaskedSecretUpdateError):
+            _settings_update_without_masked_secrets({"repos": rows}, definition, existing)
+
+
+@pytest.mark.asyncio
+async def test_webui_repository_plaintext_token_is_rejected_without_persisting(tmp_path):
+    definition = PluginDefinition(
+        name="repository_monitor",
+        parameters=[
+            PluginParameterDef(
+                name="repos",
+                type="object_array",
+                fields=[
+                    {"name": "owner", "type": "str"},
+                    {"name": "repo", "type": "str"},
+                    {"name": "repository_token", "type": "password"},
+                ],
+            )
+        ],
+    )
+    manager = SimpleNamespace(
+        data_path=tmp_path / "data", plugin_definitions={"repository_monitor": definition}
+    )
+    plugins_dir = tmp_path / "plugins"
+    plugins_dir.mkdir()
+    config_path = plugins_dir / "_config.json"
+    atomic_write_json(
+        config_path,
+        {
+            "repository_monitor": {
+                "enabled": True,
+                "permissions": {},
+                "settings": {
+                    "repos": [{"owner": "alpha", "repo": "one", "repository_token": "alpha-token"}]
+                },
+            }
+        },
+    )
+    before = config_path.read_bytes()
+
+    response = await api_plugin_setting_post(
+        _FakeJsonRequest(
+            {"value": [{"owner": "alpha", "repo": "one", "repository_token": "new-token"}]},
+            {"plugin_name": "repository_monitor", "key": "repos"},
+        ),
+        manager,
+    )
+
+    assert response.status == 400
+    assert "new-token" not in response.text
+    assert config_path.read_bytes() == before
+
+
+@pytest.mark.asyncio
+async def test_webui_plugin_settings_reject_undeclared_keys_without_persisting(tmp_path):
+    manager = SimpleNamespace(
+        data_path=tmp_path / "data",
+        plugin_definitions={"demo": _demo_plugin_definition()},
+    )
+    plugins_dir = tmp_path / "plugins"
+    plugins_dir.mkdir()
+    config_path = plugins_dir / "_config.json"
+    atomic_write_json(
+        config_path,
+        {"demo": {"enabled": True, "permissions": {}, "settings": {"label": "old"}}},
+    )
+
+    response = await api_plugin_settings_post(
+        _FakeJsonRequest(
+            {"settings": {"credential": "unrecognized-secret"}},
+            {"plugin_name": "demo"},
+        ),
+        manager,
+    )
+
+    assert response.status == 400
+    assert "unrecognized-secret" not in response.text
+    assert json.loads(config_path.read_text(encoding="utf-8"))["demo"]["settings"] == {
+        "label": "old"
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("handler", "path", "match_info"),
+    [
+        (api_plugins_get, "/api/plugins", {}),
+        (api_plugin_detail_get, "/api/plugins/demo", {"plugin_name": "demo"}),
+        (api_plugin_config_get, "/api/plugins/demo/config", {"plugin_name": "demo"}),
+        (api_plugin_settings_get, "/api/plugins/demo/settings", {"plugin_name": "demo"}),
+    ],
+)
+async def test_webui_plugin_reads_require_admin_before_scanning(
+    tmp_path,
+    monkeypatch,
+    handler,
+    path,
+    match_info,
+):
+    def fail_if_scanned(*_args, **_kwargs):
+        raise AssertionError("viewer requests must not scan or import plugins")
+
+    monkeypatch.setattr(
+        "sirius_pulse.webui.server_plugin_api._load_definitions_cached",
+        fail_if_scanned,
+    )
+    request = make_mocked_request("GET", path, match_info=match_info)
+    request["auth_role"] = "viewer"
+
+    response = await handler(request, SimpleNamespace(data_path=tmp_path / "data"))
+
+    assert response.status == 403
+
+
+@pytest.mark.asyncio
+async def test_webui_plugin_metadata_listing_does_not_execute_plugin_code(tmp_path):
+    plugins_dir = tmp_path / "plugins"
+    plugin_dir = plugins_dir / "metadata_demo"
+    plugin_dir.mkdir(parents=True)
+    marker = plugin_dir / "imported.txt"
+    (plugin_dir / "__init__.py").write_text(
+        "from pathlib import Path\n"
+        "Path(__file__).with_name('imported.txt').write_text('executed')\n"
+        "from sirius_pulse.plugins import PluginBase\n"
+        "class MetadataDemo(PluginBase):\n"
+        "    _plugin_name = 'metadata_demo'\n"
+        "    _plugin_display_name = 'Metadata demo'\n"
+        "    _plugin_parameters = [{'name': 'label', 'type': 'str'}]\n",
+        encoding="utf-8",
+    )
+    request = make_mocked_request("GET", "/api/plugins")
+    request["auth_role"] = "admin"
+
+    response = await api_plugins_get(
+        request,
+        SimpleNamespace(data_path=tmp_path / "data"),
+    )
+    payload = json.loads(response.text)
+
+    assert response.status == 200
+    assert [item["name"] for item in payload["plugins"]] == ["metadata_demo"]
+    assert marker.exists() is False
+
+
+@pytest.mark.asyncio
+async def test_webui_unknown_plugin_mutations_leave_config_untouched(tmp_path):
+    manager = SimpleNamespace(
+        data_path=tmp_path / "data",
+        plugin_definitions={"demo": _demo_plugin_definition()},
+    )
+    plugins_dir = tmp_path / "plugins"
+    plugins_dir.mkdir()
+    match_info = {"plugin_name": "missing"}
+
+    responses = [
+        await api_plugin_toggle(
+            _FakeJsonRequest({"enabled": True}, match_info),
+            manager,
+        ),
+        await api_plugin_config_post(
+            _FakeJsonRequest({"developer_only": True}, match_info),
+            manager,
+        ),
+        await api_plugin_settings_post(
+            _FakeJsonRequest({"settings": {"label": "new"}}, match_info),
+            manager,
+        ),
+        await api_plugin_setting_post(
+            _FakeJsonRequest(
+                {"value": "new"},
+                {"plugin_name": "missing", "key": "label"},
+            ),
+            manager,
+        ),
+        await api_plugin_setting_delete(
+            _FakeJsonRequest(
+                {},
+                {"plugin_name": "missing", "key": "label"},
+            ),
+            manager,
+        ),
+    ]
+
+    assert all(response.status == 404 for response in responses)
+    assert not (plugins_dir / "_config.json").exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"developer_only": "false"},
+        {"hidden_from_intent": 0},
+        {"rate_limit_calls_per_minute": True},
+        {"rate_limit_calls_per_minute": 0},
+        {"rate_limit_calls_per_minute": -1},
+        {"rate_limit_calls_per_minute": 1001},
+    ],
+)
+async def test_webui_plugin_permissions_reject_non_strict_values(tmp_path, body):
+    manager = SimpleNamespace(
+        data_path=tmp_path / "data",
+        plugin_definitions={"demo": _demo_plugin_definition()},
+    )
+    plugins_dir = tmp_path / "plugins"
+    plugins_dir.mkdir()
+
+    response = await api_plugin_config_post(
+        _FakeJsonRequest(body, {"plugin_name": "demo"}),
+        manager,
+    )
+
+    assert response.status == 400
+    assert not (plugins_dir / "_config.json").exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("enabled", ["false", 0, 1, None])
+async def test_webui_plugin_toggle_requires_exact_boolean(tmp_path, enabled):
+    manager = SimpleNamespace(
+        data_path=tmp_path / "data",
+        plugin_definitions={"demo": _demo_plugin_definition()},
+    )
+    plugins_dir = tmp_path / "plugins"
+    plugins_dir.mkdir()
+
+    response = await api_plugin_toggle(
+        _FakeJsonRequest({"enabled": enabled}, {"plugin_name": "demo"}),
+        manager,
+    )
+
+    assert response.status == 400
+    assert not (plugins_dir / "_config.json").exists()
+
+
+@pytest.mark.asyncio
+async def test_webui_plugin_settings_enforce_declared_numeric_bounds(tmp_path):
+    definition = PluginDefinition(
+        name="monitor",
+        parameters=[
+            PluginParameterDef(name="poll_seconds", type="int", minimum=30, maximum=86400),
+            PluginParameterDef(name="timeout", type="float", minimum=1, maximum=300),
+        ],
+    )
+    manager = SimpleNamespace(
+        data_path=tmp_path / "data",
+        plugin_definitions={"monitor": definition},
+    )
+    (tmp_path / "plugins").mkdir()
+
+    too_fast = await api_plugin_settings_post(
+        _FakeJsonRequest({"settings": {"poll_seconds": 29}}, {"plugin_name": "monitor"}),
+        manager,
+    )
+    non_finite = await api_plugin_settings_post(
+        _FakeJsonRequest({"settings": {"timeout": float("inf")}}, {"plugin_name": "monitor"}),
+        manager,
+    )
+
+    assert too_fast.status == 400
+    assert non_finite.status == 400
+    assert not (tmp_path / "plugins" / "_config.json").exists()
+
+
+@pytest.mark.asyncio
+async def test_webui_manifest_developer_only_cannot_be_relaxed(tmp_path):
+    definition = PluginDefinition(
+        name="locked",
+        permissions=PluginPermissionDef(developer_only=True),
+    )
+    manager = SimpleNamespace(
+        data_path=tmp_path / "data",
+        plugin_definitions={"locked": definition},
+    )
+    (tmp_path / "plugins").mkdir()
+
+    rejected = await api_plugin_config_post(
+        _FakeJsonRequest(
+            {"developer_only": False, "rate_limit_calls_per_minute": 60},
+            {"plugin_name": "locked"},
+        ),
+        manager,
+    )
+    accepted = await api_plugin_config_post(
+        _FakeJsonRequest(
+            {"developer_only": True, "rate_limit_calls_per_minute": 60},
+            {"plugin_name": "locked"},
+        ),
+        manager,
+    )
+
+    assert rejected.status == 400
+    assert accepted.status == 200
+    assert _effective_permissions(definition, {"developer_only": False})["developer_only"] is True
+
+
+def test_webui_plugin_reload_when_workspace_has_personas_then_marks_each_worker(tmp_path):
+    personas_dir = tmp_path / "personas"
+    for name in ("alpha", "beta"):
+        persona_dir = personas_dir / name
+        persona_dir.mkdir(parents=True)
+        (persona_dir / "persona.json").write_text("{}", encoding="utf-8")
+
+    _request_plugin_reload(tmp_path)
+
+    for name in ("alpha", "beta"):
+        flag = personas_dir / name / "engine_state" / "reload_requested"
+        assert flag.read_text(encoding="utf-8") == "all"
+
+
+def test_webui_plugin_reload_when_existing_types_then_preserves_them(tmp_path):
+    persona_dir = tmp_path / "personas" / "alpha"
+    persona_dir.mkdir(parents=True)
+    (persona_dir / "persona.json").write_text("{}", encoding="utf-8")
+    flag = persona_dir / "engine_state" / "reload_requested"
+    flag.parent.mkdir()
+    flag.write_text('{"types": ["provider"]}', encoding="utf-8")
+
+    _request_plugin_reload(tmp_path)
+
+    assert set(json.loads(flag.read_text(encoding="utf-8"))["types"]) == {"all", "provider"}
 
 
 @pytest.mark.asyncio

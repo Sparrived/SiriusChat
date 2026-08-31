@@ -125,6 +125,8 @@ description: "在不通读全部代码的情况下快速理解 Sirius Pulse 架�
 80. `sirius_pulse/plugins/config.py`（插件配置管理）
 81. `sirius_pulse/plugins/events.py`（插件事件定义）
 
+根目录 `plugins/` 是外部插件 Git 子模块；具体插件以子模块版本为准，外部实现不纳入核心模块边界。
+
 ### SKILL 系统
 
 82. `sirius_pulse/tools/api.py`（SKILL 开发统一 API 入口）
@@ -186,14 +188,11 @@ description: "在不通读全部代码的情况下快速理解 Sirius Pulse 架�
 
 ### 外部集成与基础设施
 
-126. `sirius_pulse/github/client.py`（GitHub REST API 异步客户端）
-127. `sirius_pulse/github/event_bridge.py`（GitHub 事件桥接）
-128. `sirius_pulse/github/webhook.py`（Webhook 签名验证 + HTTP 服务器）
-129. `sirius_pulse/embedding/server.py`（Embedding 微服务端）
-130. `sirius_pulse/embedding/client.py`（Embedding 同步客户端）
-131. `sirius_pulse/exceptions.py`（结构化异常体系）
-132. `sirius_pulse/logging_config.py`（结构化日志配置）
-133. `sirius_pulse/mixins.py`（JsonSerializable mixin）
+126. `sirius_pulse/embedding/server.py`（Embedding 微服务端）
+127. `sirius_pulse/embedding/client.py`（Embedding 同步客户端）
+128. `sirius_pulse/exceptions.py`（结构化异常体系）
+129. `sirius_pulse/logging_config.py`（结构化日志配置）
+130. `sirius_pulse/mixins.py`（JsonSerializable mixin）
 
 ## 心智模型
 
@@ -269,12 +268,11 @@ description: "在不通读全部代码的情况下快速理解 Sirius Pulse 架�
 | `sirius_pulse/adapters/` | 跨平台适配器抽象层：`BaseAdapter` 基类、`MessageSegment` 消息片段模型、`ParsedEvent` 统一事件结构 | 不介入引擎编排 |
 | `sirius_pulse/platforms/` | 平台具体实现：`platforms/onebot_v11/napcat/`（NapCat 适配器、管理器、协议解析）、`runtime.py`（EngineRuntime 封装） | 不介入高层人格调度 |
 | `sirius_pulse/webui/` | WebUI REST API + 静态页面 + JWT 认证 + WebSocket 事件推送 + 监控 API + 传记管理 + 演化链仪表盘 | 不直接操作 NapCat 进程 |
-| `sirius_pulse/github/` | GitHub API 集成：REST 客户端、事件桥接、Webhook 服务器 | 不介入核心对话逻辑 |
 | `sirius_pulse/plugins/` | 插件系统：PluginBase、词法分析/AST、输出调度、定时调度、EngineProxy、@command 装饰器、PluginContext | 不负责 SKILL 执行 |
 | `sirius_pulse/core/` | 编排核心：EmotionalGroupChatEngine（组合模式）、Brain（LLM 中枢）、Pipeline、认知/决策/响应策略、四层身份解析、主动触发、延迟防抖、消息钉住、编排持久化、人格数据库、事件总线、节奏/阈值分析 | 不负责 SKILL 注册表 |
 | `sirius_pulse/memory/` | 四层记忆架构（基础消息→情景压缩→演化链验证→传记/模式/缺口）、日记、语义、统一用户管理、上下文组装、冷检测 | 不直接决定 provider 路由 |
 | `sirius_pulse/providers/` | provider 协议、9 个具体上游实现（OpenAI 兼容/智谱/DeepSeek/硅基流动/火山引擎/阿里云百炼/MIMO/YTea/Mock）、注册表、自动路由、models.dev 自动填充 | 不介入高层人格生命周期 |
-| `sirius_pulse/tools/` | SKILL 注册、依赖解析、执行、安全校验、遥测、数据存储；被动 SKILL 支持；12 个内置技能（reminder/github_monitor/bing_search/url_content_reader/file_*/send_*/desktop_screenshot/system_info） | 不负责 provider 注册表 |
+| `sirius_pulse/tools/` | SKILL 注册、依赖解析、执行、安全校验、遥测、数据存储；支持被动 SKILL 与可选内置技能 | 不负责 provider 注册表 |
 | `sirius_pulse/config/` | SessionConfig、WorkspaceConfig、ConfigManager、ConfigBuilder 声明式构建、JSONC 解析、原子文件 I/O、类型强制转换 | 不改变核心对话契约 |
 | `sirius_pulse/models/` | 数据契约：Message、Transcript、EmotionState、IntentAnalysisV3、PersonaProfile、ResponseStrategy 等 | 不处理持久化 |
 | `sirius_pulse/session/` | SessionStore（Json/Sqlite）、持久化后端 | 不介入对话逻辑 |
@@ -362,9 +360,6 @@ description: "在不通读全部代码的情况下快速理解 Sirius Pulse 架�
 | `sirius_pulse/config/config_builder.py` | 声明式配置构建器（链式分组 API） |
 | `sirius_pulse/config/jsonc.py` | JSONC 注释解析 |
 | `sirius_pulse/config/file_io.py` | 原子 JSON 保存 |
-| `sirius_pulse/github/client.py` | GitHub REST API 异步客户端 |
-| `sirius_pulse/github/event_bridge.py` | GitHub 事件桥接（Plugin/SKILL 消费） |
-| `sirius_pulse/github/webhook.py` | Webhook 签名验证 + HTTP 服务器 |
 | `sirius_pulse/embedding/server.py` | Embedding 微服务端（aiohttp + asyncio.Queue 批量合并推理） |
 | `sirius_pulse/embedding/client.py` | Embedding 同步客户端（urllib） |
 | `sirius_pulse/token/token_store.py` | Token 使用 SQLite 存储（批量缓冲写入） |
@@ -442,6 +437,6 @@ data/
 - **修改状态持久化**：同步检查 `sirius_pulse/core/engine_persistence.py`、`core/engine_core.py`、`core/orchestration_store.py`、`core/persona_store.py`、`core/persona_db.py`、`utils/json_io.py`、`config/file_io.py`。
 - **修改表情包系统**：同步检查 `sirius_pulse/core/engine_sticker.py`、`core/utils.py`、`tools/builtin/send_image.py`。
 - **修改身份系统**：同步检查 `sirius_pulse/core/identity_resolver.py`、`core/user_lookup.py`、`core/user_lookup_mixin.py`、`memory/user/unified_manager.py`、`memory/storage.py`。
-- **修改 GitHub 集成**：同步检查 `sirius_pulse/github/client.py`、`github/event_bridge.py`、`github/events.py`、`github/webhook.py`、`tools/builtin/github_monitor.py`。
+- **修改外部扩展或子模块**：同步检查根目录 `plugins/` 子模块及其对应仓库文档；不要把外部扩展实现混入核心模块边界。
 - **修改 Token 系统**：同步检查 `sirius_pulse/token/token_store.py`、`token/analytics.py`、`token/usage.py`、`token/token_utils.py`、`token/utils.py`。
 - **修改工具函数**：同步检查 `sirius_pulse/core/constants.py`、`core/utils.py`、`utils/json_io.py`、`utils/retry.py`、`utils/sqlite_base.py`、`utils/query_builder.py`。

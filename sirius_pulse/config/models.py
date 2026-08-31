@@ -336,6 +336,8 @@ class ConfigParameter:
     default: Any = None
     choices: list[str] | None = None  # 用于 checkbox_group 类型
     fields: list[dict[str, Any]] | None = None  # 用于 object_array 类型，定义子字段结构
+    minimum: int | float | None = None  # 数值参数最小值（可选）
+    maximum: int | float | None = None  # 数值参数最大值（可选）
     group: str = ""  # 参数分组
 
 

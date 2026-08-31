@@ -13,8 +13,8 @@ from __future__ import annotations
 import json
 import logging
 import os
-import signal
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -56,20 +56,20 @@ async def api_personas_list(
         worker_status = _read_worker_status(d)
         running = _is_persona_running(d, worker_status)
 
-        result.append({
-            "name": d.name,
-            "persona_name": display_name,
-            "running": running,
-            "pid": worker_status.get("pid"),
-            "heartbeat_at": worker_status.get("heartbeat_at"),
-            "started_at": worker_status.get("started_at"),
-            "active": d.name in active_names,
-            "has_config": has_config,
-        })
+        result.append(
+            {
+                "name": d.name,
+                "persona_name": display_name,
+                "running": running,
+                "pid": worker_status.get("pid"),
+                "heartbeat_at": worker_status.get("heartbeat_at"),
+                "started_at": worker_status.get("started_at"),
+                "active": d.name in active_names,
+                "has_config": has_config,
+            }
+        )
 
-    return _json_response(
-        {"personas": result, "active": active, "active_personas": active_names}
-    )
+    return _json_response({"personas": result, "active": active, "active_personas": active_names})
 
 
 @handle_api_errors
@@ -114,7 +114,9 @@ async def api_persona_create(
         encoding="utf-8",
     )
     (persona_dir / "adapters.json").write_text(
-        json.dumps({"adapters": [{"type": "napcat", "enabled": False}]}, ensure_ascii=False, indent=2),
+        json.dumps(
+            {"adapters": [{"type": "napcat", "enabled": False}]}, ensure_ascii=False, indent=2
+        ),
         encoding="utf-8",
     )
 
@@ -189,9 +191,7 @@ async def api_persona_stop(
     """
     root_dir = _find_root_dir(data_dir)
     stop_result = _stop_persona_process(data_dir)
-    active_names = [
-        name for name in _get_active_persona_names(root_dir) if name != data_dir.name
-    ]
+    active_names = [name for name in _get_active_persona_names(root_dir) if name != data_dir.name]
     _set_active_persona_names(root_dir, active_names)
     if not active_names:
         LOG.info("人格已停用: %s", data_dir.name)
@@ -212,14 +212,16 @@ async def api_persona_status(
     worker_status = _read_worker_status(data_dir)
     running = _is_persona_running(data_dir, worker_status)
 
-    return _json_response({
-        "name": data_dir.name,
-        "active": data_dir.name in active_names,
-        "running": running,
-        "pid": worker_status.get("pid"),
-        "heartbeat_at": worker_status.get("heartbeat_at"),
-        "started_at": worker_status.get("started_at"),
-    })
+    return _json_response(
+        {
+            "name": data_dir.name,
+            "active": data_dir.name in active_names,
+            "running": running,
+            "pid": worker_status.get("pid"),
+            "heartbeat_at": worker_status.get("heartbeat_at"),
+            "started_at": worker_status.get("started_at"),
+        }
+    )
 
 
 @handle_api_errors
@@ -350,7 +352,9 @@ def _stop_persona_process(persona_dir: Path) -> dict[str, Any]:
         pid_int = 0
 
     if pid_int <= 0 or not _pid_exists(pid_int):
-        _write_worker_status(persona_dir, {"status": "stopped", "pid": pid, "stopped_at": _now_iso()})
+        _write_worker_status(
+            persona_dir, {"status": "stopped", "pid": pid, "stopped_at": _now_iso()}
+        )
         return {"stopped": False, "pid": pid, "reason": "not_running"}
 
     if pid_int == os.getpid():

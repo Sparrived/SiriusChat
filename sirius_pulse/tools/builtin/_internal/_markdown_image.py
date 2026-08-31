@@ -21,8 +21,7 @@ _MARKDOWN_LABEL_RE = re.compile(r"^\s*(?:markdown|md)\s*[:：]\s*(.*)$", re.IGNO
 _MARKDOWN_LABEL_ONLY_RE = re.compile(r"^\s*(?:markdown|md)\s*$", re.IGNORECASE)
 _STRONG_ONLY_RE = re.compile(r"^\s*(?:\*\*.+\*\*|__.+__)\s*$")
 _INLINE_MARKDOWN_RE = re.compile(
-    r"(?<!\\)(?:\*\*[^*\r\n]+\*\*|__[^_\r\n]+__|`[^`\r\n]+`|"
-    r"(?<!\*)\*[^*\r\n]+\*(?!\*))"
+    r"(?<!\\)(?:\*\*[^*\r\n]+\*\*|__[^_\r\n]+__|`[^`\r\n]+`|" r"(?<!\*)\*[^*\r\n]+\*(?!\*))"
 )
 _HORIZONTAL_RULE_RE = re.compile(r"^(?:-{3,}|\*{3,}|_{3,}|—-+|—{2,}|－{3,}|＿{3,})$")
 _CUTE_FONT_PATH = Path(__file__).with_name("assets") / "ZCOOLKuaiLe-Regular.ttf"

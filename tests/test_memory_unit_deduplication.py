@@ -1,8 +1,8 @@
-from sirius_pulse.memory.units import MemoryUnit
 import json
 
 import pytest
 
+from sirius_pulse.memory.units import MemoryUnit
 from sirius_pulse.memory.units.deduplicator import (
     DedupVerdict,
     MemoryUnitDeduplicator,

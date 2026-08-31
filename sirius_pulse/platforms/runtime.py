@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import os
 import time
@@ -35,6 +36,86 @@ from sirius_pulse.tools.registry import ToolRegistry
 
 LOG = logging.getLogger("sirius.platforms.runtime")
 MCP_STARTUP_TIMEOUT_SECONDS = 30.0
+# ``EmbeddingClient`` is intentionally synchronous because it is also used by
+# synchronous memory code.  Runtime startup must therefore isolate its health
+# probe from the persona event loop and bound both a single probe and the full
+# warmup window.
+EMBEDDING_STARTUP_TIMEOUT_SECONDS = 30.0
+EMBEDDING_HEALTH_CHECK_TIMEOUT_SECONDS = 3.0
+EMBEDDING_HEALTH_RETRY_SECONDS = 0.5
+
+
+async def _wait_for_embedding_health(
+    client: EmbeddingClient,
+    *,
+    total_timeout_seconds: float = EMBEDDING_STARTUP_TIMEOUT_SECONDS,
+    per_attempt_timeout_seconds: float = EMBEDDING_HEALTH_CHECK_TIMEOUT_SECONDS,
+    retry_seconds: float = EMBEDDING_HEALTH_RETRY_SECONDS,
+) -> bool:
+    """Wait asynchronously for a synchronous embedding health endpoint.
+
+    ``EmbeddingClient.check_health`` uses ``urllib`` and must not run on the
+    worker's sole asyncio loop.  A timed-out thread cannot be forcefully killed
+    by Python, so a probe timeout ends this warmup attempt instead of spawning
+    more concurrent probes; the client's own HTTP timeout bounds the lingering
+    thread in normal operation.  Cancellation is intentionally propagated
+    immediately to let runtime shutdown/reload proceed.
+    """
+    total_timeout = max(0.0, float(total_timeout_seconds))
+    attempt_timeout = max(0.001, float(per_attempt_timeout_seconds))
+    retry_delay = max(0.0, float(retry_seconds))
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + total_timeout
+
+    while True:
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            return False
+        try:
+            healthy = await asyncio.wait_for(
+                asyncio.to_thread(client.check_health),
+                timeout=min(attempt_timeout, remaining),
+            )
+        except asyncio.TimeoutError:
+            LOG.warning("Embedding 健康检查超时，结束本次引擎预热")
+            return False
+        except Exception as exc:
+            # The concrete client normally absorbs transport failures, but a
+            # custom client must not crash the worker loop or block retry.
+            LOG.warning("Embedding 健康检查失败: %s", type(exc).__name__)
+            healthy = False
+        if healthy:
+            return True
+
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            return False
+        # This is an async cancellation point; do not use time.sleep() during
+        # engine lifecycle work.
+        await asyncio.sleep(min(retry_delay, remaining))
+
+
+async def _await_cleanup(awaitable: Any) -> bool:
+    """Finish one async teardown operation before propagating cancellation.
+
+    Lifecycle cancellation must stop admission, but it must not abandon an
+    already-created resource halfway through its close operation.  The inner
+    task is shielded and cancellation is reported to the caller after it has
+    finished.  The return value lets a larger teardown continue all remaining
+    cleanup steps before raising ``CancelledError``.
+    """
+    task = asyncio.ensure_future(awaitable)
+    cancelled = False
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            cancelled = True
+    try:
+        task.result()
+    except asyncio.CancelledError:
+        cancelled = True
+    return cancelled
 
 
 def _resolve_api_key(raw: str) -> str:
@@ -118,10 +199,20 @@ class EngineRuntime:
         self.plugin_config = dict(plugin_config or {})
         self._engine: EmotionalGroupChatEngine | None = None
         self._running = False
+        # stop() closes persistent stores, so no engine lifecycle operation may
+        # publish a replacement after that terminal transition.
+        self._closed = False
         self._embedding_build_failed: bool = False
         self._embedding_last_fail_at: float = 0.0
         self._embedding_fail_count: int = 0
         self._mcp_manager: MCPClientManager | None = None
+        self._building_engine: EmotionalGroupChatEngine | None = None
+        self._plugin_executor: Any | None = None
+        self._plugin_scheduler: Any | None = None
+        self._plugin_tasks_started = False
+        # Serialize lazy initialization and lifecycle transitions. Building an
+        # engine starts resources, so concurrent builders must not discard one.
+        self._engine_lock = asyncio.Lock()
 
         # 统一人格数据库：所有存储层共享同一连接
         self.persona_db = PersonaDatabase(self.work_path / "persona.db")
@@ -210,7 +301,8 @@ class EngineRuntime:
         """将 plugins/_config.json 中的运行时配置合并到 definition.permissions。"""
         import json
 
-        config_path = self.work_path / "plugins" / "_config.json"
+        plugins_dir = self._plugins_dir()
+        config_path = plugins_dir / "_config.json"
         if not config_path.exists():
             return
         try:
@@ -228,14 +320,18 @@ class EngineRuntime:
         perm_cfg = plugin_config.get("permissions", {})
         if not isinstance(perm_cfg, dict):
             perm_cfg = {}
-        # 只同步 group_blacklist（白名单由主引擎统一管控）
-        for key in ("group_blacklist",):
-            if key in perm_cfg:
-                setattr(perms, key, list(perm_cfg[key]))
-        if "developer_only" in perm_cfg:
-            perms.developer_only = bool(perm_cfg["developer_only"])
-        if "rate_limit_calls_per_minute" in perm_cfg:
-            perms.rate_limit_calls_per_minute = int(perm_cfg["rate_limit_calls_per_minute"])
+        # 只同步 group_blacklist（白名单由主引擎统一管控）。清单的
+        # developer_only / hidden_from_intent 是安全下限，持久化配置只能
+        # 收紧，不能将其放宽。
+        if isinstance(perm_cfg.get("group_blacklist"), list):
+            perms.group_blacklist = [str(item) for item in perm_cfg["group_blacklist"]]
+        if perm_cfg.get("developer_only") is True:
+            perms.developer_only = True
+        if perm_cfg.get("hidden_from_intent") is True:
+            perms.hidden_from_intent = True
+        configured_rate = perm_cfg.get("rate_limit_calls_per_minute")
+        if type(configured_rate) is int and 1 <= configured_rate <= 1000:
+            perms.rate_limit_calls_per_minute = configured_rate
 
         # 将用户自定义 settings 写入 definition，供 Executor 注入 ctx.config
         settings = plugin_config.get("settings")
@@ -299,6 +395,39 @@ class EngineRuntime:
         """
         if self._engine is None:
             return
+
+        # Keep platform bridges and proactive-message routing in sync.  The
+        # engine only knows platform-neutral destinations; an adapter exposes
+        # its current allowlists through optional hooks.  Adapters that do not
+        # implement group routing remain available as tool bridges without
+        # becoming candidates for blank-target group broadcasts.
+        register_adapter = getattr(self._engine, "register_adapter", None)
+        if callable(register_adapter):
+            group_getter = getattr(bridge, "get_configured_group_ids", None)
+            private_getter = getattr(bridge, "get_configured_private_user_ids", None)
+            try:
+                group_ids = group_getter() if callable(group_getter) else None
+            except Exception:
+                LOG.debug("读取 adapter 群路由配置失败: %s", type(bridge).__name__, exc_info=True)
+                group_ids = None
+            try:
+                private_user_ids = private_getter() if callable(private_getter) else None
+            except Exception:
+                LOG.debug("读取 adapter 私聊路由配置失败: %s", type(bridge).__name__, exc_info=True)
+                private_user_ids = None
+            try:
+                register_adapter(
+                    bridge,
+                    adapter_type=adapter_type,
+                    group_ids=group_ids,
+                    private_user_ids=private_user_ids,
+                )
+            except Exception:
+                # Tool bridge injection is independent of optional proactive
+                # routing.  Do not make a bridge unusable on older/custom
+                # engines whose registration hook is incomplete.
+                LOG.warning("注册 adapter 主动消息路由失败: %s", type(bridge).__name__, exc_info=True)
+
         executor = getattr(self._engine, "_tool_executor", None)
         if executor is not None:
             executor.set_bridge(adapter_type, bridge)
@@ -319,12 +448,29 @@ class EngineRuntime:
             if count > 0:
                 LOG.info("平台 adapter 已注入 %d 个 Plugin 实例", count)
 
-    async def _setup_plugin_runtime(self, engine: "EmotionalGroupChatEngine") -> None:
-        """初始化 Plugin 系统：加载插件、注册、注入到引擎。
+    def _plugins_dir(self) -> Path:
+        """Resolve the shared plugin directory for this runtime.
 
-        Plugin 目录位于项目根：plugins/
+        Persona workers use ``data/personas/<name>`` as ``work_path`` while
+        external plugins live beside ``data`` in the workspace root. Keep a
+        legacy per-persona directory as a fallback for existing installations.
         """
-        plugins_dir = self.work_path / "plugins"
+        # In the normal layout work_path is data/personas/<name>, while the
+        # shared plugin source is <workspace>/plugins (beside data/).
+        candidates = [
+            self.global_data_path.parent / "plugins",
+            self.global_data_path / "plugins",
+        ]
+        for shared in candidates:
+            if shared.exists():
+                return shared
+        # Keep compatibility with older installations that stored plugins in
+        # each persona directory.
+        return self.work_path / "plugins"
+
+    async def _setup_plugin_runtime(self, engine: "EmotionalGroupChatEngine") -> None:
+        """初始化 Plugin 系统：加载插件、注册、注入到引擎。"""
+        plugins_dir = self._plugins_dir()
         if not plugins_dir.exists():
             LOG.info("插件目录不存在，跳过 Plugin 初始化: %s", plugins_dir)
             return
@@ -340,46 +486,77 @@ class EngineRuntime:
         # 创建注册表
         registry = PluginRegistry()
 
-        # 加载插件
+        # Discover only literal metadata first.  This allows an enablement
+        # decision before any external Plugin module is imported or dependency
+        # installer is run.
         loader = PluginLoader(plugins_dir)
-        definitions = loader.load_all_definitions()
+        metadata_definitions = loader.load_all_definitions(metadata_only=True)
 
-        if not definitions:
+        if not metadata_definitions:
             LOG.info("未发现任何 Plugin")
             return
+
+        from sirius_pulse.plugins.config import get_config_manager
+
+        plugins_config_manager = get_config_manager(plugins_dir)
+        # WebUI 可能在另一个请求中修改了配置文件；加载前刷新管理器缓存。
+        plugins_config_manager.reload()
+        disabled = {
+            definition.name
+            for definition in metadata_definitions
+            if not plugins_config_manager.get_enabled(definition.name)
+        }
+        if disabled:
+            LOG.info("跳过已禁用 Plugin: %s", ", ".join(sorted(disabled)))
 
         # 导入 Python 类并注册
         persona_data_path = Path(self.work_path) / "plugin_data"
         persona_data_path.mkdir(parents=True, exist_ok=True)
 
-        for definition in definitions:
-            if definition.source_path is None:
+        for metadata in metadata_definitions:
+            if metadata.name in disabled:
+                continue
+            if metadata.source_path is None:
                 continue
             try:
-                plugin_class = loader.import_plugin_class(definition.source_path)
-                definition._plugin_class = plugin_class
+                if metadata.dependencies:
+                    _ok, failed = await asyncio.to_thread(
+                        loader.install_dependencies, metadata.dependencies
+                    )
+                    if failed:
+                        LOG.error(
+                            "Plugin 依赖安装失败，跳过 [%s]: %d 项",
+                            metadata.name,
+                            failed,
+                        )
+                        continue
+                definition = loader.load_definition(metadata.source_path)
+                if definition is None:
+                    LOG.error("Plugin 缺少可执行入口，跳过 [%s]", metadata.name)
+                    continue
+                if definition._plugin_class is None:
+                    LOG.error("Plugin 类导入失败，跳过 [%s]", metadata.name)
+                    continue
 
                 # 合并 plugins/_config.json 中的运行时配置到 definition.permissions
                 self._merge_plugin_config(definition)
 
                 registry.register(definition)
             except Exception as exc:
-                LOG.error("导入 Plugin 类失败 [%s]: %s", definition.name, exc)
+                LOG.error("导入 Plugin 类失败 [%s]: %s", metadata.name, exc)
 
         if registry.plugin_count == 0:
             LOG.info("未加载任何 Plugin")
             return
 
         # 创建执行器和调度器
-        from sirius_pulse.plugins.config import get_config_manager
-
-        plugins_config_manager = get_config_manager(plugins_dir)
         executor = PluginExecutor(
             registry,
             persona_data_path=persona_data_path,
             engine=engine,
             config_manager=plugins_config_manager,
         )
+        self._plugin_executor = executor
         dispatcher = OutputDispatcher()
 
         # 实例化所有 Plugin
@@ -435,8 +612,10 @@ class EngineRuntime:
                 self._plugin_scheduler.add_task(task)
                 registered_tasks += 1
         if registered_tasks > 0:
-            await self._plugin_scheduler.start()
-            LOG.info("PluginScheduler 已启动，注册了 %d 个定时任务", registered_tasks)
+            LOG.info("PluginScheduler 已注册 %d 个定时任务，等待引擎启动", registered_tasks)
+
+        # Plugin 定时事件与自声明后台任务均在 _ensure_engine() 中启动，
+        # 确保引擎的后台生命周期已经建立。
 
     def _load_experience_config(self) -> PersonaExperienceConfig:
         """从人格目录加载 experience.json，回退到默认值。"""
@@ -524,14 +703,15 @@ class EngineRuntime:
 
         embedding_client = EmbeddingClient(base_url=embedding_url)
         LOG.info("等待共享 Embedding 服务就绪: %s ...", embedding_url)
-        # 阻塞等待 Embedding 服务就绪（最多 30 秒）
-        for _attempt in range(60):
-            if embedding_client.check_health():
-                LOG.info("共享 Embedding 服务已连接: %s", embedding_url)
-                self._embedding_build_failed = False
-                self._embedding_fail_count = 0
-                break
-            time.sleep(0.5)
+        try:
+            embedding_ready = await _wait_for_embedding_health(embedding_client)
+        except asyncio.CancelledError:
+            # Do not turn shutdown/reload into a cached service failure.
+            raise
+        if embedding_ready:
+            LOG.info("共享 Embedding 服务已连接: %s", embedding_url)
+            self._embedding_build_failed = False
+            self._embedding_fail_count = 0
         else:
             self._embedding_build_failed = True
             self._embedding_last_fail_at = time.monotonic()
@@ -555,6 +735,9 @@ class EngineRuntime:
             embedding_client=embedding_client,
             persona_db_conn=self.persona_db.conn,
         )
+        # Keep a reference until _ensure_engine_locked publishes the engine so
+        # cancellation during optional runtime setup can still tear it down.
+        self._building_engine = engine
 
         # 尝试恢复状态
         try:
@@ -587,101 +770,220 @@ class EngineRuntime:
         return self._engine
 
     async def _ensure_engine(self) -> "EmotionalGroupChatEngine":
-        if self._engine is None:
-            self._engine = await self._build_engine()
-            self._engine.start_background_tasks()
-        return self._engine
+        """Return the singleton running engine, building it at most once."""
+        async with self._engine_lock:
+            return await self._ensure_engine_locked()
+
+    async def _ensure_engine_locked(self) -> "EmotionalGroupChatEngine":
+        """Build the engine while ``_engine_lock`` is held."""
+        if self._closed:
+            raise RuntimeError("EngineRuntime 已关闭")
+        if self._engine is not None:
+            return self._engine
+
+        engine: EmotionalGroupChatEngine | None = None
+        try:
+            engine = await self._build_engine()
+            # Rebuilt engines are published only after their old counterpart has
+            # been retired.  Adapters use this marker to reject late old events.
+            try:
+                setattr(engine, "_runtime_retiring", False)
+            except Exception:
+                LOG.debug("引擎不支持 runtime retiring 标记", exc_info=True)
+            self._engine = engine
+            try:
+                engine.start_background_tasks()
+                if self._plugin_scheduler is not None:
+                    await self._plugin_scheduler.start()
+                if self._plugin_executor is not None and not self._plugin_tasks_started:
+                    try:
+                        started = await self._plugin_executor.start_background_tasks(
+                            running_check=lambda: bool(
+                                engine._bg_running and self._engine is engine
+                            )
+                        )
+                        self._plugin_tasks_started = True
+                        if started:
+                            LOG.info("Plugin 后台任务已启动: %d 个", started)
+                    except Exception:
+                        LOG.warning("Plugin 后台任务启动失败", exc_info=True)
+            except BaseException:
+                raise
+            return engine
+        except BaseException:
+            # Cancellation can arrive while _build_engine is still setting up
+            # optional runtimes, before it returns the partially built engine.
+            # Promote that private reference temporarily so the normal teardown
+            # closes its event bus, plugins, and MCP manager as well.
+            if engine is None:
+                engine = self._building_engine
+            if engine is not None and self._engine is None:
+                self._engine = engine
+            try:
+                # Preserve embedding backoff after a failed build.  Resetting it
+                # here would make every adapter/message immediately start
+                # another full warmup loop against an unavailable service.
+                await self._reload_engine_locked(reset_embedding_backoff=False)
+            finally:
+                self._building_engine = None
+            raise
+        finally:
+            if engine is not None and self._building_engine is engine:
+                self._building_engine = None
 
     async def rebuild_engine(self) -> "EmotionalGroupChatEngine":
-        """Rebuild the engine and return the running replacement."""
-        self.reload_engine()
-        return await self._ensure_engine()
+        """Atomically replace the running engine with a fresh instance."""
+        async with self._engine_lock:
+            if self._closed:
+                raise RuntimeError("EngineRuntime 已关闭")
+            await self._reload_engine_locked()
+            return await self._ensure_engine_locked()
 
     async def start(self) -> None:
-        if self._running:
-            return
-        self._running = True
-        # 预热引擎：在加载时就完成初始化，避免第一个消息到达时才加载
-        if self.has_provider_config() and self.has_persona():
-            try:
-                await self._ensure_engine()
-                LOG.info("EmotionalGroupChatEngine v1.0 已预热启动")
-            except Exception as exc:
-                LOG.warning("引擎预热失败（配置可能不完整）: %s", exc)
-        else:
-            LOG.info("EmotionalGroupChatEngine 已启动（等待配置完成后预热）")
+        """Start the runtime and warm a configured engine under one lock.
 
-    def reload_engine(self) -> None:
-        """保存当前状态后重建引擎，使配置变更（如模型）立即生效。"""
-        if self._engine is not None:
+        A runtime with no provider/persona remains deliberately lazy for setup
+        flows.  By contrast, once both prerequisites exist, a failed warmup is
+        a failed start: keeping ``_running`` true would make callers believe
+        they can attach an adapter to ``None`` and prevent a later retry.
+        """
+        async with self._engine_lock:
+            if self._closed:
+                raise RuntimeError("EngineRuntime 已关闭")
+            if self._running:
+                return
+            self._running = True
+            # 预热引擎：在加载时就完成初始化，避免第一个消息到达时才加载
+            if self.has_provider_config() and self.has_persona():
+                try:
+                    await self._ensure_engine_locked()
+                    LOG.info("EmotionalGroupChatEngine v1.0 已预热启动")
+                except BaseException:
+                    # ``_ensure_engine_locked`` already tears down any partial
+                    # engine.  Reset admission state before propagating the
+                    # failure so a caller can safely retry after remediation.
+                    self._running = False
+                    raise
+            else:
+                LOG.info("EmotionalGroupChatEngine 已启动（等待配置完成后预热）")
+
+    async def reload_engine(self) -> None:
+        """Save and tear down the engine without racing a concurrent build."""
+        async with self._engine_lock:
+            if self._closed:
+                return
+            await self._reload_engine_locked()
+
+    async def _reload_engine_locked(self, *, reset_embedding_backoff: bool = True) -> None:
+        """Tear down replaceable resources while ``_engine_lock`` is held.
+
+        ``reset_embedding_backoff`` is false only when this method cleans a
+        failed build.  In that path the recorded health failure remains the
+        throttle for the next initialization attempt.
+        """
+        cleanup_cancelled = False
+        engine = self._engine
+        if engine is not None:
+            # Stop adapters from admitting late events while the caller is
+            # rebuilding and has not yet rebound them to the replacement.
             try:
-                self._engine.save_state()
+                setattr(engine, "_runtime_retiring", True)
+            except Exception:
+                LOG.debug("引擎不支持 runtime retiring 标记", exc_info=True)
+            try:
+                engine.save_state()
                 LOG.info("引擎状态已保存，准备重建")
             except Exception as exc:
                 LOG.warning("引擎状态保存失败: %s", exc)
+
+        if self._plugin_scheduler is not None:
             try:
-                self._engine.stop_background_tasks()
+                cleanup_cancelled = (
+                    await _await_cleanup(self._plugin_scheduler.stop()) or cleanup_cancelled
+                )
+            except Exception as exc:
+                LOG.warning("PluginScheduler 停止失败: %s", exc)
+        if self._plugin_executor is not None:
+            try:
+                cleanup_cancelled = (
+                    await _await_cleanup(self._plugin_executor.unload_all()) or cleanup_cancelled
+                )
+            except Exception as exc:
+                LOG.warning("卸载 Plugin 失败: %s", exc)
+        self._plugin_scheduler = None
+        self._plugin_executor = None
+        self._plugin_tasks_started = False
+
+        if engine is not None:
+            try:
+                engine.stop_background_tasks()
             except Exception as exc:
                 LOG.warning("停止后台任务失败: %s", exc)
-            self._engine = None
+            event_bus = getattr(engine, "event_bus", None)
+            close_event_bus = getattr(event_bus, "close", None)
+            if callable(close_event_bus):
+                try:
+                    result = close_event_bus()
+                    if inspect.isawaitable(result):
+                        cleanup_cancelled = await _await_cleanup(result) or cleanup_cancelled
+                except Exception as exc:
+                    LOG.warning("关闭旧引擎事件总线失败: %s", exc)
+            if self._engine is engine:
+                self._engine = None
             LOG.info("引擎已标记为重建，下次访问时将重新初始化")
+
         if self._mcp_manager is not None:
             manager = self._mcp_manager
             self._mcp_manager = None
             try:
-                asyncio.get_running_loop().create_task(manager.close())
-            except RuntimeError:
-                LOG.warning("MCP 连接将在当前事件循环结束时关闭")
-        # 重置 embedding 失败缓存，让 reload 后能立即重试
-        self._embedding_build_failed = False
-        self._embedding_fail_count = 0
-
-    async def stop(self) -> None:
-        self._running = False
-
-        if self._mcp_manager is not None:
-            try:
-                await self._mcp_manager.close()
+                cleanup_cancelled = await _await_cleanup(manager.close()) or cleanup_cancelled
             except Exception as exc:
                 LOG.warning("MCP 连接关闭失败: %s", type(exc).__name__)
-            self._mcp_manager = None
 
-        # 停止 PluginScheduler（如果有）
-        plugin_scheduler = getattr(self, "_plugin_scheduler", None)
-        if plugin_scheduler is not None:
-            try:
-                await plugin_scheduler.stop()
-            except Exception as exc:
-                LOG.warning("PluginScheduler 停止失败: %s", exc)
+        self._building_engine = None
+        if reset_embedding_backoff:
+            # An explicit rebuild is operator intent to retry immediately.
+            self._embedding_build_failed = False
+            self._embedding_fail_count = 0
+        if cleanup_cancelled:
+            raise asyncio.CancelledError
 
-        if self._engine is not None:
+    async def stop(self) -> None:
+        """Stop all runtime resources after any in-progress build completes."""
+        async with self._engine_lock:
+            if self._closed:
+                return
+            # Fence queued ensure/rebuild calls before persistent stores close.
+            self._closed = True
+            self._running = False
+            engine = self._engine
+            reload_cancelled = False
             try:
-                self._engine.stop_background_tasks()
-            except Exception as exc:
-                LOG.warning("停止后台任务失败: %s", exc)
-            try:
-                self._engine.save_state()
-            except Exception as exc:
-                LOG.warning("引擎状态保存失败: %s", exc)
-            self._engine = None
+                await self._reload_engine_locked()
+            except asyncio.CancelledError:
+                # _reload_engine_locked defers cancellation until all resource
+                # closes finish; still flush the persistent stores before the
+                # terminal cancellation is re-raised.
+                reload_cancelled = True
 
-        # 关闭统一人格数据库连接
-        # 先 flush 所有使用共享连接的缓冲写入，避免数据丢失
-        if hasattr(self, "token_store") and self.token_store is not None:
-            try:
-                self.token_store.flush()
-            except Exception as exc:
-                LOG.warning("TokenUsageStore flush 失败: %s", exc)
-        if self._engine is not None and hasattr(self._engine, "cognition_store"):
-            try:
-                self._engine.cognition_store.flush()
-            except Exception as exc:
-                LOG.warning("CognitionEventStore flush 失败: %s", exc)
-
-        if hasattr(self, "persona_db") and self.persona_db is not None:
-            try:
-                self.persona_db.close()
-            except Exception as exc:
-                LOG.warning("PersonaDatabase 关闭失败: %s", exc)
+            # Flush stores while the captured engine is still available.  The
+            # old code cleared ``self._engine`` first, which skipped cognition.
+            if engine is not None and hasattr(engine, "cognition_store"):
+                try:
+                    engine.cognition_store.flush()
+                except Exception as exc:
+                    LOG.warning("CognitionEventStore flush 失败: %s", exc)
+            if hasattr(self, "token_store") and self.token_store is not None:
+                try:
+                    self.token_store.flush()
+                except Exception as exc:
+                    LOG.warning("TokenUsageStore flush 失败: %s", exc)
+            if hasattr(self, "persona_db") and self.persona_db is not None:
+                try:
+                    self.persona_db.close()
+                except Exception as exc:
+                    LOG.warning("PersonaDatabase 关闭失败: %s", exc)
+            if reload_cancelled:
+                raise asyncio.CancelledError
 
         LOG.info("EmotionalGroupChatEngine 已停止")

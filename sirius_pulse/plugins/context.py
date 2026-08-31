@@ -41,21 +41,31 @@ class EngineProxy:
             from sirius_pulse.core.user_lookup import UserLookupService
 
             self._user_lookup = UserLookupService(
-                identity_resolver=engine.identity_resolver,
-                user_manager=engine.user_manager,
+                identity_resolver=getattr(engine, "identity_resolver", None),
+                user_manager=getattr(engine, "user_manager", None),
                 engine=engine,
             )
 
-    async def generate_text(self, prompt: str, *, group_id: str = "", **kwargs: Any) -> str:
+    async def generate_text(
+        self,
+        prompt: str,
+        *,
+        group_id: str = "",
+        messages: list[dict[str, Any]] | None = None,
+        task_name: str = "plugin_generate",
+        **kwargs: Any,
+    ) -> str:
         """调用 Brain.generate_text() 生成人格化文本。
 
         走完整的框架生成链路：模型路由、token 记录、人格注入、语气对齐。
+        ``messages`` 和 ``task_name`` 可供需要保留上下文或专用路由的插件使用，
+        但默认值保持旧版 Plugin API 行为。
         """
         return await self._engine.brain.generate_text(
             system_prompt=prompt,
-            messages=[],
+            messages=list(messages or []),
             group_id=group_id,
-            task_name="plugin_generate",
+            task_name=task_name,
         )
 
     async def generate_text_analysis(
@@ -72,6 +82,88 @@ class EngineProxy:
             group_id=group_id,
             task_name="plugin_analyze",
         )
+
+    async def dispatch_proactive_message(
+        self,
+        *,
+        group_id: str,
+        text: str,
+        adapter_type: str = "",
+        event_id: str = "",
+        image_path: str = "",
+        reply_references: list[dict[str, Any]] | None = None,
+        sticker_names: list[str] | None = None,
+        poke_user_ids: list[str] | None = None,
+    ) -> bool:
+        """通过框架的主动消息管线发送文本和可选附件。"""
+        if self._engine is None:
+            return False
+        handler = getattr(self._engine, "dispatch_proactive_message", None)
+        if callable(handler):
+            result = await handler(
+                group_id=group_id,
+                text=text,
+                adapter_type=adapter_type,
+                event_id=event_id,
+                image_path=image_path,
+                reply_references=reply_references,
+                sticker_names=sticker_names,
+                poke_user_ids=poke_user_ids,
+            )
+            return bool(result)
+        return False
+
+    def get_active_groups(self) -> list[str]:
+        """获取引擎当前已观测到的活跃群组。"""
+        if self._engine is None:
+            return []
+        handler = getattr(self._engine, "get_active_groups", None)
+        if callable(handler):
+            return list(handler())
+        return list(getattr(self._engine, "_group_last_message_at", {}).keys())
+
+    def get_current_adapter_type(self) -> str:
+        """获取引擎当前适配器类型；后台任务可能返回空字符串。"""
+        if self._engine is None:
+            return ""
+        return str(getattr(self._engine, "_current_adapter_type", "") or "")
+
+    def resolve_adapter_types(self, group_id: str) -> list[str]:
+        """返回配置为处理目标群组的适配器类型。"""
+        if self._engine is None:
+            return []
+        resolver = getattr(self._engine, "resolve_adapter_types", None)
+        if not callable(resolver):
+            return []
+        try:
+            resolved = resolver(str(group_id or ""))
+        except Exception:
+            logger.debug("解析插件主动消息 adapter 路由失败", exc_info=True)
+            return []
+        if isinstance(resolved, str):
+            resolved = [resolved]
+        return list(
+            dict.fromkeys(str(value).strip() for value in (resolved or []) if str(value).strip())
+        )
+
+    async def emit_event(self, event_type: str, data: dict[str, Any]) -> bool:
+        """异步发射一个引擎事件，并返回是否成功交给事件总线。"""
+        if self._engine is None:
+            return False
+        event_bus = getattr(self._engine, "event_bus", None)
+        if event_bus is None or bool(getattr(event_bus, "closed", False)):
+            return False
+        subscriber_count = getattr(event_bus, "subscriber_count", None)
+        if isinstance(subscriber_count, int) and subscriber_count <= 0:
+            return False
+        from sirius_pulse.core.events import SessionEvent, SessionEventType
+
+        try:
+            mapped_type = SessionEventType(event_type)
+        except ValueError:
+            mapped_type = SessionEventType.CUSTOM
+        result = await event_bus.emit(SessionEvent(type=mapped_type, data=dict(data)))
+        return result is not False
 
     async def generate_raw(
         self,
@@ -273,6 +365,18 @@ class EngineProxy:
         """获取原始引擎引用（高级用法，谨慎使用）。"""
         return self._engine
 
+    def get_current_adapter_type(self) -> str:
+        """获取当前正在处理的适配器类型。"""
+        if self._engine is None:
+            return ""
+        return str(getattr(self._engine, "_current_adapter_type", "") or "")
+
+    def get_config_value(self, key: str, default: Any = None) -> Any:
+        """读取宿主引擎的只读配置项。"""
+        if self._engine is None:
+            return default
+        return getattr(self._engine, "config", {}).get(key, default)
+
     # ── 用户查找 API（委托给 UserLookupService）──────────────
 
     @property
@@ -344,33 +448,6 @@ class EngineProxy:
             return {}
         return self._user_lookup.get_bot_platform_uids()
 
-    def emit_event(self, event_type: str, data: dict[str, Any]) -> None:
-        """发射引擎事件（用于跨插件通信）。"""
-        if self._engine is None:
-            return
-        try:
-            # 依赖引擎内部的 event_bus
-            event_bus = getattr(self._engine, "event_bus", None)
-            if event_bus is not None:
-                from sirius_pulse.core.events import SessionEvent, SessionEventType
-
-                try:
-                    evt_type = SessionEventType(event_type)
-                except ValueError:
-                    evt_type = SessionEventType.CUSTOM
-                event = SessionEvent(type=evt_type, data=data)
-                # 使用同步方式发射（简化）
-                import asyncio
-
-                try:
-                    loop = asyncio.get_running_loop()
-                    loop.create_task(event_bus.emit(event))
-                except RuntimeError:
-                    logger.warning("获取 event loop 失败", exc_info=True)
-                    pass
-        except Exception as exc:
-            logger.warning("Plugin %s 发射事件失败: %s", self._plugin_name, exc)
-
 
 # ═══════════════════════════════════════════════════════════════════════
 # PluginDataStore —— 插件独立数据存储
@@ -390,26 +467,54 @@ class PluginDataStore:
         self._plugin_name = plugin_name
         self._file = self._data_dir / f"_plugin_{plugin_name}_data.json"
         self._cache: dict[str, Any] = {}
+        self._load_error: str | None = None
         self._load()
 
     def _load(self) -> None:
         """从磁盘加载数据。"""
         import json as _json
 
+        self._load_error = None
         if self._file.exists():
             try:
-                self._cache = _json.loads(self._file.read_text(encoding="utf-8"))
-            except Exception:
+                loaded = _json.loads(self._file.read_text(encoding="utf-8"))
+                if not isinstance(loaded, dict):
+                    raise ValueError("根值不是对象")
+                self._cache = loaded
+            except Exception as exc:
                 self._cache = {}
+                self._load_error = f"插件数据文件损坏：{type(exc).__name__}"
 
-    def _save(self) -> None:
-        """保存数据到磁盘。"""
-        import json as _json
+    def _save(self, values: dict[str, Any] | None = None) -> None:
+        """Atomically persist a candidate cache and commit it in memory."""
+        from sirius_pulse.config.file_io import atomic_json_save
 
-        self._data_dir.mkdir(parents=True, exist_ok=True)
-        self._file.write_text(
-            _json.dumps(self._cache, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
+        candidate = dict(self._cache if values is None else values)
+        atomic_json_save(self._file, candidate)
+        self._cache = candidate
+        self._load_error = None
+
+    def reload(self) -> None:
+        """从磁盘重新加载数据，供配置变更后的插件任务使用。"""
+        self._cache = {}
+        self._load()
+
+    @property
+    def store_path(self) -> Path:
+        """获取插件数据文件路径。"""
+        return self._file
+
+    @property
+    def load_error(self) -> str | None:
+        """Return a non-empty error when the persisted JSON was unreadable."""
+        return self._load_error
+
+    @property
+    def artifact_dir(self) -> Path:
+        """获取插件专用附件目录。"""
+        path = self._data_dir / "artifacts" / self._plugin_name
+        path.mkdir(parents=True, exist_ok=True)
+        return path
 
     def get(self, key: str, default: Any = None) -> Any:
         """读取数据。"""
@@ -417,13 +522,32 @@ class PluginDataStore:
 
     def set(self, key: str, value: Any) -> None:
         """写入数据并持久化。"""
-        self._cache[key] = value
-        self._save()
+        candidate = dict(self._cache)
+        candidate[key] = value
+        self._save(candidate)
+
+    def update(self, values: dict[str, Any]) -> None:
+        """一次原子保存多个插件状态字段。"""
+        candidate = dict(self._cache)
+        candidate.update(values)
+        self._save(candidate)
 
     def delete(self, key: str) -> None:
         """删除数据。"""
-        self._cache.pop(key, None)
-        self._save()
+        candidate = dict(self._cache)
+        candidate.pop(key, None)
+        self._save(candidate)
+
+    def delete_many(self, keys: list[str] | tuple[str, ...] | set[str]) -> None:
+        """Delete several keys and persist the resulting state once."""
+        candidate = dict(self._cache)
+        for key in keys:
+            candidate.pop(key, None)
+        self._save(candidate)
+
+    def clear(self) -> None:
+        """Clear all plugin data, including a previously recorded load error."""
+        self._save({})
 
     def all(self) -> dict[str, Any]:
         """获取所有数据。"""
@@ -474,6 +598,40 @@ class PluginContext:
     def logger(self) -> logging.Logger:
         """获取 Plugin 专用 logger。"""
         return logging.getLogger(f"plugin.{self.plugin_name}")
+
+    def get_artifact_dir(self) -> Path:
+        """获取 Plugin 专用附件目录，并确保目录存在。"""
+        if self.data_store is None:
+            raise RuntimeError("PluginDataStore 不可用")
+        return self.data_store.artifact_dir
+
+    async def dispatch_proactive_message(
+        self,
+        *,
+        group_id: str,
+        text: str,
+        adapter_type: str = "",
+        event_id: str = "",
+        image_path: str = "",
+        reply_references: list[dict[str, Any]] | None = None,
+        sticker_names: list[str] | None = None,
+        poke_user_ids: list[str] | None = None,
+    ) -> bool:
+        """通过统一消息管线主动发送文本和可选图片。"""
+        return await self.engine.dispatch_proactive_message(
+            group_id=group_id,
+            text=text,
+            adapter_type=adapter_type,
+            event_id=event_id,
+            image_path=image_path,
+            reply_references=reply_references,
+            sticker_names=sticker_names,
+            poke_user_ids=poke_user_ids,
+        )
+
+    def get_active_groups(self) -> list[str]:
+        """获取当前引擎已观测到的活跃群组。"""
+        return self.engine.get_active_groups()
 
     @staticmethod
     def create(

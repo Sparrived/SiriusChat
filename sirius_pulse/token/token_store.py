@@ -108,9 +108,7 @@ class TokenUsageStore(BaseSqliteStore):
     @property
     def cache_columns_available(self) -> bool:
         """Whether this database has the cache-aware token columns."""
-        columns = {
-            row["name"] for row in self.execute("PRAGMA table_info(token_usage)").fetchall()
-        }
+        columns = {row["name"] for row in self.execute("PRAGMA table_info(token_usage)").fetchall()}
         return {
             "cached_prompt_tokens",
             "uncached_prompt_tokens",
@@ -428,14 +426,16 @@ class TokenUsageStore(BaseSqliteStore):
 
     def get_summary(self) -> dict[str, Any]:
         """Return aggregated token usage summary."""
-        row = self.execute("""SELECT
+        row = self.execute(
+            """SELECT
                 COUNT(*) as total_calls,
                 COALESCE(SUM(prompt_tokens), 0) as total_prompt_tokens,
                 COALESCE(SUM(completion_tokens), 0) as total_completion_tokens,
                 COALESCE(SUM(total_tokens), 0) as total_tokens,
                 COALESCE(SUM(input_chars), 0) as total_input_chars,
                 COALESCE(SUM(output_chars), 0) as total_output_chars
-            FROM token_usage""").fetchone()
+            FROM token_usage"""
+        ).fetchone()
         result = dict(row) if row else {}
         result.update(self.get_cache_stats())
         return result
@@ -485,20 +485,27 @@ class TokenUsageStore(BaseSqliteStore):
         ).fetchone()
         if not row:
             return result
-        result.update({key: int(row[key]) for key in (
-            "total_calls",
-            "cache_info_calls",
-            "cached_prompt_tokens",
-            "uncached_prompt_tokens",
-            "cache_creation_prompt_tokens",
-        )})
+        result.update(
+            {
+                key: int(row[key])
+                for key in (
+                    "total_calls",
+                    "cache_info_calls",
+                    "cached_prompt_tokens",
+                    "uncached_prompt_tokens",
+                    "cache_creation_prompt_tokens",
+                )
+            }
+        )
         observed = result["cached_prompt_tokens"] + result["uncached_prompt_tokens"]
-        result["cache_info_coverage_pct"] = round(
-            result["cache_info_calls"] * 100.0 / result["total_calls"], 1
-        ) if result["total_calls"] else 0.0
-        result["cache_hit_rate_pct"] = round(
-            result["cached_prompt_tokens"] * 100.0 / observed, 1
-        ) if observed else 0.0
+        result["cache_info_coverage_pct"] = (
+            round(result["cache_info_calls"] * 100.0 / result["total_calls"], 1)
+            if result["total_calls"]
+            else 0.0
+        )
+        result["cache_hit_rate_pct"] = (
+            round(result["cached_prompt_tokens"] * 100.0 / observed, 1) if observed else 0.0
+        )
         return result
 
     def _count_in_range(self, *, start_ts: float | None, end_ts: float | None) -> int:
@@ -513,6 +520,7 @@ class TokenUsageStore(BaseSqliteStore):
         where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
         row = self.execute(f"SELECT COUNT(*) FROM token_usage{where}", params).fetchone()
         return int(row[0]) if row else 0
+
     def get_breakdown_by(
         self,
         column: str,
@@ -532,7 +540,8 @@ class TokenUsageStore(BaseSqliteStore):
             clauses.append("timestamp <= ?")
             params.append(end_ts)
         where = " WHERE " + " AND ".join(clauses)
-        cache_columns = """
+        cache_columns = (
+            """
                 ,COALESCE(SUM(CASE WHEN cache_info_available != 0 THEN 1 ELSE 0 END), 0)
                     AS cache_info_calls
                 ,COALESCE(SUM(CASE WHEN cache_info_available != 0 THEN cached_prompt_tokens ELSE 0 END), 0)
@@ -540,11 +549,14 @@ class TokenUsageStore(BaseSqliteStore):
                 ,COALESCE(SUM(CASE WHEN cache_info_available != 0 THEN uncached_prompt_tokens ELSE 0 END), 0)
                     AS uncached_prompt_tokens
                 ,COALESCE(SUM(CASE WHEN cache_info_available != 0 THEN cache_creation_prompt_tokens ELSE 0 END), 0)
-                    AS cache_creation_prompt_tokens""" if self.cache_columns_available else """
+                    AS cache_creation_prompt_tokens"""
+            if self.cache_columns_available
+            else """
                 ,0 AS cache_info_calls
                 ,0 AS cached_prompt_tokens
                 ,0 AS uncached_prompt_tokens
                 ,0 AS cache_creation_prompt_tokens"""
+        )
         rows = self.execute(
             f"""SELECT
                 {column} as name,
@@ -768,13 +780,15 @@ class TokenUsageStore(BaseSqliteStore):
 
     def get_hourly_distribution(self) -> list[dict[str, Any]]:
         """Return token usage distribution by hour-of-day (0-23)."""
-        rows = self.execute("""SELECT
+        rows = self.execute(
+            """SELECT
                 CAST(strftime('%H', datetime(timestamp, 'unixepoch')) AS INTEGER) as hour,
                 COUNT(*) as calls,
                 COALESCE(SUM(total_tokens), 0) as total_tokens
             FROM token_usage
             GROUP BY hour
-            ORDER BY hour""").fetchall()
+            ORDER BY hour"""
+        ).fetchall()
         return [dict(row) for row in rows]
 
     def get_failure_stats(

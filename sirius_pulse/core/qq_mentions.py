@@ -36,10 +36,7 @@ def build_qq_mention_section(
     max_members: int = 80,
 ) -> str:
     """Build compact QQ at syntax guidance for output specs."""
-    return (
-        "在回复正文中插入 [AT:QQ号] 可以 @ 某个群成员，发送前会自动转换成真正的 @。"
-        "从上下文消息中获取发送者的 QQ 号来使用，不要编造 QQ 号。"
-    )
+    return "在回复正文中插入 [AT:QQ号] 可以 @ 某个群成员，发送前会自动转换成真正的 @。" "从上下文消息中获取发送者的 QQ 号来使用，不要编造 QQ 号。"
 
 
 def _matched_qq_id(match: re.Match[str]) -> str:

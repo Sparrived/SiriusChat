@@ -15,21 +15,41 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+          # Plugins are host-side source and are intentionally not published.
+          submodules: false
 
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: "3.12"
 
-      - name: Install pypa/build
-        run: >-
-          python3 -m
-          pip install
-          build
-          --user
+      - name: Install packaging tools
+        run: python3 -m pip install --user build twine
 
       - name: Build a binary wheel and a source tarball
         run: python3 -m build
+
+      - name: Verify publish artifacts exclude external GitHub Plugin
+        run: |
+          python3 -m twine check dist/*
+          python3 - <<'PY'
+          import pathlib
+          import tarfile
+          import zipfile
+
+          dist = pathlib.Path("dist")
+          wheel_names = zipfile.ZipFile(next(dist.glob("*.whl"))).namelist()
+          sdist_names = tarfile.open(next(dist.glob("*.tar.gz")), "r:gz").getnames()
+          forbidden = (
+              "plugins/github_monitor/",
+              "sirius_pulse/github/",
+              "sirius_pulse/tools/builtin/github_monitor.py",
+          )
+          for names in (wheel_names, sdist_names):
+              normalized = [name.replace("\\", "/") for name in names]
+              for marker in forbidden:
+                  assert not any(marker in name for name in normalized), marker
+          PY
 
       - name: Store the distribution packages
         uses: actions/upload-artifact@v4

@@ -13,6 +13,7 @@ dist/
 data/
 logs/
 napcat/
+# External plugins stay on the host and are mounted at /app/plugins.
 plugins/
 tools/
 tests/

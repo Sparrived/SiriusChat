@@ -60,7 +60,8 @@ def extract_prompt_cache_usage(
         }
 
     nested_sources = [
-        value for key in ("prompt_tokens_details", "input_tokens_details")
+        value
+        for key in ("prompt_tokens_details", "input_tokens_details")
         if isinstance((value := usage.get(key)), dict)
     ]
 

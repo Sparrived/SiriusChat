@@ -4,16 +4,14 @@ from datetime import datetime
 
 import pytest
 
+from sirius_pulse.memory.user.unified_models import UnifiedUser
 from sirius_pulse.tools import cron_tasks
 from sirius_pulse.tools.builtin import bash
 from sirius_pulse.tools.models import ToolInvocationContext
-from sirius_pulse.memory.user.unified_models import UnifiedUser
 
 
 def test_parse_echo_crontab_install_command():
-    request = cron_tasks.parse_crontab_command(
-        "echo '*/5 * * * * echo hello' | crontab -"
-    )
+    request = cron_tasks.parse_crontab_command("echo '*/5 * * * * echo hello' | crontab -")
 
     assert request == {
         "action": "install",
@@ -35,9 +33,9 @@ def test_parse_crontab_list_and_remove():
 
 
 def test_parse_crontab_list_with_redirect_and_status_probe():
-    assert cron_tasks.parse_crontab_command(
-        'crontab -l 2>/dev/null; echo "---exit: $?---"'
-    ) == {"action": "list"}
+    assert cron_tasks.parse_crontab_command('crontab -l 2>/dev/null; echo "---exit: $?---"') == {
+        "action": "list"
+    }
 
 
 def test_parse_crontab_install_with_follow_up_list():
@@ -45,19 +43,13 @@ def test_parse_crontab_install_with_follow_up_list():
         "printf '%s\\n' '0 9 * * * echo reminder' | crontab - && crontab -l"
     )
 
-    assert request["entries"] == [
-        {"expression": "0 9 * * *", "command": "echo reminder"}
-    ]
+    assert request["entries"] == [{"expression": "0 9 * * *", "command": "echo reminder"}]
 
 
 def test_parse_printf_literal_with_newline_escape():
-    request = cron_tasks.parse_crontab_command(
-        "printf '0 9 * * * echo reminder\\n' | crontab -"
-    )
+    request = cron_tasks.parse_crontab_command("printf '0 9 * * * echo reminder\\n' | crontab -")
 
-    assert request["entries"] == [
-        {"expression": "0 9 * * *", "command": "echo reminder"}
-    ]
+    assert request["entries"] == [{"expression": "0 9 * * *", "command": "echo reminder"}]
 
 
 def test_cron_matches_common_fields_and_or_day_semantics():
@@ -145,9 +137,7 @@ async def test_bash_crontab_registers_lists_and_removes_jobs(tmp_path):
 async def test_bash_crontab_stdin_replaces_the_current_chat_crontab(tmp_path):
     store = _CronStore()
     context = {"group_id": "group-1", "adapter_type": "napcat"}
-    invocation = ToolInvocationContext(
-        caller=UnifiedUser(user_id="u1", name="Alice", metadata={})
-    )
+    invocation = ToolInvocationContext(caller=UnifiedUser(user_id="u1", name="Alice", metadata={}))
 
     await bash.run(
         "echo '0 8 * * * echo old' | crontab -",

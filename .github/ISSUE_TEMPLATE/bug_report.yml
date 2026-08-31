@@ -12,8 +12,8 @@ body:
         谢谢你的反馈！请尽量详细地描述问题，让月白能更快地修复它～
         
         > ⚠️ 在提交之前，请先确认：
-        > - 已搜索 [已有 Issues](https://github.com/Sparrived/SiriusChat/issues) 看是否已有相同报告
-        > - 已查阅 [项目文档](https://docs.sparrived.xyz/) 看是否配置有误
+        > - 已搜索 [已有 Issues](https://github.com/Sparrived/SiriusPulse/issues) 看是否已有相同报告
+        > - 已查阅 [项目文档](https://sirius-pulse-docs.vercel.app/) 看是否配置有误
 
   - type: input
     id: summary

@@ -31,6 +31,7 @@
 
 from __future__ import annotations
 
+from sirius_pulse.extension_runtime import BackgroundTaskSpec
 from sirius_pulse.plugins.base import PluginBase
 from sirius_pulse.plugins.context import EngineProxy, PluginContext, PluginDataStore
 from sirius_pulse.plugins.decorators import (
@@ -64,6 +65,7 @@ from sirius_pulse.plugins.models import (
 )
 
 __all__ = [
+    "BackgroundTaskSpec",
     "ArgNode",
     "CommandAST",
     "DispatchedOutput",

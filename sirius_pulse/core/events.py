@@ -49,8 +49,18 @@ class SessionEvent:
     timestamp: float = field(default_factory=time.time)
 
 
+@dataclass(slots=True)
+class _EventSubscriber:
+    queue: asyncio.Queue[SessionEvent]
+    closed: asyncio.Event = field(default_factory=asyncio.Event)
+
+
 class SessionEventBus:
     """Per-session event bus supporting multiple concurrent subscribers.
+
+    Proactive message producers may attach an in-memory delivery receipt to an
+    event.  The bus never serializes or persists that receipt; adapters resolve
+    it after routing and attempting the send.
 
     Usage::
 
@@ -66,48 +76,97 @@ class SessionEventBus:
         await bus.close()
     """
 
+    supports_delivery_ack = True
+
     def __init__(self) -> None:
-        self._subscribers: list[asyncio.Queue[SessionEvent | None]] = []
+        self._subscribers: list[_EventSubscriber] = []
         self._closed = False
 
-    async def emit(self, event: SessionEvent) -> None:
-        """Publish an event to all current subscribers."""
+    async def emit(self, event: SessionEvent) -> bool:
+        """Publish an event and report whether it was accepted by the bus.
+
+        ``True`` means the event bus was open and at least one subscriber (or
+        an internal consumer that wraps the bus) accepted the event.  A closed
+        or completely unsubscribed bus is not a successful delivery target;
+        producers must be able to retain their cursor and retry in that case.
+        A full subscriber queue is not counted as an acknowledgement.
+        """
         if self._closed:
-            return
-        for queue in self._subscribers:
+            return False
+        if not self._subscribers:
+            return False
+        accepted = False
+        for subscriber in tuple(self._subscribers):
+            if subscriber.closed.is_set():
+                continue
             try:
-                queue.put_nowait(event)
+                subscriber.queue.put_nowait(event)
+                accepted = True
             except asyncio.QueueFull:
                 logger.warning("事件总线订阅者队列已满，丢弃事件: %s", event.type.value)
+        return accepted
 
     async def subscribe(self, *, max_queue_size: int = 256) -> AsyncIterator[SessionEvent]:
         """Return an async iterator that yields events as they arrive.
 
-        The iterator terminates when :meth:`close` is called.
+        The iterator terminates when :meth:`close` is called.  Closing does not
+        rely on inserting a sentinel into a bounded queue: a slow consumer may
+        drain events already accepted before it exits, while a consumer waiting
+        on an empty queue is woken by a per-subscriber close event.
         """
-        queue: asyncio.Queue[SessionEvent | None] = asyncio.Queue(maxsize=max_queue_size)
-        self._subscribers.append(queue)
+        if isinstance(max_queue_size, bool) or not isinstance(max_queue_size, int):
+            raise ValueError("max_queue_size must be a positive integer")
+        if max_queue_size <= 0:
+            raise ValueError("max_queue_size must be a positive integer")
+        if self._closed:
+            return
+
+        subscriber = _EventSubscriber(asyncio.Queue(maxsize=max_queue_size))
+        self._subscribers.append(subscriber)
         try:
             while True:
-                event = await queue.get()
-                if event is None:
-                    # Sentinel — bus has been closed.
+                # Drain events which were accepted before close() first.  Once
+                # the queue is empty, the close flag is terminal.
+                if subscriber.closed.is_set() and subscriber.queue.empty():
                     break
-                yield event
+                get_task = asyncio.create_task(subscriber.queue.get())
+                close_task = asyncio.create_task(subscriber.closed.wait())
+                try:
+                    done, _pending = await asyncio.wait(
+                        {get_task, close_task},
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    if get_task in done:
+                        close_task.cancel()
+                        await asyncio.gather(close_task, return_exceptions=True)
+                        yield get_task.result()
+                    else:
+                        get_task.cancel()
+                        await asyncio.gather(get_task, return_exceptions=True)
+                        if subscriber.queue.empty():
+                            break
+                finally:
+                    # If the consumer itself is cancelled while waiting, do not
+                    # leak either helper task into the retiring event loop.
+                    for task in (get_task, close_task):
+                        if not task.done():
+                            task.cancel()
+                    await asyncio.gather(get_task, close_task, return_exceptions=True)
         finally:
             try:
-                self._subscribers.remove(queue)
+                self._subscribers.remove(subscriber)
             except ValueError:
                 pass  # Already removed by close()
 
     async def close(self) -> None:
         """Signal all subscribers to stop and clear the subscriber list."""
         self._closed = True
-        for queue in self._subscribers:
-            try:
-                queue.put_nowait(None)
-            except asyncio.QueueFull:
-                pass
+        subscribers = tuple(self._subscribers)
+        # Set a separate close event rather than enqueueing a sentinel, because
+        # every bounded queue may already be full.  This operation is
+        # cancellation-free and leaves no late subscribers behind.
+        for subscriber in subscribers:
+            subscriber.closed.set()
         self._subscribers.clear()
 
     @property

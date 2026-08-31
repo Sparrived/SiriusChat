@@ -96,7 +96,16 @@ class PersonaWorker:
         adapters_cfg: PersonaAdaptersConfig,
         plugin_config: dict[str, Any],
     ) -> None:
-        await self._runtime.start()  # type: ignore[union-attr]
+        runtime = self._runtime
+        if runtime is None:
+            raise RuntimeError("EngineRuntime 未初始化")
+        await runtime.start()
+        if runtime.engine is None:
+            # A setup-only runtime may intentionally stay lazy until provider
+            # and persona configuration exists.  Never bind a platform adapter
+            # to ``None``: it would appear connected yet reject every event.
+            LOG.warning("引擎尚未就绪，跳过本次 adapter 启动")
+            return
         for adapter_cfg in adapters_cfg.adapters:
             if not adapter_cfg.enabled:
                 LOG.info("跳过 disabled adapter: %s", getattr(adapter_cfg, "type", "?"))
@@ -160,10 +169,15 @@ class PersonaWorker:
                 persona = getattr(self._runtime.engine, "persona", None)
                 if persona:
                     adapter.set_persona_name(getattr(persona, "name", "") or "")
+            runtime = self._runtime
+            engine = runtime.engine if runtime is not None else None
+            if engine is None:
+                LOG.warning("引擎尚未就绪，拒绝启动 NapCat adapter")
+                return
             await adapter.connect()
-            await adapter.start_handling(self._runtime.engine)  # type: ignore[union-attr]
+            await adapter.start_handling(engine)
             self._adapters.append(adapter)
-            self._runtime.add_tool_bridge("napcat", adapter)  # type: ignore[union-attr]
+            runtime.add_tool_bridge("napcat", adapter)
             LOG.info("NapCat adapter 已启动: %s", adapter_cfg.ws_url)
         else:
             LOG.warning("未知 adapter 类型，已跳过: %s", type(adapter_cfg).__name__)

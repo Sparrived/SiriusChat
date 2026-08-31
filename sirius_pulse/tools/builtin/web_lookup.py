@@ -55,10 +55,7 @@ _config.group("网页查询").add(
 
 TOOL_META = {
     "name": "web_lookup",
-    "description": (
-        "群聊里需要查外部资料、最新信息、陌生名词，或有人发网页链接/文章/公告让你看看时使用；"
-        "可搜索关键词或读取 URL，拿到结果后再用自然口吻概括回应。"
-    ),
+    "description": ("群聊里需要查外部资料、最新信息、陌生名词，或有人发网页链接/文章/公告让你看看时使用；" "可搜索关键词或读取 URL，拿到结果后再用自然口吻概括回应。"),
     "version": "1.0.0",
     "retry_safe": True,
     "side_effect": "read_only",

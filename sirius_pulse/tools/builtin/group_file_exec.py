@@ -23,26 +23,18 @@ _config.group("图片与文件").add(
     required=True,
     choices=["image", "file", "list", "download"],
 )
-_config.group("图片与文件").add(
-    "image_path", type="str", description="action=image 时的本地图片路径或网络 URL。"
-)
-_config.group("图片与文件").add(
-    "file_path", type="str", description="action=file 时要上传的本地文件路径。"
-)
+_config.group("图片与文件").add("image_path", type="str", description="action=image 时的本地图片路径或网络 URL。")
+_config.group("图片与文件").add("file_path", type="str", description="action=file 时要上传的本地文件路径。")
 _config.group("图片与文件").add(
     "file_name",
     type="str",
     description="action=file 时在聊天中显示的文件名；action=download 时的本地文件名。",
 )
-_config.group("群文件管理").add(
-    "folder_id", type="str", description="action=list 时要读取的群文件夹 ID；留空读取根目录。"
-)
+_config.group("群文件管理").add("folder_id", type="str", description="action=list 时要读取的群文件夹 ID；留空读取根目录。")
 _config.group("群文件管理").add(
     "file_count", type="int", description="action=list 时最多读取的文件数。", default=50
 )
-_config.group("群文件管理").add(
-    "file_id", type="str", description="action=download 时从群文件列表得到的文件 ID。"
-)
+_config.group("群文件管理").add("file_id", type="str", description="action=download 时从群文件列表得到的文件 ID。")
 _config.group("群文件管理").add(
     "download_dir",
     type="str",
@@ -277,9 +269,7 @@ async def _list_group_files(
         payload = result if isinstance(result, dict) else {}
         files = payload.get("files") if isinstance(payload.get("files"), list) else []
         folders = payload.get("folders") if isinstance(payload.get("folders"), list) else []
-        lines = [
-            f"群 {group_id} 的群文件列表（{'根目录' if not folder_id else f'文件夹 {folder_id}'}）："
-        ]
+        lines = [f"群 {group_id} 的群文件列表（{'根目录' if not folder_id else f'文件夹 {folder_id}'}）："]
         lines.extend(_format_group_folder(item) for item in folders if isinstance(item, dict))
         lines.extend(_format_group_file(item) for item in files if isinstance(item, dict))
         if len(lines) == 1:

@@ -5,10 +5,10 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from sirius_pulse.adapters.models import ParsedEvent
 from sirius_pulse.core.delayed_response_queue import DelayedResponseQueue
 from sirius_pulse.core.engine_core import _EmotionalGroupChatEngineBase
 from sirius_pulse.core.events import SessionEvent, SessionEventType
-from sirius_pulse.adapters.models import ParsedEvent
 from sirius_pulse.models.models import Message
 from sirius_pulse.platforms.onebot_v11.napcat.adapter import NapCatAdapter
 
@@ -75,7 +75,11 @@ async def test_napcat_delayed_partials_wait_between_each_sent_message(monkeypatc
         active_snapshots.append(adapter._is_reply_send_active("100"))
         slept.append(seconds)
 
-    async def fake_tick_delayed_queue(group_id, on_partial_reply):
+    async def fake_tick_delayed_queue(
+        group_id, on_partial_reply, *, adapter_type=None, adapter_route_id=None
+    ):
+        assert adapter_type == "napcat"
+        assert adapter_route_id == ""
         active_snapshots.append(adapter._is_reply_send_active("100"))
         await on_partial_reply("first")
         await on_partial_reply("second")

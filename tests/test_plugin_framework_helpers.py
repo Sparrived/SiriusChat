@@ -5,9 +5,10 @@ from types import SimpleNamespace
 
 import pytest
 
+from sirius_pulse.core.helpers import Helpers
 from sirius_pulse.plugins.base import PluginBase
-from sirius_pulse.plugins.config import PluginConfigManager
-from sirius_pulse.plugins.context import MessageContext, PluginContext, PluginDataStore
+from sirius_pulse.plugins.config import PluginConfigManager, get_config_manager
+from sirius_pulse.plugins.context import EngineProxy, MessageContext, PluginContext, PluginDataStore
 from sirius_pulse.plugins.models import (
     ArgNode,
     CommandAST,
@@ -180,6 +181,181 @@ def test_plugin_data_store_when_values_change_then_json_persists_and_invalid_fil
     broken_file.write_text("{broken", encoding="utf-8")
     assert PluginDataStore(tmp_path, "broken").all() == {}
 
+    store_file = tmp_path / "_plugin_demo_data.json"
+    store_file.write_text(json.dumps({"count": 7}), encoding="utf-8")
+    reloaded.reload()
+    assert reloaded.get("count") == 7
+    assert reloaded.store_path == store_file
+    assert reloaded.artifact_dir == tmp_path / "artifacts" / "demo"
+
+
+@pytest.mark.asyncio
+async def test_plugin_context_when_bound_then_dispatches_proactive_message_through_engine(tmp_path):
+    calls = []
+
+    class Engine:
+        identity_resolver = None
+        user_manager = None
+        _pending_reminders = {}
+        _current_adapter_type = ""
+        event_bus = None
+        _active_private_groups = set()
+
+        async def dispatch_proactive_message(self, **kwargs):
+            calls.append(kwargs)
+
+        def get_active_groups(self):
+            return ["g1"]
+
+    context = PluginContext.create(engine=Engine(), plugin_name="demo")
+    await context.dispatch_proactive_message(
+        group_id="g1",
+        text="更新啦",
+        adapter_type="napcat",
+        image_path="update.png",
+    )
+
+    assert calls == [
+        {
+            "group_id": "g1",
+            "text": "更新啦",
+            "adapter_type": "napcat",
+            "event_id": "",
+            "image_path": "update.png",
+            "reply_references": None,
+            "sticker_names": None,
+            "poke_user_ids": None,
+        }
+    ]
+    assert context.get_active_groups() == ["g1"]
+
+    data_store = PluginDataStore(tmp_path, "demo")
+    context.data_store = data_store
+    assert context.get_artifact_dir() == tmp_path / "artifacts" / "demo"
+
+
+@pytest.mark.asyncio
+async def test_engine_proxy_emit_event_is_awaitable_and_reports_bus_availability():
+    events = []
+
+    class EventBus:
+        async def emit(self, event):
+            events.append(event)
+
+    proxy = EngineProxy()
+    proxy._bind(
+        SimpleNamespace(identity_resolver=None, user_manager=None, event_bus=EventBus()),
+        "demo",
+    )
+
+    assert await proxy.emit_event("reminder_triggered", {"group_id": "g1"}) is True
+    assert events[0].type.value == "reminder_triggered"
+
+    assert await EngineProxy().emit_event("reminder_triggered", {}) is False
+
+
+@pytest.mark.asyncio
+async def test_blank_proactive_dispatch_uses_group_routes_without_current_adapter():
+    events = []
+
+    class EventBus:
+        async def emit(self, event):
+            events.append(event)
+
+    class Engine:
+        _current_adapter_type = ""
+        _active_private_groups = set()
+        _group_last_message_at = {}
+        event_bus = EventBus()
+
+        def resolve_adapter_types(self, group_id):
+            return {"g1": ["napcat", "discord"], "g2": []}.get(group_id, [])
+
+        def has_registered_adapters(self):
+            return True
+
+    helpers = Helpers(Engine())
+    await helpers.dispatch_proactive_message(group_id="g1", text="广播", adapter_type="")
+
+    assert len(events) == 1
+    assert events[0].data["adapter_type"] == ""
+    assert events[0].data["adapter_types"] == ["napcat", "discord"]
+
+    await helpers.dispatch_proactive_message(group_id="g2", text="不应泄漏", adapter_type="")
+    assert len(events) == 1
+
+
+@pytest.mark.asyncio
+async def test_proactive_dispatch_when_resolver_fails_then_does_not_use_stale_adapter():
+    events = []
+
+    class EventBus:
+        async def emit(self, event):
+            events.append(event)
+
+    class Engine:
+        _current_adapter_type = "napcat"
+        event_bus = EventBus()
+
+        def resolve_adapter_types(self, _group_id):
+            raise RuntimeError("routing unavailable")
+
+    accepted = await Helpers(Engine()).dispatch_proactive_message(
+        group_id="g1", text="不应泄漏", adapter_type=""
+    )
+
+    assert accepted is False
+    assert events == []
+
+
+@pytest.mark.asyncio
+async def test_proactive_dispatch_when_adapter_is_explicit_then_keeps_targeted_event():
+    events = []
+
+    class EventBus:
+        async def emit(self, event):
+            events.append(event)
+
+    engine = SimpleNamespace(
+        _current_adapter_type="discord",
+        _active_private_groups=set(),
+        event_bus=EventBus(),
+        resolve_adapter_types=lambda _group_id: ["napcat"],
+        has_registered_adapters=lambda: True,
+    )
+
+    await Helpers(engine).dispatch_proactive_message(
+        group_id="g1", text="定向", adapter_type="napcat", event_id="evt-1"
+    )
+
+    assert len(events) == 1
+    assert events[0].data["adapter_type"] == "napcat"
+    assert "adapter_types" not in events[0].data
+
+
+@pytest.mark.asyncio
+async def test_proactive_dispatch_rejects_explicit_adapter_outside_destination_route():
+    events = []
+
+    class EventBus:
+        async def emit(self, event):
+            events.append(event)
+
+    engine = SimpleNamespace(
+        _current_adapter_type="",
+        _active_private_groups=set(),
+        event_bus=EventBus(),
+        resolve_adapter_types=lambda _group_id: ["napcat"],
+        has_registered_adapters=lambda: True,
+    )
+
+    accepted = await Helpers(engine).dispatch_proactive_message(
+        group_id="g1", text="不应投递", adapter_type="discord"
+    )
+
+    assert accepted is False
+    assert events == []
+
 
 def test_plugin_context_and_base_when_setup_is_missing_or_present_then_helpers_use_context(
     tmp_path,
@@ -250,6 +426,15 @@ def test_engine_proxy_when_unbound_or_bound_then_persona_and_lookup_defaults_are
         "name": "Yue",
         "full_system_prompt": "Yue 的完整身份设定。",
     }
+
+
+def test_plugin_config_manager_when_workspaces_differ_then_managers_are_not_shared(tmp_path):
+    first = get_config_manager(tmp_path / "first")
+    second = get_config_manager(tmp_path / "second")
+
+    assert first is not second
+    first.set_enabled("demo", False)
+    assert second.get_enabled("demo") is True
 
 
 def test_plugin_config_manager_when_old_config_is_loaded_then_updates_notify_and_persist(tmp_path):

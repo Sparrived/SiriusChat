@@ -13,8 +13,14 @@ services:
     environment:
       SIRIUS_PULSE_HOME: /app
       SIRIUS_PULSE_FILE_ROOT: /
+      # Optional examples for github_monitor. The Plugin setting must reference
+      # these exact names; map any custom *_env names in an uncommitted override.
+      SIRIUS_GITHUB_TOKEN_SIRIUS_PULSE: ${SIRIUS_GITHUB_TOKEN_SIRIUS_PULSE:-}
+      SIRIUS_GITHUB_WEBHOOK_SECRET: ${SIRIUS_GITHUB_WEBHOOK_SECRET:-}
     volumes:
       - ./data:/app/data
+      # External plugin source and _config.json remain on the host.
+      - ./plugins:/app/plugins:rw
       - /root/.cache/huggingface:/home/sirius/.cache/huggingface
       - ${SIRIUS_CONTAINER_ADMIN_SOCKET:-/dev/null}:/run/sirius-container-admin.sock:ro
     command: ["run"]

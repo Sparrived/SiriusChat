@@ -7,14 +7,14 @@
 <a href="https://www.python.org/"><img src="https://img.shields.io/badge/Python-3.12%2B-blue?style=flat-square&logo=python&logoColor=white" alt="Python 3.12+"></a>
 <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green?style=flat-square" alt="License"></a>
 <a href="https://pypi.org/project/sirius-pulse/"><img src="https://img.shields.io/badge/PyPI-sirius--pulse-blueviolet?style=flat-square" alt="PyPI"></a>
-<a href="#-测试"><img src="https://img.shields.io/badge/Tests-39%20passed-brightgreen?style=flat-square" alt="Tests"></a>
+<a href="https://github.com/Sparrived/SiriusPulse/actions/workflows/ci.yml"><img src="https://github.com/Sparrived/SiriusPulse/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
 <a href="https://sirius-pulse-docs.vercel.app/"><img src="https://img.shields.io/badge/Docs-VitePress-646cff?style=flat-square&logo=vitepress" alt="VitePress Docs"></a>
 
 <em>✨ 月白亲手写的 README，请多关照喵～(ฅ´ω`ฅ)</em>
 <br>
 <em>一个让 AI 角色在群里活起来的异步角色扮演框架～支持多人格、多平台、多模型，每个人格都有自己的小世界喵！</em>
 
-<a href="https://docs.sparrived.xyz/">📚 文档</a> · <a href="#-快速开始">🚀 快速开始</a> · <a href="#使用示例">💡 示例</a> · <a href="#-扩展开发">🔧 扩展开发</a> · <a href="#-贡献">🤝 贡献</a>
+<a href="https://sirius-pulse-docs.vercel.app/">📚 文档</a> · <a href="#-快速开始">🚀 快速开始</a> · <a href="#使用示例">💡 示例</a> · <a href="#-扩展开发">🔧 扩展开发</a> · <a href="#-贡献">🤝 贡献</a>
 
 </div>
 
@@ -104,6 +104,8 @@ Perception → Cognition → Decision → Execution → Background
 ```bash
 pip install sirius-pulse
 ```
+
+外部插件是独立维护的 Git submodule，不会打包进 PyPI wheel，也不会复制进 Docker 镜像。源码必须在运行目录的 `plugins/` 中由宿主机准备；详见下方的插件初始化和 Docker 挂载说明。
 
 ### 2️⃣ 启动 CLI
 
@@ -230,10 +232,10 @@ sirius_pulse/
 │       ├── web_lookup.py
 │       ├── qq_member_info.py
 │       ├── bash.py（含项目级 crontab 兼容调度）
-│       ├── github_monitor.py（纯被动）
 │       └── ...
 │
-├── plugins/                 # 插件系统（v1.2+）
+├── extension_runtime.py     # Tool / Plugin 共用的扩展运行时契约
+├── sirius_pulse/plugins/    # Plugin 框架（加载、执行、调度、上下文）
 │   ├── base.py              # PluginBase 基类
 │   ├── registry.py          # 多维度插件索引
 │   ├── executor.py          # 插件执行器（权限 + 速率限制）
@@ -246,6 +248,11 @@ sirius_pulse/
 │   ├── scheduler.py         # 定时调度器（cron/interval）
 │   ├── models.py            # 插件数据模型
 │   └── events.py            # 事件定义
+├── plugins/                 # Git submodule：外部 Plugin 仓库
+│   ├── github_monitor/      # GitHub Poll/Webhook 监控
+│   ├── amkr_key_manager/    # AMKR 模型和 Key 管理
+│   ├── sub2api_monitor/     # Sub2API 订阅与分组倍率监控
+│   └── ...                  # 其他由子模块版本提供的外部扩展
 │
 ├── providers/               # LLM Provider
 │   ├── base.py              # Provider 基类接口
@@ -332,13 +339,34 @@ def run(query: str = "", data_store=None, **kwargs) -> dict:
     return {"success": True, "text": result}
 ```
 
-内置工具包括：`bash`（含受限 Docker 命令和项目级 crontab 调度）、`web_lookup`、`qq_member_info`、`github_monitor`、`desktop_screenshot` 等。
-
-支持**被动工具**：后台任务、事件触发器、生命周期回调。
+内置工具包括：`bash`（含受限 Docker 命令和项目级 crontab 调度）、`web_lookup`、`qq_member_info`、`desktop_screenshot` 等。工具也可以通过后台任务、事件触发器和生命周期回调提供被动能力。
 
 ### 插件系统（Plugins）
 
-用户通过 `/` `#` `!` 前缀**显式命令**触发。
+用户通过 `/` `#` `!` 前缀**显式命令**触发。外部插件位于根目录 `plugins/` Git submodule 中，当前包含 `github_monitor`、`amkr_key_manager`、`sub2api_monitor` 等扩展，具体目录以子模块版本为准。
+
+初始化插件 submodule：
+
+```bash
+git submodule update --init --recursive
+```
+
+GitHub 监控已从内置 Tool 迁为 `github_monitor` Plugin，提供 Poll/Webhook、聚合通知、Compare API 丰富信息和可选截图。GitHub Token 与 Webhook Secret 只允许通过 Plugin 中配置的 `github_token_env` / `webhook_secret_env` 变量名引用，再由实际 Persona Worker 环境注入；不要把密钥写入 WebUI settings 或 `plugins/_config.json`。Docker 的 `.env` 不会自动进入容器，变量名必须在 Compose `environment`/override 中显式映射。详见 [`plugins/github_monitor/README.md`](plugins/github_monitor/README.md)。
+
+例如，Sub2API 监控插件支持 `/sub2api status`、`/sub2api poll`、`/sub2api subscriptions` 和 `/sub2api rates`；站点、登录/API 路径以及**必填**的订阅与倍率监控路径均为运行时配置，插件不写死监控端点或站点 URL。`SUB2API_EMAIL` 和 `SUB2API_PASSWORD` 是支持的凭据机制，应只由启动进程环境提供，密码不得通过 WebUI 或插件 settings 保存。`notify_group_ids` 是显式通知允许列表；`run_on_persona` 必须指定唯一轮询 Persona，留空会禁用后台和手动轮询。首个快照及来源变更静默；投递失败或未确认时会保留每群 ACK 状态并重试未确认群，框架确认仅可能表示适配器/平台已受理或确认发送，并不代表用户已阅读。详见 [`plugins/sub2api_monitor/README.md`](plugins/sub2api_monitor/README.md)。
+
+#### Docker 中的外部插件
+
+Docker 只提供 Sirius Pulse 核心运行环境；`plugins/` 源码和插件配置保留在宿主机，并由 Compose 挂载到容器的 `/app/plugins`。首次部署或更新插件时在宿主机执行：
+
+```bash
+git submodule update --init --recursive
+docker compose up -d --build
+```
+
+不要把插件复制到镜像或 PyPI 包中。容器需要通过 WebUI 写入 `plugins/_config.json` 时，Linux 宿主机上的 `plugins/` 目录必须允许 UID `10001`（镜像内 `sirius` 用户）写入；可按宿主机权限策略使用 ACL（例如 `sudo setfacl -R -m u:10001:rwX plugins`），同时保留宿主机 Git 用户对工作树的写权限，不要为此改变整个 Git 工作树所有权。Plugin 特有依赖可由受信任的运行时生命周期按声明处理；`httpx` 与 Playwright 同时服务于核心 Provider/通用渲染，仍属于共享核心环境，Docker 镜像也会准备 Chromium。
+
+#### 编写自定义插件
 
 ```python
 # plugins/my_plugin/__init__.py
@@ -366,7 +394,7 @@ class MyPlugin(PluginBase):
 
 ## 📚 文档
 
-> 💡 **月白说**：文档见 [SiriusPulse-Docs](https://sirius-pulse-docs.vercel.app/) 下喵～第一次使用的话，建议从 [系统架构全景](https://sirius-pulse-docs.vercel.app/guide/architecture-overview) 开始看哦(｡•̀ᴗ-)✧
+> 💡 **月白说**：文档见 [SiriusPulse-Doc](https://sirius-pulse-docs.vercel.app/) 下喵～第一次使用的话，建议从 [系统架构全景](https://sirius-pulse-docs.vercel.app/guide/architecture-overview) 开始看哦(｡•̀ᴗ-)✧
 
 | 板块 | 内容 |
 |------|------|
@@ -390,23 +418,22 @@ npm run build     # 构建
 测试必须从业务侧出发，围绕用户实际使用路径编写。优先验证用户输入、系统处理、最终响应或持久化结果之间的业务闭环，避免只为了覆盖内部函数、私有实现或临时分支而编写脱离业务语义的测试。
 
 ```bash
-# 运行全部测试（< 2 秒）
+# 核心测试
 python -m pytest tests/ -q
 
-# 覆盖率
+# 外部 Plugin 完整测试（先递归初始化 submodule）
+git submodule update --init --recursive
+python -m pytest plugins/tests/ -q
+
+# 核心覆盖率
 python -m pytest tests/ --cov=sirius_pulse
+
+# 文档生产构建
+npm ci --prefix docs
+npm run build --prefix docs
 ```
 
-**测试覆盖**：6 个测试模块，39 个测试用例，覆盖关键运行节点：
-
-| 测试模块 | 覆盖的关键节点 |
-|----------|--------------|
-| `test_plugin_lexer.py` | Tokenizer → Lexer 完整解析链路 |
-| `test_plugin_registry.py` | 插件注册/匹配/注销/清空 |
-| `test_tool_executor.py` | TOOL_CALL 解析/参数传递/默认值/data_store/失败处理 |
-| `test_tool_registry.py` | 工具加载/注册/工具描述/原子替换 |
-| `test_basic_memory.py` | 记忆添加/上下文窗口/硬限制/归档/多群/热度/序列化 |
-| `test_tool_data_store.py` + `test_config.py` | 数据持久化与配置加载 |
+CI 会分别运行核心测试、外部 Plugin 测试、Plugin 语法/manifest 与类元数据一致性校验、VitePress 构建，以及 wheel/sdist 外部 Plugin 源码排除检查。测试数量会随扩展变化，因此不在 README 中维护易过期的固定数字。
 
 ---
 
@@ -442,8 +469,8 @@ MIT License © 2025-2026 Sparrived. 详见 [LICENSE](LICENSE)。
 - 📦 [PyPI](https://pypi.org/project/sirius-pulse/)
 - 📚 [VitePress 文档](https://sirius-pulse-docs.vercel.app/)
 - 📖 [扩展开发指南](https://sirius-pulse-docs.vercel.app/extensions/)
-- 🐛 [报告问题](https://github.com/Sparrived/SiriusChat/issues)
-- 💬 [讨论区](https://github.com/Sparrived/SiriusChat/discussions)
+- 🐛 [报告问题](https://github.com/Sparrived/SiriusPulse/issues)
+- 💬 [讨论区](https://github.com/Sparrived/SiriusPulse/discussions)
 
 ---
 

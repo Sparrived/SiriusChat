@@ -25,9 +25,7 @@ def _normalize_text(value: Any) -> str:
     return ""
 
 
-def extract_assistant_text(
-    message: dict[str, Any], *, include_reasoning: bool = True
-) -> str:
+def extract_assistant_text(message: dict[str, Any], *, include_reasoning: bool = True) -> str:
     """Extract assistant-visible text from heterogeneous provider payloads.
 
     Providers may return message.content as string/list/object, or place usable text

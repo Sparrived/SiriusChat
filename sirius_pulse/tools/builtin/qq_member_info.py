@@ -36,10 +36,7 @@ _config.group("QQ 成员信息").add(
 
 TOOL_META = {
     "name": "qq_member_info",
-    "description": (
-        "群聊里需要确认谁是谁、查成员 QQ 号/群昵称/管理员身份，或准备 @、戳一戳、管理操作前核对对象时使用；"
-        "可列出群成员或查询单个成员详情。"
-    ),
+    "description": ("群聊里需要确认谁是谁、查成员 QQ 号/群昵称/管理员身份，或准备 @、戳一戳、管理操作前核对对象时使用；" "可列出群成员或查询单个成员详情。"),
     "version": "1.0.0",
     "side_effect": "read_only",
     "tags": ["napcat", "qq", "group_info"],

@@ -51,9 +51,7 @@ def handle_request(
         if isinstance(job, dict)
     ]
     owner_id = (
-        invocation_context.caller_user_id
-        if invocation_context
-        else str(context.get("user_id", ""))
+        invocation_context.caller_user_id if invocation_context else str(context.get("user_id", ""))
     )
     owner_name = invocation_context.caller_name if invocation_context else ""
     adapter_type = str(context.get("adapter_type", ""))
@@ -71,10 +69,7 @@ def handle_request(
                 "summary": "当前聊天没有定时任务",
                 "text_blocks": ["当前没有定时任务。"],
             }
-        lines = [
-            f"{job.get('expression', '')} {job.get('command', '')}".strip()
-            for job in scoped
-        ]
+        lines = [f"{job.get('expression', '')} {job.get('command', '')}".strip() for job in scoped]
         return {
             "success": True,
             "summary": f"列出 {len(scoped)} 个定时任务（标准 crontab 格式）",
@@ -193,9 +188,7 @@ async def _run_job(ctx: Any, job: dict[str, Any], run_command: CommandRunner) ->
         _skip_crontab=True,
     )
     output = (
-        result.get("text_blocks", [""])[0]
-        if result.get("success")
-        else result.get("error", "")
+        result.get("text_blocks", [""])[0] if result.get("success") else result.get("error", "")
     )
     if not output:
         output = "命令执行成功，但没有输出。"

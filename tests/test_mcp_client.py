@@ -52,9 +52,7 @@ class _FakeManager(MCPClientManager):
 async def test_mcp_tools_preserve_schema_and_execute_without_framework_injection(
     tmp_path: Path,
 ):
-    session = _FakeSession(
-        CallToolResult(content=[TextContent(type="text", text="结果")])
-    )
+    session = _FakeSession(CallToolResult(content=[TextContent(type="text", text="结果")]))
     manager = _FakeManager(session)
     tools = await manager.load_tools()
 

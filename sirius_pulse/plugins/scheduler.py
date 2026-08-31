@@ -13,7 +13,7 @@ import asyncio
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Awaitable, Callable
+from typing import Any, Awaitable, Callable
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +34,8 @@ class ScheduledTask:
     callback: Callable[[], Awaitable[None]] | None = field(default=None)
     consecutive_failures: int = field(default=0)  # 连续失败次数（用于退避）
     disabled: bool = field(default=False)  # 是否已停用
+    running: bool = field(default=False)  # 是否正在执行，避免同一任务重入
+    runtime_task: asyncio.Task[Any] | None = field(default=None, repr=False)
 
 
 class PluginScheduler:
@@ -46,7 +48,8 @@ class PluginScheduler:
         self._tasks: list[ScheduledTask] = []
         self._check_interval = check_interval  # 检查粒度（秒）
         self._running = False
-        self._task: asyncio.Task | None = None
+        self._task: asyncio.Task[Any] | None = None
+        self._callback_tasks: set[asyncio.Task[Any]] = set()
 
     def add_task(self, task: ScheduledTask) -> None:
         """添加一个定时任务。"""
@@ -59,16 +62,34 @@ class PluginScheduler:
         )
 
     def remove_task(self, name: str) -> None:
-        """移除一个定时任务。"""
+        """移除一个定时任务，并请求取消正在运行的回调。"""
+        for scheduled_task in self._tasks:
+            if scheduled_task.name == name and scheduled_task.runtime_task:
+                scheduled_task.runtime_task.cancel()
         self._tasks = [t for t in self._tasks if t.name != name]
 
     def remove_plugin_tasks(self, plugin_name: str) -> None:
-        """移除指定插件的所有定时任务。"""
+        """移除指定插件的所有定时任务，并请求取消正在运行的回调。"""
         before = len(self._tasks)
+        for scheduled_task in self._tasks:
+            if scheduled_task.plugin_name == plugin_name and scheduled_task.runtime_task:
+                scheduled_task.runtime_task.cancel()
         self._tasks = [t for t in self._tasks if t.plugin_name != plugin_name]
         removed = before - len(self._tasks)
         if removed > 0:
             logger.info("移除插件 %s 的 %d 个定时任务", plugin_name, removed)
+
+    async def stop_plugin_tasks(self, plugin_name: str) -> None:
+        """移除指定插件任务，并等待其正在运行的回调退出。"""
+        running = [
+            scheduled_task.runtime_task
+            for scheduled_task in self._tasks
+            if scheduled_task.plugin_name == plugin_name and scheduled_task.runtime_task
+        ]
+        self.remove_plugin_tasks(plugin_name)
+        tasks = [task for task in running if task is not None]
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     async def start(self) -> None:
         """启动调度器（后台循环）。"""
@@ -88,6 +109,16 @@ class PluginScheduler:
             except asyncio.CancelledError:
                 pass
             self._task = None
+        callback_tasks = list(self._callback_tasks)
+        for task in callback_tasks:
+            if not task.done():
+                task.cancel()
+        if callback_tasks:
+            await asyncio.gather(*callback_tasks, return_exceptions=True)
+        self._callback_tasks.clear()
+        for scheduled_task in self._tasks:
+            scheduled_task.runtime_task = None
+            scheduled_task.running = False
         logger.info("Plugin 定时调度器已停止")
 
     async def _run_loop(self) -> None:
@@ -95,7 +126,7 @@ class PluginScheduler:
         while self._running:
             now = time.time()
             for task in self._tasks:
-                if task.disabled:
+                if task.disabled or task.running:
                     continue
                 if not self._should_run(task, now):
                     continue
@@ -104,27 +135,44 @@ class PluginScheduler:
 
                 task.last_run = now
                 if task.callback:
-                    try:
-                        logger.debug("触发定时任务: %s", task.name)
-                        await task.callback()
-                        task.consecutive_failures = 0
-                    except Exception as exc:
-                        task.consecutive_failures += 1
-                        if task.consecutive_failures >= _MAX_CONSECUTIVE_FAILURES:
-                            task.disabled = True
-                            logger.error(
-                                "定时任务 %s 连续失败 %d 次，已自动停用",
-                                task.name,
-                                task.consecutive_failures,
-                            )
-                        else:
-                            logger.error(
-                                "定时任务 %s 执行失败（第%d次）: %s",
-                                task.name,
-                                task.consecutive_failures,
-                                exc,
-                            )
+                    task.running = True
+                    callback_task = asyncio.create_task(
+                        self._run_callback(task),
+                        name=f"plugin_schedule:{task.name}",
+                    )
+                    task.runtime_task = callback_task
+                    self._callback_tasks.add(callback_task)
+                    callback_task.add_done_callback(self._callback_tasks.discard)
             await asyncio.sleep(self._check_interval)
+
+    async def _run_callback(self, task: ScheduledTask) -> None:
+        """运行单个定时回调；不阻塞 Scheduler 主循环。"""
+        try:
+            logger.debug("触发定时任务: %s", task.name)
+            if task.callback is not None:
+                await task.callback()
+            task.consecutive_failures = 0
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            task.consecutive_failures += 1
+            if task.consecutive_failures >= _MAX_CONSECUTIVE_FAILURES:
+                task.disabled = True
+                logger.error(
+                    "定时任务 %s 连续失败 %d 次，已自动停用",
+                    task.name,
+                    task.consecutive_failures,
+                )
+            else:
+                logger.error(
+                    "定时任务 %s 执行失败（第%d次）: %s",
+                    task.name,
+                    task.consecutive_failures,
+                    exc,
+                )
+        finally:
+            task.running = False
+            task.runtime_task = None
 
     def _is_in_backoff(self, task: ScheduledTask, now: float) -> bool:
         """检查任务是否处于退避期。"""

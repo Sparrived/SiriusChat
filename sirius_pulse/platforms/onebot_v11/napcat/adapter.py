@@ -131,6 +131,15 @@ class NapCatAdapter(BaseAdapter):
 
         # 引擎集成（原 Bridge 字段）
         self.plugin_config = dict(config or {})
+        account_id = str(self.plugin_config.get("qq_number", "") or "").strip()
+        if account_id:
+            self.adapter_route_id = f"{self.adapter_type}:{account_id}"
+        else:
+            # Do not expose the WebSocket URL (which can contain credentials) in
+            # event payloads; a bounded digest still keeps same-type instances
+            # separate when an account ID is unavailable during bootstrap.
+            route_digest = hashlib.sha256(str(ws_url).encode("utf-8")).hexdigest()[:16]
+            self.adapter_route_id = f"{self.adapter_type}:endpoint-{route_digest}"
         self._enabled = True
         self._engine: Any = None
         self._last_not_ready_log: float = 0.0
@@ -154,6 +163,18 @@ class NapCatAdapter(BaseAdapter):
         self._dispatch_leases: dict[str, str] = {}
         self._dispatch_delivery_active: set[str] = set()
         self._dispatch_retry_tasks: dict[str, asyncio.Task] = {}
+        # Keep fire-and-forget event handlers so stop/rebind can cancel work
+        # that still owns an old engine.
+        self._event_handler_tasks: set[asyncio.Task[Any]] = set()
+        # Every raw event task captures this generation.  It prevents a task
+        # queued just before a rebind from running against the new engine.
+        self._engine_generation = 0
+        # Set during ownership handoff so the WebSocket path cannot add a raw
+        # handler after the lifecycle code has started draining tasks.
+        self._detaching_engine = False
+        # Serialize start/rebind/stop so a listener cannot be rebound while a
+        # concurrent lifecycle transition is still cancelling its handlers.
+        self._engine_lifecycle_lock = asyncio.Lock()
 
     # ─── 生命周期 ─────────────────────────────────────────
 
@@ -163,15 +184,63 @@ class NapCatAdapter(BaseAdapter):
         调用者必须在外层先完成 runtime.start() 初始化引擎。
         此方法注册 _on_event 处理器并开始监听引擎事件总线。
         """
-        self._engine = engine
-        self._get_dispatcher()
-        if self._event_bus_task is None or self._event_bus_task.done():
-            self._event_bus_task = asyncio.create_task(self._event_bus_listener())
-        self.on_event(self._on_event)
-        LOG.info("NapCatAdapter 平台集成已启动")
+        async with self._engine_lifecycle_lock:
+            previous_engine = self._engine
+            if previous_engine is not None and previous_engine is not engine:
+                await self._detach_engine_locked(previous_engine)
+            self._engine_generation += 1
+            self._engine = engine
+            self._detaching_engine = False
+            register_adapter = getattr(engine, "register_adapter", None)
+            if callable(register_adapter):
+                register_adapter(
+                    self,
+                    adapter_type=self.adapter_type,
+                    group_ids=self._get_allowed_group_ids(),
+                    private_user_ids=self._get_allowed_private_user_ids(),
+                )
+            self._get_dispatcher()
+            if self._event_bus_task is None or self._event_bus_task.done():
+                self._event_bus_task = asyncio.create_task(self._event_bus_listener())
+            self.on_event(self._on_event)
+            LOG.info("NapCatAdapter 平台集成已启动")
 
     async def rebind_engine(self, engine: Any) -> None:
         """Switch the adapter and event listener to a rebuilt engine."""
+        async with self._engine_lifecycle_lock:
+            previous_engine = self._engine
+            # Detach first so a raw event arriving during the handoff cannot
+            # work against the old engine or the not-yet-registered new one.
+            await self._detach_engine_locked(previous_engine)
+            self._engine_generation += 1
+            self._engine = engine
+            self._detaching_engine = False
+            register_adapter = getattr(engine, "register_adapter", None)
+            if callable(register_adapter):
+                register_adapter(
+                    self,
+                    adapter_type=self.adapter_type,
+                    group_ids=self._get_allowed_group_ids(),
+                    private_user_ids=self._get_allowed_private_user_ids(),
+                )
+            if self._running:
+                self._event_bus_task = asyncio.create_task(self._event_bus_listener())
+
+    async def stop_handling(self) -> None:
+        """停止事件处理和引擎事件总线监听。"""
+        async with self._engine_lifecycle_lock:
+            self._running = False
+            await self._detach_engine_locked(self._engine)
+            if self._dispatcher is not None:
+                self._dispatcher.close()
+                self._dispatcher = None
+            LOG.info("NapCatAdapter 平台集成已停止")
+
+    async def _detach_engine_locked(self, engine: Any | None) -> None:
+        """Stop listeners and handlers before changing engine ownership."""
+        self._detaching_engine = True
+        self._engine_generation += 1
+        self._engine = None
         task = self._event_bus_task
         self._event_bus_task = None
         if task is not None:
@@ -180,33 +249,17 @@ class NapCatAdapter(BaseAdapter):
                 await task
             except asyncio.CancelledError:
                 pass
-
-        self._engine = engine
-        if self._running:
-            self._event_bus_task = asyncio.create_task(self._event_bus_listener())
-
-    async def stop_handling(self) -> None:
-        """停止事件处理和引擎事件总线监听。"""
-        self._running = False
-        retry_tasks = list(self._dispatch_retry_tasks.values())
-        for task in retry_tasks:
-            task.cancel()
-        if retry_tasks:
-            await asyncio.gather(*retry_tasks, return_exceptions=True)
-        self._dispatch_retry_tasks.clear()
-        if self._event_bus_task is not None:
-            self._event_bus_task.cancel()
-            try:
-                await self._event_bus_task
-            except asyncio.CancelledError:
-                pass
-            self._event_bus_task = None
-        if self._dispatcher is not None:
-            self._dispatcher.close()
-            self._dispatcher = None
+        # Drain handlers before retries: an active inbound handler can still
+        # schedule a retry while it is being cancelled.
+        await self._cancel_event_handler_tasks()
+        await self._cancel_dispatch_retry_tasks()
+        self._release_dispatch_leases()
+        self._dispatch_delivery_active.clear()
         self._dispatch_leases.clear()
-        self._engine = None
-        LOG.info("NapCatAdapter 平台集成已停止")
+        if engine is not None:
+            unregister_adapter = getattr(engine, "unregister_adapter", None)
+            if callable(unregister_adapter):
+                unregister_adapter(self)
 
     async def connect(self) -> None:
         """建立 WebSocket 连接并启动监听循环。"""
@@ -406,9 +459,14 @@ class NapCatAdapter(BaseAdapter):
                 pass
             return
 
-        for handler in self._event_handlers:
+        if self._detaching_engine:
+            return
+        generation = self._engine_generation
+        for handler in tuple(self._event_handlers):
             try:
-                asyncio.create_task(handler(data))
+                self._track_task(
+                    asyncio.create_task(self._run_raw_event_handler(handler, data, generation))
+                )
             except Exception:
                 LOG.exception("Event handler error")
 
@@ -763,6 +821,8 @@ class NapCatAdapter(BaseAdapter):
             if not self._is_group_allowed(gid):
                 return None
         elif msg_type == "private":
+            if not self._is_private_user_allowed(uid):
+                return None
             gid = f"private_{uid}"
         else:
             gid = ""
@@ -817,9 +877,7 @@ class NapCatAdapter(BaseAdapter):
         msg_id = str(raw_event.get("message_id", ""))
         poke_target_id = str(raw_event.get("target_id", "")) if is_poke else ""
         if is_poke and not msg_id:
-            msg_id = "poke-{}-{}-{}".format(
-                raw_event.get("time", ""), uid, poke_target_id
-            )
+            msg_id = "poke-{}-{}-{}".format(raw_event.get("time", ""), uid, poke_target_id)
 
         return ParsedEvent(
             group_id=gid,
@@ -925,10 +983,7 @@ class NapCatAdapter(BaseAdapter):
                 quote_text = quote_text[:200] + "..."
             safe_quote = html.escape(quote_text, quote=False)
             if safe_nick:
-                return (
-                    f'[引用消息 msg_id="{safe_msg_id}" speaker="{safe_nick}"]'
-                    f"{safe_quote}[/引用消息]"
-                )
+                return f'[引用消息 msg_id="{safe_msg_id}" speaker="{safe_nick}"]' f"{safe_quote}[/引用消息]"
             return f'[引用消息 msg_id="{safe_msg_id}"]{safe_quote}[/引用消息]'
         except Exception as exc:
             LOG.debug("获取引用消息失败 (msg_id=%s): %s", msg_id, exc)
@@ -1060,9 +1115,69 @@ class NapCatAdapter(BaseAdapter):
             return [gids.strip()] if gids.strip() else []
         return [str(g).strip() for g in gids if g]
 
+    def get_configured_group_ids(self) -> list[str]:
+        """Expose the current group destinations to generic engine routing."""
+        return self._get_allowed_group_ids()
+
+    def get_configured_private_user_ids(self) -> list[str]:
+        """Expose the current private destinations to generic engine routing."""
+        return self._get_allowed_private_user_ids()
+
+    def _get_allowed_private_user_ids(self) -> list[str]:
+        """Return normalized private-chat destinations from adapter config."""
+        uids = self.plugin_config.get("allowed_private_user_ids", [])
+        if isinstance(uids, str):
+            try:
+                parsed = json.loads(uids)
+                if isinstance(parsed, list):
+                    return [
+                        str(value).strip().removeprefix("private_").removeprefix("qq_")
+                        for value in parsed
+                        if str(value).strip()
+                    ]
+                if isinstance(parsed, (str, int, float)) and not isinstance(parsed, bool):
+                    value = str(parsed).strip().removeprefix("private_").removeprefix("qq_")
+                    return [value] if value else []
+            except (json.JSONDecodeError, ValueError):
+                pass
+            if "," in uids:
+                return [
+                    value.strip().strip("'\\\"[]()").removeprefix("private_").removeprefix("qq_")
+                    for value in uids.split(",")
+                    if value.strip()
+                ]
+            value = uids.strip().removeprefix("private_").removeprefix("qq_")
+            return [value] if value else []
+        if not isinstance(uids, (list, tuple, set)):
+            return []
+        return [
+            str(value).strip().removeprefix("private_").removeprefix("qq_")
+            for value in uids
+            if str(value).strip()
+        ]
+
+    def _is_private_user_allowed(self, user_id: str) -> bool:
+        allowed = self._get_allowed_private_user_ids()
+        normalized_user_id = str(user_id or "").strip()
+        normalized_user_id = normalized_user_id.removeprefix("private_").removeprefix("qq_")
+        return bool(self.plugin_config.get("enable_private_chat", True)) and (
+            not allowed or normalized_user_id in set(allowed)
+        )
+
+    def is_proactive_destination_allowed(self, destination_id: str) -> bool:
+        """Return whether a proactive event may target this destination."""
+        if not self._enabled:
+            return False
+        destination = str(destination_id or "").strip()
+        if destination.startswith("private_"):
+            user_id = destination.removeprefix("private_").removeprefix("qq_")
+            return self._is_private_user_allowed(user_id)
+        return self._is_group_allowed(destination)
+
     def _is_group_allowed(self, group_id: str) -> bool:
-        return bool(self.plugin_config.get("enable_group_chat", True)) and str(group_id) in set(
-            self._get_allowed_group_ids()
+        normalized_group_id = str(group_id or "").strip()
+        return bool(self.plugin_config.get("enable_group_chat", True)) and (
+            normalized_group_id in set(self._get_allowed_group_ids())
         )
 
     def _require_allowed_group(self, group_id: str) -> None:
@@ -1089,6 +1204,13 @@ class NapCatAdapter(BaseAdapter):
             msg_type = "group" if event.get("group_id") else "private"
         if msg_type == "group" and not self._is_group_allowed(str(event.get("group_id", ""))):
             LOG.debug("忽略不在群白名单中的消息: group=%s", event.get("group_id", ""))
+            return
+        if msg_type == "private" and not self._is_private_user_allowed(
+            str(event.get("user_id", ""))
+        ):
+            LOG.debug("忽略不在私聊白名单中的消息: user=%s", event.get("user_id", ""))
+            return
+        if self._detaching_engine or bool(getattr(self._engine, "_runtime_retiring", False)):
             return
         self._event_queue.put_nowait(event)
         if msg_type == "group":
@@ -1164,7 +1286,8 @@ class NapCatAdapter(BaseAdapter):
             group_id=group_id,
             message_id=parsed.message_id,
             multimodal_inputs=parsed.multimodal_inputs,
-            adapter_type="napcat",
+            adapter_type=self.adapter_type,
+            adapter_route_id=self.adapter_route_id,
             sender_type="other_ai" if is_peer_ai else "human",
             mentions_current_bot=mentions_current_bot,
         )
@@ -1211,9 +1334,7 @@ class NapCatAdapter(BaseAdapter):
             return f"qq:{parsed.group_id}:event:{digest}"
         if parsed.message_id:
             return f"qq:{parsed.group_id}:{parsed.message_id}"
-        raw = "|".join(
-            (parsed.group_id, parsed.user_id, parsed.prompt, parsed.message_type)
-        )
+        raw = "|".join((parsed.group_id, parsed.user_id, parsed.prompt, parsed.message_type))
         return f"qq:{parsed.group_id}:hash:{hashlib.sha256(raw.encode('utf-8')).hexdigest()[:24]}"
 
     async def _process_event(self, event: dict[str, Any]) -> bool:
@@ -1253,10 +1374,7 @@ class NapCatAdapter(BaseAdapter):
                     or (qq_number and qq_number in parsed.at_user_ids)
                 )
             )
-            or (
-                parsed.poke_target_id
-                and parsed.poke_target_id in {parsed.self_id, qq_number}
-            )
+            or (parsed.poke_target_id and parsed.poke_target_id in {parsed.self_id, qq_number})
         )
 
         participant = UnifiedUser(
@@ -1283,7 +1401,8 @@ class NapCatAdapter(BaseAdapter):
             group_id=group_id,
             message_id=parsed.message_id,
             multimodal_inputs=parsed.multimodal_inputs,
-            adapter_type="napcat",
+            adapter_type=self.adapter_type,
+            adapter_route_id=self.adapter_route_id,
             sender_type="other_ai" if is_peer_ai else "human",
             received_during_bot_send=bool(event.get("_sirius_received_during_reply_send")),
             mentions_current_bot=mentions_current_bot,
@@ -1447,10 +1566,15 @@ class NapCatAdapter(BaseAdapter):
             await self._send_stickers_after_reply(group_id, sticker_names)
             await self._send_pokes_after_reply(group_id, poke_user_ids)
             dispatch_sent = bool(sticker_names or poke_user_ids) or dispatch_sent
-            if dispatch_lease_id and not dispatch_sent and result.get("strategy") in {
-                "immediate",
-                "delayed",
-            }:
+            if (
+                dispatch_lease_id
+                and not dispatch_sent
+                and result.get("strategy")
+                in {
+                    "immediate",
+                    "delayed",
+                }
+            ):
                 # The existing queue will deliver the generated reply later;
                 # keep the group lease until its delivery event completes.
                 dispatch_deferred = True
@@ -1481,12 +1605,21 @@ class NapCatAdapter(BaseAdapter):
         task = self._dispatch_retry_tasks.get(event_id)
         if task is not None and not task.done():
             return
+        engine = self._engine
+        if engine is None:
+            return
         wait_seconds = min(
             max(30.0, dispatcher.lease_seconds + dispatcher.peer_cooldown_seconds),
             180.0,
         )
         self._dispatch_retry_tasks[event_id] = asyncio.create_task(
-            self._retry_dispatch_event(event, event_id, wait_seconds)
+            self._retry_dispatch_event(
+                event,
+                event_id,
+                wait_seconds,
+                engine=engine,
+                generation=self._engine_generation,
+            )
         )
 
     async def _retry_dispatch_event(
@@ -1494,14 +1627,33 @@ class NapCatAdapter(BaseAdapter):
         event: dict[str, Any],
         event_id: str,
         wait_seconds: float,
+        *,
+        engine: Any,
+        generation: int,
     ) -> None:
+        """Retry only while the adapter still owns the original engine."""
         deadline = time.monotonic() + wait_seconds
         try:
-            while self._running and time.monotonic() < deadline:
+            while (
+                self._running
+                and not self._detaching_engine
+                and self._engine is engine
+                and generation == self._engine_generation
+                and not getattr(engine, "_runtime_retiring", False)
+                and time.monotonic() < deadline
+            ):
                 await asyncio.sleep(0.5)
+                if (
+                    self._detaching_engine
+                    or self._engine is not engine
+                    or generation != self._engine_generation
+                    or getattr(engine, "_runtime_retiring", False)
+                ):
+                    return
                 if await self._process_event(event):
                     return
-            LOG.info("[群调度] retry expired event=%s", event_id)
+            if self._engine is engine and generation == self._engine_generation:
+                LOG.info("[群调度] retry expired event=%s", event_id)
         except asyncio.CancelledError:
             raise
         finally:
@@ -1510,51 +1662,194 @@ class NapCatAdapter(BaseAdapter):
 
     # ─── 事件总线监听 ────────────────────────────────────
 
+    def _release_dispatch_leases(self) -> None:
+        """Release deferred delivery leases that will not survive a rebind."""
+        dispatcher = self._dispatcher
+        if dispatcher is None:
+            return
+        for lease_id in set(self._dispatch_leases.values()):
+            if not lease_id:
+                continue
+            try:
+                dispatcher.finish(lease_id, sent=False)
+            except Exception:
+                LOG.debug("释放重绑定前的群调度 lease 失败", exc_info=True)
+
+    async def _cancel_dispatch_retry_tasks(self) -> None:
+        """Cancel deferred inbound-event retries before engine ownership moves."""
+        tasks = list(self._dispatch_retry_tasks.values())
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._dispatch_retry_tasks.clear()
+
+    async def _run_raw_event_handler(
+        self,
+        handler: EventHandler,
+        data: dict[str, Any],
+        generation: int,
+    ) -> None:
+        """Run an inbound handler only while its engine generation is current."""
+        if self._detaching_engine or generation != self._engine_generation:
+            return
+        await handler(data)
+
+    def _track_task(self, task: asyncio.Task[Any]) -> None:
+        """Retain a fire-and-forget task until it is observed and complete."""
+        self._event_handler_tasks.add(task)
+
+        def _discard(done: asyncio.Task[Any]) -> None:
+            self._event_handler_tasks.discard(done)
+            if done.cancelled():
+                return
+            try:
+                exc = done.exception()
+            except asyncio.CancelledError:
+                return
+            if exc is not None:
+                LOG.warning("事件处理任务异常: %s", exc)
+
+        task.add_done_callback(_discard)
+
+    def _track_event_handler(self, event: SessionEvent, engine: Any) -> None:
+        """Run one bus event without losing ownership during shutdown/rebind."""
+        self._track_task(asyncio.create_task(self._handle_event(event, engine=engine)))
+
+    async def _cancel_event_handler_tasks(self) -> None:
+        """Cancel and drain every tracked handler before ownership changes."""
+        while self._event_handler_tasks:
+            tasks = list(self._event_handler_tasks)
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            for task in tasks:
+                self._event_handler_tasks.discard(task)
+
     async def _event_bus_listener(self) -> None:
         engine = self._engine
-        while self._running and engine is not None:
+        while (
+            self._running
+            and not self._detaching_engine
+            and engine is not None
+            and not getattr(engine, "_runtime_retiring", False)
+        ):
             try:
                 async for event in engine.event_bus.subscribe():
-                    if not self._running:
+                    if (
+                        not self._running
+                        or self._detaching_engine
+                        or self._engine is not engine
+                        or getattr(engine, "_runtime_retiring", False)
+                    ):
                         break
-                    asyncio.create_task(self._handle_event(event))
+                    self._track_event_handler(event, engine)
             except asyncio.CancelledError:
                 break
             except Exception as exc:
                 LOG.warning("事件总线监听异常: %s", exc)
                 await asyncio.sleep(1)
 
-    async def _handle_event(self, event: SessionEvent) -> None:
-        engine = self._engine
-        if engine is None:
+    def _ack_proactive_delivery(self, event: SessionEvent, accepted: bool) -> None:
+        """Resolve an in-memory receipt attached by the proactive dispatcher."""
+        receipt = event.data.get("_delivery_ack")
+        if not isinstance(receipt, dict):
+            return
+        expected = {
+            str(value).strip() for value in receipt.get("expected", []) if str(value).strip()
+        }
+        if expected and self.adapter_type not in expected:
+            return
+        results = receipt.setdefault("results", {})
+        type_results = results.setdefault(self.adapter_type, {})
+        if not isinstance(type_results, dict):
+            return
+        route_key = str(getattr(self, "adapter_route_id", "") or f"instance:{id(self)}")
+        type_results.setdefault(route_key, bool(accepted))
+        future = receipt.get("future")
+        if not isinstance(future, asyncio.Future) or future.done():
+            return
+        if not expected:
+            # Legacy broadcasts have no complete candidate set.  One confirmed
+            # platform send is enough; all-negative cases use the bounded
+            # dispatcher timeout.
+            if any(type_results.values()):
+                future.set_result(True)
+            return
+
+        succeeded = {
+            adapter
+            for adapter in expected
+            if isinstance(results.get(adapter), dict)
+            and any(bool(value) for value in results[adapter].values())
+        }
+        if expected.issubset(succeeded):
+            future.set_result(True)
+            return
+        raw_counts = receipt.get("expected_counts", {})
+        expected_counts = raw_counts if isinstance(raw_counts, dict) else {}
+        for adapter in expected - succeeded:
+            adapter_results = results.get(adapter, {})
+            required = max(1, int(expected_counts.get(adapter, 1) or 1))
+            if isinstance(adapter_results, dict) and len(adapter_results) >= required:
+                future.set_result(False)
+                return
+
+    async def _handle_event(self, event: SessionEvent, *, engine: Any | None = None) -> None:
+        engine = self._engine if engine is None else engine
+        if (
+            engine is None
+            or self._engine is not engine
+            or getattr(engine, "_runtime_retiring", False)
+        ):
             return
         try:
             if event.type == SessionEventType.DELAYED_RESPONSE_TRIGGERED:
+                source_adapter = str(event.data.get("adapter_type", "") or "").strip()
+                source_route = str(event.data.get("adapter_route_id", "") or "").strip()
+                # Queue consumption is destructive.  Prefer the stable source
+                # instance/account route; coarse type routing is retained only
+                # for legacy items that predate adapter_route_id.
+                if source_route:
+                    if source_route != self.adapter_route_id:
+                        return
+                elif source_adapter and source_adapter != self.adapter_type:
+                    return
                 gid = str(event.data.get("group_id", ""))
                 if gid in self._dispatch_delivery_active:
+                    item_id = str(event.data.get("item_id", "") or "")
+                    emitted = getattr(engine, "_delayed_event_emitted", None)
+                    if item_id and isinstance(emitted, dict):
+                        emitted.setdefault(gid, set()).discard(item_id)
                     return
                 self._dispatch_delivery_active.add(gid)
-                dispatcher = self._get_dispatcher() if not gid.startswith("private_") else None
-                dispatch_lease_id = self._dispatch_leases.get(gid, "")
-                if dispatcher is not None and dispatch_lease_id != dispatcher.active_lease(gid):
-                    dispatch_lease_id = ""
-                    self._dispatch_leases.pop(gid, None)
-                if dispatcher is not None and not dispatch_lease_id:
-                    item_id = str(event.data.get("item_id", "") or event.data.get("agent_turn_id", ""))
-                    decision = dispatcher.admit(
-                        event_id=f"delayed:{gid}:{item_id or 'unknown'}",
-                        group_id=gid,
-                        sender_type="system",
-                        preferred_worker_id=dispatcher.worker_id,
-                    )
-                    if not decision.granted:
-                        cancel_item = getattr(engine.delayed_queue, "cancel_item", None)
-                        if callable(cancel_item) and item_id:
-                            cancel_item(item_id)
-                        self._dispatch_delivery_active.discard(gid)
-                        return
-                    dispatch_lease_id = decision.lease_id
-                    self._dispatch_leases[gid] = dispatch_lease_id
+                try:
+                    dispatcher = self._get_dispatcher() if not gid.startswith("private_") else None
+                    dispatch_lease_id = self._dispatch_leases.get(gid, "")
+                    if dispatcher is not None and dispatch_lease_id != dispatcher.active_lease(gid):
+                        dispatch_lease_id = ""
+                        self._dispatch_leases.pop(gid, None)
+                    if dispatcher is not None and not dispatch_lease_id:
+                        item_id = str(
+                            event.data.get("item_id", "") or event.data.get("agent_turn_id", "")
+                        )
+                        decision = dispatcher.admit(
+                            event_id=f"delayed:{gid}:{item_id or 'unknown'}",
+                            group_id=gid,
+                            sender_type="system",
+                            preferred_worker_id=dispatcher.worker_id,
+                        )
+                        if not decision.granted:
+                            cancel_item = getattr(engine.delayed_queue, "cancel_item", None)
+                            if callable(cancel_item) and item_id:
+                                cancel_item(item_id)
+                            self._dispatch_delivery_active.discard(gid)
+                            return
+                        dispatch_lease_id = decision.lease_id
+                        self._dispatch_leases[gid] = dispatch_lease_id
+                except Exception:
+                    self._dispatch_delivery_active.discard(gid)
+                    raise
                 send_key = gid
                 if gid.startswith("private_"):
                     uid = gid.replace("private_", "").replace("qq_", "")
@@ -1584,7 +1879,12 @@ class NapCatAdapter(BaseAdapter):
                 try:
                     try:
                         results = await engine.tick_delayed_queue(
-                            gid, on_partial_reply=_send_partial
+                            gid,
+                            on_partial_reply=_send_partial,
+                            adapter_type=self.adapter_type,
+                            # Empty string explicitly selects old, unrouted
+                            # queue items; None would mean every same-type item.
+                            adapter_route_id=source_route,
                         )
                     except Exception as exc:
                         LOG.warning("Delayed queue tick failed (%s): %s", gid, exc)
@@ -1606,9 +1906,9 @@ class NapCatAdapter(BaseAdapter):
                                     dispatch_sent = bool(sent) or dispatch_sent
                                     if sent:
                                         response_parts.append(str(reply))
-                            await self._send_stickers_after_reply(gid, sticker_names)
-                            await self._send_pokes_after_reply(gid, poke_user_ids)
-                            dispatch_sent = bool(sticker_names or poke_user_ids) or dispatch_sent
+                            sticker_sent = await self._send_stickers_after_reply(gid, sticker_names)
+                            poke_sent = await self._send_pokes_after_reply(gid, poke_user_ids)
+                            dispatch_sent = sticker_sent or poke_sent or dispatch_sent
                         elif gid in self._get_allowed_group_ids():
                             if reply:
                                 if partial_sent_count > 0:
@@ -1618,10 +1918,14 @@ class NapCatAdapter(BaseAdapter):
                                     dispatch_sent = bool(sent) or dispatch_sent
                                     if sent:
                                         response_parts.append(str(reply))
-                            await self._send_stickers_after_reply(gid, sticker_names)
-                            await self._send_pokes_after_reply(gid, poke_user_ids)
+                            sticker_sent = await self._send_stickers_after_reply(gid, sticker_names)
+                            poke_sent = await self._send_pokes_after_reply(gid, poke_user_ids)
+                            dispatch_sent = sticker_sent or poke_sent or dispatch_sent
                 finally:
                     self._end_reply_send(send_key)
+                    # Clear the guard before lease finalization; even a
+                    # dispatcher storage error must not wedge this group.
+                    self._dispatch_delivery_active.discard(gid)
                     if dispatch_lease_id and dispatcher is not None:
                         dispatcher.finish(
                             dispatch_lease_id,
@@ -1630,25 +1934,75 @@ class NapCatAdapter(BaseAdapter):
                         )
                         if self._dispatch_leases.get(gid) == dispatch_lease_id:
                             self._dispatch_leases.pop(gid, None)
-                    self._dispatch_delivery_active.discard(gid)
             elif event.type == SessionEventType.REMINDER_TRIGGERED:
                 gid = str(event.data.get("group_id", ""))
                 reply = event.data.get("reply", "")
-                adapter_type = event.data.get("adapter_type", "")
+                adapter_type = str(event.data.get("adapter_type", "") or "").strip()
                 image_path = str(event.data.get("image_path", "")).strip()
                 reply_refs = event.data.get("reply_references", [])
                 sticker_names = event.data.get("sticker_names", [])
                 poke_user_ids = event.data.get("poke_user_ids", [])
-                if (reply or sticker_names or poke_user_ids) and adapter_type == self.adapter_type:
+                target_types = event.data.get("adapter_types", [])
+                if isinstance(target_types, str):
+                    target_types = [target_types]
+                if not isinstance(target_types, (list, tuple, set)):
+                    target_types = []
+                normalized_target_types = {
+                    str(value).strip() for value in target_types if str(value).strip()
+                }
+                # An explicit adapter type is authoritative.  The optional
+                # adapter_types list is only an allow-set for blank-target
+                # events; a list cannot override an explicit other adapter.
+                if adapter_type:
+                    adapter_matches = adapter_type == self.adapter_type
+                elif normalized_target_types:
+                    adapter_matches = self.adapter_type in normalized_target_types
+                else:
+                    # Legacy blank events without routing metadata are a
+                    # broadcast to subscribed adapters.
+                    adapter_matches = True
+                destination_allowed = (
+                    self._is_private_user_allowed(gid.removeprefix("private_").removeprefix("qq_"))
+                    if gid.startswith("private_")
+                    else self._is_group_allowed(gid)
+                )
+                if not adapter_matches:
+                    return
+                if not (reply or image_path or sticker_names or poke_user_ids):
+                    self._ack_proactive_delivery(event, False)
+                    return
+                if not destination_allowed:
+                    self._ack_proactive_delivery(event, False)
+                    return
+                if (
+                    (reply or image_path or sticker_names or poke_user_ids)
+                    and adapter_matches
+                    and destination_allowed
+                ):
                     dispatcher = self._get_dispatcher() if not gid.startswith("private_") else None
                     dispatch_lease_id = ""
                     dispatch_sent = False
                     if dispatcher is not None:
-                        reminder_id = str(event.data.get("reminder_id", "") or event.data.get("id", ""))
+                        reminder_id = str(
+                            event.data.get("reminder_id", "") or event.data.get("id", "")
+                        )
                         if not reminder_id:
-                            reminder_id = hashlib.sha256(
-                                f"{gid}|{reply}|{image_path}".encode("utf-8")
-                            ).hexdigest()[:24]
+                            fallback_id = json.dumps(
+                                {
+                                    "group_id": gid,
+                                    "reply": reply,
+                                    "image_path": image_path,
+                                    "reply_references": reply_refs,
+                                    "sticker_names": sticker_names,
+                                    "poke_user_ids": poke_user_ids,
+                                },
+                                ensure_ascii=False,
+                                sort_keys=True,
+                                separators=(",", ":"),
+                            )
+                            reminder_id = hashlib.sha256(fallback_id.encode("utf-8")).hexdigest()[
+                                :24
+                            ]
                         decision = dispatcher.admit(
                             event_id=f"reminder:{gid}:{reminder_id}",
                             group_id=gid,
@@ -1656,29 +2010,35 @@ class NapCatAdapter(BaseAdapter):
                             preferred_worker_id=dispatcher.worker_id,
                         )
                         if not decision.granted:
+                            self._ack_proactive_delivery(event, False)
                             return
                         dispatch_lease_id = decision.lease_id
                     try:
                         if gid.startswith("private_"):
                             uid = gid.replace("private_", "").replace("qq_", "")
                             if reply:
-                                await self._send_private_text(uid, reply, reply_refs)
-                                dispatch_sent = True
+                                dispatch_sent = await self._send_private_text(
+                                    uid, reply, reply_refs
+                                )
                             if image_path:
-                                await self._send_private_image(uid, image_path)
-                        elif gid in self._get_allowed_group_ids():
+                                image_sent = await self._send_private_image(uid, image_path)
+                                dispatch_sent = image_sent or dispatch_sent
+                        elif destination_allowed:
                             if reply:
-                                await self._send_group_text(gid, reply, reply_refs)
-                                dispatch_sent = True
+                                dispatch_sent = await self._send_group_text(gid, reply, reply_refs)
                             if image_path:
-                                await self._send_group_image(gid, image_path)
-                        await self._send_stickers_after_reply(gid, sticker_names)
-                        await self._send_pokes_after_reply(gid, poke_user_ids)
-                        dispatch_sent = bool(sticker_names or poke_user_ids) or dispatch_sent
+                                image_sent = await self._send_group_image(gid, image_path)
+                                dispatch_sent = image_sent or dispatch_sent
+                        sticker_sent = await self._send_stickers_after_reply(gid, sticker_names)
+                        poke_sent = await self._send_pokes_after_reply(gid, poke_user_ids)
+                        dispatch_sent = sticker_sent or poke_sent or dispatch_sent
                     finally:
+                        self._ack_proactive_delivery(event, dispatch_sent)
                         if dispatch_lease_id and dispatcher is not None:
                             dispatcher.finish(dispatch_lease_id, sent=dispatch_sent)
         except Exception as exc:
+            if event.type == SessionEventType.REMINDER_TRIGGERED:
+                self._ack_proactive_delivery(event, False)
             LOG.warning("事件处理异常: %s", exc)
 
     # ─── 消息发送（引擎回调） ─────────────────────────────
@@ -1893,65 +2253,79 @@ class NapCatAdapter(BaseAdapter):
             LOG.warning("发送私聊消息失败: %s", exc)
             return False
 
-    async def _send_stickers_after_reply(self, group_id: str, names: Any) -> None:
+    async def _send_stickers_after_reply(self, group_id: str, names: Any) -> bool:
         if not names or self._engine is None:
-            return
+            return False
         if isinstance(names, str):
             sticker_names = [names.strip()] if names.strip() else []
         else:
             sticker_names = [str(name).strip() for name in names if str(name).strip()]
         if not sticker_names:
-            return
+            return False
         try:
             result = await self._engine._send_stickers_by_names(group_id, sticker_names)
-            if isinstance(result, dict) and result.get("success") is False:
+            if not isinstance(result, dict) or result.get("success") is not True:
                 LOG.warning(
                     "发送回复后的表情包失败: group=%s names=%s result=%s",
                     group_id,
                     sticker_names,
                     result,
                 )
+                return False
+            return True
         except Exception as exc:
             LOG.warning("发送回复后的表情包失败: %s", exc)
+            return False
 
-    async def _send_pokes_after_reply(self, group_id: str, user_ids: Any) -> None:
+    async def _send_pokes_after_reply(self, group_id: str, user_ids: Any) -> bool:
         if not user_ids or self._engine is None or group_id.startswith("private_"):
-            return
+            return False
         if isinstance(user_ids, str):
             poke_user_ids = [user_ids.strip()] if user_ids.strip() else []
         else:
             poke_user_ids = [str(user_id).strip() for user_id in user_ids if str(user_id).strip()]
+        sent_any = False
         for user_id in dict.fromkeys(poke_user_ids):
             try:
-                await self.send_poke(user_id, group_id)
+                result = await self.send_poke(user_id, group_id)
+                if not isinstance(result, dict) or result.get("status") != "ok":
+                    LOG.warning(
+                        "发送回复后的戳一戳失败: group=%s user=%s result=%s",
+                        group_id,
+                        user_id,
+                        result,
+                    )
+                    continue
+                sent_any = True
             except Exception as exc:
                 LOG.warning("发送回复后的戳一戳失败: group=%s user=%s error=%s", group_id, user_id, exc)
+        return sent_any
 
-    async def _send_group_image(self, group_id: str, image_path: str) -> None:
-        """发送群聊图片。"""
+    async def _send_group_image(self, group_id: str, image_path: str) -> bool:
+        """发送群聊图片并返回平台是否确认接受。"""
         image_reference = to_image_reference(image_path)
-        segment: list[dict[str, Any]] = [
-            {"type": "image", "data": {"file": image_reference}}
-        ]
+        segment: list[dict[str, Any]] = [{"type": "image", "data": {"file": image_reference}}]
         async with self._get_reply_lock(group_id):
             try:
                 await self.send_group_msg(group_id, segment)
                 LOG.info("回复群 %s 图片: %s", group_id, image_path)
+                return True
             except Exception as exc:
                 LOG.warning("发送群图片失败: %s", exc)
+                return False
 
-    async def _send_private_image(self, user_id: str, image_path: str) -> None:
-        """发送私聊图片。"""
+    async def _send_private_image(self, user_id: str, image_path: str) -> bool:
+        """发送私聊图片并返回平台是否确认接受。"""
         image_reference = to_image_reference(image_path)
-        segment: list[dict[str, Any]] = [
-            {"type": "image", "data": {"file": image_reference}}
-        ]
+        segment: list[dict[str, Any]] = [{"type": "image", "data": {"file": image_reference}}]
         async with self._get_reply_lock(user_id):
             try:
                 await self.send_private_msg(user_id, segment)
                 LOG.info("回复私聊 %s 图片: %s", user_id, image_path)
+                return True
             except Exception as exc:
                 LOG.warning("发送私聊图片失败: %s", exc)
+                return False
 
     def _get_reply_lock(self, key: str) -> asyncio.Lock:
         lock = self._reply_locks.get(key)
@@ -2020,7 +2394,7 @@ class NapCatAdapter(BaseAdapter):
     def _engine_ready(self) -> bool:
         """检查引擎是否已就绪。"""
         engine = self._engine
-        if engine is None:
+        if engine is None or bool(getattr(engine, "_runtime_retiring", False)):
             return False
         return getattr(engine, "is_ready", lambda: True)()
 

@@ -64,14 +64,17 @@ class MemoryUnitDedupeMaintenance:
                 verdict = await self._deduplicator.decide(
                     incoming, working, indexer, brain=brain, model_name=model_name
                 )
-                target = next((unit for unit in working if unit.unit_id == verdict.target_unit_id), None)
+                target = next(
+                    (unit for unit in working if unit.unit_id == verdict.target_unit_id), None
+                )
                 working, accepted = apply_verdict(
                     working, incoming, verdict, now_iso=datetime.now(timezone.utc).isoformat()
                 )
                 indexer.replace_group(group_id, working)
                 summary_key = (
                     "exact_duplicate"
-                    if verdict.decision == "DUPLICATE" and verdict.reason == "normalized exact match"
+                    if verdict.decision == "DUPLICATE"
+                    and verdict.reason == "normalized exact match"
                     else verdict.decision.lower()
                 )
                 summary[summary_key] += 1

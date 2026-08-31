@@ -11,8 +11,8 @@ from uuid import uuid4
 
 from aiohttp import web
 
-from sirius_pulse.persona_config import PersonaConfigPaths
 from sirius_pulse.memory.units.deduplicator import normalize_summary
+from sirius_pulse.persona_config import PersonaConfigPaths
 from sirius_pulse.webui.persona_manager_api import _is_persona_running
 from sirius_pulse.webui.server_utils import _json_response, handle_api_errors
 
@@ -1102,8 +1102,22 @@ async def api_persona_memory_units_post(request: web.Request, data_dir: Path) ->
     _, units = _load_memory_units_file(_memory_unit_file(data_dir, group_id))
     if any(item.get("unit_id") == unit["unit_id"] for item in units):
         return _json_response({"error": "记忆单元已存在"}, 409)
-    if any(normalize_summary(str(item.get("summary") or "")) == normalize_summary(unit["summary"]) for item in units):
-        return _json_response({"success": True, "unit": next(item for item in units if normalize_summary(str(item.get("summary") or "")) == normalize_summary(unit["summary"]))}, 200)
+    if any(
+        normalize_summary(str(item.get("summary") or "")) == normalize_summary(unit["summary"])
+        for item in units
+    ):
+        return _json_response(
+            {
+                "success": True,
+                "unit": next(
+                    item
+                    for item in units
+                    if normalize_summary(str(item.get("summary") or ""))
+                    == normalize_summary(unit["summary"])
+                ),
+            },
+            200,
+        )
     units.append(unit)
     _save_memory_units_file(data_dir, group_id, units)
     _queue_memory_reconcile(data_dir, group_ids=[group_id], unit_ids=[unit["unit_id"]])
@@ -1114,6 +1128,7 @@ async def api_persona_memory_units_post(request: web.Request, data_dir: Path) ->
 async def api_persona_memory_unit_put(request: web.Request, data_dir: Path) -> web.Response:
     """Update a MemoryUnit record."""
     from urllib.parse import unquote
+
     if _memory_units_applying(data_dir):
         return _json_response({"error": "记忆清理正在应用"}, 409)
 
@@ -1165,6 +1180,7 @@ async def api_persona_memory_unit_put(request: web.Request, data_dir: Path) -> w
 async def api_persona_memory_unit_delete(request: web.Request, data_dir: Path) -> web.Response:
     """Delete a MemoryUnit record."""
     from urllib.parse import unquote
+
     if _memory_units_applying(data_dir):
         return _json_response({"error": "记忆清理正在应用"}, 409)
 
@@ -1195,7 +1211,9 @@ async def api_persona_memory_dedupe_scan(request: web.Request, data_dir: Path) -
     job_id = f"dedupe_{uuid4().hex}"
     job_dir = _memory_dedupe_dir(data_dir)
     _atomic_write_json(job_dir / "request.json", {"action": "scan", "job_id": job_id})
-    _atomic_write_json(job_dir / "status.json", {"job_id": job_id, "status": "queued", "progress": 0})
+    _atomic_write_json(
+        job_dir / "status.json", {"job_id": job_id, "status": "queued", "progress": 0}
+    )
     return _json_response({"job_id": job_id, "status": "queued"}, 202)
 
 
@@ -1214,8 +1232,13 @@ async def api_persona_memory_dedupe_apply(request: web.Request, data_dir: Path) 
     status = _dedupe_status(data_dir)
     if status.get("status") != "ready" or status.get("job_id") != job_id:
         return _json_response({"error": "扫描报告不可应用"}, 409)
-    _atomic_write_json(_memory_dedupe_dir(data_dir) / "request.json", {"action": "apply", "job_id": job_id})
-    _atomic_write_json(_memory_dedupe_dir(data_dir) / "status.json", {"job_id": job_id, "status": "queued", "phase": "apply"})
+    _atomic_write_json(
+        _memory_dedupe_dir(data_dir) / "request.json", {"action": "apply", "job_id": job_id}
+    )
+    _atomic_write_json(
+        _memory_dedupe_dir(data_dir) / "status.json",
+        {"job_id": job_id, "status": "queued", "phase": "apply"},
+    )
     return _json_response({"job_id": job_id, "status": "queued"}, 202)
 
 

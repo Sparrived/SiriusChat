@@ -68,9 +68,7 @@ class AgentTurn:
             return False
         if deduplicate:
             self._action_fingerprints.add(fingerprint)
-        self.tool_attempts.append(
-            AgentToolAttempt(tool_call_id, tool_name, side_effect, "running")
-        )
+        self.tool_attempts.append(AgentToolAttempt(tool_call_id, tool_name, side_effect, "running"))
         return True
 
     def finish_action(self, tool_call_id: str, *, success: bool, summary: str = "") -> None:

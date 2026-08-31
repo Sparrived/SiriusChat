@@ -16,13 +16,19 @@ from sirius_pulse.webui.server_utils import _json_response
 
 LOG = logging.getLogger("sirius.webui.middleware")
 
-# 认证白名单路径前缀（免认证）
+# 认证白名单路径前缀（免认证）。WebSocket 不在白名单中：它会和
+# REST API 一样在 upgrade 前经过 JWT 校验，避免 /ws/* 新路由意外裸露。
 _WHITELIST_PREFIXES: tuple[str, ...] = (
     "/static/",
-    "/ws/",
     "/api/auth/login",
     "/api/auth/status",
 )
+
+# 浏览器 WebSocket API 不允许设置 Authorization 头。前端把 JWT 放在
+# Sec-WebSocket-Protocol 的受控第二项；服务端只协商固定的第一个协议，
+# 因而不会在 URL、访问日志或响应协议中回显 JWT。
+_WS_AUTH_PROTOCOL = "sirius-auth"
+_VALID_ROLES: frozenset[str] = frozenset({"admin", "viewer"})
 
 # 认证白名单精确路径
 _WHITELIST_EXACT: tuple[str, ...] = (
@@ -43,17 +49,36 @@ def _is_whitelisted(path: str) -> bool:
     return any(path.startswith(prefix) for prefix in _WHITELIST_PREFIXES)
 
 
-def _extract_token(request: web.Request) -> str | None:
-    """从请求中提取 JWT 令牌。
+def _extract_websocket_token(request: web.Request) -> str | None:
+    """Read a JWT from the controlled WebSocket subprotocol offer.
 
-    优先从 Authorization 头提取，其次从查询参数 token 提取。
+    Expected browser offer: ``sirius-auth, <jwt>``.  Reject malformed and
+    oversized values instead of accepting arbitrary subprotocol text.  Tokens
+    are intentionally not accepted in query parameters because URLs are often
+    retained by access logs, browser history, and proxies.
     """
+    offered = request.headers.get("Sec-WebSocket-Protocol", "")
+    parts = [part.strip() for part in offered.split(",") if part.strip()]
+    if len(parts) != 2 or parts[0] != _WS_AUTH_PROTOCOL:
+        return None
+    token = parts[1]
+    if len(token) > 8192 or any(char.isspace() for char in token):
+        return None
+    return token or None
+
+
+def _extract_token(request: web.Request) -> str | None:
+    """Extract a JWT for an HTTP request or a WebSocket upgrade."""
+    if request.path.startswith("/ws/"):
+        return _extract_websocket_token(request)
+
     # Authorization: Bearer <token>
     auth_header = request.headers.get("Authorization", "")
     if auth_header.startswith("Bearer "):
         return auth_header[7:].strip()
 
-    # 查询参数 fallback
+    # Retain REST query fallback for compatibility.  WebSocket upgrades never
+    # reach this branch and therefore never place credentials in URLs.
     return request.query.get("token") or None
 
 
@@ -66,7 +91,8 @@ async def auth_middleware(
 
     规则：
     1. 白名单路径（/static/, /, /api/auth/login, /api/auth/status）免认证
-    2. 其他路径需要有效的 JWT 令牌
+    2. REST 与 /ws/ upgrade 都需要有效的 JWT；WebSocket 使用受控
+       Sec-WebSocket-Protocol 协商项而非 URL 参数
     3. GET/HEAD/OPTIONS 请求：admin 或 viewer 角色均可访问
     4. POST/PUT/DELETE 请求：仅 admin 角色可访问
     """
@@ -94,7 +120,10 @@ async def auth_middleware(
         LOG.debug("令牌验证失败: %s %s", method, path)
         return _json_response({"error": "令牌无效或已过期，请重新登录"}, status=401)
 
-    role = payload.get("role", "")
+    role = str(payload.get("role", ""))
+    if role not in _VALID_ROLES:
+        LOG.debug("令牌角色无效: %s %s", method, path)
+        return _json_response({"error": "令牌角色无效"}, status=403)
 
     # 写操作权限检查
     if method not in _READ_ONLY_METHODS and role != "admin":

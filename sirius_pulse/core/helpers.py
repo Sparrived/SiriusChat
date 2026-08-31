@@ -107,6 +107,211 @@ class Helpers:
         else:
             self._engine._plugin_intent_verifier = None
 
+    async def dispatch_proactive_message(
+        self,
+        *,
+        group_id: str,
+        text: str,
+        adapter_type: str = "",
+        event_id: str = "",
+        image_path: str = "",
+        reply_references: list[dict[str, Any]] | None = None,
+        sticker_names: list[str] | None = None,
+        poke_user_ids: list[str] | None = None,
+    ) -> bool:
+        """将插件/被动扩展的主动消息交给统一事件管线。
+
+        ``False`` means that no configured adapter can serve ``group_id``.
+        Producers can then retain their cursor and retry instead of
+        acknowledging a message that was never routable.
+        """
+        group_id = str(group_id or "").strip()
+        if not group_id:
+            return False
+        requested_adapter = str(adapter_type or "").strip()
+        resolved_adapter_types: list[str] = []
+        resolver = getattr(self._engine, "resolve_adapter_types", None)
+        has_routes = getattr(self._engine, "has_registered_adapters", None)
+        routing_failed = False
+
+        def _resolve_routes() -> list[str] | None:
+            nonlocal routing_failed
+            """Resolve routes, returning None when the host has no API."""
+            if not callable(resolver):
+                return None
+            try:
+                raw_types = resolver(group_id)
+                if isinstance(raw_types, str):
+                    raw_types = [raw_types]
+                return list(
+                    dict.fromkeys(
+                        str(value).strip() for value in (raw_types or []) if str(value).strip()
+                    )
+                )
+            except Exception:
+                # A resolver is the authoritative routing API.  Falling back
+                # to the last inbound adapter after it fails can leak a
+                # background message to an unrelated destination.  Keep a
+                # distinct failure flag and fail closed rather than treating
+                # this as a legacy host without routing.
+                routing_failed = True
+                logger.warning("解析主动消息 adapter 路由失败，已丢弃消息", exc_info=True)
+                return []
+
+        if requested_adapter:
+            # Explicit targets must still be checked against the destination
+            # route.  Otherwise a typo (or a stopped adapter) is acknowledged
+            # even though no subscriber can consume the event.
+            resolved = _resolve_routes()
+            if routing_failed:
+                return False
+            if resolved is not None and requested_adapter not in resolved:
+                # A declared route table is authoritative for explicit targets.
+                # Hosts that only expose the legacy current-adapter hint may
+                # still target that current adapter, but never an arbitrary
+                # adapter name.
+                try:
+                    routes_declared = bool(has_routes()) if callable(has_routes) else True
+                except Exception:
+                    logger.warning("检查 adapter 路由注册状态失败，已丢弃消息", exc_info=True)
+                    return False
+                legacy_current = str(
+                    getattr(self._engine, "_current_adapter_type", "") or ""
+                ).strip()
+                if routes_declared or legacy_current != requested_adapter:
+                    return False
+        else:
+            # A background task has no current inbound adapter.  Resolve the
+            # destination from the adapters' group configuration instead of
+            # inheriting whichever adapter handled the last message.
+            resolved = _resolve_routes()
+            if routing_failed:
+                return False
+            if resolved is not None:
+                resolved_adapter_types = resolved
+                if not resolved_adapter_types:
+                    # A registered routing table makes an unmatched target a
+                    # deliberate drop.  An initialized engine with no
+                    # registrations retains the legacy current-adapter
+                    # fallback; a resolver without registration state is
+                    # authoritative and therefore fails closed.
+                    if not callable(has_routes):
+                        return False
+                    try:
+                        if has_routes():
+                            return False
+                    except Exception:
+                        logger.warning("检查 adapter 路由注册状态失败，已丢弃消息", exc_info=True)
+                        return False
+
+            if not resolved_adapter_types and not routing_failed:
+                current = str(getattr(self._engine, "_current_adapter_type", "") or "").strip()
+                if current:
+                    # Keep the current-adapter fallback only for legacy hosts
+                    # that do not expose group-aware routing.
+                    requested_adapter = current
+            if routing_failed:
+                return False
+
+        # REMINDER_TRIGGERED is delivered directly to subscribed adapters.  Do
+        # not also enqueue it in the legacy reminder queue: that queue is only
+        # for the old delayed-consumer path and otherwise retains every image
+        # and notification forever.
+        event_bus = getattr(self._engine, "event_bus", None)
+        if event_bus is None or bool(getattr(event_bus, "closed", False)):
+            return False
+        subscriber_count = getattr(event_bus, "subscriber_count", None)
+        if isinstance(subscriber_count, int) and subscriber_count <= 0:
+            return False
+        receipt: dict[str, Any] | None = None
+        if bool(getattr(event_bus, "supports_delivery_ack", False)):
+            expected = resolved_adapter_types or ([requested_adapter] if requested_adapter else [])
+            expected_counts: dict[str, int] = {}
+            route_counter = getattr(self._engine, "resolve_adapter_route_counts", None)
+            if callable(route_counter):
+                try:
+                    raw_counts = route_counter(group_id)
+                    if isinstance(raw_counts, dict):
+                        expected_counts = {
+                            str(key): max(1, int(value))
+                            for key, value in raw_counts.items()
+                            if str(key).strip() and int(value) > 0
+                        }
+                except (TypeError, ValueError):
+                    expected_counts = {}
+            for adapter in expected:
+                expected_counts.setdefault(adapter, 1)
+            receipt = {
+                "expected": expected,
+                "expected_counts": expected_counts,
+                "results": {},
+                "future": asyncio.get_running_loop().create_future(),
+            }
+        event = self._build_proactive_event(
+            group_id=group_id,
+            text=text,
+            adapter_type=requested_adapter,
+            adapter_types=resolved_adapter_types,
+            event_id=event_id,
+            image_path=image_path,
+            reply_references=reply_references,
+            sticker_names=sticker_names,
+            poke_user_ids=poke_user_ids,
+        )
+        if receipt is not None:
+            event.data["_delivery_ack"] = receipt
+        try:
+            emitted = await event_bus.emit(event)
+        except Exception:
+            logger.warning("主动消息事件投递失败", exc_info=True)
+            return False
+        if emitted is False:
+            return False
+        if receipt is not None:
+            try:
+                delivered = await asyncio.wait_for(asyncio.shield(receipt["future"]), timeout=5.0)
+            except asyncio.TimeoutError:
+                logger.warning("主动消息投递确认超时: group=%s", group_id)
+                return False
+            if delivered is not True:
+                return False
+        if group_id.startswith("private_"):
+            self._engine._active_private_groups.add(group_id)
+        return True
+
+    @staticmethod
+    def _build_proactive_event(
+        *,
+        group_id: str,
+        text: str,
+        adapter_type: str,
+        event_id: str,
+        image_path: str,
+        reply_references: list[dict[str, Any]] | None,
+        sticker_names: list[str] | None,
+        poke_user_ids: list[str] | None,
+        adapter_types: list[str] | None = None,
+    ) -> Any:
+        from sirius_pulse.core.events import SessionEvent, SessionEventType
+
+        data: dict[str, Any] = {
+            "group_id": group_id,
+            "reply": text,
+            "adapter_type": adapter_type,
+            "reminder_id": event_id,
+            "image_path": image_path,
+            "reply_references": reply_references or [],
+            "sticker_names": sticker_names or [],
+            "poke_user_ids": poke_user_ids or [],
+        }
+        if adapter_types:
+            data["adapter_types"] = list(adapter_types)
+        return SessionEvent(type=SessionEventType.REMINDER_TRIGGERED, data=data)
+
+    def get_active_groups(self) -> list[str]:
+        """返回当前引擎已观测到的活跃群组。"""
+        return list(getattr(self._engine, "_group_last_message_at", {}).keys())
+
     async def execute_plugin_command(
         self,
         decision: Any,
@@ -245,9 +450,7 @@ class Helpers:
             if not result.success:
                 last_error = result.error or "未知错误"
                 if is_last:
-                    final_reply = (
-                        f"[{definition.display_name or plugin_name}] 执行失败: {last_error}"
-                    )
+                    final_reply = f"[{definition.display_name or plugin_name}] 执行失败: {last_error}"
                 continue
 
             any_success = True
@@ -360,9 +563,7 @@ class Helpers:
                         trigger_specs = [trigger_specs]
                     for spec in trigger_specs:
                         engine._passive_tool_triggers.setdefault(spec.event_type, []).append(spec)
-                        logger.info(
-                            "被动TOOL触发器已注册: %s (事件: %s)", spec.name, spec.event_type
-                        )
+                        logger.info("被动TOOL触发器已注册: %s (事件: %s)", spec.name, spec.event_type)
             except Exception as exc:
                 logger.warning("注册被动TOOL失败 (%s): %s", tool.name, exc)
 
@@ -375,12 +576,13 @@ class Helpers:
         original_emit = engine.event_bus.emit
         dispatch = self._dispatch_passive_triggers
 
-        async def _dispatching_emit(event: Any) -> None:
-            await original_emit(event)
+        async def _dispatching_emit(event: Any) -> bool:
+            emitted = await original_emit(event)
             try:
                 await dispatch(event.type.value, event.data)
             except Exception as exc:
                 logger.warning("被动TOOL触发分发失败: %s", exc)
+            return bool(emitted)
 
         engine.event_bus.emit = _dispatching_emit  # type: ignore[assignment]
 
@@ -555,9 +757,7 @@ class Helpers:
         completion_tokens = int(usage["completion_tokens"])
         total_tokens = int(usage["total_tokens"])
         estimation_method = (
-            "provider_real"
-            if real_usage and isinstance(real_usage, dict)
-            else "unknown_subtask"
+            "provider_real" if real_usage and isinstance(real_usage, dict) else "unknown_subtask"
         )
 
         # Build breakdown JSON from request if available

@@ -99,13 +99,6 @@ _DEFAULT_TASK_REGISTRY: dict[str, TaskConfig] = {
         timeout=20.0,
         fallback_model="deepseek-chat",
     ),
-    "github_monitor_notify": TaskConfig(
-        model_name="gpt-4o",
-        temperature=0.8,
-        max_tokens=1024,
-        timeout=20.0,
-        fallback_model="deepseek-chat",
-    ),
     # 璁板繂缁存姢
     "diary_generate": TaskConfig(
         model_name="gpt-4o-mini",

@@ -48,12 +48,14 @@ USER root
 COPY pyproject.toml uv.lock README.md ./
 RUN uv sync --frozen --no-dev --no-install-project
 RUN rm -rf /app/sirius_pulse /app/sirius_pulse.egg-info \
-    && chown sirius:sirius /app
+    && mkdir -p /app/plugins \
+    && chown sirius:sirius /app /app/plugins
 COPY --chown=sirius:sirius sirius_pulse ./sirius_pulse
 USER sirius
 RUN uv sync --frozen --no-dev
 
-VOLUME ["/app/data"]
+# External plugins are supplied by the host checkout and mounted at runtime.
+VOLUME ["/app/data", "/app/plugins"]
 
 EXPOSE 8080 18900
 

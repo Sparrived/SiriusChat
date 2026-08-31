@@ -101,6 +101,7 @@ from sirius_pulse.exceptions import (
     TokenEstimationError,
     UserNotFoundError,
 )
+from sirius_pulse.extension_runtime import BackgroundTaskSpec
 
 # ── Logging ──
 from sirius_pulse.logging_config import (
@@ -192,21 +193,6 @@ from sirius_pulse.providers.base import AsyncLLMProvider, LLMProvider
 
 # ── Session / Workspace ──
 from sirius_pulse.session.store import JsonSessionStore, SessionStoreFactory, SqliteSessionStore
-
-# ── Tools ──
-from sirius_pulse.tools import (
-    BackgroundTaskSpec,
-    ToolDataStore,
-    ToolDefinition,
-    ToolEngineContext,
-    ToolExecutor,
-    ToolInvocationContext,
-    ToolParameter,
-    ToolPassiveType,
-    ToolRegistry,
-    ToolResult,
-    TriggerSpec,
-)
 from sirius_pulse.token.analytics import (
     AnalyticsReport,
     BaselineDict,
@@ -227,6 +213,20 @@ from sirius_pulse.token.usage import (
     TokenUsageBaseline,
     build_token_usage_baseline,
     summarize_token_usage,
+)
+
+# ── Tools ──
+from sirius_pulse.tools import (
+    ToolDataStore,
+    ToolDefinition,
+    ToolEngineContext,
+    ToolExecutor,
+    ToolInvocationContext,
+    ToolParameter,
+    ToolPassiveType,
+    ToolRegistry,
+    ToolResult,
+    TriggerSpec,
 )
 from sirius_pulse.utils.layout import WorkspaceLayout
 

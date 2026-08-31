@@ -16,14 +16,15 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
 import json
 import logging
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
 from aiohttp import web
 
+from sirius_pulse.webui.dispatcher_api import api_dispatcher_overview as _api_dispatcher_overview
 from sirius_pulse.webui.memory_api import (
     api_persona_cognition_analysis_get,
     api_persona_cognition_get,
@@ -33,12 +34,12 @@ from sirius_pulse.webui.memory_api import (
     api_persona_diary_get,
     api_persona_diary_post,
     api_persona_diary_put,
-    api_persona_memory_unit_delete,
-    api_persona_memory_unit_put,
     api_persona_memory_dedupe_apply,
     api_persona_memory_dedupe_report,
     api_persona_memory_dedupe_scan,
     api_persona_memory_dedupe_status,
+    api_persona_memory_unit_delete,
+    api_persona_memory_unit_put,
     api_persona_memory_units_get,
     api_persona_memory_units_post,
     api_persona_memory_viz,
@@ -51,17 +52,6 @@ from sirius_pulse.webui.monitoring_api import api_monitoring_health as _api_moni
 from sirius_pulse.webui.monitoring_api import api_monitoring_overview as _api_monitoring_overview
 from sirius_pulse.webui.monitoring_api import (
     api_monitoring_persona_metrics as _api_monitoring_persona_metrics,
-)
-from sirius_pulse.webui.dispatcher_api import api_dispatcher_overview as _api_dispatcher_overview
-from sirius_pulse.webui.persona_manager_api import (
-    api_persona_activate,
-    api_persona_active_get,
-    api_persona_create,
-    api_persona_delete,
-    api_persona_start,
-    api_persona_status,
-    api_persona_stop,
-    api_personas_list,
 )
 from sirius_pulse.webui.persona_api import (
     api_adapters_get,
@@ -81,12 +71,22 @@ from sirius_pulse.webui.persona_api import (
     api_task_params_get,
     api_task_params_post,
 )
+from sirius_pulse.webui.persona_manager_api import (
+    api_persona_activate,
+    api_persona_active_get,
+    api_persona_create,
+    api_persona_delete,
+    api_persona_start,
+    api_persona_status,
+    api_persona_stop,
+    api_personas_list,
+)
 from sirius_pulse.webui.server_core import WebUIServer as _WebUIServer
+from sirius_pulse.webui.server_mcp_api import api_persona_mcp_get, api_persona_mcp_post
 from sirius_pulse.webui.server_plugin_api import (
     api_plugin_config_get,
     api_plugin_config_post,
     api_plugin_detail_get,
-    api_plugin_monitor_repos_get,
     api_plugin_setting_delete,
     api_plugin_setting_post,
     api_plugin_settings_get,
@@ -102,7 +102,6 @@ from sirius_pulse.webui.server_tool_api import (
     api_persona_tool_toggle,
     api_persona_tools_get,
 )
-from sirius_pulse.webui.server_mcp_api import api_persona_mcp_get, api_persona_mcp_post
 from sirius_pulse.webui.server_utils import _json_response
 
 LOG = logging.getLogger("sirius.webui")
@@ -158,7 +157,6 @@ DELEGATED_HANDLERS: dict[str, DelegatedHandler] = {
     "api_plugin_setting_post": api_plugin_setting_post,
     "api_plugin_setting_delete": api_plugin_setting_delete,
     "api_plugins_reload": api_plugins_reload,
-    "api_plugin_monitor_repos_get": api_plugin_monitor_repos_get,
     "api_persona_tools_get": api_persona_tools_get,
     "api_persona_tool_toggle": api_persona_tool_toggle,
     "api_persona_tool_config_get": api_persona_tool_config_get,

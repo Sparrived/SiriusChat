@@ -43,8 +43,13 @@ async def test_memory_dedupe_scan_lifecycle(tmp_path, monkeypatch):
     )
     assert request_data == {"action": "scan", "job_id": payload["job_id"]}
     assert (await api_persona_memory_dedupe_scan(_request(), tmp_path)).status == 409
-    assert _payload(await api_persona_memory_dedupe_status(_request(), tmp_path))["worker_running"] is True
-    assert (await api_persona_memory_dedupe_apply(_request({"job_id": payload["job_id"]}), tmp_path)).status == 409
+    assert (
+        _payload(await api_persona_memory_dedupe_status(_request(), tmp_path))["worker_running"]
+        is True
+    )
+    assert (
+        await api_persona_memory_dedupe_apply(_request({"job_id": payload["job_id"]}), tmp_path)
+    ).status == 409
 
 
 @pytest.mark.asyncio

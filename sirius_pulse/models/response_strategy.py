@@ -53,6 +53,7 @@ class DelayedResponseItem:
     status: str = "pending"  # pending | triggered | cancelled | sent
     multimodal_inputs: list[dict[str, str]] = field(default_factory=list)
     adapter_type: str | None = None
+    adapter_route_id: str | None = None
     heat_level: str = "warm"  # cold | warm | hot | overheated
     pace: str = "steady"  # accelerating | steady | decelerating | silent
     related_user_ids: list[str] = field(
@@ -75,6 +76,8 @@ class DelayedResponseItem:
             "window_seconds": self.window_seconds,
             "status": self.status,
             "multimodal_inputs": self.multimodal_inputs,
+            "adapter_type": self.adapter_type,
+            "adapter_route_id": self.adapter_route_id,
             "heat_level": self.heat_level,
             "pace": self.pace,
             "related_user_ids": list(self.related_user_ids),

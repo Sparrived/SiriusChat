@@ -206,9 +206,7 @@ class ToolRegistry:
                 tool = self._load_tool_file(py_file)
                 if tool is not None:
                     loaded_tools.append(tool)
-                    logger.info(
-                        "工具 %s v%s 刷新完毕（来源：%s）", tool.name, tool.version, py_file.name
-                    )
+                    logger.info("工具 %s v%s 刷新完毕（来源：%s）", tool.name, tool.version, py_file.name)
             except Exception as exc:
                 logger.warning("重载TOOL文件失败 (%s): %s", py_file.name, exc)
 
@@ -390,7 +388,6 @@ class ToolRegistry:
             chat_type=chat_type,
             admin_allowed=admin_allowed,
         ):
-
             security_notes: list[str] = []
             if tool.developer_only:
                 security_notes.append("仅 developer 可调用")
@@ -408,9 +405,7 @@ class ToolRegistry:
                     for p in tool.parameters:
                         required_tag = "必填" if p.required else "可选"
                         default_tag = (
-                            f", 默认={p.default}"
-                            if not p.required and p.default is not None
-                            else ""
+                            f", 默认={p.default}" if not p.required and p.default is not None else ""
                         )
                         param_parts.append(
                             f"    - {p.name} ({p.type}, {required_tag}{default_tag}): {p.description}"

@@ -107,12 +107,14 @@ def _read_token_usage(persona_dir: Path) -> dict[str, Any]:
             if has_cache_columns
             else "0, 0, 0, 0"
         )
-        row = conn.execute(f"""SELECT
+        row = conn.execute(
+            f"""SELECT
                 COALESCE(SUM(prompt_tokens), 0)  AS total_input,
                 COALESCE(SUM(completion_tokens), 0) AS total_output,
                 COUNT(*) AS call_count,
                 {cache_select}
-            FROM token_usage""").fetchone()
+            FROM token_usage"""
+        ).fetchone()
         conn.close()
         if row:
             total_calls = int(row[2])
@@ -133,9 +135,7 @@ def _read_token_usage(persona_dir: Path) -> dict[str, Any]:
                     "cached_prompt_tokens": cached,
                     "uncached_prompt_tokens": uncached,
                     "cache_creation_prompt_tokens": int(row[6] or 0),
-                    "cache_hit_rate_pct": round(cached * 100.0 / observed, 1)
-                    if observed
-                    else 0.0,
+                    "cache_hit_rate_pct": round(cached * 100.0 / observed, 1) if observed else 0.0,
                 },
             }
     except Exception:

@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from copy import deepcopy
 import logging
 import math
 import uuid
 from collections import deque
+from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Any
 

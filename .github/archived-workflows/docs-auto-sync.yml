@@ -9,7 +9,7 @@
 #   LLM_MODEL        — 模型名（默认 gpt-4o-mini）
 #   GIT_USER_NAME    — 提交者名称（默认 "Sirius Docs Bot"）
 #   GIT_USER_EMAIL   — 提交者邮箱（默认 "bot@sirius.pulse"）
-#   DOCS_FORK        — Fork 仓库名（如 "YourName/SiriusPulse-Docs"），
+#   DOCS_FORK        — Fork 仓库名（如 "YourName/SiriusPulse-Doc"），
 #                      设置后从 fork 克隆并提跨仓库 PR。
 #                      需要用 Classic PAT（repo scope）作 DOCS_REPO_PAT
 
@@ -17,7 +17,7 @@ name: 文档自动同步
 
 on:
   push:
-    branches: [ master, main ]
+    branches: [ master ]
     paths-ignore:
       - '.github/**'
       - '**.md'
@@ -78,6 +78,7 @@ jobs:
           GIT_USER_NAME: ${{ secrets.GIT_USER_NAME }}
           GIT_USER_EMAIL: ${{ secrets.GIT_USER_EMAIL }}
           DOCS_FORK: ${{ secrets.DOCS_FORK }}
+          DOCS_BRANCH: master
           # Push Event 提供的准确 commit 范围（首次运行/cache 丢失时兜底）
           GITHUB_EVENT_BEFORE: ${{ github.event.before }}
           # 自动生成的 docs 目录树（用于 LLM 上下文）

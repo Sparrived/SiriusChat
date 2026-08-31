@@ -114,6 +114,18 @@ export function statCard(label, value, detail = '', icon = '') {
 export const $ = (id) => document.getElementById(id);
 export const $$ = (sel, root = document) => root.querySelectorAll(sel);
 
+const HTML_ESCAPE_MAP = {
+  '&': '&amp;',
+  '<': '&lt;',
+  '>': '&gt;',
+  '"': '&quot;',
+  "'": '&#39;',
+};
+
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, (char) => HTML_ESCAPE_MAP[char]);
+}
+
 /**
  * 动态配置表单组件
  * 支持的参数类型: str/string, int/number, boolean, list/array, model, password, schedule
@@ -126,15 +138,13 @@ export class DynamicConfigForm {
    * @param {Array} options.parameters - 参数定义列表
    * @param {Object} options.settings - 当前配置值
    * @param {Array} [options.modelChoices] - 模型选项列表 [{label, value}]
-   * @param {Array} [options.repoOptions] - 仓库选项列表
    * @param {Function} [options.get] - GET 请求函数
    */
-  constructor({ containerId, parameters, settings, modelChoices, repoOptions, get }) {
+  constructor({ containerId, parameters, settings, modelChoices, get }) {
     this.containerId = containerId;
     this.parameters = parameters || [];
     this.settings = settings || {};
     this.modelChoices = modelChoices || null;
-    this.repoOptions = repoOptions || null;
     this.get = get;
     this._scheduleData = {};
     this._initScheduleData();
@@ -168,14 +178,6 @@ export class DynamicConfigForm {
         this.modelChoices = res.model_choices || [];
       } catch (e) {
         console.warn('获取可用模型列表失败', e);
-      }
-    }
-    if (!this.repoOptions && this.parameters.some(p => p.name === 'active_repos') && this.get) {
-      try {
-        const res = await this.get('/plugins/monitor_repos');
-        this.repoOptions = res.repos || [];
-      } catch (e) {
-        console.warn('获取仓库列表失败', e);
       }
     }
   }
@@ -229,9 +231,7 @@ export class DynamicConfigForm {
       const group = param.group || '';
 
       let fieldHtml = '';
-      if (key === 'active_repos' && this.repoOptions?.length) {
-        fieldHtml = this._renderActiveRepos(key, value, desc);
-      } else if (type === 'model') {
+      if (type === 'model') {
         // model 类型：有选项时渲染下拉框，否则回退到文本输入
         const modelValue = value || defaultVal || '';
         if (this.modelChoices?.length) {
@@ -241,7 +241,7 @@ export class DynamicConfigForm {
         }
       } else if (type === 'password' || type === 'secret') {
         fieldHtml = this._renderPassword(key, param.name, value, defaultVal, desc, required);
-      } else if (type === 'boolean') {
+      } else if (type === 'boolean' || type === 'bool') {
         fieldHtml = this._renderCheckbox(key, param.name, value, desc);
       } else if (type === 'int' || type === 'float' || type === 'number') {
         fieldHtml = this._renderNumber(key, param.name, value, defaultVal, desc, required);
@@ -289,8 +289,8 @@ export class DynamicConfigForm {
     for (const [groupName, fields] of groups) {
       sections.push(`
         <div class="config-group">
-          <div class="config-group-header" data-group="${groupName}">
-            <span class="config-group-title">${groupName}</span>
+          <div class="config-group-header" data-group="${escapeHtml(groupName)}">
+            <span class="config-group-title">${escapeHtml(groupName)}</span>
             <span class="config-group-toggle">▼</span>
           </div>
           <div class="config-group-body">
@@ -303,28 +303,6 @@ export class DynamicConfigForm {
     return sections.join('') || '<div style="color:var(--text-3);font-size:13px;text-align:center;padding:20px">暂无可配置项</div>';
   }
 
-  _renderActiveRepos(key, value, desc) {
-    const selected = new Set(Array.isArray(value) ? value : []);
-    const checkboxes = this.repoOptions.map(repo =>
-      `<label style="display:flex;align-items:center;gap:8px;cursor:pointer;padding:6px 8px;border-radius:4px;transition:background 0.2s;font-size:13px">
-        <input type="checkbox" data-repo-check="${repo}"${selected.has(repo) ? ' checked' : ''}
-          style="width:16px;height:16px;accent-color:var(--accent)">
-        <span>${repo}</span>
-      </label>`
-    ).join('');
-    return `
-      <div class="config-field">
-        <div class="config-field-header">
-          <label class="config-field-label">${key}</label>
-          ${desc ? `<span class="config-field-desc">${desc}</span>` : ''}
-        </div>
-        <div style="max-height:200px;overflow-y:auto;background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:8px">
-          ${checkboxes || '<span style="color:var(--text-3);font-size:12px;padding:8px;display:block;text-align:center">无可用仓库</span>'}
-        </div>
-      </div>
-    `;
-  }
-
   _renderModelSelect(key, value, desc, required) {
     // value 可能是裸模型名，需要匹配复合格式 provider_type/model_name
     const resolvedValue = this._resolveCompositeValue(value);
@@ -332,31 +310,36 @@ export class DynamicConfigForm {
     const valueInChoices = this.modelChoices.some(m => m.value === resolvedValue);
     const options = [...this.modelChoices];
     if (resolvedValue && !valueInChoices) {
-      options.unshift({ value: resolvedValue, label: `${resolvedValue} (当前配置)`, tags: [] });
+      options.unshift({
+        value: resolvedValue,
+        label: String(resolvedValue) + ' (当前配置)',
+        tags: [],
+      });
     }
     
     return `
       <div class="config-field">
         <div class="config-field-header">
-          <label class="config-field-label">${key}${required ? '<span class="config-required">*</span>' : ''}</label>
-          ${desc ? `<span class="config-field-desc">${desc}</span>` : ''}
+          <label class="config-field-label">${escapeHtml(key)}${required ? '<span class="config-required">*</span>' : ''}</label>
+          ${desc ? `<span class="config-field-desc">${escapeHtml(desc)}</span>` : ''}
         </div>
-        <div data-model-select="${key}" data-model-value="${resolvedValue || ''}"></div>
+        <div data-model-select="${escapeHtml(key)}" data-model-value="${escapeHtml(resolvedValue || '')}"></div>
       </div>
     `;
   }
 
   _renderPassword(key, label, value, defaultVal, desc, required) {
     const id = `pwd_${key}`;
+    // Keep stored masked secrets out of the DOM; blank preserves them on the server.
     return `
       <div class="config-field">
         <div class="config-field-header">
-          <label class="config-field-label">${label}${required ? '<span class="config-required">*</span>' : ''}</label>
-          ${desc ? `<span class="config-field-desc">${desc}</span>` : ''}
+          <label class="config-field-label">${escapeHtml(label)}${required ? '<span class="config-required">*</span>' : ''}</label>
+          ${desc ? `<span class="config-field-desc">${escapeHtml(desc)}</span>` : ''}
         </div>
         <div style="position:relative">
-          <input type="password" id="${id}" data-setting-key="${key}" value="${value ?? defaultVal ?? ''}" class="config-input" style="padding-right:36px">
-          <button type="button" class="pwd-toggle" onclick="const inp=document.getElementById('${id}');const btn=this;inp.type=inp.type==='password'?'text':'password';btn.textContent=inp.type==='password'?'🙈':'👁'"
+          <input type="password" id="${escapeHtml(id)}" data-setting-key="${escapeHtml(key)}" value="" class="config-input" style="padding-right:36px">
+          <button type="button" class="pwd-toggle" data-password-toggle="${escapeHtml(id)}"
             style="position:absolute;right:8px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;font-size:16px;padding:4px;opacity:0.6">
             🙈
           </button>
@@ -369,11 +352,11 @@ export class DynamicConfigForm {
     return `
       <div class="config-field">
         <label style="display:flex;align-items:center;gap:10px;cursor:pointer">
-          <input type="checkbox" data-setting-key="${key}" ${value ? 'checked' : ''}
+          <input type="checkbox" data-setting-key="${escapeHtml(key)}" ${value ? 'checked' : ''}
             style="width:18px;height:18px;accent-color:var(--accent)">
           <div>
-            <span style="font-weight:500">${label}</span>
-            ${desc ? `<div style="color:var(--text-3);font-size:12px;margin-top:2px">${desc}</div>` : ''}
+            <span style="font-weight:500">${escapeHtml(label)}</span>
+            ${desc ? `<div style="color:var(--text-3);font-size:12px;margin-top:2px">${escapeHtml(desc)}</div>` : ''}
           </div>
         </label>
       </div>
@@ -384,13 +367,13 @@ export class DynamicConfigForm {
     return `
       <div class="config-field">
         <div class="config-field-header">
-          <label class="config-field-label">${label}${required ? '<span class="config-required">*</span>' : ''}</label>
-          ${desc ? `<span class="config-field-desc">${desc}</span>` : ''}
+          <label class="config-field-label">${escapeHtml(label)}${required ? '<span class="config-required">*</span>' : ''}</label>
+          ${desc ? `<span class="config-field-desc">${escapeHtml(desc)}</span>` : ''}
         </div>
         <div class="number-input-group">
-          <button type="button" class="number-spin-btn" data-spin-target="${key}" data-spin-dir="-1">−</button>
-          <input type="number" data-setting-key="${key}" value="${value ?? defaultVal ?? 0}" class="config-input">
-          <button type="button" class="number-spin-btn" data-spin-target="${key}" data-spin-dir="1">+</button>
+          <button type="button" class="number-spin-btn" data-spin-target="${escapeHtml(key)}" data-spin-dir="-1">−</button>
+          <input type="number" data-setting-key="${escapeHtml(key)}" value="${escapeHtml(value ?? defaultVal ?? 0)}" class="config-input">
+          <button type="button" class="number-spin-btn" data-spin-target="${escapeHtml(key)}" data-spin-dir="1">+</button>
         </div>
       </div>
     `;
@@ -400,10 +383,10 @@ export class DynamicConfigForm {
     return `
       <div class="config-field">
         <div class="config-field-header">
-          <label class="config-field-label">${label}${required ? '<span class="config-required">*</span>' : ''}</label>
-          ${desc ? `<span class="config-field-desc">${desc}</span>` : ''}
+          <label class="config-field-label">${escapeHtml(label)}${required ? '<span class="config-required">*</span>' : ''}</label>
+          ${desc ? `<span class="config-field-desc">${escapeHtml(desc)}</span>` : ''}
         </div>
-        <input type="text" data-setting-key="${key}" value="${value ?? defaultVal ?? ''}" class="config-input">
+        <input type="text" data-setting-key="${escapeHtml(key)}" value="${escapeHtml(value ?? defaultVal ?? '')}" class="config-input">
       </div>
     `;
   }
@@ -413,47 +396,48 @@ export class DynamicConfigForm {
     return `
       <div class="config-field">
         <div class="config-field-header">
-          <label class="config-field-label">${label}</label>
-          ${desc ? `<span class="config-field-desc">${desc}</span>` : ''}
+          <label class="config-field-label">${escapeHtml(label)}</label>
+          ${desc ? `<span class="config-field-desc">${escapeHtml(desc)}</span>` : ''}
         </div>
-        <div id="dynamicList_${key}" style="display:flex;flex-direction:column;gap:6px;margin-bottom:8px">
+        <div id="dynamicList_${escapeHtml(key)}" style="display:flex;flex-direction:column;gap:6px;margin-bottom:8px">
           ${listVal.map((v, i) => `
             <div style="display:flex;gap:6px;align-items:center">
-              <input type="text" value="${v}" data-list-key="${key}" data-list-index="${i}" class="config-input" style="flex:1">
-              <button class="btn btn-sm btn-ghost" data-list-remove="${key}" style="padding:6px 8px;color:var(--danger)">✕</button>
+              <input type="text" value="${escapeHtml(v)}" data-list-key="${escapeHtml(key)}" data-list-index="${i}" class="config-input" style="flex:1">
+              <button class="btn btn-sm btn-ghost" data-list-remove="${escapeHtml(key)}" style="padding:6px 8px;color:var(--danger)">✕</button>
             </div>
           `).join('')}
         </div>
-        <button class="btn btn-sm btn-ghost" data-list-add="${key}" style="padding:4px 12px;font-size:12px;color:var(--accent)">+ 添加</button>
+        <button class="btn btn-sm btn-ghost" data-list-add="${escapeHtml(key)}" style="padding:4px 12px;font-size:12px;color:var(--accent)">+ 添加</button>
       </div>
     `;
   }
 
   _renderSchedule(key, value) {
     const scheduleId = 'dynamicSchedule_' + key;
+    const escapedKey = escapeHtml(key);
     return `
       <div class="config-field">
         <div class="config-field-header">
-          <label class="config-field-label">${this._formatKey(key)}</label>
+          <label class="config-field-label">${escapeHtml(this._formatKey(key))}</label>
         </div>
-        <div id="${scheduleId}" style="display:flex;flex-direction:column;gap:8px;margin-bottom:8px">
+        <div id="${escapeHtml(scheduleId)}" style="display:flex;flex-direction:column;gap:8px;margin-bottom:8px">
           ${value.map((s, i) => `
             <div style="display:flex;gap:8px;align-items:center;padding:8px;background:var(--surface-2);border-radius:6px">
-              <input type="time" value="${s.time || '22:00'}" data-schedule-key="${key}" data-schedule-idx="${i}" data-schedule-field="time"
+              <input type="time" value="${escapeHtml(s.time || '22:00')}" data-schedule-key="${escapedKey}" data-schedule-idx="${i}" data-schedule-field="time"
                 class="config-input" style="width:auto">
               <span style="color:var(--text-3);font-size:12px;white-space:nowrap">时长</span>
               <div class="number-input-group" style="max-width:120px">
-                <button type="button" class="number-spin-btn" data-spin-target="schedule_duration_${key}_${i}" data-spin-dir="-1">−</button>
-                <input type="number" id="schedule_duration_${key}_${i}" value="${s.duration || 1440}" min="1" max="10080" data-schedule-key="${key}" data-schedule-idx="${i}" data-schedule-field="duration"
+                <button type="button" class="number-spin-btn" data-spin-target="${escapeHtml(`schedule_duration_${key}_${i}`)}" data-spin-dir="-1">−</button>
+                <input type="number" id="${escapeHtml(`schedule_duration_${key}_${i}`)}" value="${escapeHtml(s.duration || 1440)}" min="1" max="10080" data-schedule-key="${escapedKey}" data-schedule-idx="${i}" data-schedule-field="duration"
                   class="config-input">
-                <button type="button" class="number-spin-btn" data-spin-target="schedule_duration_${key}_${i}" data-spin-dir="1">+</button>
+                <button type="button" class="number-spin-btn" data-spin-target="${escapeHtml(`schedule_duration_${key}_${i}`)}" data-spin-dir="1">+</button>
               </div>
               <span style="color:var(--text-3);font-size:12px">分钟</span>
-              <button class="btn btn-sm btn-ghost" data-schedule-remove="${i}" data-schedule-remove-key="${key}" style="margin-left:auto;padding:4px 8px;color:var(--danger)">✕</button>
+              <button class="btn btn-sm btn-ghost" data-schedule-remove="${i}" data-schedule-remove-key="${escapedKey}" style="margin-left:auto;padding:4px 8px;color:var(--danger)">✕</button>
             </div>
           `).join('')}
         </div>
-        <button class="btn btn-sm btn-ghost" data-schedule-add="${key}" style="padding:4px 12px;font-size:12px;color:var(--accent)">+ 添加定时</button>
+        <button class="btn btn-sm btn-ghost" data-schedule-add="${escapedKey}" style="padding:4px 12px;font-size:12px;color:var(--accent)">+ 添加定时</button>
       </div>
     `;
   }
@@ -461,62 +445,64 @@ export class DynamicConfigForm {
   _renderObjectArray(key, label, value, defaultVal, desc, fields) {
     const items = Array.isArray(value) ? value : (Array.isArray(defaultVal) ? defaultVal : []);
     const fieldDefs = fields || [];
-    
+    const escapedKey = escapeHtml(key);
+
     const renderFieldInput = (field, val, idx) => {
       const fieldType = field.type || 'str';
       const fieldVal = val ?? field.default ?? '';
+      const escapedFieldName = escapeHtml(field.name);
       const listId = `objList_${key}_${idx}_${field.name}`;
-      
+
       if (fieldType === 'checkbox_group' && field.choices) {
         const selected = new Set(Array.isArray(fieldVal) ? fieldVal : []);
         return `<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;flex:1">
           ${field.choices.map(c => `
             <label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-size:12px;background:var(--surface-3);border:1px solid var(--border);border-radius:4px;padding:3px 8px;min-width:0">
-              <input type="checkbox" data-obj-array-key="${key}" data-obj-idx="${idx}" data-obj-field="${field.name}" data-obj-checkbox="${c}"${selected.has(c) ? ' checked' : ''}
+              <input type="checkbox" data-obj-array-key="${escapedKey}" data-obj-idx="${idx}" data-obj-field="${escapedFieldName}" data-obj-checkbox="${escapeHtml(c)}"${selected.has(c) ? ' checked' : ''}
                 style="flex-shrink:0">
-              <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${c}</span>
+              <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(c)}</span>
             </label>
           `).join('')}
         </div>`;
       } else if (fieldType === 'list' || fieldType === 'array') {
         const listItems = Array.isArray(fieldVal) ? fieldVal : [];
         return `<div style="flex:1">
-          <div id="${listId}" style="display:flex;flex-direction:column;gap:4px;margin-bottom:4px">
+          <div id="${escapeHtml(listId)}" style="display:flex;flex-direction:column;gap:4px;margin-bottom:4px">
             ${listItems.map((v, li) => `
               <div style="display:flex;gap:4px;align-items:center">
-                <input type="text" value="${v}" data-obj-array-key="${key}" data-obj-idx="${idx}" data-obj-field="${field.name}" data-obj-list-idx="${li}" class="config-input" style="flex:1;font-size:12px;padding:4px 6px">
-                <button class="btn btn-sm btn-ghost" data-obj-list-remove="${key}" data-obj-idx="${idx}" data-obj-field="${field.name}" data-obj-list-idx="${li}" style="padding:2px 6px;color:var(--danger);font-size:11px">✕</button>
+                <input type="text" value="${escapeHtml(v)}" data-obj-array-key="${escapedKey}" data-obj-idx="${idx}" data-obj-field="${escapedFieldName}" data-obj-list-idx="${li}" class="config-input" style="flex:1;font-size:12px;padding:4px 6px">
+                <button class="btn btn-sm btn-ghost" data-obj-list-remove="${escapedKey}" data-obj-idx="${idx}" data-obj-field="${escapedFieldName}" data-obj-list-idx="${li}" style="padding:2px 6px;color:var(--danger);font-size:11px">✕</button>
               </div>
             `).join('')}
           </div>
-          <button class="btn btn-sm btn-ghost" data-obj-list-add="${key}" data-obj-idx="${idx}" data-obj-field="${field.name}" style="padding:2px 8px;font-size:11px;color:var(--accent)">+ 添加</button>
+          <button class="btn btn-sm btn-ghost" data-obj-list-add="${escapedKey}" data-obj-idx="${idx}" data-obj-field="${escapedFieldName}" style="padding:2px 8px;font-size:11px;color:var(--accent)">+ 添加</button>
         </div>`;
       } else if (fieldType === 'password' || fieldType === 'secret') {
-        return `<input type="password" data-obj-array-key="${key}" data-obj-idx="${idx}" data-obj-field="${field.name}" value="${fieldVal}" class="config-input" style="flex:1">`;
+        return `<input type="password" data-obj-array-key="${escapedKey}" data-obj-idx="${idx}" data-obj-field="${escapedFieldName}" value="" class="config-input" style="flex:1">`;
       } else if (fieldType === 'int' || fieldType === 'number') {
-        return `<input type="number" data-obj-array-key="${key}" data-obj-idx="${idx}" data-obj-field="${field.name}" value="${fieldVal}" class="config-input" style="flex:1">`;
+        return `<input type="number" data-obj-array-key="${escapedKey}" data-obj-idx="${idx}" data-obj-field="${escapedFieldName}" value="${escapeHtml(fieldVal)}" class="config-input" style="flex:1">`;
       } else {
-        return `<input type="text" data-obj-array-key="${key}" data-obj-idx="${idx}" data-obj-field="${field.name}" value="${fieldVal}" placeholder="${field.description || ''}" class="config-input" style="flex:1">`;
+        return `<input type="text" data-obj-array-key="${escapedKey}" data-obj-idx="${idx}" data-obj-field="${escapedFieldName}" value="${escapeHtml(fieldVal)}" placeholder="${escapeHtml(field.description || '')}" class="config-input" style="flex:1">`;
       }
     };
-    
+
     return `
       <div class="config-field">
         <div class="config-field-header">
-          <label class="config-field-label">${label}</label>
-          ${desc ? `<span class="config-field-desc">${desc}</span>` : ''}
+          <label class="config-field-label">${escapeHtml(label)}</label>
+          ${desc ? `<span class="config-field-desc">${escapeHtml(desc)}</span>` : ''}
         </div>
-        <div id="objectArray_${key}" style="display:flex;flex-direction:column;gap:8px;margin-bottom:8px">
+        <div id="${escapeHtml(`objectArray_${key}`)}" style="display:flex;flex-direction:column;gap:8px;margin-bottom:8px">
           ${items.map((item, i) => `
-            <div style="border:1px solid var(--border);border-radius:8px;padding:12px;background:var(--surface-2)" data-obj-array-item="${key}" data-obj-idx="${i}">
+            <div style="border:1px solid var(--border);border-radius:8px;padding:12px;background:var(--surface-2)" data-obj-array-item="${escapedKey}" data-obj-idx="${i}">
               <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
                 <span style="font-size:12px;color:var(--text-3)">#${i + 1}</span>
-                <button class="btn btn-sm btn-ghost" data-obj-array-remove="${key}" data-obj-idx="${i}" style="padding:2px 8px;color:var(--danger)">✕</button>
+                <button class="btn btn-sm btn-ghost" data-obj-array-remove="${escapedKey}" data-obj-idx="${i}" style="padding:2px 8px;color:var(--danger)">✕</button>
               </div>
               <div style="display:grid;gap:8px">
                 ${fieldDefs.map(f => `
                   <div style="display:flex;align-items:flex-start;gap:8px">
-                    <label style="font-size:12px;color:var(--text-3);min-width:80px;padding-top:6px;flex-shrink:0">${f.name}</label>
+                    <label style="font-size:12px;color:var(--text-3);min-width:80px;padding-top:6px;flex-shrink:0">${escapeHtml(f.name)}</label>
                     ${renderFieldInput(f, item[f.name], i)}
                   </div>
                 `).join('')}
@@ -524,7 +510,7 @@ export class DynamicConfigForm {
             </div>
           `).join('')}
         </div>
-        <button class="btn btn-sm btn-ghost" data-obj-array-add="${key}" style="padding:4px 12px;font-size:12px;color:var(--accent)">+ 添加</button>
+        <button class="btn btn-sm btn-ghost" data-obj-array-add="${escapedKey}" style="padding:4px 12px;font-size:12px;color:var(--accent)">+ 添加</button>
       </div>
     `;
   }
@@ -534,15 +520,15 @@ export class DynamicConfigForm {
     return `
       <div class="config-field">
         <div class="config-field-header">
-          <label class="config-field-label">${label}</label>
-          ${desc ? `<span class="config-field-desc">${desc}</span>` : ''}
+          <label class="config-field-label">${escapeHtml(label)}</label>
+          ${desc ? `<span class="config-field-desc">${escapeHtml(desc)}</span>` : ''}
         </div>
         <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">
           ${choices.map(c => `
             <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:13px;background:var(--surface-2);border:1px solid var(--border);border-radius:6px;padding:6px 12px;min-width:0">
-              <input type="checkbox" data-checkbox-group="${key}" data-checkbox-value="${c}"${selected.has(c) ? ' checked' : ''}
+              <input type="checkbox" data-checkbox-group="${escapeHtml(key)}" data-checkbox-value="${escapeHtml(c)}"${selected.has(c) ? ' checked' : ''}
                 style="width:16px;height:16px;accent-color:var(--accent);flex-shrink:0">
-              <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${c}</span>
+              <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(c)}</span>
             </label>
           `).join('')}
         </div>
@@ -551,18 +537,19 @@ export class DynamicConfigForm {
   }
 
   _renderJson(key, value) {
+    const serializedValue = typeof value === 'object' ? JSON.stringify(value) : value;
     return `
       <div class="config-field">
         <div class="config-field-header">
-          <label class="config-field-label">${key}</label>
+          <label class="config-field-label">${escapeHtml(key)}</label>
         </div>
-        <input type="text" data-setting-key="${key}" value="${typeof value === 'object' ? JSON.stringify(value) : value}" class="config-input">
+        <input type="text" data-setting-key="${escapeHtml(key)}" value="${escapeHtml(serializedValue)}" class="config-input">
       </div>
     `;
   }
 
   _formatKey(key) {
-    return key.replace(/_/g, ' ').replace(/^\w/, c => c.toUpperCase());
+    return String(key ?? '').replace(/_/g, ' ').replace(/^\w/, c => c.toUpperCase());
   }
 
   _bindEvents() {
@@ -582,18 +569,29 @@ export class DynamicConfigForm {
       });
     });
 
+    container.querySelectorAll('[data-password-toggle]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const input = document.getElementById(btn.dataset.passwordToggle);
+        if (!input) return;
+        const show = input.type === 'password';
+        input.type = show ? 'text' : 'password';
+        btn.textContent = show ? '👁' : '🙈';
+      });
+    });
+
     container.querySelectorAll('[data-list-add]').forEach(btn => {
       btn.addEventListener('click', () => {
         const key = btn.dataset.listAdd;
+        const escapedKey = escapeHtml(key);
         const listContainer = document.getElementById('dynamicList_' + key);
         if (!listContainer) return;
         const idx = listContainer.querySelectorAll('[data-list-key]').length;
         const div = document.createElement('div');
         div.style.cssText = 'display:flex;gap:4px;margin-bottom:4px';
         div.innerHTML = `
-          <input type="text" data-list-key="${key}" data-list-index="${idx}"
+          <input type="text" data-list-key="${escapedKey}" data-list-index="${idx}"
             style="background:var(--surface-2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 8px;font-size:13px;flex:1">
-          <button class="btn btn-sm" data-list-remove="${key}" style="padding:2px 8px">✕</button>
+          <button class="btn btn-sm" data-list-remove="${escapedKey}" style="padding:2px 8px">✕</button>
         `;
         listContainer.appendChild(div);
         div.querySelector('[data-list-remove]').addEventListener('click', () => {
@@ -652,7 +650,7 @@ export class DynamicConfigForm {
             newItem[f.name] = [];
           } else if (f.type === 'list' || f.type === 'array') {
             newItem[f.name] = [];
-          } else if (f.type === 'boolean') {
+          } else if (f.type === 'boolean' || f.type === 'bool') {
             newItem[f.name] = false;
           } else {
             newItem[f.name] = f.default || '';
@@ -769,7 +767,8 @@ export class DynamicConfigForm {
     // 数字调节按钮
     container.querySelectorAll('[data-spin-target]').forEach(btn => {
       btn.addEventListener('click', () => {
-        const target = container.querySelector(`input[data-setting-key="${btn.dataset.spinTarget}"]`);
+        const target = Array.from(container.querySelectorAll('input[data-setting-key]'))
+          .find(input => input.dataset.settingKey === btn.dataset.spinTarget);
         if (!target) return;
         const dir = parseInt(btn.dataset.spinDir, 10);
         const step = parseFloat(target.step) || 1;
@@ -795,7 +794,11 @@ export class DynamicConfigForm {
       const valueInChoices = options.some(o => o.value === value);
       const allOptions = [...options];
       if (value && !valueInChoices) {
-        allOptions.unshift({ value: value, label: `${value} (当前配置)`, tags: [] });
+        allOptions.unshift({
+          value: value,
+          label: String(value) + ' (当前配置)',
+          tags: [],
+        });
       }
       
       const ms = new ModelSelect({
@@ -816,6 +819,8 @@ export class DynamicConfigForm {
    */
   collectValues() {
     const values = {};
+    const container = document.getElementById(this.containerId);
+    if (!container) return values;
 
     for (const [key, schedule] of Object.entries(this._scheduleData)) {
       if (Array.isArray(schedule) && schedule.length > 0) {
@@ -823,7 +828,7 @@ export class DynamicConfigForm {
       }
     }
 
-    document.querySelectorAll(`#${this.containerId} [data-setting-key]`).forEach(input => {
+    container.querySelectorAll('[data-setting-key]').forEach(input => {
       const key = input.dataset.settingKey;
       if (input.type === 'checkbox') {
         values[key] = input.checked;
@@ -836,24 +841,15 @@ export class DynamicConfigForm {
       }
     });
 
-    const listKeys = new Set();
-    document.querySelectorAll(`#${this.containerId} [data-list-key]`).forEach(inp => {
-      listKeys.add(inp.dataset.listKey);
-    });
+    const listInputs = Array.from(container.querySelectorAll('[data-list-key]'));
+    const listKeys = new Set(listInputs.map(inp => inp.dataset.listKey));
     listKeys.forEach(key => {
       const vals = [];
-      document.querySelectorAll(`#${this.containerId} [data-list-key="${key}"]`).forEach(inp => {
+      listInputs.filter(inp => inp.dataset.listKey === key).forEach(inp => {
         if (inp.value.trim()) vals.push(inp.value.trim());
       });
       values[key] = vals;
     });
-
-    const repoChecks = document.querySelectorAll(`#${this.containerId} [data-repo-check]`);
-    if (repoChecks.length > 0) {
-      const checked = [];
-      repoChecks.forEach(cb => { if (cb.checked) checked.push(cb.dataset.repoCheck); });
-      values['active_repos'] = checked;
-    }
 
     // 收集 object_array 值（从 settings 中同步）
     for (const param of this.parameters) {
@@ -865,16 +861,13 @@ export class DynamicConfigForm {
     }
 
     // 收集 checkbox_group 值
-    const checkboxGroups = new Set();
-    document.querySelectorAll(`#${this.containerId} [data-checkbox-group]`).forEach(cb => {
-      checkboxGroups.add(cb.dataset.checkboxGroup);
-    });
+    const checkboxInputs = Array.from(container.querySelectorAll('[data-checkbox-group]'));
+    const checkboxGroups = new Set(checkboxInputs.map(cb => cb.dataset.checkboxGroup));
     checkboxGroups.forEach(key => {
-      const checked = [];
-      document.querySelectorAll(`#${this.containerId} [data-checkbox-group="${key}"]:checked`).forEach(cb => {
-        checked.push(cb.dataset.checkboxValue);
-      });
-      values[key] = checked;
+      const checked = checkboxInputs.filter(
+        cb => cb.dataset.checkboxGroup === key && cb.checked
+      );
+      values[key] = checked.map(cb => cb.dataset.checkboxValue);
     });
 
     // 收集 ModelSelect 值（保留 provider 前缀，避免同名模型歧义）
@@ -944,9 +937,11 @@ export class ModelSelect {
 
   _selectedLabel() {
     const opt = this.options.find(o => o.value === this.value);
-    if (!opt) return this.placeholder;
-    const tags = (opt.tags || []).map(t => `<span class="cap-tag-inline">${t}</span>`).join('');
-    return `${opt.label}${tags ? ' ' + tags : ''}`;
+    if (!opt) return escapeHtml(this.placeholder);
+    const tags = (Array.isArray(opt.tags) ? opt.tags : [])
+      .map(t => `<span class="cap-tag-inline">${escapeHtml(t)}</span>`)
+      .join('');
+    return `${escapeHtml(opt.label)}${tags ? ' ' + tags : ''}`;
   }
 
   _syncTriggerText() {
@@ -955,19 +950,21 @@ export class ModelSelect {
     const trigger = this._el.querySelector('.msel-trigger');
     if (!textEl) return;
     const sel = this.options.find(o => o.value === this.value);
-    textEl.innerHTML = sel ? this._renderTriggerContent(sel) : this.placeholder;
+    textEl.innerHTML = sel ? this._renderTriggerContent(sel) : escapeHtml(this.placeholder);
     if (trigger) trigger.classList.toggle('msel-placeholder', !sel);
   }
 
   _renderTriggerContent(opt) {
-    const tags = (opt.tags || []).map(t => `<span class="cap-tag-inline">${t}</span>`).join('');
-    return `<span class="msel-label">${opt.label}</span>${tags}`;
+    const tags = (Array.isArray(opt.tags) ? opt.tags : [])
+      .map(t => `<span class="cap-tag-inline">${escapeHtml(t)}</span>`)
+      .join('');
+    return `<span class="msel-label">${escapeHtml(opt.label)}</span>${tags}`;
   }
 
   render() {
     if (!this._el) return;
     const sel = this.options.find(o => o.value === this.value);
-    const triggerHtml = sel ? this._renderTriggerContent(sel) : this.placeholder;
+    const triggerHtml = sel ? this._renderTriggerContent(sel) : escapeHtml(this.placeholder);
     this._el.innerHTML = `
       <div class="msel-wrap">
         <button type="button" class="msel-trigger${this._open ? ' msel-open' : ''}${!sel ? ' msel-placeholder' : ''}">
@@ -1030,20 +1027,24 @@ export class ModelSelect {
   _renderList(query) {
     const list = this._el.querySelector('.msel-list');
     if (!list) return;
-    const q = query.trim().toLowerCase();
+    const q = String(query ?? '').trim().toLowerCase();
     const filtered = this.options.filter(o => {
       if (!q) return true;
-      return o.label.toLowerCase().includes(q) || o.value.toLowerCase().includes(q);
+      const label = String(o.label ?? '').toLowerCase();
+      const value = String(o.value ?? '').toLowerCase();
+      return label.includes(q) || value.includes(q);
     });
     if (!filtered.length) {
       list.innerHTML = '<div class="msel-empty">无匹配模型</div>';
       return;
     }
     list.innerHTML = filtered.map(o => {
-      const tags = (o.tags || []).map(t => `<span class="cap-tag-inline">${t}</span>`).join('');
+      const tags = (Array.isArray(o.tags) ? o.tags : [])
+        .map(t => `<span class="cap-tag-inline">${escapeHtml(t)}</span>`)
+        .join('');
       const active = o.value === this.value ? ' msel-active' : '';
-      return `<div class="msel-option${active}" data-value="${o.value}">
-        <span class="msel-option-label">${o.label}</span>
+      return `<div class="msel-option${active}" data-value="${escapeHtml(o.value)}">
+        <span class="msel-option-label">${escapeHtml(o.label)}</span>
         ${tags ? `<span class="msel-option-tags">${tags}</span>` : ''}
       </div>`;
     }).join('');

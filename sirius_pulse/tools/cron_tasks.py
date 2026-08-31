@@ -11,13 +11,22 @@ CRON_TIMEZONE = timezone(timedelta(hours=8), name="Asia/Shanghai")
 CRON_FIELD_COUNT = 5
 _CRONTAB_RE = re.compile(r"(?:^|[|;&])\s*crontab(?:\s|$)")
 _CRONTAB_LIST = r"crontab\s+-l(?:\s+2>/dev/null)?"
-_CRONTAB_LIST_WITH_PROBE = (
-    _CRONTAB_LIST
-    + r"(?:\s*;\s*echo\s+[\"']---exit:\s*\$\?\s*---[\"'])?"
-)
+_CRONTAB_LIST_WITH_PROBE = _CRONTAB_LIST + r"(?:\s*;\s*echo\s+[\"']---exit:\s*\$\?\s*---[\"'])?"
 _FIELD_NAMES = {
-    3: {"JAN": 1, "FEB": 2, "MAR": 3, "APR": 4, "MAY": 5, "JUN": 6,
-        "JUL": 7, "AUG": 8, "SEP": 9, "OCT": 10, "NOV": 11, "DEC": 12},
+    3: {
+        "JAN": 1,
+        "FEB": 2,
+        "MAR": 3,
+        "APR": 4,
+        "MAY": 5,
+        "JUN": 6,
+        "JUL": 7,
+        "AUG": 8,
+        "SEP": 9,
+        "OCT": 10,
+        "NOV": 11,
+        "DEC": 12,
+    },
     4: {"SUN": 0, "MON": 1, "TUE": 2, "WED": 3, "THU": 4, "FRI": 5, "SAT": 6},
 }
 
@@ -51,9 +60,7 @@ def parse_crontab_command(command: str) -> dict[str, Any] | None:
         flags=re.DOTALL,
     )
     if not match:
-        raise CronParseError(
-            "仅支持 crontab -l、crontab -r，以及 echo/printf 'cron条目' | crontab -"
-        )
+        raise CronParseError("仅支持 crontab -l、crontab -r，以及 echo/printf 'cron条目' | crontab -")
 
     try:
         producer = shlex.split(match.group(1), posix=True)

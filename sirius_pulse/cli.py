@@ -379,6 +379,7 @@ async def _cmd_run(args: argparse.Namespace) -> None:
 
     # 等待 Embedding 服务就绪
     import time
+
     from sirius_pulse.embedding.client import EmbeddingClient
 
     emb_url = config.get("embedding_url", "http://127.0.0.1:18900")
@@ -397,8 +398,7 @@ async def _cmd_run(args: argparse.Namespace) -> None:
         LOG.error("Embedding 服务在 60 秒内未就绪，无法启动人格")
         await webui.stop()
         raise RuntimeError(
-            f"Embedding 服务不可用 ({emb_url})。"
-            "请检查日志或手动启动: python -m sirius_pulse.embedding.server"
+            f"Embedding 服务不可用 ({emb_url})。" "请检查日志或手动启动: python -m sirius_pulse.embedding.server"
         )
 
     from sirius_pulse.persona_worker import PersonaWorker

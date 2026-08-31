@@ -15,6 +15,8 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from sirius_pulse.extension_runtime import BackgroundTaskSpec
+
 if TYPE_CHECKING:
     from sirius_pulse.plugins.models import CommandAST, PluginDefinition, PluginResponse
     from sirius_pulse.plugins.registry import PluginRegistry
@@ -46,6 +48,8 @@ class PluginExecutor:
         self._rate_state: dict[str, dict[str, Any]] = {}
         # PluginScheduler 引用（由 runtime 注入，用于卸载时清理定时任务）
         self._scheduler: Any = None
+        # Plugin 自己声明的后台任务；由 Executor 统一追踪和取消。
+        self._background_tasks: dict[str, list[asyncio.Task[Any]]] = {}
 
     def set_adapter(self, adapter: Any) -> None:
         """运行时注入平台 adapter（在 NapCat 连接后调用）。"""
@@ -90,11 +94,15 @@ class PluginExecutor:
             "plugin_path": str(definition.source_path) if definition.source_path else "",
             "render_mode": definition.render.mode,
         }
-        # 注入用户在 WebUI 中配置的自定义 settings
+        # 注入用户在 WebUI 中配置的自定义 settings。框架上下文字段不能
+        # 被持久化设置覆盖，否则插件可伪造其路径或渲染策略。
         if self._config_manager is not None:
             user_settings = self._config_manager.get_settings(definition.name)
             if isinstance(user_settings, dict):
-                config.update(user_settings)
+                reserved_keys = {"plugin_path", "render_mode"}
+                config.update(
+                    {key: value for key, value in user_settings.items() if key not in reserved_keys}
+                )
         ctx = PluginContext.create(
             plugin_name=definition.name,
             data_store=data_store,
@@ -135,12 +143,76 @@ class PluginExecutor:
             成功实例化的 Plugin 数量
         """
         count = 0
+        if self._config_manager is not None:
+            self._config_manager.reload()
         for definition in self._registry.get_all_definitions():
+            if self._config_manager is not None and not self._config_manager.get_enabled(
+                definition.name
+            ):
+                logger.info("Plugin %s 当前已禁用，跳过实例化", definition.name)
+                continue
             instance = await self.instantiate(definition)
             if instance is not None:
                 self._registry.set_instance(definition.name, instance)
                 count += 1
         return count
+
+    async def start_background_tasks(self, *, running_check: Any = None) -> int:
+        """启动插件声明的后台任务，并将其纳入插件生命周期管理。
+
+        ``BackgroundTaskSpec`` 与被动 Tool 共用任务描述，但任务归属 Plugin
+        自身；卸载 Plugin 时会先取消并等待这些任务，避免 Webhook/HTTP 客户端
+        等资源在插件重载后继续运行。
+        """
+        started = 0
+        for definition in self._registry.get_all_definitions():
+            if self._background_tasks.get(definition.name):
+                continue
+            instance = self._registry.get_instance(definition.name)
+            if instance is None or not hasattr(instance, "create_background_tasks"):
+                continue
+            try:
+                specs = instance.create_background_tasks()
+                if specs is None:
+                    continue
+                if not isinstance(specs, list):
+                    specs = [specs]
+                for index, spec in enumerate(specs):
+                    if not isinstance(spec, BackgroundTaskSpec):
+                        logger.warning("Plugin %s 返回了无效后台任务规格: %r", definition.name, spec)
+                        continue
+                    if spec.interval_seconds <= 0:
+                        logger.warning(
+                            "Plugin %s 的后台任务 %s 间隔必须大于 0，已跳过",
+                            definition.name,
+                            spec.name,
+                        )
+                        continue
+                    task_name = f"plugin:{definition.name}:{spec.name}:{index}"
+                    checker = running_check or (lambda: True)
+                    task = asyncio.create_task(
+                        spec.run_loop(checker),
+                        name=task_name,
+                    )
+                    self._background_tasks.setdefault(definition.name, []).append(task)
+                    started += 1
+                    logger.info("Plugin 后台任务已启动: %s", task_name)
+            except Exception as exc:
+                logger.warning("Plugin %s 创建后台任务失败: %s", definition.name, exc)
+        return started
+
+    async def _stop_background_tasks(self, plugin_name: str) -> None:
+        """取消并等待指定插件的全部后台任务。"""
+        tasks = self._background_tasks.pop(plugin_name, [])
+        if not tasks:
+            return
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        for result in results:
+            if isinstance(result, Exception) and not isinstance(result, asyncio.CancelledError):
+                logger.debug("Plugin %s 后台任务退出异常: %s", plugin_name, result)
 
     # ── 执行 ──
 
@@ -180,6 +252,13 @@ class PluginExecutor:
         definition = self._registry.get(plugin_name)
         if definition is None:
             return [PluginResponse.fail(f"Plugin 未找到: {plugin_name}")]
+
+        # 防御性检查：即使宿主未及时重建 runtime，禁用状态也不能继续执行命令。
+        if self._config_manager is not None:
+            self._config_manager.reload()
+        if self._config_manager is not None and not self._config_manager.get_enabled(plugin_name):
+            logger.info("Plugin %s 当前已禁用，跳过执行", plugin_name)
+            return [PluginResponse(success=False, render_mode="silent")]
 
         # ── 权限校验 ──
         perm_error = self._check_permissions(
@@ -292,6 +371,18 @@ class PluginExecutor:
 
     async def unload(self, plugin_name: str) -> None:
         """卸载指定 Plugin。"""
+        # 先停止由框架托管的后台任务和调度回调，再释放插件资源。
+        await self._stop_background_tasks(plugin_name)
+        if self._scheduler is not None:
+            try:
+                stop_tasks = getattr(self._scheduler, "stop_plugin_tasks", None)
+                if callable(stop_tasks):
+                    await stop_tasks(plugin_name)
+                else:
+                    self._scheduler.remove_plugin_tasks(plugin_name)
+            except Exception as exc:
+                logger.warning("清理插件 %s 的定时任务失败: %s", plugin_name, exc)
+
         instance = self._registry.get_instance(plugin_name)
         if instance is not None and hasattr(instance, "on_unload"):
             try:
@@ -305,15 +396,12 @@ class PluginExecutor:
         self._registry.unregister(plugin_name)
         # 清理速率限制状态
         self._rate_state.pop(plugin_name, None)
-        # 清理定时任务
-        if self._scheduler is not None:
-            try:
-                self._scheduler.remove_plugin_tasks(plugin_name)
-            except Exception as exc:
-                logger.warning("清理插件 %s 的定时任务失败: %s", plugin_name, exc)
         logger.info("插件 %s 已卸载", plugin_name)
 
     async def unload_all(self) -> None:
         """卸载所有 Plugin。"""
         for name in list(self._registry.plugin_names):
             await self.unload(name)
+        # 防御性清理：处理实例化失败或注册表已变更后遗留的任务。
+        for name in list(self._background_tasks):
+            await self._stop_background_tasks(name)

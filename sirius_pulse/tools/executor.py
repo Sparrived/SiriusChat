@@ -110,9 +110,7 @@ class ToolExecutor:
     ) -> tuple[dict[str, Any] | None, ToolResult | None]:
         """Apply the same validation contract to sync and async tools."""
         if tool._run_func is None:
-            return None, ToolResult(
-                success=False, error=f"TOOL '{tool.name}' 没有可执行的 run() 函数"
-            )
+            return None, ToolResult(success=False, error=f"TOOL '{tool.name}' 没有可执行的 run() 函数")
 
         if chain_context is not None:
             params = chain_context.resolve_templates(params)
@@ -224,9 +222,7 @@ class ToolExecutor:
                     # Persist data store after execution
                     data_store.save()
                     tool_result = ToolResult.from_raw_result(result)
-                    tool_result.success = (
-                        True if tool_result.error == "" else tool_result.success
-                    )
+                    tool_result.success = True if tool_result.error == "" else tool_result.success
                     logger.info(
                         "Tool execute done: %s -> success=%s | summary=%r | text_blocks=%d | "
                         "multimodal_blocks=%d",
@@ -277,11 +273,7 @@ class ToolExecutor:
         if chain_context is not None and tool_result is not None:
             chain_context.store(tool.name, tool_result)
 
-        return (
-            tool_result
-            if tool_result is not None
-            else ToolResult(success=False, error="未知错误")
-        )
+        return tool_result if tool_result is not None else ToolResult(success=False, error="未知错误")
 
     async def execute_async(
         self,
@@ -385,9 +377,7 @@ class ToolExecutor:
                     result = await tool._run_func(**call_params)
                     data_store.save()
                     tool_result = ToolResult.from_raw_result(result)
-                    tool_result.success = (
-                        True if tool_result.error == "" else tool_result.success
-                    )
+                    tool_result.success = True if tool_result.error == "" else tool_result.success
                     logger.info(
                         "Tool async execute done: %s -> success=%s | summary=%r | text_blocks=%d | "
                         "multimodal_blocks=%d",
@@ -444,9 +434,7 @@ class ToolExecutor:
                 chain_context.store(tool.name, tool_result)
 
             return (
-                tool_result
-                if tool_result is not None
-                else ToolResult(success=False, error="未知错误")
+                tool_result if tool_result is not None else ToolResult(success=False, error="未知错误")
             )
         except Exception as exc:
             logger.error("Tool async execute exception: %s -> %s", tool.name, exc)

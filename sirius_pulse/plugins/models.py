@@ -272,6 +272,8 @@ class PluginDefinition:
     description: str = ""
     version: str = "1.0.0"
     author: str = ""
+    # Class/manifest authors can declare a stricter minimum; PluginLoader
+    # validates it before importing executable Plugin code.
     min_framework_version: str = "1.2.0"
 
     # ── 触发器 ──
@@ -365,6 +367,10 @@ class PluginDefinition:
                     default=param_raw.get("default"),
                     position=param_raw.get("position", 0),
                     choices=param_raw.get("choices"),
+                    fields=param_raw.get("fields"),
+                    minimum=param_raw.get("minimum", param_raw.get("min")),
+                    maximum=param_raw.get("maximum", param_raw.get("max")),
+                    group=param_raw.get("group", ""),
                 )
             )
 
@@ -553,6 +559,9 @@ class PluginDefinition:
                         default=p.get("default"),
                         position=p.get("position", i),
                         choices=p.get("choices"),
+                        fields=p.get("fields"),
+                        minimum=p.get("minimum", p.get("min")),
+                        maximum=p.get("maximum", p.get("max")),
                         group=p.get("group", ""),
                     )
                 )
@@ -586,6 +595,9 @@ class PluginDefinition:
             description=getattr(plugin_cls, "_plugin_description", "") or "",
             version=getattr(plugin_cls, "_plugin_version", "") or "1.0.0",
             author=getattr(plugin_cls, "_plugin_author", "") or "",
+            min_framework_version=(
+                getattr(plugin_cls, "_plugin_min_framework_version", "") or "1.2.0"
+            ),
             commands=commands,
             command_groups=command_groups,
             events=events,

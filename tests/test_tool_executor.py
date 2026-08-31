@@ -311,9 +311,7 @@ async def test_tool_executor_when_async_developer_tool_is_called_by_user_then_ac
     executor = ToolExecutor(work_path=tmp_path)
     tool = _make_tool("async_server_shell", run, developer_only=True)
 
-    result = await executor.execute_async(
-        tool, {}, invocation_context=_context(is_developer=False)
-    )
+    result = await executor.execute_async(tool, {}, invocation_context=_context(is_developer=False))
 
     assert result.success is False
     assert "developer" in result.error.lower() or "开发" in result.error

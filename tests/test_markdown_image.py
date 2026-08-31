@@ -15,9 +15,7 @@ from sirius_pulse.tools.builtin._internal._markdown_image import (
 
 
 def test_split_fenced_markdown_preserves_text_before_and_after_the_card():
-    result = split_fenced_markdown(
-        "先说整体思路。\n```markdown\n**顶层模块**：\n- core/\n```\n细节之后再聊。"
-    )
+    result = split_fenced_markdown("先说整体思路。\n```markdown\n**顶层模块**：\n- core/\n```\n细节之后再聊。")
 
     assert result == [
         (False, "先说整体思路。"),
@@ -57,9 +55,7 @@ def test_split_fenced_markdown_detects_structured_content_without_fence():
 
 def test_split_fenced_markdown_keeps_natural_language_around_unfenced_markdown():
     result = split_fenced_markdown(
-        "我看完了，核心问题是连接还没就绪。\n\n"
-        "# 部署结果\n- WebUI 正常\n- Embedding 正常\n\n"
-        "如果还在刷屏，可以重启。"
+        "我看完了，核心问题是连接还没就绪。\n\n" "# 部署结果\n- WebUI 正常\n- Embedding 正常\n\n" "如果还在刷屏，可以重启。"
     )
 
     assert result == [
@@ -100,9 +96,7 @@ def test_split_unfenced_markdown_detects_inline_formatting_from_group_history():
     text = "看起来是**只读模式**，可以执行 `/op Sparrived`。"
 
     assert split_fenced_markdown(text) == [(True, text)]
-    assert split_fenced_markdown("执行 `docker ps` 查看状态。") == [
-        (True, "执行 `docker ps` 查看状态。")
-    ]
+    assert split_fenced_markdown("执行 `docker ps` 查看状态。") == [(True, "执行 `docker ps` 查看状态。")]
 
 
 def test_markdown_card_requires_more_than_two_lines_or_eighty_chars():

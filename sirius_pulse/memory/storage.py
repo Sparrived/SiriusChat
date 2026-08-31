@@ -31,7 +31,8 @@ class MemoryStorage(BaseSqliteStore):
 
     def _create_tables(self) -> None:
         """创建表结构。"""
-        self.executescript("""
+        self.executescript(
+            """
             CREATE TABLE IF NOT EXISTS users (
                 user_id TEXT PRIMARY KEY,
                 name TEXT NOT NULL DEFAULT '',
@@ -128,7 +129,8 @@ class MemoryStorage(BaseSqliteStore):
                 last_tail_sources TEXT DEFAULT '[]',
                 updated_at TEXT DEFAULT ''
             );
-        """)
+        """
+        )
 
     # ── 用户 CRUD ─────────────────────────────────────────
 

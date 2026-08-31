@@ -11,8 +11,9 @@ import logging
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
-from sirius_pulse.core.identity_resolver import IdentityContext
 from sirius_pulse.core.cognition import extract_keywords
+from sirius_pulse.core.events import SessionEvent, SessionEventType
+from sirius_pulse.core.identity_resolver import IdentityContext
 from sirius_pulse.core.participation import (
     ParticipationPolicy,
     get_group_reply_strategy,
@@ -406,9 +407,7 @@ class Pipeline:
     def _keyword_participation(mentioned: bool) -> dict[str, Any]:
         return {
             "strategy": (
-                ResponseStrategy.IMMEDIATE.value
-                if mentioned
-                else ResponseStrategy.SILENT.value
+                ResponseStrategy.IMMEDIATE.value if mentioned else ResponseStrategy.SILENT.value
             ),
             "reason": "keyword_mentioned" if mentioned else "keyword_not_mentioned",
             "score": 1.0 if mentioned else 0.0,
@@ -523,6 +522,7 @@ class Pipeline:
             channel_user_id=message.channel_user_id,
             multimodal_inputs=message.multimodal_inputs,
             adapter_type=message.adapter_type,
+            adapter_route_id=message.adapter_route_id,
             heat_level=signal.heat_level,
             pace=signal.pace,
             speaker_name=message.speaker or "",
@@ -531,6 +531,31 @@ class Pipeline:
         if message.dispatch_coordinated:
             item.window_seconds = 0.0
         engine._persist_group_state(group_id)
+
+        # IMMEDIATE means no debounce: notify the delivery loop in this turn so
+        # the model API request can start immediately instead of waiting for the
+        # delayed-queue ticker's next wake-up.
+        if strategy == ResponseStrategy.IMMEDIATE:
+            event_data = {
+                "group_id": group_id,
+                "item_id": item.item_id,
+                "adapter_type": item.adapter_type or "",
+                "reason": "immediate",
+            }
+            if item.adapter_route_id:
+                event_data["adapter_route_id"] = item.adapter_route_id
+            accepted = await engine.event_bus.emit(
+                SessionEvent(
+                    type=SessionEventType.DELAYED_RESPONSE_TRIGGERED,
+                    data=event_data,
+                )
+            )
+            if accepted:
+                emitted = getattr(engine, "_delayed_event_emitted", None)
+                if not isinstance(emitted, dict):
+                    emitted = {}
+                    setattr(engine, "_delayed_event_emitted", emitted)
+                emitted.setdefault(group_id, set()).add(item.item_id)
 
         # 更新 assistant emotion 和语义记忆
         emotion = signal.emotion
@@ -600,6 +625,7 @@ class Pipeline:
             channel_user_id=message.channel_user_id,
             multimodal_inputs=message.multimodal_inputs,
             adapter_type=message.adapter_type,
+            adapter_route_id=message.adapter_route_id,
             heat_level=rhythm.heat_level,
             pace=rhythm.pace,
             speaker_name=message.speaker or "",

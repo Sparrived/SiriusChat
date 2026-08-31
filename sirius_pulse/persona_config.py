@@ -233,9 +233,7 @@ class PersonaExperienceConfig:
         d: dict[str, Any] = {
             "engagement_sensitivity": self.engagement_sensitivity,
             "expressiveness": self.expressiveness,
-            "group_reply_strategies": normalize_group_reply_strategies(
-                self.group_reply_strategies
-            ),
+            "group_reply_strategies": normalize_group_reply_strategies(self.group_reply_strategies),
             "min_reply_interval_seconds": self.min_reply_interval_seconds,
             "main_model_reply_cooldown_seconds": self.main_model_reply_cooldown_seconds,
             "reply_time_curve_points": normalize_reply_time_curve_points(
