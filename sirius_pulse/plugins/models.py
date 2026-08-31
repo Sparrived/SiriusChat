@@ -67,8 +67,10 @@ class CommandAST:
 
     示例路径结构：
         /ca analyse                → command="ca", subcommand="analyse"
-        /ca report daily           → command="ca", subcommand="report", subcommands=["report", "daily"]
-        /tools image resize        → command="tools", subcommand="image", subcommands=["image", "resize"]
+        /ca report daily           → command="ca", subcommand="report",
+                                     subcommands=["report", "daily"]
+        /tools image resize        → command="tools", subcommand="image",
+                                     subcommands=["image", "resize"]
     """
 
     command: str  # 指令名，如 "weather" 或指令组名 "ca"
@@ -328,6 +330,7 @@ class PluginDefinition:
                     pattern_type=cmd_raw.get("pattern_type", "prefix"),
                     description=cmd_raw.get("description", ""),
                     examples=cmd_raw.get("examples", []),
+                    hidden_from_intent=cmd_raw.get("hidden_from_intent", False),
                 )
             )
 

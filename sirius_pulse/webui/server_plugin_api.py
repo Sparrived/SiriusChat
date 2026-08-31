@@ -15,6 +15,7 @@ import re
 import time
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qsl, urlsplit
 
 from aiohttp import web
 
@@ -86,6 +87,23 @@ def _is_masked_secret_value(value: Any) -> bool:
     return isinstance(value, str) and value.strip() in _MASKED_SECRET_VALUES
 
 
+def _url_contains_plaintext_secret(value: Any) -> bool:
+    """Detect credentials embedded in an otherwise non-secret URL setting."""
+    if not isinstance(value, str) or not any(marker in value for marker in ("://", "?", "#")):
+        return False
+    try:
+        parsed = urlsplit(value)
+    except ValueError:
+        return False
+    if parsed.username is not None or parsed.password is not None:
+        return True
+    return any(
+        _is_secret_setting_key(query_key) and bool(query_value)
+        for component in (parsed.query, parsed.fragment)
+        for query_key, query_value in parse_qsl(component, keep_blank_values=True)
+    )
+
+
 def _contains_plaintext_secret(
     value: Any,
     *,
@@ -102,6 +120,8 @@ def _contains_plaintext_secret(
     parameter = parameter or _parameter_for(definition, key)
     if _is_secret_parameter(key, definition, parameter):
         return bool(value) and not _is_masked_secret_value(value)
+    if _url_contains_plaintext_secret(value):
+        return True
     if isinstance(value, dict):
         field_parameters = {
             str(field.get("name")): field
@@ -314,7 +334,7 @@ def _settings_update_without_masked_secrets(
             result_items: list[Any] = []
             seen_new_identities: set[tuple[str, ...]] = set()
             for item in value:
-                old_item: Any = _MISSING
+                matched_old_item: Any = _MISSING
                 identity = _stable_secret_row_identity(item)
                 wants_secret_retention = _row_has_explicit_masked_secret(item, secret_fields)
                 if secret_fields and identity is not None:
@@ -323,16 +343,16 @@ def _settings_update_without_masked_secrets(
                     seen_new_identities.add(identity)
                     if identity in ambiguous_identities:
                         raise MaskedSecretUpdateError("现有对象列表包含重复的稳定标识；请先移除重复项后再保留密钥")
-                    old_item = old_by_identity.get(identity, _MISSING)
+                    matched_old_item = old_by_identity.get(identity, _MISSING)
 
                 # Never use the item index as a secret lookup key.  An explicit
                 # masked field means "retain this row's current secret" and is
                 # only valid when one unambiguous stable identity matched.
-                if wants_secret_retention and old_item is _MISSING:
+                if wants_secret_retention and matched_old_item is _MISSING:
                     raise MaskedSecretUpdateError(
                         "无法为掩码密钥匹配稳定对象标识；新对象请省略该字段，并为现有对象保留有效 owner/repo、id、name 或 slug"
                     )
-                merged = merge(item, old_item, key=key, parameter=parameter)
+                merged = merge(item, matched_old_item, key=key, parameter=parameter)
                 if merged is not _MISSING:
                     result_items.append(merged)
             return result_items
@@ -544,10 +564,10 @@ def _validate_settings_schema(
         ):
             return f"{parameter.name} 不能为空"
     for key, value in settings.items():
-        parameter = parameters.get(str(key))
-        if parameter is None:
+        declared_parameter = parameters.get(str(key))
+        if declared_parameter is None:
             return f"未声明的插件设置：{key}"
-        error = _validate_parameter_value(value, parameter, path=str(key))
+        error = _validate_parameter_value(value, declared_parameter, path=str(key))
         if error:
             return error
     return None

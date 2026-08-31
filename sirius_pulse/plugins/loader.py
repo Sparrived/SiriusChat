@@ -38,7 +38,8 @@ def _numeric_version(value: object) -> tuple[int, int, int] | None:
     match = _VERSION_PREFIX.match(value)
     if match is None:
         return None
-    return tuple(int(part or 0) for part in match.groups())
+    major, minor, patch = match.groups()
+    return int(major), int(minor or 0), int(patch or 0)
 
 
 def _installed_framework_version() -> str | None:
@@ -231,6 +232,7 @@ class PluginLoader:
     def load_metadata_definition(self, plugin_path: Path) -> PluginDefinition | None:
         """Load non-executing metadata for listing and enablement decisions."""
         config_file = plugin_path / "plugin.json"
+        definition: PluginDefinition | None
         if config_file.exists() or config_file.is_symlink():
             self._safe_manifest_path(plugin_path)
             definition = self._load_definition_from_json(plugin_path)
@@ -238,6 +240,10 @@ class PluginLoader:
             if ast_definition is not None:
                 # plugin.json is authoritative metadata, while literal class
                 # settings fill optional UI schema omitted by older manifests.
+                if not definition.commands:
+                    definition.commands = ast_definition.commands
+                if not definition.command_groups:
+                    definition.command_groups = ast_definition.command_groups
                 if not definition.parameters:
                     definition.parameters = ast_definition.parameters
                 if not definition.dependencies:
@@ -368,6 +374,10 @@ class PluginLoader:
                             f"Plugin 元数据 {target_name} 必须是字面量",
                         ) from exc
                 if class_values.get("name"):
+                    class_values["commands"] = self._commands_from_ast_class(
+                        plugin_path,
+                        node,
+                    )
                     metadata.update(class_values)
                     source_found = True
                     break
@@ -408,8 +418,13 @@ class PluginLoader:
             raise PluginLoadError(plugin_path, "_plugin_parameters 必须是对象列表")
         if "permissions" in metadata:
             data["permissions"] = metadata["permissions"]
-        if "events" in metadata:
-            data["triggers"] = {"events": metadata["events"]}
+        commands = metadata.get("commands", [])
+        events = metadata.get("events", [])
+        if commands or events:
+            data["triggers"] = {
+                "commands": commands,
+                "events": events,
+            }
         try:
             return PluginDefinition.from_dict(data, source_path=plugin_path)
         except (AttributeError, TypeError, ValueError) as exc:

@@ -480,6 +480,39 @@ async def test_webui_repository_plaintext_token_is_rejected_without_persisting(t
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://user:password@example.invalid/path",
+        "https://example.invalid/path?access_token=secret",
+        "https://example.invalid/path?api-key=secret",
+        "plans?accessToken=secret",
+        "plans#refresh-token=secret",
+    ],
+)
+async def test_webui_plugin_settings_reject_credentials_embedded_in_urls(tmp_path, url):
+    manager = SimpleNamespace(
+        data_path=tmp_path / "data",
+        plugin_definitions={"demo": _demo_plugin_definition()},
+    )
+    plugins_dir = tmp_path / "plugins"
+    plugins_dir.mkdir()
+
+    response = await api_plugin_settings_post(
+        _FakeJsonRequest(
+            {"settings": {"label": url}},
+            {"plugin_name": "demo"},
+        ),
+        manager,
+    )
+
+    assert response.status == 400
+    assert "secret" not in response.text
+    assert "password" not in response.text
+    assert not (plugins_dir / "_config.json").exists()
+
+
+@pytest.mark.asyncio
 async def test_webui_plugin_settings_reject_undeclared_keys_without_persisting(tmp_path):
     manager = SimpleNamespace(
         data_path=tmp_path / "data",
@@ -553,7 +586,9 @@ async def test_webui_plugin_metadata_listing_does_not_execute_plugin_code(tmp_pa
         "class MetadataDemo(PluginBase):\n"
         "    _plugin_name = 'metadata_demo'\n"
         "    _plugin_display_name = 'Metadata demo'\n"
-        "    _plugin_parameters = [{'name': 'label', 'type': 'str'}]\n",
+        "    _plugin_parameters = [{'name': 'label', 'type': 'str'}]\n"
+        "    @command('demo', prefix='/', patterns=['demo'], description='Demo')\n"
+        "    def demo(self): pass\n",
         encoding="utf-8",
     )
     request = make_mocked_request("GET", "/api/plugins")
@@ -567,6 +602,15 @@ async def test_webui_plugin_metadata_listing_does_not_execute_plugin_code(tmp_pa
 
     assert response.status == 200
     assert [item["name"] for item in payload["plugins"]] == ["metadata_demo"]
+    assert payload["plugins"][0]["commands"] == [
+        {
+            "name": "demo",
+            "patterns": ["/demo"],
+            "pattern_type": "prefix",
+            "description": "Demo",
+            "hidden_from_intent": False,
+        }
+    ]
     assert marker.exists() is False
 
 
