@@ -92,6 +92,41 @@ async def test_plugin_executor_when_disabled_after_load_then_skips_execution(tmp
 
 
 @pytest.mark.asyncio
+async def test_plugin_executor_settings_cannot_override_framework_context_keys(tmp_path):
+    registry = PluginRegistry()
+    source_path = tmp_path / "trusted_plugin"
+    definition = PluginDefinition(
+        name="command_demo",
+        display_name="Command demo",
+        permissions=PluginPermissionDef(),
+        render=PluginRenderDef(mode="llm"),
+        source_path=source_path,
+    )
+    definition._plugin_class = _CommandPlugin
+    registry.register(definition)
+
+    from sirius_pulse.plugins.config import PluginConfigManager
+
+    config = PluginConfigManager(tmp_path)
+    config.update_settings(
+        "command_demo",
+        {
+            "plugin_path": "C:/untrusted/plugin",
+            "render_mode": "silent",
+            "label": "kept",
+        },
+    )
+    executor = PluginExecutor(registry, persona_data_path=tmp_path, config_manager=config)
+
+    assert await executor.instantiate_all() == 1
+    instance = registry.get_instance("command_demo")
+    assert instance is not None
+    assert instance.ctx.config["plugin_path"] == str(source_path)
+    assert instance.ctx.config["render_mode"] == "llm"
+    assert instance.ctx.config["label"] == "kept"
+
+
+@pytest.mark.asyncio
 async def test_plugin_executor_starts_and_cancels_declared_background_tasks(tmp_path):
     registry = PluginRegistry()
     definition = PluginDefinition(

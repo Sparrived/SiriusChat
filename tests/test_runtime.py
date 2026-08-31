@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import os
 import threading
-import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -12,6 +11,7 @@ import pytest
 from sirius_pulse.persona_config import PersonaExperienceConfig
 from sirius_pulse.persona_worker import PersonaWorker
 from sirius_pulse.platforms.runtime import EngineRuntime, _wait_for_embedding_health
+from sirius_pulse.plugins.models import PluginDefinition, PluginPermissionDef
 from sirius_pulse.utils.json_io import atomic_write_json
 
 
@@ -25,6 +25,43 @@ def test_engine_runtime_when_workspace_has_shared_plugins_then_uses_shared_direc
     runtime = EngineRuntime(persona_dir)
 
     assert runtime._plugins_dir() == shared_plugins
+
+
+def test_engine_runtime_plugin_config_cannot_relax_manifest_security(tmp_path):
+    data_dir = tmp_path / "data"
+    persona_dir = data_dir / "personas" / "sirius"
+    persona_dir.mkdir(parents=True)
+    plugins_dir = tmp_path / "plugins"
+    plugins_dir.mkdir()
+    atomic_write_json(
+        plugins_dir / "_config.json",
+        {
+            "locked": {
+                "enabled": True,
+                "permissions": {
+                    "developer_only": False,
+                    "hidden_from_intent": False,
+                    "rate_limit_calls_per_minute": 0,
+                },
+                "settings": {},
+            }
+        },
+    )
+    runtime = EngineRuntime(persona_dir)
+    definition = PluginDefinition(
+        name="locked",
+        permissions=PluginPermissionDef(
+            developer_only=True,
+            hidden_from_intent=True,
+            rate_limit_calls_per_minute=10,
+        ),
+    )
+
+    runtime._merge_plugin_config(definition)
+
+    assert definition.permissions.developer_only is True
+    assert definition.permissions.hidden_from_intent is True
+    assert definition.permissions.rate_limit_calls_per_minute == 10
 
 
 def test_engine_runtime_when_tool_bridge_has_routes_then_registers_proactive_destinations(tmp_path):
