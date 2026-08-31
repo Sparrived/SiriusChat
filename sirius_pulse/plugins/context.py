@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -365,12 +366,6 @@ class EngineProxy:
         """获取原始引擎引用（高级用法，谨慎使用）。"""
         return self._engine
 
-    def get_current_adapter_type(self) -> str:
-        """获取当前正在处理的适配器类型。"""
-        if self._engine is None:
-            return ""
-        return str(getattr(self._engine, "_current_adapter_type", "") or "")
-
     def get_config_value(self, key: str, default: Any = None) -> Any:
         """读取宿主引擎的只读配置项。"""
         if self._engine is None:
@@ -538,7 +533,7 @@ class PluginDataStore:
         candidate.pop(key, None)
         self._save(candidate)
 
-    def delete_many(self, keys: list[str] | tuple[str, ...] | set[str]) -> None:
+    def delete_many(self, keys: Iterable[str]) -> None:
         """Delete several keys and persist the resulting state once."""
         candidate = dict(self._cache)
         for key in keys:
