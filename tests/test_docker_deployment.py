@@ -37,6 +37,11 @@ def test_update_script_refuses_to_replace_an_unmigrated_container_data_directory
     assert '\\"org.sirius-pulse.environment-cache-key\\"' not in script
     assert "exit 2" in script
     assert "systemctl restart sirius-container-admin" in script
+    assert "git -c fetch.recurseSubmodules=false pull --ff-only origin master" in script
+    assert "submodule sync --recursive" in script
+    assert script.index("submodule sync --recursive") < script.index(
+        "submodule update --init --recursive"
+    )
     assert script.index("docker compose config -q") < script.index("docker compose up -d")
 
 

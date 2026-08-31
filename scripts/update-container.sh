@@ -63,8 +63,12 @@ restore_system_packages() {
   fi
 }
 
-git pull --ff-only origin master
-git submodule update --init --recursive
+git -c fetch.recurseSubmodules=false pull --ff-only origin master
+repo_root="$(pwd -P)"
+git -c safe.directory="$repo_root/docs" -c safe.directory="$repo_root/plugins" \
+  submodule sync --recursive
+git -c safe.directory="$repo_root/docs" -c safe.directory="$repo_root/plugins" \
+  submodule update --init --recursive
 if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet sirius-container-admin; then
   systemctl restart sirius-container-admin
 fi

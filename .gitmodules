@@ -1,6 +1,6 @@
 [submodule "docs"]
 	path = docs
-	url = https://github.com/Sparrived/SiriusPulse-Doc.git
+	url = https://github.com/Sparrived/SiriusPulse-Docs.git
 	branch = master
 [submodule "plugins"]
 	path = plugins
