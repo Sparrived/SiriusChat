@@ -400,7 +400,9 @@ class WorkspaceConfig:
             "session_defaults": {
                 "history_max_messages": self.session_defaults.history_max_messages,
                 "history_max_chars": self.session_defaults.history_max_chars,
-                "max_recent_participant_messages": self.session_defaults.max_recent_participant_messages,
+                "max_recent_participant_messages": (
+                    self.session_defaults.max_recent_participant_messages
+                ),
                 "enable_auto_compression": self.session_defaults.enable_auto_compression,
             },
             "orchestration_defaults": dict(self.orchestration_defaults),

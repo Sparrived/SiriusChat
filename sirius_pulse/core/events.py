@@ -70,7 +70,9 @@ class SessionEventBus:
             handle(event)
 
         # Publish (from engine internals)
-        await bus.emit(SessionEvent(type=SessionEventType.PERCEPTION_COMPLETED, data={"message": msg}))
+        await bus.emit(
+            SessionEvent(type=SessionEventType.PERCEPTION_COMPLETED, data={"message": msg})
+        )
 
         # Close when the session ends
         await bus.close()

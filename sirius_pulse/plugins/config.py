@@ -165,7 +165,9 @@ class PluginConfigManager:
 
     def get_permissions(self, plugin_name: str) -> dict[str, Any]:
         """获取插件权限配置。"""
-        return self._config.get(plugin_name, {}).get("permissions", {})  # type: ignore[call-overload]
+        return self._config.get(plugin_name, {}).get(
+            "permissions", {}
+        )  # type: ignore[call-overload]
 
     def get_settings(self, plugin_name: str) -> dict[str, Any]:
         """获取插件自定义配置。"""
