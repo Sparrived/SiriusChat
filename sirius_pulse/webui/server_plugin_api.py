@@ -939,7 +939,7 @@ def _masked_parameter(parameter: Any, *, nested: bool = False) -> dict[str, Any]
         result["default"] = parameter_default
 
     if nested:
-        for metadata_key in ("identity", "position"):
+        for metadata_key in ("identity", "position", "persist_secret"):
             metadata_value = _parameter_value(parameter, metadata_key, _MISSING)
             if metadata_value is not _MISSING:
                 result[metadata_key] = copy.deepcopy(metadata_value)
