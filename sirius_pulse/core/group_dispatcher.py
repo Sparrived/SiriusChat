@@ -15,7 +15,7 @@ import sqlite3
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 from uuid import uuid4
 
 _OPEN_LOOP_RE = re.compile(
@@ -158,6 +158,11 @@ class GroupDispatcher:
                     created_at REAL NOT NULL,
                     updated_at REAL NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS dispatcher_delivery_receipts (
+                    event_id TEXT PRIMARY KEY,
+                    status TEXT NOT NULL,
+                    created_at REAL NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS dispatcher_candidates (
                     event_id TEXT NOT NULL,
                     group_id TEXT NOT NULL,
@@ -210,7 +215,8 @@ class GroupDispatcher:
             }
             if "topic_signature" not in candidate_columns:
                 conn.execute(
-                    "ALTER TABLE dispatcher_candidates ADD COLUMN topic_signature TEXT NOT NULL DEFAULT ''"
+                    "ALTER TABLE dispatcher_candidates ADD COLUMN topic_signature "
+                    "TEXT NOT NULL DEFAULT ''"
                 )
             for name, definition in (
                 ("base_score", "REAL NOT NULL DEFAULT 0"),
@@ -229,6 +235,16 @@ class GroupDispatcher:
                     conn.execute(
                         f"ALTER TABLE dispatcher_candidates ADD COLUMN {name} {definition}"
                     )
+            # Upgrade existing terminal reminder rows into the non-expiring
+            # receipt ledger before normal event pruning can remove them.
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO dispatcher_delivery_receipts(event_id, status, created_at)
+                SELECT event_id, status, updated_at
+                FROM dispatcher_events
+                WHERE event_id LIKE 'reminder:%' AND status IN ('sent', 'uncertain')
+                """
+            )
 
     def register(self) -> None:
         now = self._clock()
@@ -269,19 +285,18 @@ class GroupDispatcher:
         return row is not None
 
     def close(self) -> None:
-        """Expire this worker and release a lease it owns."""
+        """Expire this worker without orphaning durable in-flight event rows.
+
+        Callers explicitly finish leases they still own before closing.  Any
+        remaining lease is left to normal expiry: pre-I/O ``granted`` work can
+        then retry, while ``sending`` work becomes terminal ``uncertain``.
+        Clearing only the group row here would strand the corresponding event
+        forever and can also disrupt sibling adapters sharing a persona worker.
+        """
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             conn.execute(
                 "UPDATE dispatcher_workers SET last_seen = 0 WHERE worker_id = ?",
-                (self.worker_id,),
-            )
-            conn.execute(
-                """
-                UPDATE dispatcher_groups
-                SET active_lease_id='', active_worker_id='', active_event_id='', active_expires_at=0
-                WHERE active_worker_id=?
-                """,
                 (self.worker_id,),
             )
 
@@ -367,7 +382,9 @@ class GroupDispatcher:
             if existing is None:
                 conn.execute(
                     """
-                    INSERT INTO dispatcher_events(event_id, group_id, status, created_at, updated_at)
+                    INSERT INTO dispatcher_events(
+                        event_id, group_id, status, created_at, updated_at
+                    )
                     VALUES (?, ?, 'collecting', ?, ?)
                     """,
                     (event_id, group_id, now, now),
@@ -656,7 +673,7 @@ class GroupDispatcher:
                     )
 
             recent_counts = self._recent_reply_counts(conn, group_id, now)
-            ranked: list[dict[str, object]] = []
+            ranked: list[dict[str, Any]] = []
             for candidate in eligible:
                 worker_id = str(candidate["worker_id"])
                 worker = next((row for row in workers if row["worker_id"] == worker_id), None)
@@ -737,7 +754,10 @@ class GroupDispatcher:
                     """
                     UPDATE dispatcher_groups
                     SET peer_turns=peer_turns+1,
-                        peer_window_started_at=CASE WHEN peer_window_started_at=0 THEN ? ELSE peer_window_started_at END,
+                        peer_window_started_at=CASE
+                            WHEN peer_window_started_at=0 THEN ?
+                            ELSE peer_window_started_at
+                        END,
                         peer_required=0,
                         open_loop_target_worker_id='', open_loop_topic='', open_loop_expires_at=0
                     WHERE group_id=?
@@ -796,7 +816,11 @@ class GroupDispatcher:
         reason: str,
     ) -> DispatchDecision:
         conn.execute(
-            "UPDATE dispatcher_events SET status='observed', worker_id=?, reason=?, updated_at=? WHERE event_id=?",
+            """
+            UPDATE dispatcher_events
+            SET status='observed', worker_id=?, reason=?, updated_at=?
+            WHERE event_id=?
+            """,
             (worker_id, reason, now, event_id),
         )
         return DispatchDecision("observe", event_id, worker_id=worker_id, reason=reason)
@@ -810,7 +834,10 @@ class GroupDispatcher:
         reason: str,
     ) -> DispatchDecision:
         conn.execute(
-            "UPDATE dispatcher_events SET worker_id=?, reason=?, updated_at=? WHERE event_id=? AND status='collecting'",
+            """
+            UPDATE dispatcher_events SET worker_id=?, reason=?, updated_at=?
+            WHERE event_id=? AND status='collecting'
+            """,
             (worker_id, reason, now, event_id),
         )
         return DispatchDecision("defer", event_id, worker_id=worker_id, reason=reason)
@@ -855,19 +882,54 @@ class GroupDispatcher:
                 "UPDATE dispatcher_workers SET last_seen=? WHERE worker_id=?",
                 (now, self.worker_id),
             )
+            # Every expired lease must be classified before pruning any event:
+            # admitting another group must not erase an old post-I/O marker.
+            self._expire_all_active_leases(conn, now)
+            self._prune_events(conn, now)
             conn.execute(
                 "INSERT OR IGNORE INTO dispatcher_groups(group_id) VALUES (?)", (group_id,)
             )
-            self._expire_active_lease(conn, group_id, now)
-            self._prune_events(conn, now)
+
+            receipt = conn.execute(
+                "SELECT status FROM dispatcher_delivery_receipts WHERE event_id=?",
+                (event_id,),
+            ).fetchone()
+            if receipt is not None:
+                return DispatchDecision(
+                    "observe",
+                    event_id,
+                    reason=f"event_{receipt['status']}",
+                )
 
             existing = conn.execute(
-                "SELECT worker_id, lease_id, status FROM dispatcher_events WHERE event_id=?",
+                "SELECT group_id, worker_id, lease_id, status "
+                "FROM dispatcher_events WHERE event_id=?",
                 (event_id,),
             ).fetchone()
             if existing is not None:
-                if existing["status"] == "collecting":
+                retryable_reminder = (
+                    sender_type == "system"
+                    and event_id.startswith("reminder:")
+                    and str(existing["group_id"]) == group_id
+                    and existing["status"] in {"silent", "observed", "expired"}
+                )
+                if retryable_reminder:
+                    conn.execute("DELETE FROM dispatcher_candidates WHERE event_id=?", (event_id,))
+                    conn.execute("DELETE FROM dispatcher_events WHERE event_id=?", (event_id,))
+                    existing = None
+                elif existing["status"] == "collecting":
                     pass
+                elif (
+                    sender_type == "system"
+                    and event_id.startswith("reminder:")
+                    and existing["status"] == "granted"
+                ):
+                    return DispatchDecision(
+                        "observe",
+                        event_id,
+                        worker_id=existing["worker_id"],
+                        reason="event_granted",
+                    )
                 elif (
                     existing["worker_id"] == self.worker_id
                     and existing["status"] == "granted"
@@ -880,12 +942,13 @@ class GroupDispatcher:
                         lease_id=existing["lease_id"],
                         reason="idempotent_claim",
                     )
-                return DispatchDecision(
-                    "observe",
-                    event_id,
-                    worker_id=existing["worker_id"],
-                    reason=f"event_{existing['status']}",
-                )
+                else:
+                    return DispatchDecision(
+                        "observe",
+                        event_id,
+                        worker_id=existing["worker_id"],
+                        reason=f"event_{existing['status']}",
+                    )
 
             state = conn.execute(
                 "SELECT * FROM dispatcher_groups WHERE group_id=?", (group_id,)
@@ -1025,7 +1088,10 @@ class GroupDispatcher:
                     """
                     UPDATE dispatcher_groups
                     SET peer_turns=peer_turns+1,
-                        peer_window_started_at=CASE WHEN peer_window_started_at=0 THEN ? ELSE peer_window_started_at END,
+                        peer_window_started_at=CASE
+                            WHEN peer_window_started_at=0 THEN ?
+                            ELSE peer_window_started_at
+                        END,
                         open_loop_target_worker_id='', open_loop_topic='', open_loop_expires_at=0
                     WHERE group_id=?
                     """,
@@ -1113,8 +1179,15 @@ class GroupDispatcher:
             (target_worker_id, topic, now + 60.0, group_id),
         )
 
-    def finish(self, lease_id: str, *, sent: bool, response_text: str = "") -> bool:
-        """Release a lease and remember whether the reply leaves a peer loop open."""
+    def finish(
+        self,
+        lease_id: str,
+        *,
+        sent: bool,
+        response_text: str = "",
+        uncertain: bool = False,
+    ) -> bool:
+        """Release a lease and retain confirmed or ambiguous delivery state."""
         lease_id = str(lease_id or "").strip()
         if not lease_id:
             return False
@@ -1133,11 +1206,12 @@ class GroupDispatcher:
                 return False
             group_id = str(row["group_id"])
             event_id = str(row["active_event_id"] or "")
-            status = "sent" if sent else "silent"
+            status = "uncertain" if uncertain else ("sent" if sent else "silent")
             conn.execute(
                 "UPDATE dispatcher_events SET status=?, updated_at=? WHERE lease_id=?",
                 (status, now, lease_id),
             )
+            self._record_delivery_receipt(conn, event_id, status, now)
             conn.execute(
                 """
                 UPDATE dispatcher_groups
@@ -1151,7 +1225,9 @@ class GroupDispatcher:
                 self._record_open_loop(conn, group_id, event_id, response_text, now)
                 conn.execute(
                     """
-                    INSERT INTO dispatcher_worker_stats(group_id, worker_id, last_reply_at, reply_count)
+                    INSERT INTO dispatcher_worker_stats(
+                        group_id, worker_id, last_reply_at, reply_count
+                    )
                     VALUES (?, ?, ?, 1)
                     ON CONFLICT(group_id, worker_id) DO UPDATE SET
                         last_reply_at=excluded.last_reply_at,
@@ -1159,6 +1235,91 @@ class GroupDispatcher:
                     """,
                     (group_id, self.worker_id, now),
                 )
+            return True
+
+    def begin_delivery(self, lease_id: str) -> bool:
+        """Mark an owned lease as performing irreversible platform I/O.
+
+        An expired ``granted`` lease is safe to retry because delivery never
+        started.  Once this marker is set, expiry becomes ``uncertain`` and a
+        later claimant must not replay the event.
+        """
+        lease_id = str(lease_id or "").strip()
+        if not lease_id:
+            return False
+        now = self._clock()
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                """
+                SELECT group_id, active_expires_at FROM dispatcher_groups
+                WHERE active_lease_id=? AND active_worker_id=?
+                """,
+                (lease_id, self.worker_id),
+            ).fetchone()
+            if row is None:
+                return False
+            group_id = str(row["group_id"])
+            if float(row["active_expires_at"] or 0) <= now:
+                self._expire_active_lease(conn, group_id, now)
+                return False
+            conn.execute(
+                """
+                UPDATE dispatcher_events
+                SET status='sending', updated_at=?
+                WHERE lease_id=? AND status IN ('granted', 'sending')
+                """,
+                (now, lease_id),
+            )
+            conn.execute(
+                """
+                UPDATE dispatcher_groups SET active_expires_at=?
+                WHERE active_lease_id=? AND active_worker_id=?
+                """,
+                (now + self.lease_seconds, lease_id, self.worker_id),
+            )
+            conn.execute(
+                "UPDATE dispatcher_workers SET last_seen=? WHERE worker_id=?",
+                (now, self.worker_id),
+            )
+            return True
+
+    def renew(self, lease_id: str) -> bool:
+        """Extend a live owned lease while platform delivery is in progress."""
+        lease_id = str(lease_id or "").strip()
+        if not lease_id:
+            return False
+        now = self._clock()
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                """
+                SELECT group_id, active_expires_at FROM dispatcher_groups
+                WHERE active_lease_id=? AND active_worker_id=?
+                """,
+                (lease_id, self.worker_id),
+            ).fetchone()
+            if row is None:
+                return False
+            group_id = str(row["group_id"])
+            if float(row["active_expires_at"] or 0) <= now:
+                self._expire_active_lease(conn, group_id, now)
+                return False
+            conn.execute(
+                """
+                UPDATE dispatcher_groups SET active_expires_at=?
+                WHERE active_lease_id=? AND active_worker_id=?
+                """,
+                (now + self.lease_seconds, lease_id, self.worker_id),
+            )
+            conn.execute(
+                "UPDATE dispatcher_events SET updated_at=? WHERE lease_id=? AND status='sending'",
+                (now, lease_id),
+            )
+            conn.execute(
+                "UPDATE dispatcher_workers SET last_seen=? WHERE worker_id=?",
+                (now, self.worker_id),
+            )
             return True
 
     def active_lease(self, group_id: str) -> str:
@@ -1214,26 +1375,6 @@ class GroupDispatcher:
                 str(row[1])
                 for row in conn.execute("PRAGMA table_info(dispatcher_groups)").fetchall()
             }
-            reason_sql = "reason" if "reason" in event_columns else "'' AS reason"
-            base_score_sql = "base_score" if "base_score" in event_columns else "0 AS base_score"
-            final_score_sql = (
-                "final_score" if "final_score" in event_columns else "0 AS final_score"
-            )
-            activity_penalty_sql = (
-                "activity_penalty"
-                if "activity_penalty" in event_columns
-                else "0 AS activity_penalty"
-            )
-            response_strategy_sql = (
-                "response_strategy"
-                if "response_strategy" in event_columns
-                else "'immediate' AS response_strategy"
-            )
-            response_delay_sql = (
-                "response_delay_seconds"
-                if "response_delay_seconds" in event_columns
-                else "0 AS response_delay_seconds"
-            )
             workers = [
                 {
                     "worker_id": str(row["worker_id"] or ""),
@@ -1295,6 +1436,9 @@ class GroupDispatcher:
                     }
                 )
 
+            def event_value(row: sqlite3.Row, name: str, default: Any) -> Any:
+                return row[name] if name in event_columns else default
+
             limit = max(1, min(int(event_limit), 200))
             events = [
                 {
@@ -1303,22 +1447,22 @@ class GroupDispatcher:
                     "worker_id": str(row["worker_id"] or ""),
                     "lease_id": str(row["lease_id"] or ""),
                     "status": str(row["status"] or ""),
-                    "reason": str(row["reason"] or ""),
-                    "base_score": float(row["base_score"] or 0),
-                    "final_score": float(row["final_score"] or 0),
-                    "activity_penalty": float(row["activity_penalty"] or 0),
-                    "response_strategy": str(row["response_strategy"] or "immediate"),
-                    "response_delay_seconds": float(row["response_delay_seconds"] or 0),
+                    "reason": str(event_value(row, "reason", "") or ""),
+                    "base_score": float(event_value(row, "base_score", 0) or 0),
+                    "final_score": float(event_value(row, "final_score", 0) or 0),
+                    "activity_penalty": float(event_value(row, "activity_penalty", 0) or 0),
+                    "response_strategy": str(
+                        event_value(row, "response_strategy", "immediate") or "immediate"
+                    ),
+                    "response_delay_seconds": float(
+                        event_value(row, "response_delay_seconds", 0) or 0
+                    ),
                     "created_at": float(row["created_at"] or 0),
                     "updated_at": float(row["updated_at"] or 0),
                 }
                 for row in conn.execute(
-                    f"""
-                    SELECT event_id, group_id, worker_id, lease_id, status,
-                           {reason_sql}, {base_score_sql}, {final_score_sql},
-                           {activity_penalty_sql}, {response_strategy_sql}, {response_delay_sql},
-                           created_at, updated_at
-                    FROM dispatcher_events
+                    """
+                    SELECT * FROM dispatcher_events
                     ORDER BY updated_at DESC
                     LIMIT ?
                     """,
@@ -1330,7 +1474,10 @@ class GroupDispatcher:
                 """
                 SELECT
                     COUNT(*) AS decisions,
-                    SUM(CASE WHEN status IN ('granted', 'sent', 'silent', 'expired') THEN 1 ELSE 0 END) AS granted,
+                    SUM(
+                        CASE WHEN status IN ('granted', 'sent', 'silent', 'expired')
+                        THEN 1 ELSE 0 END
+                    ) AS granted,
                     SUM(CASE WHEN status='sent' THEN 1 ELSE 0 END) AS sent,
                     SUM(CASE WHEN status='observed' THEN 1 ELSE 0 END) AS observed
                 FROM dispatcher_events
@@ -1360,18 +1507,48 @@ class GroupDispatcher:
         except (OSError, sqlite3.Error) as exc:
             return {"available": False, "db_path": str(path), "reason": str(exc)}
 
+    def _expire_all_active_leases(self, conn: sqlite3.Connection, now: float) -> None:
+        group_ids = [
+            str(row["group_id"])
+            for row in conn.execute(
+                """
+                SELECT group_id FROM dispatcher_groups
+                WHERE active_lease_id<>'' AND active_expires_at<=?
+                """,
+                (now,),
+            ).fetchall()
+        ]
+        for group_id in group_ids:
+            self._expire_active_lease(conn, group_id, now)
+
     def _expire_active_lease(self, conn: sqlite3.Connection, group_id: str, now: float) -> None:
         row = conn.execute(
             """
-            SELECT active_lease_id FROM dispatcher_groups
+            SELECT active_lease_id, active_event_id FROM dispatcher_groups
             WHERE group_id=? AND active_lease_id<>'' AND active_expires_at<=?
             """,
             (group_id, now),
         ).fetchone()
         if row is None:
             return
+        event = conn.execute(
+            "SELECT status FROM dispatcher_events WHERE lease_id=?",
+            (row["active_lease_id"],),
+        ).fetchone()
+        if event is not None and str(event["status"]) == "sending":
+            self._record_delivery_receipt(
+                conn,
+                str(row["active_event_id"] or ""),
+                "uncertain",
+                now,
+            )
         conn.execute(
-            "UPDATE dispatcher_events SET status='expired', updated_at=? WHERE lease_id=?",
+            """
+            UPDATE dispatcher_events
+            SET status=CASE WHEN status='sending' THEN 'uncertain' ELSE 'expired' END,
+                updated_at=?
+            WHERE lease_id=?
+            """,
             (now, row["active_lease_id"]),
         )
         conn.execute(
@@ -1381,6 +1558,24 @@ class GroupDispatcher:
             WHERE group_id=?
             """,
             (group_id,),
+        )
+
+    @staticmethod
+    def _record_delivery_receipt(
+        conn: sqlite3.Connection,
+        event_id: str,
+        status: str,
+        now: float,
+    ) -> None:
+        if not event_id.startswith("reminder:") or status not in {"sent", "uncertain"}:
+            return
+        conn.execute(
+            """
+            INSERT INTO dispatcher_delivery_receipts(event_id, status, created_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(event_id) DO NOTHING
+            """,
+            (event_id, status, now),
         )
 
     @staticmethod
@@ -1404,16 +1599,90 @@ class GroupDispatcher:
             (event_id, group_id, worker_id, lease_id, status, reason, now, now),
         )
 
-    @staticmethod
-    def _prune_events(conn: sqlite3.Connection, now: float) -> None:
+    def _prune_events(self, conn: sqlite3.Connection, now: float) -> None:
+        retry_cutoff = now - 86400.0
+        terminal_cutoff = now - 30 * 86400.0
+        # A stale/orphaned sending row is still post-I/O evidence. Convert it
+        # before general cleanup and copy stable reminders to the durable ledger.
+        stale_sending = conn.execute(
+            """
+            SELECT event_id FROM dispatcher_events
+            WHERE status='sending' AND updated_at < ?
+            """,
+            (retry_cutoff,),
+        ).fetchall()
+        for row in stale_sending:
+            self._record_delivery_receipt(
+                conn,
+                str(row["event_id"] or ""),
+                "uncertain",
+                now,
+            )
         conn.execute(
-            "DELETE FROM dispatcher_events WHERE updated_at < ?",
-            (now - 86400.0,),
+            """
+            UPDATE dispatcher_events SET status='uncertain', updated_at=?
+            WHERE status='sending' AND updated_at < ?
+            """,
+            (now, retry_cutoff),
+        )
+        conn.execute(
+            """
+            DELETE FROM dispatcher_events
+            WHERE updated_at < ? AND status NOT IN ('sent', 'uncertain')
+            """,
+            (retry_cutoff,),
+        )
+        conn.execute(
+            """
+            DELETE FROM dispatcher_events
+            WHERE updated_at < ? AND status IN ('sent', 'uncertain')
+            """,
+            (terminal_cutoff,),
+        )
+        # Keep a hard ceiling even if a high-volume deployment produces more
+        # than thirty days of terminal stable-ID tombstones.
+        conn.execute(
+            """
+            DELETE FROM dispatcher_events
+            WHERE status IN ('sent', 'uncertain') AND event_id NOT IN (
+                SELECT event_id FROM dispatcher_events
+                WHERE status IN ('sent', 'uncertain')
+                ORDER BY updated_at DESC LIMIT 65536
+            )
+            """
         )
         conn.execute(
             "DELETE FROM dispatcher_candidates WHERE submitted_at < ?",
-            (now - 86400.0,),
+            (retry_cutoff,),
         )
+        stale_groups = [
+            str(row["group_id"])
+            for row in conn.execute(
+                """
+                SELECT groups.group_id
+                FROM dispatcher_groups AS groups
+                WHERE groups.active_lease_id=''
+                  AND groups.last_reply_at < ?
+                  AND groups.last_human_at < ?
+                  AND NOT EXISTS (
+                      SELECT 1 FROM dispatcher_events AS events
+                      WHERE events.group_id=groups.group_id
+                  )
+                LIMIT 1024
+                """,
+                (terminal_cutoff, terminal_cutoff),
+            ).fetchall()
+        ]
+        if stale_groups:
+            parameters = [(group_id,) for group_id in stale_groups]
+            conn.executemany(
+                "DELETE FROM dispatcher_worker_stats WHERE group_id=?",
+                parameters,
+            )
+            conn.executemany(
+                "DELETE FROM dispatcher_groups WHERE group_id=?",
+                parameters,
+            )
 
 
 __all__ = ["DispatchDecision", "GroupDispatcher"]

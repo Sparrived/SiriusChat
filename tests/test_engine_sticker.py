@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 
+from sirius_pulse.adapters.base import DeliveryUncertainError
 from sirius_pulse.core.engine_sticker import EngineSticker
 
 
@@ -159,6 +160,43 @@ async def test_sticker_when_wrong_image_is_missent_then_it_is_recalled_and_corre
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "recall_result",
+    [
+        {},
+        {"status": "failed", "retcode": 100},
+    ],
+)
+async def test_sticker_when_confirmed_missend_cannot_be_recalled_then_delivery_is_uncertain(
+    tmp_path: Path,
+    monkeypatch,
+    recall_result: dict[str, Any],
+):
+    _prepare_stickers(tmp_path)
+    adapter = RecordingAdapter()
+    engine = DummyEngine(tmp_path, adapter)
+    sticker = EngineSticker(engine)
+    sticker._init_sticker_system()
+    engine._sticker_oppositions = {"喜欢": ["讨厌"]}
+    _force_first_random_choice(monkeypatch)
+    monkeypatch.setattr("sirius_pulse.core.engine_sticker.random.random", lambda: 0.01)
+
+    async def no_sleep(_seconds: float) -> None:
+        return None
+
+    async def failed_recall(_message_id: str) -> dict[str, Any]:
+        return recall_result
+
+    monkeypatch.setattr("sirius_pulse.core.engine_sticker.asyncio.sleep", no_sleep)
+    adapter.delete_message = failed_recall  # type: ignore[method-assign]
+
+    with pytest.raises(DeliveryUncertainError, match="已确认送达"):
+        await sticker._send_stickers_by_names("group_a", ["喜欢"])
+
+    assert len(adapter.sent) == 1
+
+
+@pytest.mark.asyncio
 async def test_sticker_when_private_chat_sends_image_then_private_adapter_api_is_used(
     tmp_path: Path,
     monkeypatch,
@@ -171,7 +209,7 @@ async def test_sticker_when_private_chat_sends_image_then_private_adapter_api_is
     _force_first_random_choice(monkeypatch)
     monkeypatch.setattr("sirius_pulse.core.engine_sticker.random.random", lambda: 0.99)
 
-    result = await sticker._send_stickers_by_names("private_10001", ["喜欢"])
+    result = await sticker._send_stickers_by_names("private_qq_10001", ["喜欢"])
 
     assert result["success"] is True
     assert adapter.sent[0][0] == "private"

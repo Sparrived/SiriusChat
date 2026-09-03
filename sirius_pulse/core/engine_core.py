@@ -37,7 +37,7 @@ from sirius_pulse.core.plan_runtime import (
     get_active_plan_session,
     route_message_for_active_plan,
 )
-from sirius_pulse.core.prompt_factory import PromptFactory, StyleAdapter
+from sirius_pulse.core.prompt_factory import StyleAdapter
 from sirius_pulse.core.rhythm import RhythmAnalyzer
 
 # New v2 memory system (refactor)
@@ -544,6 +544,45 @@ class _EmotionalGroupChatEngineBase:
                 counts[adapter_type] = counts.get(adapter_type, 0) + 1
         return counts
 
+    def resolve_adapter_route_ids(
+        self,
+        group_id: str,
+        adapter_type: str = "",
+    ) -> list[str]:
+        """Return concrete eligible adapter route IDs for a destination."""
+        gid = str(group_id or "").strip()
+        requested_type = str(adapter_type or "").strip()
+        if not gid:
+            return []
+        is_private = gid.startswith("private_")
+        target = gid.removeprefix("private_").removeprefix("qq_")
+        result: list[str] = []
+        for route_type, adapter, groups, private_users in getattr(
+            self,
+            "_adapter_routes",
+            [],
+        ):
+            if requested_type and route_type != requested_type:
+                continue
+            checker = getattr(adapter, "is_proactive_destination_allowed", None)
+            if callable(checker):
+                try:
+                    matched = bool(checker(gid))
+                except Exception:
+                    matched = False
+            elif is_private:
+                matched = private_users is not None and (
+                    not private_users or target in private_users
+                )
+            else:
+                matched = groups is not None and target in groups
+            if not matched:
+                continue
+            route_id = str(getattr(adapter, "adapter_route_id", "") or "").strip()
+            if route_id and route_id not in result:
+                result.append(route_id)
+        return result
+
     def resolve_adapter_types(self, group_id: str) -> list[str]:
         """Return adapter types configured to serve ``group_id``.
 
@@ -897,9 +936,15 @@ class _EmotionalGroupChatEngineBase:
         self,
         group_id: str,
         names: list[str],
+        *,
+        adapter: Any | None = None,
     ) -> dict[str, Any]:
         """从模型选中的名称中随机挑一个表情包发送（sub_type=1）。"""
-        return await self._sticker._send_stickers_by_names(group_id, names)
+        return await self._sticker._send_stickers_by_names(
+            group_id,
+            names,
+            adapter=adapter,
+        )
 
     def _register_engine_hooks(self) -> None:
         """向 Brain 注册引擎级别的后处理 hook。

@@ -10,6 +10,35 @@ from sirius_pulse.tools.models import ToolResult
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("handler_result", "expected"),
+    [
+        (True, True),
+        (False, False),
+        ("accepted", False),
+        (1, False),
+        ({"accepted": True}, False),
+        (None, False),
+    ],
+)
+async def test_scheduled_dispatch_only_accepts_explicit_true(handler_result, expected):
+    async def dispatch_proactive_message(**_kwargs):
+        return handler_result
+
+    context = ToolEngineContextImpl.__new__(ToolEngineContextImpl)
+    context._engine = SimpleNamespace(
+        dispatch_proactive_message=dispatch_proactive_message,
+    )
+
+    accepted = await context.dispatch_proactive_message(
+        group_id="group-1",
+        text="scheduled update",
+    )
+
+    assert accepted is expected
+
+
+@pytest.mark.asyncio
 async def test_scheduled_generation_runs_tool_calls_before_final_text():
     class Executor:
         def __init__(self):

@@ -6,9 +6,14 @@
 from __future__ import annotations
 
 import enum
+import hashlib
+import json
+import math
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qsl, urlsplit
 
 from sirius_pulse.config.models import ConfigParameter
 
@@ -181,6 +186,16 @@ class CommandAST:
 # ═══════════════════════════════════════════════════════════════════════
 
 
+def _validate_command_patterns(patterns: object) -> None:
+    """Reject command pattern collections that could match empty input."""
+    if not isinstance(patterns, list):
+        raise ValueError("Plugin 指令 patterns 必须是字符串列表")
+    if any(not isinstance(pattern, str) for pattern in patterns):
+        raise ValueError("Plugin 指令 patterns 必须是字符串列表")
+    if any(not pattern.strip() for pattern in patterns):
+        raise ValueError("Plugin 指令 pattern 不能为空或仅包含空白")
+
+
 @dataclass(slots=True)
 class PluginCommandDef:
     """Plugin 指令触发器定义。"""
@@ -191,6 +206,10 @@ class PluginCommandDef:
     description: str = ""
     examples: list[str] = field(default_factory=list)
     hidden_from_intent: bool = False  # 是否对意图识别隐藏（v1.3+）
+
+    def __post_init__(self) -> None:
+        """Validate trigger patterns at metadata construction time."""
+        _validate_command_patterns(self.patterns)
 
 
 @dataclass(slots=True)
@@ -207,6 +226,10 @@ class PluginCommandGroupDef:
     description: str = ""  # 指令组描述
     examples: list[str] = field(default_factory=list)  # 使用示例
     hidden_from_intent: bool = False  # 是否对意图识别隐藏
+
+    def __post_init__(self) -> None:
+        """Validate trigger patterns at metadata construction time."""
+        _validate_command_patterns(self.patterns)
 
 
 @dataclass(slots=True)
@@ -225,6 +248,603 @@ class PluginParameterDef(ConfigParameter):
 
     position: int = 0  # 位置参数序号
     choices: list[str] | None = None  # 可选值限制
+
+
+_UI_SCHEMA_UNSAFE_NAMES = {"__proto__", "prototype", "constructor"}
+_PARAMETER_CONTRACT_MAX_BYTES = 256 * 1024
+_PARAMETER_CONTRACT_MAX_DEPTH = 16
+_PARAMETER_CONTRACT_MAX_NODES = 4096
+_PARAMETER_CONTRACT_MAX_CONTAINER_ITEMS = 256
+_PARAMETER_CONTRACT_KEYS = (
+    "name",
+    "type",
+    "description",
+    "required",
+    "default",
+    "choices",
+    "fields",
+    "minimum",
+    "maximum",
+    "group",
+    "position",
+)
+_UI_SCHEMA_ID_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
+_UI_SCHEMA_MAX_BYTES = 64 * 1024
+_UI_SCHEMA_MAX_SECTIONS = 16
+_UI_SCHEMA_MAX_PARAMETERS = 128
+_UI_SCHEMA_WIDGET_TYPES = {"text", "url", "path", "code", "textarea", "switch"}
+_UI_SCHEMA_SECRET_NAMES = {
+    "password",
+    "passwords",
+    "secret",
+    "secrets",
+    "token",
+    "tokens",
+    "key",
+    "keys",
+    "api_key",
+    "api_keys",
+    "access_token",
+    "refresh_token",
+    "authorization",
+    "auth",
+    "authentication",
+    "bearer",
+    "client_secret",
+    "credential",
+    "credentials",
+    "session",
+    "session_id",
+}
+_UI_SCHEMA_SECRET_SUFFIXES = (
+    "_token",
+    "_tokens",
+    "_key",
+    "_keys",
+    "_secret",
+    "_secrets",
+    "_password",
+    "_passwords",
+    "_credential",
+    "_credentials",
+    "_auth",
+    "_session",
+)
+_UI_SCHEMA_TOP_KEYS = {"version", "layout", "title", "description", "sections", "parameters"}
+_UI_SCHEMA_SECTION_KEYS = {
+    "id",
+    "title",
+    "description",
+    "parameters",
+    "columns",
+    "collapsed",
+    "tone",
+}
+_UI_SCHEMA_FIELDSET_KEYS = {"id", "title", "description", "fields", "collapsed"}
+_UI_SCHEMA_BASE_PRESENTATION_KEYS = {"label", "help", "span"}
+_UI_SCHEMA_OBJECT_ARRAY_KEYS = {
+    "add_label",
+    "item_placeholder",
+    "empty_title",
+    "empty_description",
+    "item_title_field",
+    "item_fallback_field",
+    "item_subtitle_field",
+    "item_badge_field",
+    "item_status_field",
+    "fields",
+    "fieldsets",
+}
+_UI_SCHEMA_TEXT_LIMITS = {
+    "title": 120,
+    "description": 600,
+    "label": 120,
+    "help": 600,
+    "placeholder": 240,
+    "unit": 32,
+    "true_label": 64,
+    "false_label": 64,
+    "add_label": 120,
+    "item_placeholder": 160,
+    "empty_title": 120,
+    "empty_description": 600,
+}
+
+
+def _validate_bounded_json_tree(
+    raw: Any,
+    *,
+    label: str,
+    max_depth: int,
+    max_nodes: int,
+    max_container_items: int,
+    max_bytes: int,
+) -> bytes:
+    """Validate and encode a finite, bounded JSON tree without recursive descent."""
+    stack = [(raw, 0)]
+    seen_containers: set[int] = set()
+    nodes = 0
+    estimated_bytes = 0
+    while stack:
+        value, depth = stack.pop()
+        nodes += 1
+        if nodes > max_nodes:
+            raise ValueError(f"{label} 节点数量超过安全上限")
+        if depth > max_depth:
+            raise ValueError(f"{label} 嵌套过深")
+        if value is None:
+            estimated_bytes += 4
+        elif type(value) is bool:
+            estimated_bytes += 5
+        elif type(value) is int:
+            estimated_bytes += len(str(value))
+        elif type(value) is float:
+            if not math.isfinite(value):
+                raise ValueError(f"{label} 不能包含非有限数字")
+            estimated_bytes += len(repr(value))
+        elif type(value) is str:
+            estimated_bytes += len(value.encode("utf-8")) + 2
+        elif type(value) in {dict, list}:
+            value_id = id(value)
+            if value_id in seen_containers:
+                raise ValueError(f"{label} 不能包含循环或共享容器引用")
+            seen_containers.add(value_id)
+            if len(value) > max_container_items:
+                raise ValueError(f"{label} 单个容器项目过多")
+            estimated_bytes += 2 + len(value)
+            if type(value) is dict:
+                for key, child in value.items():
+                    if type(key) is not str:
+                        raise ValueError(f"{label} 对象字段名必须是字符串")
+                    estimated_bytes += len(key.encode("utf-8")) + 3
+                    stack.append((child, depth + 1))
+            else:
+                stack.extend((child, depth + 1) for child in value)
+        else:
+            raise ValueError(f"{label} 只能包含 JSON 数据")
+        if estimated_bytes > max_bytes:
+            raise ValueError(f"{label} 超过安全大小上限")
+    try:
+        encoded = json.dumps(
+            raw,
+            ensure_ascii=False,
+            allow_nan=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(f"{label} 必须是有限 JSON 数据") from exc
+    if len(encoded) > max_bytes:
+        raise ValueError(f"{label} 超过安全大小上限")
+    return encoded
+
+
+def plugin_parameter_contract_digest(parameters: Any) -> str:
+    """Return a deterministic integrity digest for the complete parameter contract."""
+    if type(parameters) is not list or len(parameters) > _UI_SCHEMA_MAX_PARAMETERS:
+        raise ValueError("Plugin 参数契约必须是最多 128 项的列表")
+    payload: list[dict[str, Any]] = []
+    for parameter in parameters:
+        if not isinstance(parameter, PluginParameterDef):
+            raise ValueError("Plugin 参数契约包含无效参数对象")
+        payload.append({key: getattr(parameter, key) for key in _PARAMETER_CONTRACT_KEYS})
+    encoded = _validate_bounded_json_tree(
+        payload,
+        label="Plugin 参数契约",
+        max_depth=_PARAMETER_CONTRACT_MAX_DEPTH,
+        max_nodes=_PARAMETER_CONTRACT_MAX_NODES,
+        max_container_items=_PARAMETER_CONTRACT_MAX_CONTAINER_ITEMS,
+        max_bytes=_PARAMETER_CONTRACT_MAX_BYTES,
+    )
+    return hashlib.sha256(encoded).hexdigest()
+
+
+_UI_SCHEMA_INLINE_SECRET_RE = re.compile(
+    r"(?i)(?:authorization\s*:\s*\S+|bearer\s+[A-Za-z0-9._~+/=-]{8,}|"
+    r"(?:password|passphrase|api[_-]?key|access[_-]?token|refresh[_-]?token|"
+    r"client[_-]?secret|credential)\s*[=:]\s*\S+)"
+)
+
+
+def _ui_schema_text_contains_secret(value: str) -> bool:
+    """Reject credentials embedded in otherwise harmless presentation text."""
+    if _UI_SCHEMA_INLINE_SECRET_RE.search(value):
+        return True
+    if not any(marker in value for marker in ("://", "//", "?", "#")):
+        return False
+    authority_starts = [match.end() for match in re.finditer(r"://", value)]
+    if value.startswith("//"):
+        authority_starts.append(2)
+    if any(
+        "@" in (authority := re.split(r"[/\\?#]", value[start:], maxsplit=1)[0])
+        and bool(authority.rsplit("@", 1)[0])
+        for start in authority_starts
+    ):
+        return True
+    components: list[str] = []
+    if "?" in value:
+        query_and_fragment = value.split("?", 1)[1]
+        query, separator, fragment = query_and_fragment.partition("#")
+        components.append(query)
+        if separator:
+            components.append(fragment)
+    elif "#" in value:
+        components.append(value.split("#", 1)[1])
+    if any(
+        _ui_schema_is_secret(key, "str") and bool(query_value)
+        for component in components
+        for key, query_value in parse_qsl(component, keep_blank_values=True)
+    ):
+        return True
+    try:
+        parsed = urlsplit(value)
+    except ValueError:
+        return False
+    return parsed.username is not None or parsed.password is not None
+
+
+def _ui_schema_text(value: Any, *, path: str, limit: int) -> str:
+    if not isinstance(value, str):
+        raise ValueError(f"Plugin ui_schema {path} 必须是字符串")
+    if (
+        len(value) > limit
+        or any(ord(char) < 32 and char not in "\n\t" for char in value)
+        or "<" in value
+        or ">" in value
+        or "${" in value
+        or "{{" in value
+        or "}}" in value
+        or _ui_schema_text_contains_secret(value)
+    ):
+        raise ValueError(f"Plugin ui_schema {path} 超出安全文本限制")
+    return value
+
+
+def _ui_schema_fields(parameter: Any) -> dict[str, dict[str, Any]]:
+    raw_fields = getattr(parameter, "fields", None)
+    if not isinstance(raw_fields, list):
+        return {}
+    if len(raw_fields) > _UI_SCHEMA_MAX_PARAMETERS:
+        raise ValueError("Plugin ui_schema 所引用的子字段数量超过安全上限")
+    result: dict[str, dict[str, Any]] = {}
+    for raw_field in raw_fields:
+        if not isinstance(raw_field, dict):
+            continue
+        name = raw_field.get("name")
+        if (
+            not isinstance(name, str)
+            or not name
+            or name in _UI_SCHEMA_UNSAFE_NAMES
+            or name in result
+        ):
+            raise ValueError("Plugin ui_schema 所引用的子字段声明存在歧义")
+        result[name] = raw_field
+    return result
+
+
+def _ui_schema_is_secret(name: Any, parameter_type: str) -> bool:
+    normalized = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", str(name))
+    normalized = re.sub(r"[^a-z0-9]+", "_", normalized.casefold()).strip("_")
+    return (
+        parameter_type in {"password", "secret"}
+        or normalized in _UI_SCHEMA_SECRET_NAMES
+        or any(normalized.endswith(suffix) for suffix in _UI_SCHEMA_SECRET_SUFFIXES)
+    )
+
+
+def _ui_schema_presentation_keys(
+    parameter_type: str,
+    *,
+    object_array: bool,
+    secret: bool,
+) -> set[str]:
+    allowed = set(_UI_SCHEMA_BASE_PRESENTATION_KEYS)
+    if secret:
+        return allowed
+    if parameter_type in {"str", "string"}:
+        allowed.update({"placeholder", "widget"})
+    elif parameter_type in {"int", "float", "number"}:
+        allowed.add("unit")
+    elif parameter_type in {"bool", "boolean"}:
+        allowed.update({"widget", "true_label", "false_label"})
+    elif parameter_type in {"list", "array"}:
+        allowed.update({"add_label", "item_placeholder"})
+    elif parameter_type == "object_array" and object_array:
+        allowed.update(_UI_SCHEMA_OBJECT_ARRAY_KEYS)
+    return allowed
+
+
+def _normalize_ui_field_presentation(
+    raw: Any,
+    *,
+    parameter_type: str,
+    path: str,
+    object_array: bool = False,
+    secret: bool = False,
+) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        raise ValueError(f"Plugin ui_schema {path} 必须是对象")
+    allowed = _ui_schema_presentation_keys(
+        parameter_type,
+        object_array=object_array,
+        secret=secret,
+    )
+    unknown = set(raw) - allowed
+    if unknown:
+        raise ValueError(f"Plugin ui_schema {path} 包含不支持字段：{sorted(unknown)[0]}")
+    result: dict[str, Any] = {}
+    for key, value in raw.items():
+        if key in _UI_SCHEMA_TEXT_LIMITS:
+            result[key] = _ui_schema_text(
+                value,
+                path=f"{path}.{key}",
+                limit=_UI_SCHEMA_TEXT_LIMITS[key],
+            )
+    if "span" in raw:
+        span = raw["span"]
+        if type(span) is not int or not 1 <= span <= 12:
+            raise ValueError(f"Plugin ui_schema {path}.span 必须是 1 到 12 的整数")
+        result["span"] = span
+    if "widget" in raw:
+        widget = raw["widget"]
+        compatible = (widget == "switch" and parameter_type in {"bool", "boolean"}) or (
+            widget != "switch"
+            and widget in _UI_SCHEMA_WIDGET_TYPES
+            and parameter_type in {"str", "string"}
+        )
+        if not compatible:
+            raise ValueError(f"Plugin ui_schema {path}.widget 与参数类型不兼容")
+        result["widget"] = widget
+    return result
+
+
+def normalize_plugin_ui_schema(
+    raw: Any,
+    parameters: list[PluginParameterDef],
+) -> dict[str, Any]:
+    """Return a bounded presentation-only Plugin UI schema.
+
+    The schema may change labels and layout, but it cannot redefine parameter
+    types, defaults, requirements, identities, choices, or secret semantics.
+    """
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise ValueError("Plugin ui_schema 必须是对象")
+    if not raw:
+        return {}
+    encoded = _validate_bounded_json_tree(
+        raw,
+        label="Plugin ui_schema",
+        max_depth=8,
+        max_nodes=1024,
+        max_container_items=_UI_SCHEMA_MAX_PARAMETERS,
+        max_bytes=_UI_SCHEMA_MAX_BYTES,
+    )
+    schema = json.loads(encoded)
+    if any(
+        depth > 8
+        or (
+            isinstance(node, dict)
+            and any(not isinstance(key, str) or key in _UI_SCHEMA_UNSAFE_NAMES for key in node)
+        )
+        for node, depth in _walk_ui_schema(schema)
+    ):
+        raise ValueError("Plugin ui_schema 包含不安全字段名称或嵌套过深")
+    unknown_top = set(schema) - _UI_SCHEMA_TOP_KEYS
+    if unknown_top:
+        raise ValueError(f"Plugin ui_schema 包含不支持字段：{sorted(unknown_top)[0]}")
+    version = schema.get("version")
+    if type(version) is not int or version != 1:
+        raise ValueError("Plugin ui_schema.version 目前只支持 1")
+    layout = schema.get("layout", "standard")
+    if layout not in {"standard", "wide"}:
+        raise ValueError("Plugin ui_schema.layout 必须是 standard 或 wide")
+
+    parameter_names = [parameter.name for parameter in parameters]
+    if (
+        len(parameters) > _UI_SCHEMA_MAX_PARAMETERS
+        or len(parameter_names) != len(set(parameter_names))
+        or any(
+            not isinstance(name, str) or not name or name in _UI_SCHEMA_UNSAFE_NAMES
+            for name in parameter_names
+        )
+    ):
+        raise ValueError("Plugin ui_schema 参数声明存在歧义或超过安全上限")
+    parameter_map = {parameter.name: parameter for parameter in parameters}
+    result: dict[str, Any] = {"version": 1, "layout": layout}
+    for key in ("title", "description"):
+        if key in schema:
+            result[key] = _ui_schema_text(
+                schema[key],
+                path=key,
+                limit=_UI_SCHEMA_TEXT_LIMITS[key],
+            )
+
+    raw_sections = schema.get("sections", [])
+    if not isinstance(raw_sections, list) or len(raw_sections) > _UI_SCHEMA_MAX_SECTIONS:
+        raise ValueError("Plugin ui_schema.sections 必须是最多 16 项的列表")
+    section_ids: set[str] = set()
+    section_parameters: set[str] = set()
+    sections: list[dict[str, Any]] = []
+    for index, raw_section in enumerate(raw_sections):
+        path = f"sections[{index}]"
+        if not isinstance(raw_section, dict):
+            raise ValueError(f"Plugin ui_schema {path} 必须是对象")
+        unknown = set(raw_section) - _UI_SCHEMA_SECTION_KEYS
+        if unknown:
+            raise ValueError(f"Plugin ui_schema {path} 包含不支持字段：{sorted(unknown)[0]}")
+        section_id = raw_section.get("id")
+        if not isinstance(section_id, str) or not _UI_SCHEMA_ID_RE.fullmatch(section_id):
+            raise ValueError(f"Plugin ui_schema {path}.id 无效")
+        if section_id in section_ids:
+            raise ValueError(f"Plugin ui_schema 包含重复分区 ID：{section_id}")
+        section_ids.add(section_id)
+        references = raw_section.get("parameters", [])
+        if not isinstance(references, list) or any(
+            not isinstance(item, str) for item in references
+        ):
+            raise ValueError(f"Plugin ui_schema {path}.parameters 必须是字符串列表")
+        if len(references) != len(set(references)):
+            raise ValueError(f"Plugin ui_schema {path}.parameters 包含重复参数")
+        for reference in references:
+            if reference not in parameter_map:
+                raise ValueError(f"Plugin ui_schema 引用了未声明参数：{reference}")
+            if reference in section_parameters:
+                raise ValueError(f"Plugin ui_schema 参数重复出现在分区中：{reference}")
+            section_parameters.add(reference)
+        columns = raw_section.get("columns", 1)
+        if type(columns) is not int or columns not in {1, 2}:
+            raise ValueError(f"Plugin ui_schema {path}.columns 必须是 1 或 2")
+        collapsed = raw_section.get("collapsed", False)
+        if type(collapsed) is not bool:
+            raise ValueError(f"Plugin ui_schema {path}.collapsed 必须是布尔值")
+        tone = raw_section.get("tone", "default")
+        if tone not in {"default", "accent", "muted"}:
+            raise ValueError(f"Plugin ui_schema {path}.tone 无效")
+        section: dict[str, Any] = {
+            "id": section_id,
+            "parameters": list(references),
+            "columns": columns,
+            "collapsed": collapsed,
+            "tone": tone,
+        }
+        for key in ("title", "description"):
+            if key in raw_section:
+                section[key] = _ui_schema_text(
+                    raw_section[key],
+                    path=f"{path}.{key}",
+                    limit=_UI_SCHEMA_TEXT_LIMITS[key],
+                )
+        sections.append(section)
+    result["sections"] = sections
+
+    raw_presentations = schema.get("parameters", {})
+    if (
+        not isinstance(raw_presentations, dict)
+        or len(raw_presentations) > _UI_SCHEMA_MAX_PARAMETERS
+    ):
+        raise ValueError("Plugin ui_schema.parameters 必须是有界对象")
+    presentations: dict[str, Any] = {}
+    for parameter_name, raw_presentation in raw_presentations.items():
+        parameter = parameter_map.get(parameter_name)
+        if parameter is None:
+            raise ValueError(f"Plugin ui_schema 引用了未声明参数：{parameter_name}")
+        parameter_type = str(parameter.type or "str").casefold()
+        path = f"parameters.{parameter_name}"
+        presentation = _normalize_ui_field_presentation(
+            raw_presentation,
+            parameter_type=parameter_type,
+            path=path,
+            object_array=parameter_type == "object_array",
+            secret=_ui_schema_is_secret(parameter_name, parameter_type),
+        )
+        if parameter_type == "object_array":
+            field_map = _ui_schema_fields(parameter)
+            scalar_types = {"str", "string", "int", "float", "number", "bool", "boolean"}
+            for key in (
+                "item_title_field",
+                "item_fallback_field",
+                "item_subtitle_field",
+                "item_badge_field",
+                "item_status_field",
+            ):
+                if key not in raw_presentation:
+                    continue
+                reference = raw_presentation[key]
+                field = field_map.get(reference) if isinstance(reference, str) else None
+                field_type = str(field.get("type", "str")).casefold() if field else ""
+                if (
+                    field is None
+                    or field_type not in scalar_types
+                    or _ui_schema_is_secret(reference, field_type)
+                ):
+                    raise ValueError(f"Plugin ui_schema {path}.{key} 引用了无效子字段")
+                if key == "item_status_field" and field_type not in {"bool", "boolean"}:
+                    raise ValueError(f"Plugin ui_schema {path}.{key} 必须引用 bool 子字段")
+                presentation[key] = reference
+            raw_fields = raw_presentation.get("fields", {})
+            if not isinstance(raw_fields, dict):
+                raise ValueError(f"Plugin ui_schema {path}.fields 必须是对象")
+            field_presentations: dict[str, Any] = {}
+            for field_name, raw_field_ui in raw_fields.items():
+                field = field_map.get(field_name)
+                if field is None:
+                    raise ValueError(f"Plugin ui_schema {path}.fields 引用了未知子字段：{field_name}")
+                field_presentations[field_name] = _normalize_ui_field_presentation(
+                    raw_field_ui,
+                    parameter_type=str(field.get("type", "str")).casefold(),
+                    path=f"{path}.fields.{field_name}",
+                    secret=_ui_schema_is_secret(
+                        field_name,
+                        str(field.get("type", "str")).casefold(),
+                    ),
+                )
+            presentation["fields"] = field_presentations
+            raw_fieldsets = raw_presentation.get("fieldsets", [])
+            if not isinstance(raw_fieldsets, list) or len(raw_fieldsets) > 16:
+                raise ValueError(f"Plugin ui_schema {path}.fieldsets 必须是最多 16 项的列表")
+            fieldset_ids: set[str] = set()
+            assigned_fields: set[str] = set()
+            fieldsets: list[dict[str, Any]] = []
+            for index, raw_fieldset in enumerate(raw_fieldsets):
+                fieldset_path = f"{path}.fieldsets[{index}]"
+                if not isinstance(raw_fieldset, dict):
+                    raise ValueError(f"Plugin ui_schema {fieldset_path} 必须是对象")
+                unknown = set(raw_fieldset) - _UI_SCHEMA_FIELDSET_KEYS
+                if unknown:
+                    raise ValueError(
+                        f"Plugin ui_schema {fieldset_path} 包含不支持字段：{sorted(unknown)[0]}"
+                    )
+                fieldset_id = raw_fieldset.get("id")
+                if not isinstance(fieldset_id, str) or not _UI_SCHEMA_ID_RE.fullmatch(fieldset_id):
+                    raise ValueError(f"Plugin ui_schema {fieldset_path}.id 无效")
+                if fieldset_id in fieldset_ids:
+                    raise ValueError(f"Plugin ui_schema 包含重复字段组 ID：{fieldset_id}")
+                fieldset_ids.add(fieldset_id)
+                references = raw_fieldset.get("fields", [])
+                if not isinstance(references, list) or any(
+                    not isinstance(item, str) for item in references
+                ):
+                    raise ValueError(f"Plugin ui_schema {fieldset_path}.fields 必须是字符串列表")
+                if len(references) != len(set(references)):
+                    raise ValueError(f"Plugin ui_schema {fieldset_path}.fields 包含重复字段")
+                for reference in references:
+                    if reference not in field_map:
+                        raise ValueError(f"Plugin ui_schema 引用了未知子字段：{reference}")
+                    if reference in assigned_fields:
+                        raise ValueError(f"Plugin ui_schema 子字段重复出现在字段组中：{reference}")
+                    assigned_fields.add(reference)
+                collapsed = raw_fieldset.get("collapsed", False)
+                if type(collapsed) is not bool:
+                    raise ValueError(f"Plugin ui_schema {fieldset_path}.collapsed 必须是布尔值")
+                fieldset: dict[str, Any] = {
+                    "id": fieldset_id,
+                    "fields": list(references),
+                    "collapsed": collapsed,
+                }
+                for key in ("title", "description"):
+                    if key in raw_fieldset:
+                        fieldset[key] = _ui_schema_text(
+                            raw_fieldset[key],
+                            path=f"{fieldset_path}.{key}",
+                            limit=_UI_SCHEMA_TEXT_LIMITS[key],
+                        )
+                fieldsets.append(fieldset)
+            presentation["fieldsets"] = fieldsets
+        presentations[parameter_name] = presentation
+    result["parameters"] = presentations
+    return result
+
+
+def _walk_ui_schema(value: Any) -> list[tuple[Any, int]]:
+    nodes = [(value, 0)]
+    for node, depth in nodes:
+        if isinstance(node, dict):
+            nodes.extend((child, depth + 1) for child in node.values())
+        elif isinstance(node, list):
+            nodes.extend((child, depth + 1) for child in node)
+    return nodes
 
 
 @dataclass(slots=True)
@@ -285,6 +905,7 @@ class PluginDefinition:
 
     # ── 参数 ──
     parameters: list[PluginParameterDef] = field(default_factory=list)
+    ui_schema: dict[str, Any] = field(default_factory=dict, kw_only=True)
     natural_language: PluginNaturalLangDef | None = None
 
     # ── 权限与渲染 ──
@@ -302,6 +923,30 @@ class PluginDefinition:
     source_path: Path | None = None  # 插件文件夹路径
     _plugin_class: type | None = field(default=None, repr=False)  # PluginBase 子类
     user_settings: dict[str, Any] = field(default_factory=dict, repr=False)  # 运行时用户配置
+    _parameter_contract_digest: str = field(default="", init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        """Seal the data contract and fail closed for invalid presentation metadata."""
+        self.seal_parameter_contract()
+        try:
+            self.ui_schema = normalize_plugin_ui_schema(self.ui_schema, self.parameters)
+        except (TypeError, ValueError, OverflowError, RecursionError):
+            # A broken optional presentation declaration must not make an
+            # otherwise usable plugin disappear.  The WebUI will use its
+            # generic parameter form instead.
+            self.ui_schema = {}
+
+    def seal_parameter_contract(self) -> None:
+        """Record the canonical parameter contract after a trusted loader merge."""
+        self._parameter_contract_digest = plugin_parameter_contract_digest(self.parameters)
+
+    def parameter_contract_is_intact(self) -> bool:
+        """Return whether cached parameter metadata still matches its sealed contract."""
+        try:
+            current = plugin_parameter_contract_digest(self.parameters)
+        except (TypeError, ValueError, OverflowError):
+            return False
+        return bool(self._parameter_contract_digest) and current == self._parameter_contract_digest
 
     @property
     def all_patterns(self) -> list[tuple[str, str, str]]:
@@ -417,6 +1062,7 @@ class PluginDefinition:
             command_groups=command_groups,
             events=events,
             parameters=parameters,
+            ui_schema=data.get("ui_schema", {}),
             natural_language=nl_def,
             permissions=permissions,
             render=render,
@@ -605,6 +1251,7 @@ class PluginDefinition:
             command_groups=command_groups,
             events=events,
             parameters=parameters,
+            ui_schema=getattr(plugin_cls, "_plugin_ui_schema", {}) or {},
             natural_language=nl_def,
             permissions=permissions,
             dependencies=getattr(plugin_cls, "_plugin_dependencies", []) or [],

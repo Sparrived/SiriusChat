@@ -200,7 +200,14 @@ class PluginRegistry:
         Returns:
             MatchResult 或 None
         """
-        from sirius_pulse.plugins.lexer import Lexer, PluginMatcher, Tokenizer
+        from sirius_pulse.plugins.lexer import (
+            Lexer,
+            MatchResult,
+            PluginMatcher,
+            Tokenizer,
+            _is_explicit_prefix_pattern,
+            _prefix_pattern_matches,
+        )
 
         # 精确指令路径：尝试 Tokenizer → Lexer
         lexer = Lexer(Tokenizer())
@@ -213,40 +220,54 @@ class PluginRegistry:
         is_explicit_command = lexed is not None
         effective_include_hidden = include_hidden or is_explicit_command
 
+        stripped = text.strip()
         if lexed is not None:
-            # 按指令名查找 Plugin
-            for pattern, pat_type, plugin_name, cmd_name in self._commands_index:
-                if not effective_include_hidden and self._is_pattern_hidden(plugin_name, cmd_name):
-                    continue
-                if pat_type == "prefix" and text.strip().startswith(pattern):
-                    definition = self._definitions.get(plugin_name)
-                    if definition is not None:
-                        from sirius_pulse.plugins.lexer import MatchResult
+            explicit_matches = [
+                (pattern, pat_type, plugin_name, cmd_name)
+                for pattern, pat_type, plugin_name, cmd_name in self._commands_index
+                if pat_type == "prefix"
+                and _is_explicit_prefix_pattern(pattern)
+                and _prefix_pattern_matches(stripped, pattern)
+                and plugin_name in self._definitions
+            ]
+            if explicit_matches:
+                pattern, pat_type, plugin_name, cmd_name = max(
+                    explicit_matches, key=lambda item: len(item[0])
+                )
+                return MatchResult(
+                    plugin_name=plugin_name,
+                    command_name=cmd_name,
+                    pattern=pattern,
+                    pattern_type=pat_type,
+                    confidence=1.0,
+                    lexed=lexed,
+                )
 
-                        return MatchResult(
-                            plugin_name=plugin_name,
-                            command_name=cmd_name,
-                            pattern=pattern,
-                            pattern_type=pat_type,
-                            confidence=1.0,
-                            lexed=lexed,
-                        )
-
-        # 关键词/正则路径：遍历索引
+        # Preserve registration-order semantics for non-explicit prefix, keyword,
+        # and regex triggers. Explicit patterns are handled only by the strict path above.
         matcher = PluginMatcher()
         for pattern, pat_type, plugin_name, cmd_name in self._commands_index:
+            if pat_type == "prefix" and _is_explicit_prefix_pattern(pattern):
+                continue
             if not effective_include_hidden and self._is_pattern_hidden(plugin_name, cmd_name):
                 continue
-            definition = self._definitions.get(plugin_name)
-            if definition is None:
+            if plugin_name not in self._definitions:
                 continue
-            # 构建临时 PluginCommandDef 列表
-            for cmd in definition.commands:
-                result = matcher.match(
-                    text, [cmd], plugin_name, lexer=(lexer if pat_type == "prefix" else None)
-                )
-                if result is not None:
-                    return result
+            from sirius_pulse.plugins.models import PluginCommandDef
+
+            command = PluginCommandDef(
+                name=cmd_name,
+                patterns=[pattern],
+                pattern_type=pat_type,
+            )
+            result = matcher.match(
+                text,
+                [command],
+                plugin_name,
+                lexer=(lexer if pat_type == "prefix" else None),
+            )
+            if result is not None:
+                return result
 
         return None
 

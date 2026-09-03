@@ -353,7 +353,9 @@ git submodule update --init --recursive
 
 GitHub 监控已从内置 Tool 迁为 `github_monitor` Plugin，提供 Poll/Webhook、聚合通知、Compare API 丰富信息和可选截图。GitHub Token 与 Webhook Secret 只允许通过 Plugin 中配置的 `github_token_env` / `webhook_secret_env` 变量名引用，再由实际 Persona Worker 环境注入；不要把密钥写入 WebUI settings 或 `plugins/_config.json`。Docker 的 `.env` 不会自动进入容器，变量名必须在 Compose `environment`/override 中显式映射。详见 [`plugins/github_monitor/README.md`](plugins/github_monitor/README.md)。
 
-例如，Sub2API 监控插件支持 `/sub2api status`、`/sub2api poll`、`/sub2api subscriptions` 和 `/sub2api rates`；站点、登录/API 路径以及**必填**的订阅与倍率监控路径均为运行时配置，插件不写死监控端点或站点 URL。`SUB2API_EMAIL` 和 `SUB2API_PASSWORD` 是支持的凭据机制，应只由启动进程环境提供，密码不得通过 WebUI 或插件 settings 保存。`notify_group_ids` 是显式通知允许列表；`run_on_persona` 必须指定唯一轮询 Persona，留空会禁用后台和手动轮询。首个快照及来源变更静默；投递失败或未确认时会保留每群 ACK 状态并重试未确认群，框架确认仅可能表示适配器/平台已受理或确认发送，并不代表用户已阅读。详见 [`plugins/sub2api_monitor/README.md`](plugins/sub2api_monitor/README.md)。
+Sub2API 多站监控 `0.3.0`（需要框架 `1.3.0+`）可在 WebUI 中通过中文分区和站点卡片维护 `sources`：每个稳定 `id` 派生 `SUB2API_<ID>_EMAIL` / `SUB2API_<ID>_PASSWORD`，`display_name` 只负责通知与图表展示。插件作者一次性声明字段身份、校验和展示 Schema，部署者只填写站点参数；Schema 不会写入 settings。站点、登录/API 路径以及**必填**的订阅与倍率监控路径均为运行时配置，插件不写死站点或监控端点。全局 `notify_group_ids` 是显式允许列表，各站可选择继承并合并自己的列表；`run_on_persona` 必须指定唯一轮询 Persona，留空会禁用后台和手动轮询，删除最后一张卡片保存的显式 `sources: []` 会禁用全部站点且不回退旧版顶层配置。命令支持 ID、唯一显示名称或 `all` 选择器，并新增 `/sub2api report` 多站运行图。凭据只允许进入实际 Persona Worker 环境，不能通过 WebUI/settings 保存。
+
+首个快照及来源变化静默；投递失败或未确认时会保留站点隔离的逐群 ACK，只重试未确认群，框架确认仅可能表示适配器/平台已受理或确认发送，并不代表用户已阅读。自动变化图依赖 Playwright Chromium，渲染失败会降级为权威文字通知；非 Docker 环境需安装 Chromium，官方镜像已预装。旧版单站配置在没有 `sources` 键时继续使用 `SUB2API_EMAIL` / `SUB2API_PASSWORD` 和旧状态；切换到显式 `sources` 时，仅在恰好有一个可用且凭据齐全的目标、目标尚无新状态，并且旧顶层集合的 endpoint/account/timezone 指纹逐集合精确匹配时，才确定性迁移匹配集合的 snapshot、时间状态和 ACK。多站、已有新状态或指纹不匹配时绝不猜测，旧顶层数据始终保留。命令、迁移、安全和排障详见 [`plugins/sub2api_monitor/README.md`](plugins/sub2api_monitor/README.md)。
 
 #### Docker 中的外部插件
 

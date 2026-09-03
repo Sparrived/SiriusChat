@@ -15,6 +15,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from sirius_pulse.adapters.base import DeliveryUncertainError
+
 if TYPE_CHECKING:
     from sirius_pulse.core.engine_core import _EmotionalGroupChatEngineBase
 
@@ -270,7 +272,8 @@ class EngineSticker:
             }
         )
         if group_id.startswith("private_"):
-            return await adapter.send_private_msg(group_id.replace("private_", ""), msg)
+            user_id = group_id.removeprefix("private_").removeprefix("qq_")
+            return await adapter.send_private_msg(user_id, msg)
         return await adapter.send_group_msg(group_id, msg)
 
     @staticmethod
@@ -278,7 +281,7 @@ class EngineSticker:
         if not isinstance(result, dict):
             return False
         if result.get("status") is not None:
-            return result.get("status") == "ok"
+            return result.get("status") in {"ok", "async"}
         if "ok" in result:
             return bool(result.get("ok"))
         if "success" in result:
@@ -286,18 +289,24 @@ class EngineSticker:
         return True
 
     async def _recall_message(self, adapter: Any, result: dict[str, Any]) -> None:
-        """根据发送接口返回的 message_id 调用适配器撤回接口。"""
+        """Recall a confirmed missend, raising when reversal is not confirmed."""
         data = result.get("data", {}) if isinstance(result, dict) else {}
         message_id = data.get("message_id") if isinstance(data, dict) else None
         if message_id is None:
-            logger.warning("错发表情包撤回失败：发送结果缺少 message_id")
-            return
-        await adapter.delete_message(str(message_id))
+            raise RuntimeError("错发表情包发送成功但结果缺少 message_id")
+        recall_result = await adapter.delete_message(str(message_id))
+        has_confirmation = isinstance(recall_result, dict) and any(
+            key in recall_result for key in ("status", "ok", "success")
+        )
+        if not has_confirmation or not self._send_result_ok(recall_result):
+            raise RuntimeError("错发表情包撤回接口未确认成功")
 
     async def _send_stickers_by_names(
         self,
         group_id: str,
         names: list[str],
+        *,
+        adapter: Any | None = None,
     ) -> dict[str, Any]:
         """从模型选中的名称中随机挑一个表情包发送（sub_type=1）。"""
         engine = self._engine
@@ -305,7 +314,7 @@ class EngineSticker:
         if intended is None:
             return {"success": False, "error": "没有匹配的表情包文件"}
 
-        adapter = getattr(engine, "_adapter", None)
+        adapter = adapter or getattr(engine, "_adapter", None)
         if adapter is None:
             return {"success": False, "error": "没有可用的 adapter"}
 
@@ -350,23 +359,20 @@ class EngineSticker:
                     "sticker_name": wrong.name,
                     "result": wrong_result,
                 }
-            await asyncio.sleep(STICKER_MISSEND_RECALL_DELAY_SECONDS)
-            await self._recall_message(adapter, wrong_result)
-            send_result = await self._send_sticker_message(adapter, group_id, intended)
-            if not self._send_result_ok(send_result):
-                logger.warning(
-                    "纠正表情包发送接口返回失败: name=%s group=%s result=%s",
-                    intended.name,
-                    group_id,
-                    send_result,
-                )
-                return {
-                    "success": False,
-                    "error": "adapter_send_failed",
-                    "sticker_name": intended.name,
-                    "wrong_sticker_name": wrong.name,
-                    "result": send_result,
-                }
+            try:
+                await asyncio.sleep(STICKER_MISSEND_RECALL_DELAY_SECONDS)
+                await self._recall_message(adapter, wrong_result)
+                send_result = await self._send_sticker_message(adapter, group_id, intended)
+                if not self._send_result_ok(send_result):
+                    raise RuntimeError("纠正表情包发送接口未确认成功")
+            except asyncio.CancelledError:
+                # The caller's proactive-delivery fence classifies cancellation
+                # after the confirmed missend as terminal uncertainty.
+                raise
+            except DeliveryUncertainError:
+                raise
+            except Exception as exc:
+                raise DeliveryUncertainError("错发表情包已确认送达，但撤回或纠正结果未完整确认") from exc
             logger.info(
                 "触发表情包错发: wrong=%s intended=%s group=%s",
                 wrong.file_path.name,
@@ -381,6 +387,8 @@ class EngineSticker:
                 "file_path": str(intended.file_path),
                 "wrong_file_path": str(wrong.file_path),
             }
+        except DeliveryUncertainError:
+            raise
         except Exception as exc:
             logger.warning("表情包发送失败: %s %s", intended.file_path.name, exc)
             return {"success": False, "error": str(exc), "file_path": str(intended.file_path)}

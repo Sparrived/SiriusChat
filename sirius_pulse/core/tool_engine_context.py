@@ -243,7 +243,7 @@ class ToolEngineContextImpl:
                 sticker_names=sticker_names,
                 poke_user_ids=poke_user_ids,
             )
-            return bool(result)
+            return result is True
 
         # 兼容旧宿主：公共引擎方法不存在时保留原有实现。
         adapter = adapter_type or self._engine._current_adapter_type

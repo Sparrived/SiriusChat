@@ -223,6 +223,30 @@ class Helpers:
         subscriber_count = getattr(event_bus, "subscriber_count", None)
         if isinstance(subscriber_count, int) and subscriber_count <= 0:
             return False
+        selected_adapter_route = ""
+        if group_id.startswith("private_"):
+            route_resolver = getattr(self._engine, "resolve_adapter_route_ids", None)
+            if callable(route_resolver):
+                try:
+                    route_type = requested_adapter or (
+                        resolved_adapter_types[0] if len(resolved_adapter_types) == 1 else ""
+                    )
+                    routes = route_resolver(group_id, route_type)
+                    if isinstance(routes, str):
+                        routes = [routes]
+                    route_ids = sorted(
+                        {str(value).strip() for value in (routes or []) if str(value).strip()}
+                    )
+                    if not route_ids:
+                        return False
+                    selected_adapter_route = route_ids[0]
+                except Exception:
+                    logger.warning(
+                        "解析主动私聊 adapter 实例路由失败，已丢弃消息",
+                        exc_info=True,
+                    )
+                    return False
+
         receipt: dict[str, Any] | None = None
         if bool(getattr(event_bus, "supports_delivery_ack", False)):
             expected = resolved_adapter_types or ([requested_adapter] if requested_adapter else [])
@@ -241,6 +265,10 @@ class Helpers:
                     expected_counts = {}
             for adapter in expected:
                 expected_counts.setdefault(adapter, 1)
+            if selected_adapter_route:
+                selected_type = selected_adapter_route.split(":", 1)[0]
+                expected = [selected_type]
+                expected_counts = {selected_type: 1}
             receipt = {
                 "expected": expected,
                 "expected_counts": expected_counts,
@@ -257,6 +285,7 @@ class Helpers:
             reply_references=reply_references,
             sticker_names=sticker_names,
             poke_user_ids=poke_user_ids,
+            adapter_route_id=selected_adapter_route,
         )
         if receipt is not None:
             event.data["_delivery_ack"] = receipt
@@ -291,6 +320,7 @@ class Helpers:
         sticker_names: list[str] | None,
         poke_user_ids: list[str] | None,
         adapter_types: list[str] | None = None,
+        adapter_route_id: str = "",
     ) -> Any:
         from sirius_pulse.core.events import SessionEvent, SessionEventType
 
@@ -306,6 +336,8 @@ class Helpers:
         }
         if adapter_types:
             data["adapter_types"] = list(adapter_types)
+        if adapter_route_id:
+            data["adapter_route_id"] = adapter_route_id
         return SessionEvent(type=SessionEventType.REMINDER_TRIGGERED, data=data)
 
     def get_active_groups(self) -> list[str]:

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import shutil
+import subprocess
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -29,6 +32,7 @@ from sirius_pulse.webui.server_plugin_api import (
     _masked_settings,
     _request_plugin_reload,
     _settings_update_without_masked_secrets,
+    _validate_settings_schema,
     api_plugin_config_get,
     api_plugin_config_post,
     api_plugin_detail_get,
@@ -50,6 +54,431 @@ def _route_snapshot(app: web.Application) -> set[tuple[str, str]]:
             continue
         routes.add((route.method, path))
     return routes
+
+
+def test_webui_form_constructor_clones_settings_and_keeps_stable_object_row_identity():
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node.js is not installed")
+    source_path = (
+        Path(__file__).resolve().parents[1] / "sirius_pulse" / "webui" / "static" / "components.js"
+    )
+    script = f"""
+      import assert from 'node:assert/strict';
+      import {{
+        DynamicConfigForm,
+      }} from {json.dumps(source_path.as_uri())};
+
+      // Settings are cloned immediately; later caller mutations must not leak.
+      const original = {{ tags: ['a'], options: {{ flags: [true] }} }};
+      const form = new DynamicConfigForm({{
+        parameters: [
+          {{ name: 'tags', type: 'list' }},
+          {{ name: 'options', type: 'json' }},
+          {{ name: 'schedules', type: 'schedule' }},
+          {{
+            name: 'sources',
+            type: 'object_array',
+            fields: [
+              {{ name: 'id', type: 'str', identity: true, default: '' }},
+              {{ name: 'secret_key', type: 'password' }},
+            ],
+          }},
+        ],
+        settings: {{
+          ...original,
+          schedules: [{{ time: '08:00', duration: 90 }}],
+          sources: [{{ id: 'a', secret_key: 'must-be-dropped' }}],
+        }},
+      }});
+      original.tags.push('b');
+      original.options.flags.push(false);
+      assert.deepEqual(JSON.parse(JSON.stringify(form.settings.tags)), ['a']);
+      assert.deepEqual(JSON.parse(JSON.stringify(form.settings.options)), {{ flags: [true] }});
+
+      // Declared schedule parameters are copied without aliasing the input.
+      const declared = form._scheduleData.schedules;
+      declared[0].time = '23:59';
+      assert.equal(form.settings.schedules[0].time, '08:00');
+
+      // Legacy schedule-shaped settings still initialize the schedule editor.
+      const legacy = new DynamicConfigForm({{
+        parameters: [],
+        settings: {{ schedule: [{{ time: '22:00', duration: 1440 }}] }},
+      }});
+      assert.deepEqual(JSON.parse(JSON.stringify(legacy._scheduleData.schedule)), [
+        {{ time: '22:00', duration: 1440 }},
+      ]);
+
+      // Object-array rows are normalized against the executable field
+      // contract: secret fields drop, stable row identity survives rerenders.
+      const rows = form.settings.sources;
+      assert.deepEqual(JSON.parse(JSON.stringify(rows)), [{{ id: 'a' }}]);
+      const firstId = form._objectRowStateId(rows[0], 0);
+      assert.equal(form._objectRowStateId(rows[0], 0), firstId);
+      assert.equal(form._objectRowIndex('sources', firstId, 99), 0);
+    """
+
+    completed = subprocess.run(
+        [node, "--input-type=module", "-e", script],
+        capture_output=True,
+        check=False,
+        text=True,
+        timeout=5,
+    )
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_webui_object_array_defaults_are_safe_independent_and_persistable():
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node.js is not installed")
+    source_path = (
+        Path(__file__).resolve().parents[1] / "sirius_pulse" / "webui" / "static" / "components.js"
+    )
+    script = f"""
+      import assert from 'node:assert/strict';
+      import {{
+        createObjectArrayItem,
+        DynamicConfigForm,
+        parseConfigNumber,
+      }} from {json.dumps(source_path.as_uri())};
+
+      const fields = [
+        {{ name: 'name', type: 'str', default: '' }},
+        {{ name: 'enabled', type: 'bool', default: true }},
+        {{ name: 'disabled', type: 'boolean', default: false }},
+        {{ name: 'timeout', type: 'number', default: 0 }},
+        {{ name: 'nullable', type: 'number' }},
+        {{ name: 'groups', type: 'list', default: ['base'] }},
+        {{ name: 'options', type: 'json', default: {{ flags: [false] }} }},
+        {{ name: 'repository_token', type: 'password', default: 'row-secret' }},
+        {{ name: 'clientSecret', type: 'str', default: 'mislabeled-secret' }},
+        {{ name: '__proto__', type: 'json', default: {{ polluted: true }} }},
+        {{ name: 'prototype', type: 'str', default: 'bad' }},
+        {{ name: 'constructor', type: 'str', default: 'bad' }},
+      ];
+      const first = createObjectArrayItem(fields);
+      const second = createObjectArrayItem(fields);
+      first.groups.push('changed');
+      first.options.flags.push(true);
+
+      assert.equal(Object.getPrototypeOf(first), null);
+      assert.deepEqual(JSON.parse(JSON.stringify(first)), {{
+        name: '',
+        enabled: true,
+        disabled: false,
+        timeout: 0,
+        groups: ['base', 'changed'],
+        options: {{ flags: [false, true] }},
+      }});
+      assert.deepEqual(JSON.parse(JSON.stringify(second)), {{
+        name: '',
+        enabled: true,
+        disabled: false,
+        timeout: 0,
+        groups: ['base'],
+        options: {{ flags: [false] }},
+      }});
+      assert.equal(Object.prototype.polluted, undefined);
+      assert.equal(parseConfigNumber(''), undefined);
+      assert.equal(parseConfigNumber('0'), 0);
+
+      globalThis.document = {{
+        getElementById: () => ({{ querySelectorAll: () => [] }}),
+      }};
+      const form = new DynamicConfigForm({{
+        containerId: 'plugin-form',
+        parameters: [{{
+          name: 'repos',
+          type: 'object_array',
+          fields,
+          default: [{{
+            name: 'starter',
+            enabled: false,
+            repository_token: '********',
+          }}],
+        }}],
+        settings: {{}},
+      }});
+      const collected = form.collectValues();
+      assert.equal(collected.repos[0].name, 'starter');
+      assert.equal(collected.repos[0].enabled, false);
+      assert.equal(collected.repos[0].timeout, 0);
+      assert.equal('nullable' in collected.repos[0], false);
+      assert.equal('repository_token' in collected.repos[0], false);
+      assert.equal('clientSecret' in collected.repos[0], false);
+      assert.equal('__proto__' in collected.repos[0], false);
+      assert.equal(Object.getPrototypeOf(collected.repos[0]), null);
+
+      const emptyDefaultForm = new DynamicConfigForm({{
+        containerId: 'plugin-form',
+        parameters: [{{ name: 'sources', type: 'object_array', fields, default: [] }}],
+        settings: {{}},
+      }});
+      const emptyCollected = emptyDefaultForm.collectValues();
+      assert.equal('sources' in emptyCollected, false);
+
+      const mixedCaseForm = new DynamicConfigForm({{
+        containerId: 'plugin-form',
+        parameters: [{{
+          name: 'sources',
+          type: 'OBJECT_ARRAY',
+          fields: [{{ name: 'id', type: 'str' }}],
+        }}],
+        settings: {{ sources: [{{ id: 'alpha' }}] }},
+      }});
+      const mixedCaseCollected = mixedCaseForm.collectValues();
+      assert.deepEqual(JSON.parse(JSON.stringify(mixedCaseCollected.sources)), [{{ id: 'alpha' }}]);
+    """
+
+    completed = subprocess.run(
+        [node, "--input-type=module", "-e", script],
+        capture_output=True,
+        check=False,
+        text=True,
+        timeout=5,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_webui_plugin_ui_schema_browser_boundary_fails_closed():
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node.js is not installed")
+    source_path = (
+        Path(__file__).resolve().parents[1]
+        / "sirius_pulse"
+        / "webui"
+        / "static"
+        / "plugin-ui-schema.js"
+    )
+    script = f"""
+      import assert from 'node:assert/strict';
+      import {{ normalizePluginUISchema }} from {json.dumps(source_path.as_uri())};
+
+      const parameters = [
+        {{
+          name: 'sources',
+          type: 'object_array',
+          fields: [
+            {{ name: 'id', type: 'str', identity: true }},
+            {{ name: 'display_name', type: 'str' }},
+            {{ name: 'enabled', type: 'bool' }},
+            {{ name: 'timeout', type: 'int' }},
+            {{ name: 'api_token', type: 'password' }},
+          ],
+        }},
+        {{ name: 'poll_seconds', type: 'int' }},
+      ];
+      const valid = {{
+        version: 1,
+        layout: 'wide',
+        title: '多站监控',
+        sections: [
+          {{ id: 'sites', parameters: ['sources'], columns: 1, collapsed: false, tone: 'accent' }},
+          {{ id: 'runtime', parameters: ['poll_seconds'], columns: 2,
+             collapsed: false, tone: 'default' }},
+        ],
+        parameters: {{
+          sources: {{
+            label: '站点列表',
+            add_label: '添加站点',
+            item_title_field: 'display_name',
+            item_fallback_field: 'id',
+            item_badge_field: 'id',
+            item_status_field: 'enabled',
+            fields: {{
+              id: {{ label: '站点 ID', widget: 'code', span: 6 }},
+              display_name: {{ label: '显示名称', span: 6 }},
+              enabled: {{ widget: 'switch', true_label: '监控中', false_label: '已停用' }},
+              timeout: {{ unit: '秒' }},
+              api_token: {{ label: '环境凭据' }},
+            }},
+            fieldsets: [
+              {{ id: 'identity', fields: ['enabled', 'id', 'display_name'], collapsed: false }},
+              {{ id: 'network', fields: ['timeout', 'api_token'], collapsed: true }},
+            ],
+          }},
+          poll_seconds: {{ label: '轮询间隔', unit: '秒', span: 6 }},
+        }},
+      }};
+      const clone = value => JSON.parse(JSON.stringify(value));
+      const mutate = callback => {{
+        const value = clone(valid);
+        callback(value);
+        return value;
+      }};
+
+      const normalized = normalizePluginUISchema(valid, parameters);
+      assert.deepEqual(normalized, valid);
+      assert.notEqual(normalized, valid);
+      assert.equal(normalizePluginUISchema(null, parameters), null);
+      assert.equal(
+         normalizePluginUISchema(mutate(value => delete value.version), parameters),
+         null,
+       );
+      assert.equal(
+         normalizePluginUISchema(mutate(value => value.css = 'body{{display:none}}'), parameters),
+         null,
+       );
+      assert.equal(normalizePluginUISchema(
+        mutate(value => value.sections[0].parameters.push('missing')),
+        parameters,
+      ), null);
+      assert.equal(normalizePluginUISchema(
+        mutate(value => value.sections[1].parameters.push('sources')),
+        parameters,
+      ), null);
+      assert.equal(normalizePluginUISchema(
+        mutate(value => value.parameters.poll_seconds.widget = 'text'),
+        parameters,
+      ), null);
+      assert.equal(normalizePluginUISchema(
+        mutate(value => value.parameters.sources.item_title_field = 'api_token'),
+        parameters,
+      ), null);
+      assert.equal(normalizePluginUISchema(
+        mutate(value => value.title = '<img src=x onerror=alert(1)>'),
+        parameters,
+      ), null);
+      assert.equal(normalizePluginUISchema(
+        mutate(value => (
+          value.parameters.sources.help = 'https://user:password@host.invalid/config'
+        )),
+        parameters,
+      ), null);
+      assert.equal(normalizePluginUISchema(
+        mutate(value => value.title = 'Authorization: Bearer sk-live-example-123456'),
+        parameters,
+      ), null);
+
+      assert.equal(normalizePluginUISchema({{
+        version: 1,
+        parameters: {{ sources: {{ item_title_field: 'not_declared' }} }},
+      }}, parameters), null);
+      assert.equal(normalizePluginUISchema({{
+        version: 1,
+        parameters: {{ sources: {{ fields: {{ not_declared: {{ label: 'x' }} }} }} }},
+      }}, parameters), null);
+      assert.equal(normalizePluginUISchema({{
+        version: 1,
+        parameters: {{ unknown: {{ label: 'x' }} }},
+      }}, parameters), null);
+
+      const inherited = clone(valid);
+      delete inherited.version;
+      Object.setPrototypeOf(inherited, {{ version: 1 }});
+      assert.equal(normalizePluginUISchema(inherited, parameters), null);
+
+      const accessor = clone(valid);
+      Object.defineProperty(
+        accessor,
+        'title',
+        {{ get() {{ throw new Error('must not execute'); }} }},
+      );
+      assert.equal(normalizePluginUISchema(accessor, parameters), null);
+
+      const polluted = JSON.parse(JSON.stringify(valid));
+      polluted.parameters.sources.fields = JSON.parse('{{"__proto__":{{"label":"bad"}}}}');
+      assert.equal(normalizePluginUISchema(polluted, parameters), null);
+      assert.equal(Object.prototype.label, undefined);
+
+      const shared = {{ label: '共享' }};
+      const sharedSchema = clone(valid);
+      sharedSchema.parameters.poll_seconds = shared;
+      sharedSchema.parameters.sources.fields.id = shared;
+      assert.equal(normalizePluginUISchema(sharedSchema, parameters), null);
+
+      const cyclic = clone(valid);
+      cyclic.self = cyclic;
+      assert.equal(normalizePluginUISchema(cyclic, parameters), null);
+
+      class Parameter {{ constructor() {{ this.name = 'poll_seconds'; this.type = 'int'; }} }}
+      assert.equal(normalizePluginUISchema(valid, [new Parameter()]), null);
+    """
+
+    completed = subprocess.run(
+        [node, "--input-type=module", "-e", script],
+        capture_output=True,
+        check=False,
+        text=True,
+        timeout=5,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+
+
+def _visual_plugin_definition() -> PluginDefinition:
+    return PluginDefinition(
+        name="visual_demo",
+        display_name="可视化插件",
+        parameters=[
+            PluginParameterDef(
+                name="sources",
+                type="object_array",
+                default=[],
+                fields=[
+                    {"name": "id", "type": "str", "required": True, "identity": True},
+                    {"name": "display_name", "type": "str"},
+                    {"name": "enabled", "type": "bool", "default": True},
+                ],
+            ),
+            PluginParameterDef(name="poll_seconds", type="int", default=300, minimum=30),
+        ],
+        ui_schema={
+            "version": 1,
+            "layout": "wide",
+            "title": "多站监控",
+            "sections": [
+                {
+                    "id": "sites",
+                    "title": "站点",
+                    "parameters": ["sources"],
+                    "columns": 1,
+                    "collapsed": False,
+                    "tone": "accent",
+                },
+                {
+                    "id": "runtime",
+                    "title": "运行参数",
+                    "parameters": ["poll_seconds"],
+                    "columns": 2,
+                    "collapsed": False,
+                    "tone": "default",
+                },
+            ],
+            "parameters": {
+                "sources": {
+                    "label": "站点列表",
+                    "item_title_field": "display_name",
+                    "item_fallback_field": "id",
+                    "item_badge_field": "id",
+                    "item_status_field": "enabled",
+                    "fields": {
+                        "id": {"label": "站点 ID"},
+                        "display_name": {"label": "显示名称"},
+                        "enabled": {
+                            "label": "状态",
+                            "widget": "switch",
+                            "true_label": "监控中",
+                            "false_label": "已停用",
+                        },
+                    },
+                    "fieldsets": [
+                        {
+                            "id": "identity",
+                            "title": "身份",
+                            "fields": ["enabled", "id", "display_name"],
+                            "collapsed": False,
+                        }
+                    ],
+                },
+                "poll_seconds": {"label": "轮询间隔", "unit": "秒"},
+            },
+        },
+    )
 
 
 def _demo_plugin_definition() -> PluginDefinition:
@@ -137,18 +566,26 @@ def test_webui_plugin_parameter_masks_password_defaults_and_nested_fields():
         type="object_array",
         description="",
         required=False,
-        default=None,
+        default=[
+            {
+                "repository_token": "default-secret",
+                "label": "starter",
+                "__proto__": {"polluted": True},
+            }
+        ],
         choices=None,
         fields=[
             {"name": "repository_token", "type": "password", "default": "secret"},
             {"name": "label", "type": "str", "default": "demo"},
+            {"name": "__proto__", "type": "json", "default": {"polluted": True}},
         ],
         group="",
     )
 
     masked = _masked_parameter(parameter)
-    assert masked["fields"][0]["default"] == "********"
-    assert masked["fields"][1]["default"] == "demo"
+    assert masked == {"name": "", "type": "invalid", "fields": None}
+    assert "default-secret" not in json.dumps(masked, ensure_ascii=False)
+    assert "secret" not in json.dumps(masked, ensure_ascii=False)
 
 
 @pytest.mark.asyncio
@@ -183,6 +620,117 @@ async def test_webui_plugin_settings_post_rejects_plaintext_secret_without_persi
     assert config_path.read_text(encoding="utf-8") == before
     saved = json.loads(config_path.read_text(encoding="utf-8"))
     assert saved["demo"]["settings"] == {"api_key": "stored-secret", "label": "old"}
+
+
+@pytest.mark.asyncio
+async def test_webui_plugin_full_form_save_retains_browser_omitted_sensitive_settings(tmp_path):
+    definition = PluginDefinition(
+        name="safe_form",
+        parameters=[
+            PluginParameterDef(name="api_key", type="password"),
+            PluginParameterDef(name="label", type="str"),
+            PluginParameterDef(name="ordinary_removed", type="str"),
+            PluginParameterDef(name="payload", type="json"),
+            PluginParameterDef(
+                name="credentials",
+                type="object",
+                fields=[
+                    {"name": "access_token", "type": "password"},
+                    {"name": "label", "type": "str"},
+                ],
+            ),
+            PluginParameterDef(
+                name="repos",
+                type="object_array",
+                fields=[
+                    {"name": "owner", "type": "str", "required": True},
+                    {"name": "repo", "type": "str", "required": True},
+                    {"name": "repository_token", "type": "password", "required": True},
+                ],
+            ),
+        ],
+    )
+    manager = SimpleNamespace(
+        data_path=tmp_path / "data",
+        plugin_definitions={"safe_form": definition},
+    )
+    plugins_dir = tmp_path / "plugins"
+    plugins_dir.mkdir()
+    config_path = plugins_dir / "_config.json"
+    atomic_write_json(
+        config_path,
+        {
+            "safe_form": {
+                "enabled": True,
+                "permissions": {},
+                "settings": {
+                    "api_key": "top-secret",
+                    "label": "old",
+                    "ordinary_removed": "remove me",
+                    "payload": {"safe": [1, 2]},
+                    "credentials": {"access_token": "object-secret", "label": "stored"},
+                    "repos": [
+                        {
+                            "owner": "alpha",
+                            "repo": "one",
+                            "repository_token": "alpha-secret",
+                        },
+                        {
+                            "owner": "beta",
+                            "repo": "two",
+                            "repository_token": "beta-secret",
+                        },
+                    ],
+                },
+            }
+        },
+    )
+
+    response = await api_plugin_settings_post(
+        _FakeJsonRequest(
+            {
+                "settings": {
+                    "label": "updated",
+                    "repos": [
+                        {"owner": "beta", "repo": "two"},
+                        {"owner": "alpha", "repo": "one"},
+                        {"owner": "gamma", "repo": "three"},
+                    ],
+                }
+            },
+            {"plugin_name": "safe_form"},
+        ),
+        manager,
+    )
+    payload = json.loads(response.text)
+    saved = json.loads(config_path.read_text(encoding="utf-8"))["safe_form"]["settings"]
+
+    assert response.status == 200
+    assert saved == {
+        "api_key": "top-secret",
+        "label": "updated",
+        "payload": {"safe": [1, 2]},
+        "credentials": {"access_token": "object-secret", "label": "stored"},
+        "repos": [
+            {"owner": "beta", "repo": "two", "repository_token": "beta-secret"},
+            {"owner": "alpha", "repo": "one", "repository_token": "alpha-secret"},
+            {"owner": "gamma", "repo": "three"},
+        ],
+    }
+    assert "ordinary_removed" not in saved
+    assert payload["settings"] == {
+        "api_key": "********",
+        "label": "updated",
+        "payload": {"safe": [1, 2]},
+        "credentials": {"access_token": "********", "label": "stored"},
+        "repos": [
+            {"owner": "beta", "repo": "two", "repository_token": "********"},
+            {"owner": "alpha", "repo": "one", "repository_token": "********"},
+            {"owner": "gamma", "repo": "three"},
+        ],
+    }
+    for secret in ("top-secret", "object-secret", "alpha-secret", "beta-secret"):
+        assert secret not in response.text
 
 
 @pytest.mark.asyncio
@@ -274,6 +822,273 @@ async def test_webui_plugin_setting_post_handles_nested_secrets_and_masks_respon
     }
 
 
+@pytest.mark.asyncio
+async def test_webui_json_and_mixed_case_object_array_settings_are_editable_and_validated(
+    tmp_path,
+):
+    definition = PluginDefinition(
+        name="json_editor",
+        parameters=[
+            PluginParameterDef(name="payload", type="json", required=True),
+            PluginParameterDef(name="groups", type="list"),
+            PluginParameterDef(
+                name="sources",
+                type="OBJECT_ARRAY",
+                fields=[{"name": "id", "type": "str", "required": True, "identity": True}],
+            ),
+        ],
+    )
+    manager = SimpleNamespace(
+        data_path=tmp_path / "data",
+        plugin_definitions={"json_editor": definition},
+    )
+    plugins_dir = tmp_path / "plugins"
+    plugins_dir.mkdir()
+    config_path = plugins_dir / "_config.json"
+    atomic_write_json(
+        config_path,
+        {
+            "json_editor": {
+                "enabled": True,
+                "permissions": {},
+                "settings": {
+                    "payload": {"safe": [1]},
+                    "groups": ["base"],
+                    "sources": [{"id": "alpha"}],
+                },
+            }
+        },
+    )
+
+    accepted = await api_plugin_settings_post(
+        _FakeJsonRequest(
+            {
+                "settings": {
+                    "payload": {"safe": [2], "label": "updated"},
+                    "groups": ["changed"],
+                    "sources": [{"id": "beta"}],
+                }
+            },
+            {"plugin_name": "json_editor"},
+        ),
+        manager,
+    )
+    saved = json.loads(config_path.read_text(encoding="utf-8"))["json_editor"]["settings"]
+    assert accepted.status == 200
+    assert saved == {
+        "payload": {"safe": [2], "label": "updated"},
+        "groups": ["changed"],
+        "sources": [{"id": "beta"}],
+    }
+
+    direct = await api_plugin_setting_post(
+        _FakeJsonRequest(
+            {"value": [{"id": "gamma"}]},
+            {"plugin_name": "json_editor", "key": "sources"},
+        ),
+        manager,
+    )
+    assert direct.status == 200
+    assert json.loads(config_path.read_text(encoding="utf-8"))["json_editor"]["settings"][
+        "sources"
+    ] == [{"id": "gamma"}]
+
+    before_invalid = config_path.read_bytes()
+    invalid_shape = await api_plugin_settings_post(
+        _FakeJsonRequest(
+            {"settings": {"payload": ["not", "an", "object"]}},
+            {"plugin_name": "json_editor"},
+        ),
+        manager,
+    )
+    invalid_blank = await api_plugin_settings_post(
+        _FakeJsonRequest(
+            {"settings": {"groups": ["  "]}},
+            {"plugin_name": "json_editor"},
+        ),
+        manager,
+    )
+    assert invalid_shape.status == 400
+    assert invalid_blank.status == 400
+    assert config_path.read_bytes() == before_invalid
+
+
+@pytest.mark.asyncio
+async def test_webui_schedule_parameters_validate_time_and_duration_bounds(tmp_path):
+    definition = PluginDefinition(
+        name="scheduled_plugin",
+        parameters=[
+            PluginParameterDef(name="cron", type="schedule"),
+            PluginParameterDef(
+                name="runtime",
+                type="object_array",
+                fields=[{"name": "id", "type": "str", "identity": True}],
+            ),
+        ],
+    )
+    manager = SimpleNamespace(
+        data_path=tmp_path / "data",
+        plugin_definitions={"scheduled_plugin": definition},
+    )
+    plugins_dir = tmp_path / "plugins"
+    plugins_dir.mkdir()
+    config_path = plugins_dir / "_config.json"
+    atomic_write_json(
+        config_path,
+        {
+            "scheduled_plugin": {
+                "enabled": True,
+                "permissions": {},
+                "settings": {"cron": [{"time": "08:30", "duration": 30}]},
+            }
+        },
+    )
+
+    accepted = await api_plugin_settings_post(
+        _FakeJsonRequest(
+            {
+                "settings": {
+                    "cron": [
+                        {"time": "22:05", "duration": 1440},
+                        {"time": "00:00", "duration": 1},
+                    ],
+                    "runtime": [{"id": "alpha"}],
+                }
+            },
+            {"plugin_name": "scheduled_plugin"},
+        ),
+        manager,
+    )
+    assert accepted.status == 200
+    saved = json.loads(config_path.read_text(encoding="utf-8"))["scheduled_plugin"]["settings"]
+    assert saved["cron"] == [{"time": "22:05", "duration": 1440}, {"time": "00:00", "duration": 1}]
+
+    before_invalid = config_path.read_bytes()
+    for invalid_settings in (
+        {"cron": [{"time": "25:99", "duration": 30}]},
+        {"cron": [{"time": "08:30", "duration": 0}]},
+        {"cron": [{"time": "08:30", "duration": 10081}]},
+        {"cron": [{"time": 830, "duration": 30}]},
+        {"cron": ["08:30"]},
+        {"cron": [{"duration": 30}]},
+    ):
+        rejected = await api_plugin_settings_post(
+            _FakeJsonRequest(
+                {"settings": invalid_settings},
+                {"plugin_name": "scheduled_plugin"},
+            ),
+            manager,
+        )
+        assert rejected.status == 400, invalid_settings
+    assert config_path.read_bytes() == before_invalid
+
+
+@pytest.mark.asyncio
+async def test_webui_credential_urls_are_masked_and_mask_updates_preserve_storage(tmp_path):
+    definition = PluginDefinition(
+        name="legacy_urls",
+        parameters=[
+            PluginParameterDef(
+                name="endpoint",
+                type="str",
+                default=(
+                    "jdbc:postgresql://default-user:default-password@" "example.invalid/database"
+                ),
+            ),
+            PluginParameterDef(
+                name="connection",
+                type="object",
+                fields=[
+                    {
+                        "name": "callback",
+                        "type": "str",
+                        "default": "//default-user:default-secret@example.invalid/hook",
+                    }
+                ],
+            ),
+            PluginParameterDef(
+                name="choice_endpoint",
+                type="str",
+                choices=[
+                    "https://safe.example.invalid",
+                    "jdbc:postgresql://choice-user:choice-secret@example.invalid/db",
+                ],
+            ),
+        ],
+    )
+    manager = SimpleNamespace(
+        data_path=tmp_path / "data",
+        plugin_definitions={"legacy_urls": definition},
+    )
+    plugins_dir = tmp_path / "plugins"
+    plugins_dir.mkdir()
+    config_path = plugins_dir / "_config.json"
+    atomic_write_json(
+        config_path,
+        {
+            "legacy_urls": {
+                "enabled": True,
+                "permissions": {},
+                "settings": {
+                    "endpoint": "https://stored-user:stored-password@example.invalid/api",
+                    "connection": {"callback": "plans?access_token=stored-secret"},
+                },
+            }
+        },
+    )
+
+    get_response = await api_plugin_settings_get(
+        _FakeJsonRequest({}, {"plugin_name": "legacy_urls"}),
+        manager,
+    )
+    get_payload = json.loads(get_response.text)
+    masked_endpoint = _masked_parameter(definition.parameters[0])
+    masked_connection = _masked_parameter(definition.parameters[1])
+    masked_choice = _masked_parameter(definition.parameters[2])
+
+    assert get_response.status == 200
+    assert get_payload["settings"] == {
+        "endpoint": "********",
+        "connection": {"callback": "********"},
+    }
+    assert "default" not in masked_endpoint
+    assert "default" not in masked_connection["fields"][0]
+    assert masked_choice["choices"] == ["https://safe.example.invalid"]
+    for secret in (
+        "default-password",
+        "default-secret",
+        "stored-password",
+        "stored-secret",
+    ):
+        assert secret not in get_response.text
+        assert secret not in json.dumps(
+            [masked_endpoint, masked_connection, masked_choice], ensure_ascii=False
+        )
+    assert "choice-secret" not in json.dumps(masked_choice, ensure_ascii=False)
+
+    post_response = await api_plugin_settings_post(
+        _FakeJsonRequest(
+            {
+                "settings": {
+                    "endpoint": "********",
+                    "connection": {"callback": "********"},
+                }
+            },
+            {"plugin_name": "legacy_urls"},
+        ),
+        manager,
+    )
+    saved = json.loads(config_path.read_text(encoding="utf-8"))["legacy_urls"]["settings"]
+
+    assert post_response.status == 200
+    assert saved == {
+        "endpoint": "https://stored-user:stored-password@example.invalid/api",
+        "connection": {"callback": "plans?access_token=stored-secret"},
+    }
+    assert "stored-password" not in post_response.text
+    assert "stored-secret" not in post_response.text
+
+
 def test_webui_plugin_parameter_masks_sensitive_names_even_if_mislabeled():
     parameter = SimpleNamespace(
         name="api_key",
@@ -292,8 +1107,355 @@ def test_webui_plugin_parameter_masks_sensitive_names_even_if_mislabeled():
     masked = _masked_parameter(parameter)
 
     assert masked["default"] == "********"
-    assert masked["fields"][0]["default"] == "********"
+    assert "default" not in masked["fields"][0]
     assert masked["fields"][1]["default"] == "visible"
+
+
+def test_webui_explicit_row_identity_precedes_mutable_names_when_retaining_secrets():
+    definition = PluginDefinition(
+        name="identity_rows",
+        parameters=[
+            PluginParameterDef(
+                name="accounts",
+                type="object_array",
+                fields=[
+                    {"name": "stable_ref", "type": "str", "identity": True},
+                    {"name": "id", "type": "str"},
+                    {"name": "name", "type": "str"},
+                    {"name": "access_token", "type": "password"},
+                ],
+            )
+        ],
+    )
+    existing = {
+        "accounts": [
+            {
+                "stable_ref": "account-a",
+                "id": "old-a",
+                "name": "Alpha",
+                "access_token": "token-a",
+            },
+            {
+                "stable_ref": "account-b",
+                "id": "old-b",
+                "name": "Beta",
+                "access_token": "token-b",
+            },
+        ]
+    }
+
+    merged = _settings_update_without_masked_secrets(
+        {
+            "accounts": [
+                {"stable_ref": "account-b", "id": "old-a", "name": "Alpha"},
+                {"stable_ref": "account-a", "id": "old-b", "name": "Beta"},
+            ]
+        },
+        definition,
+        existing,
+    )
+
+    assert merged["accounts"] == [
+        {
+            "stable_ref": "account-b",
+            "id": "old-a",
+            "name": "Alpha",
+            "access_token": "token-b",
+        },
+        {
+            "stable_ref": "account-a",
+            "id": "old-b",
+            "name": "Beta",
+            "access_token": "token-a",
+        },
+    ]
+
+
+def test_webui_secret_rows_without_unambiguous_identity_reject_full_form_save():
+    definition = PluginDefinition(
+        name="identityless_rows",
+        parameters=[
+            PluginParameterDef(
+                name="accounts",
+                type="object_array",
+                fields=[
+                    {"name": "label", "type": "str"},
+                    {"name": "region", "type": "str"},
+                    {"name": "access_token", "type": "password"},
+                ],
+            )
+        ],
+    )
+    existing = {
+        "accounts": [{"label": "primary", "region": "east", "access_token": "stored-secret"}]
+    }
+
+    with pytest.raises(MaskedSecretUpdateError, match="稳定标识"):
+        _settings_update_without_masked_secrets(
+            {"accounts": [{"label": "primary", "region": "east"}]},
+            definition,
+            existing,
+        )
+
+
+def test_webui_object_array_credential_url_mask_follows_stable_identity():
+    definition = PluginDefinition(
+        name="url_rows",
+        parameters=[
+            PluginParameterDef(
+                name="rows",
+                type="object_array",
+                fields=[
+                    {"name": "stable_ref", "type": "str", "identity": True},
+                    {"name": "endpoint", "type": "str"},
+                ],
+            )
+        ],
+    )
+    existing = {
+        "rows": [
+            {
+                "stable_ref": "primary",
+                "endpoint": "https://user:password@example.invalid/api",
+            }
+        ]
+    }
+
+    merged = _settings_update_without_masked_secrets(
+        {"rows": [{"stable_ref": "primary", "endpoint": "********"}]},
+        definition,
+        existing,
+    )
+
+    assert merged == existing
+
+
+def test_webui_secret_retention_rejects_existing_duplicate_stable_identity():
+    definition = PluginDefinition(
+        name="duplicate_identity_rows",
+        parameters=[
+            PluginParameterDef(
+                name="rows",
+                type="object_array",
+                fields=[
+                    {"name": "stable_ref", "type": "str", "identity": True},
+                    {"name": "label", "type": "str"},
+                    {"name": "access_token", "type": "password"},
+                ],
+            )
+        ],
+    )
+    existing = {
+        "rows": [
+            {"stable_ref": "same", "label": "secret", "access_token": "token"},
+            {"stable_ref": "same", "label": "ordinary"},
+        ]
+    }
+
+    with pytest.raises(MaskedSecretUpdateError, match="重复的稳定标识"):
+        _settings_update_without_masked_secrets(
+            {"rows": [{"stable_ref": "same", "label": "updated"}]},
+            definition,
+            existing,
+        )
+
+
+def test_webui_invalid_explicit_identity_never_falls_back_to_mutable_id():
+    definition = PluginDefinition(
+        name="invalid_identity_rows",
+        parameters=[
+            PluginParameterDef(
+                name="rows",
+                type="object_array",
+                fields=[
+                    {"name": "id", "type": "str"},
+                    {
+                        "name": "identity_blob",
+                        "type": "object",
+                        "identity": True,
+                        "fields": [{"name": "region", "type": "str"}],
+                    },
+                    {"name": "access_token", "type": "password"},
+                ],
+            )
+        ],
+    )
+    existing = {
+        "rows": [
+            {
+                "id": "mutable-id",
+                "identity_blob": {"region": "east"},
+                "access_token": "stored-token",
+            }
+        ]
+    }
+
+    assert "identity" in (
+        _validate_settings_schema({"rows": []}, definition, existing=existing) or ""
+    )
+    with pytest.raises(MaskedSecretUpdateError, match="稳定标识"):
+        _settings_update_without_masked_secrets(
+            {
+                "rows": [
+                    {
+                        "id": "mutable-id",
+                        "identity_blob": {"region": "west"},
+                    }
+                ]
+            },
+            definition,
+            existing,
+        )
+
+
+def test_webui_generic_object_array_secret_uses_declared_required_identity():
+    definition = PluginDefinition(
+        name="generic_rows",
+        parameters=[
+            PluginParameterDef(
+                name="accounts",
+                type="object_array",
+                fields=[
+                    {"name": "account", "type": "str", "required": True},
+                    {"name": "access_token", "type": "password"},
+                ],
+            )
+        ],
+    )
+    existing = {"accounts": [{"account": "Alice", "access_token": "stored-secret"}]}
+
+    merged = _settings_update_without_masked_secrets(
+        {"accounts": [{"account": "alice"}]},
+        definition,
+        existing,
+    )
+
+    assert merged == {"accounts": [{"account": "alice", "access_token": "stored-secret"}]}
+
+
+def test_webui_duplicate_nested_field_names_fail_closed_and_never_unmask_secret():
+    definition = PluginDefinition(
+        name="ambiguous_rows",
+        parameters=[
+            PluginParameterDef(
+                name="rows",
+                type="object_array",
+                fields=[
+                    {"name": "opaque", "type": "password"},
+                    {"name": "opaque", "type": "str"},
+                ],
+            )
+        ],
+    )
+
+    assert "重复名称" in (_validate_settings_schema({"rows": []}, definition, existing={}) or "")
+    assert (
+        _masked_settings(
+            {"rows": [{"opaque": "must-not-leak"}]},
+            definition,
+        )
+        == {}
+    )
+    assert _masked_parameter(definition.parameters[0]) == {
+        "name": "",
+        "type": "invalid",
+        "fields": None,
+    }
+
+
+def test_webui_deep_nested_metadata_fails_closed_and_masks_secret_defaults():
+    nested_secret = {
+        "name": "level_one",
+        "type": "object",
+        "fields": [
+            {
+                "name": "level_two",
+                "type": "object",
+                "default": {
+                    "client_secret": "default-secret",
+                    "label": "visible-default",
+                },
+                "fields": [
+                    {
+                        "name": "client_secret",
+                        "type": "password",
+                        "default": "nested-secret",
+                    },
+                    {"name": "label", "type": "str", "default": "visible"},
+                ],
+            }
+        ],
+    }
+    definition = PluginDefinition(
+        name="nested_metadata",
+        parameters=[
+            PluginParameterDef(
+                name="payload",
+                type="object",
+                fields=[nested_secret],
+            )
+        ],
+    )
+
+    masked = _masked_parameter(definition.parameters[0])
+    level_two = masked["fields"][0]["fields"][0]
+
+    assert level_two["default"] == {"label": "visible-default"}
+    assert "default" not in level_two["fields"][0]
+    assert level_two["fields"][1]["default"] == "visible"
+    assert "default-secret" not in json.dumps(masked, ensure_ascii=False)
+    assert "nested-secret" not in json.dumps(masked, ensure_ascii=False)
+
+    duplicate_definition = PluginDefinition(
+        name="nested_duplicate",
+        parameters=[
+            PluginParameterDef(
+                name="payload",
+                type="object",
+                fields=[
+                    {
+                        "name": "nested",
+                        "type": "object",
+                        "fields": [
+                            {"name": "token", "type": "password"},
+                            {"name": "token", "type": "str"},
+                        ],
+                    }
+                ],
+            )
+        ],
+    )
+    unsafe_definition = PluginDefinition(
+        name="nested_unsafe",
+        parameters=[
+            PluginParameterDef(
+                name="payload",
+                type="object",
+                fields=[
+                    {
+                        "name": "nested",
+                        "type": "object",
+                        "fields": [{"name": "__proto__", "type": "str"}],
+                    }
+                ],
+            )
+        ],
+    )
+
+    assert "重复名称" in (
+        _validate_settings_schema({"payload": {}}, duplicate_definition, existing={}) or ""
+    )
+    assert "不安全名称" in (
+        _validate_settings_schema({"payload": {}}, unsafe_definition, existing={}) or ""
+    )
+    assert "不安全字段名称" in (
+        _validate_settings_schema(
+            {"payload": {"nested": {"constructor": {"polluted": True}}}},
+            definition,
+            existing={},
+        )
+        or ""
+    )
 
 
 def test_webui_masked_object_array_secrets_follow_stable_identity_not_position():
@@ -484,9 +1646,14 @@ async def test_webui_repository_plaintext_token_is_rejected_without_persisting(t
     "url",
     [
         "https://user:password@example.invalid/path",
+        "jdbc:postgresql://dbuser:dbpass@example.invalid/database",
+        "//dbuser:dbpass@example.invalid/database",
         "https://example.invalid/path?access_token=secret",
         "https://example.invalid/path?api-key=secret",
         "plans?accessToken=secret",
+        "plans?credential=secret",
+        "plans?credentials=secret",
+        "plans?session-id=secret",
         "plans#refresh-token=secret",
         "https://user:password@[invalid/path",
         "https://[invalid/path?api_key=secret",
@@ -540,6 +1707,101 @@ async def test_webui_plugin_settings_reject_undeclared_keys_without_persisting(t
     assert "unrecognized-secret" not in response.text
     assert json.loads(config_path.read_text(encoding="utf-8"))["demo"]["settings"] == {
         "label": "old"
+    }
+
+
+@pytest.mark.asyncio
+async def test_webui_malformed_recursive_metadata_fails_closed_on_reads_and_single_save(
+    tmp_path,
+    monkeypatch,
+):
+    definition = PluginDefinition(
+        name="malformed_metadata",
+        parameters=[
+            PluginParameterDef(
+                name="payload",
+                type="object",
+                default={"branch": {"opaque": "default-secret"}},
+                fields=[
+                    {
+                        "name": "branch",
+                        "type": "object",
+                        "fields": [{"name": "opaque", "type": "str"}],
+                    },
+                    {
+                        "name": "branch",
+                        "type": "object",
+                        "fields": [{"name": "opaque", "type": "password"}],
+                    },
+                ],
+            )
+        ],
+    )
+    manager = SimpleNamespace(
+        data_path=tmp_path / "data",
+        plugin_definitions={"malformed_metadata": definition},
+    )
+    plugins_dir = tmp_path / "plugins"
+    plugins_dir.mkdir()
+    config_path = plugins_dir / "_config.json"
+    atomic_write_json(
+        config_path,
+        {
+            "malformed_metadata": {
+                "enabled": True,
+                "permissions": {},
+                "settings": {"payload": {"branch": {"opaque": "stored-secret"}}},
+            }
+        },
+    )
+    before = config_path.read_bytes()
+    monkeypatch.setattr(
+        "sirius_pulse.webui.server_plugin_api._load_definitions_cached",
+        lambda _plugins_dir: [definition],
+    )
+
+    list_response = await api_plugins_get(
+        _FakeJsonRequest({}),
+        manager,
+    )
+    detail_response = await api_plugin_detail_get(
+        _FakeJsonRequest({}, {"plugin_name": "malformed_metadata"}),
+        manager,
+    )
+    settings_response = await api_plugin_settings_get(
+        _FakeJsonRequest({}, {"plugin_name": "malformed_metadata"}),
+        manager,
+    )
+    save_response = await api_plugin_setting_post(
+        _FakeJsonRequest(
+            {"value": {"branch": {"opaque": "updated"}}},
+            {"plugin_name": "malformed_metadata", "key": "payload"},
+        ),
+        manager,
+    )
+
+    assert json.loads(list_response.text)["plugins"] == []
+    assert detail_response.status == 400
+    assert settings_response.status == 400
+    assert save_response.status == 400
+    assert config_path.read_bytes() == before
+    for response in (list_response, detail_response, settings_response, save_response):
+        assert "stored-secret" not in response.text
+        assert "default-secret" not in response.text
+
+
+def test_webui_top_level_prototype_parameter_is_never_serialized():
+    definition = PluginDefinition(
+        name="unsafe_top_level",
+        parameters=[PluginParameterDef(name="__proto__", type="str", default="secret")],
+    )
+
+    assert "不安全名称" in (_validate_settings_schema({}, definition, existing={}) or "")
+    assert _masked_settings({"__proto__": "stored-secret"}, definition) == {}
+    assert _masked_parameter(definition.parameters[0]) == {
+        "name": "",
+        "type": "invalid",
+        "fields": None,
     }
 
 
@@ -614,6 +1876,186 @@ async def test_webui_plugin_metadata_listing_does_not_execute_plugin_code(tmp_pa
         }
     ]
     assert marker.exists() is False
+
+
+@pytest.mark.asyncio
+async def test_webui_plugin_ui_schema_is_serialized_but_never_persisted(tmp_path, monkeypatch):
+    definition = _visual_plugin_definition()
+    manager = SimpleNamespace(
+        data_path=tmp_path / "data",
+        plugin_definitions={"visual_demo": definition},
+    )
+    plugins_dir = tmp_path / "plugins"
+    plugins_dir.mkdir()
+    monkeypatch.setattr(
+        "sirius_pulse.webui.server_plugin_api._load_definitions_cached",
+        lambda _plugins_dir: [definition],
+    )
+
+    list_response = await api_plugins_get(_FakeJsonRequest({}), manager)
+    detail_response = await api_plugin_detail_get(
+        _FakeJsonRequest({}, {"plugin_name": "visual_demo"}),
+        manager,
+    )
+    save_response = await api_plugin_settings_post(
+        _FakeJsonRequest(
+            {
+                "settings": {
+                    "sources": [{"id": "primary", "display_name": "主站", "enabled": True}],
+                    "poll_seconds": 600,
+                }
+            },
+            {"plugin_name": "visual_demo"},
+        ),
+        manager,
+    )
+
+    assert list_response.status == 200
+    assert detail_response.status == 200
+    assert save_response.status == 200
+    listed = json.loads(list_response.text)["plugins"][0]
+    detail = json.loads(detail_response.text)
+    assert listed["ui_schema"]["layout"] == "wide"
+    assert detail["ui_schema"]["parameters"]["sources"]["item_title_field"] == "display_name"
+    stored = json.loads((plugins_dir / "_config.json").read_text(encoding="utf-8"))
+    assert stored["visual_demo"]["settings"] == {
+        "sources": [{"id": "primary", "display_name": "主站", "enabled": True}],
+        "poll_seconds": 600,
+    }
+    assert "ui_schema" not in stored["visual_demo"]
+    assert "identity" not in json.dumps(stored, ensure_ascii=False)
+
+
+@pytest.mark.asyncio
+async def test_webui_mutated_parameter_contract_fails_closed_without_secret_leak(
+    tmp_path,
+    monkeypatch,
+):
+    parameter = PluginParameterDef(
+        name="opaque",
+        type="password",
+        default="stored-secret",
+    )
+    definition = PluginDefinition(name="mutated_contract", parameters=[parameter])
+    parameter.type = "str"
+    manager = SimpleNamespace(
+        data_path=tmp_path / "data",
+        plugin_definitions={"mutated_contract": definition},
+    )
+    plugins_dir = tmp_path / "plugins"
+    plugins_dir.mkdir()
+    monkeypatch.setattr(
+        "sirius_pulse.webui.server_plugin_api._load_definitions_cached",
+        lambda _plugins_dir: [definition],
+    )
+
+    list_response = await api_plugins_get(_FakeJsonRequest({}), manager)
+    detail_response = await api_plugin_detail_get(
+        _FakeJsonRequest({}, {"plugin_name": "mutated_contract"}),
+        manager,
+    )
+    save_response = await api_plugin_settings_post(
+        _FakeJsonRequest(
+            {"settings": {"opaque": "new-secret"}},
+            {"plugin_name": "mutated_contract"},
+        ),
+        manager,
+    )
+
+    assert json.loads(list_response.text)["plugins"] == []
+    assert detail_response.status == 400
+    assert save_response.status == 400
+    assert not (plugins_dir / "_config.json").exists()
+    for response in (list_response, detail_response, save_response):
+        assert "stored-secret" not in response.text
+        assert "new-secret" not in response.text
+
+
+@pytest.mark.asyncio
+async def test_webui_mutated_cyclic_parameter_default_fails_closed_without_recursion(
+    tmp_path,
+    monkeypatch,
+):
+    parameter = PluginParameterDef(name="payload", type="object")
+    definition = PluginDefinition(name="cyclic_default", parameters=[parameter])
+    cycle: list[object] = []
+    cycle.append(cycle)
+    parameter.default = cycle
+    manager = SimpleNamespace(
+        data_path=tmp_path / "data",
+        plugin_definitions={"cyclic_default": definition},
+    )
+    plugins_dir = tmp_path / "plugins"
+    plugins_dir.mkdir()
+    monkeypatch.setattr(
+        "sirius_pulse.webui.server_plugin_api._load_definitions_cached",
+        lambda _plugins_dir: [definition],
+    )
+
+    list_response = await api_plugins_get(_FakeJsonRequest({}), manager)
+    detail_response = await api_plugin_detail_get(
+        _FakeJsonRequest({}, {"plugin_name": "cyclic_default"}),
+        manager,
+    )
+
+    assert list_response.status == 200
+    assert json.loads(list_response.text)["plugins"] == []
+    assert detail_response.status == 400
+
+
+@pytest.mark.asyncio
+async def test_webui_mutated_plugin_ui_schema_fails_closed_for_reads_and_writes(
+    tmp_path,
+    monkeypatch,
+):
+    definition = _visual_plugin_definition()
+    definition.ui_schema["parameters"]["sources"]["item_title_field"] = "access_token"
+    manager = SimpleNamespace(
+        data_path=tmp_path / "data",
+        plugin_definitions={"visual_demo": definition},
+    )
+    plugins_dir = tmp_path / "plugins"
+    plugins_dir.mkdir()
+    config_path = plugins_dir / "_config.json"
+    atomic_write_json(
+        config_path,
+        {
+            "visual_demo": {
+                "enabled": True,
+                "permissions": {},
+                "settings": {"poll_seconds": 300, "sources": []},
+            }
+        },
+    )
+    before = config_path.read_bytes()
+    monkeypatch.setattr(
+        "sirius_pulse.webui.server_plugin_api._load_definitions_cached",
+        lambda _plugins_dir: [definition],
+    )
+
+    list_response = await api_plugins_get(_FakeJsonRequest({}), manager)
+    detail_response = await api_plugin_detail_get(
+        _FakeJsonRequest({}, {"plugin_name": "visual_demo"}),
+        manager,
+    )
+    save_response = await api_plugin_settings_post(
+        _FakeJsonRequest(
+            {"settings": {"sources": [], "poll_seconds": 600}},
+            {"plugin_name": "visual_demo"},
+        ),
+        manager,
+    )
+
+    listed = json.loads(list_response.text)["plugins"]
+    detail = json.loads(detail_response.text)
+    assert [item["name"] for item in listed] == ["visual_demo"]
+    assert listed[0]["ui_schema"] == {}
+    assert detail_response.status == 200
+    assert detail["ui_schema"] == {}
+    assert save_response.status == 200
+    assert config_path.read_bytes() != before
+    for response in (list_response, detail_response, save_response):
+        assert "access_token" not in response.text
 
 
 @pytest.mark.asyncio

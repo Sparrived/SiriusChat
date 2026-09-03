@@ -8,6 +8,7 @@ v1.2+: 支持插件自定义配置（如 chat_analyzer 的时间配置）
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import math
@@ -21,7 +22,7 @@ from aiohttp import web
 
 from sirius_pulse.plugins.config import get_config_manager
 from sirius_pulse.plugins.loader import PluginLoader
-from sirius_pulse.plugins.models import PluginDefinition
+from sirius_pulse.plugins.models import PluginDefinition, normalize_plugin_ui_schema
 from sirius_pulse.webui.server_utils import _json_response, handle_api_errors
 
 LOG = logging.getLogger("sirius.webui")
@@ -32,6 +33,9 @@ _CACHE_TTL = 60.0  # 秒
 _SECRET_MASK = "********"
 _MASKED_SECRET_VALUES = {"", _SECRET_MASK, "[已隐藏]", "••••••••"}
 _MISSING = object()
+_UNSAFE_OBJECT_FIELD_NAMES = {"__proto__", "prototype", "constructor"}
+_SECRET_TREE_MAX_DEPTH = 16
+_SECRET_TREE_MAX_NODES = 4096
 
 
 class MaskedSecretUpdateError(ValueError):
@@ -47,6 +51,10 @@ _SECRET_SUFFIXES = (
     "_secrets",
     "_password",
     "_passwords",
+    "_credential",
+    "_credentials",
+    "_auth",
+    "_session",
 )
 
 
@@ -80,6 +88,14 @@ def _is_secret_setting_key(
         "access_token",
         "refresh_token",
         "authorization",
+        "auth",
+        "authentication",
+        "bearer",
+        "client_secret",
+        "credential",
+        "credentials",
+        "session",
+        "session_id",
     } or normalized.endswith(_SECRET_SUFFIXES)
 
 
@@ -87,10 +103,22 @@ def _is_masked_secret_value(value: Any) -> bool:
     return isinstance(value, str) and value.strip() in _MASKED_SECRET_VALUES
 
 
+def _is_explicit_secret_mask(value: Any) -> bool:
+    return isinstance(value, str) and value.strip() in _MASKED_SECRET_VALUES and bool(value.strip())
+
+
 def _url_contains_plaintext_secret(value: Any) -> bool:
     """Detect credentials embedded in an otherwise non-secret URL setting."""
-    if not isinstance(value, str) or not any(marker in value for marker in ("://", "?", "#")):
+    if not isinstance(value, str) or not any(marker in value for marker in ("://", "//", "?", "#")):
         return False
+
+    authority_starts = [match.end() for match in re.finditer(r"://", value)]
+    if value.startswith("//"):
+        authority_starts.append(2)
+    for start in authority_starts:
+        authority = re.split(r"[/\\?#]", value[start:], maxsplit=1)[0]
+        if "@" in authority and authority.rsplit("@", 1)[0]:
+            return True
 
     raw_components: list[str] = []
     if "?" in value:
@@ -125,18 +153,28 @@ def _contains_plaintext_secret(
     key: Any = "",
     definition: PluginDefinition | None = None,
     parameter: Any = None,
+    _depth: int = 0,
+    _seen: set[int] | None = None,
+    _nodes: list[int] | None = None,
 ) -> bool:
-    """Return whether a settings tree attempts to persist a secret value.
-
-    Secret fields are environment-backed by design.  Masked placeholders are
-    update-preserving values, while any other non-empty value must be rejected
-    instead of being written to ``plugins/_config.json``.
-    """
+    """Return whether a bounded settings tree attempts to persist a secret value."""
+    if _depth > _SECRET_TREE_MAX_DEPTH:
+        return True
+    nodes = _nodes if _nodes is not None else [0]
+    nodes[0] += 1
+    if nodes[0] > _SECRET_TREE_MAX_NODES:
+        return True
     parameter = parameter or _parameter_for(definition, key)
     if _is_secret_parameter(key, definition, parameter):
         return bool(value) and not _is_masked_secret_value(value)
     if _url_contains_plaintext_secret(value):
         return True
+    seen = _seen if _seen is not None else set()
+    if isinstance(value, (dict, list)):
+        value_id = id(value)
+        if value_id in seen:
+            return True
+        seen.add(value_id)
     if isinstance(value, dict):
         field_parameters = {
             str(field.get("name")): field
@@ -144,11 +182,15 @@ def _contains_plaintext_secret(
             if field.get("name")
         }
         return any(
-            _contains_plaintext_secret(
+            not _is_safe_object_field_name(child_key)
+            or _contains_plaintext_secret(
                 child,
                 key=child_key,
                 definition=definition,
                 parameter=field_parameters.get(str(child_key)),
+                _depth=_depth + 1,
+                _seen=seen,
+                _nodes=nodes,
             )
             for child_key, child in value.items()
         )
@@ -159,6 +201,9 @@ def _contains_plaintext_secret(
                 key=key,
                 definition=definition,
                 parameter=parameter,
+                _depth=_depth + 1,
+                _seen=seen,
+                _nodes=nodes,
             )
             for item in value
         )
@@ -172,7 +217,17 @@ def _parameter_for(
     if definition is None:
         return None
     name = str(key)
-    return next((parameter for parameter in definition.parameters if parameter.name == name), None)
+    matches = [parameter for parameter in definition.parameters if parameter.name == name]
+    if not matches:
+        return None
+    return next(
+        (
+            parameter
+            for parameter in matches
+            if str(_parameter_value(parameter, "type", "")).casefold() in {"password", "secret"}
+        ),
+        matches[0],
+    )
 
 
 def _parameter_value(parameter: Any, key: str, default: Any = None) -> Any:
@@ -183,15 +238,168 @@ def _parameter_value(parameter: Any, key: str, default: Any = None) -> Any:
     return getattr(parameter, key, default)
 
 
-def _parameter_fields(parameter: Any) -> list[dict[str, Any]]:
+def _is_safe_object_field_name(name: Any) -> bool:
+    return bool(str(name)) and str(name) not in _UNSAFE_OBJECT_FIELD_NAMES
+
+
+def _unsafe_object_path(value: Any, *, path: str) -> str | None:
+    """Find unsafe keys without recursively trusting an attacker-controlled tree."""
+    stack = [(value, path, 0)]
+    seen: set[int] = set()
+    nodes = 0
+    while stack:
+        current, current_path, depth = stack.pop()
+        nodes += 1
+        if nodes > _SECRET_TREE_MAX_NODES or depth > _SECRET_TREE_MAX_DEPTH:
+            return current_path
+        if isinstance(current, (dict, list)):
+            current_id = id(current)
+            if current_id in seen:
+                return current_path
+            seen.add(current_id)
+        if isinstance(current, dict):
+            for key, child in reversed(list(current.items())):
+                name = str(key)
+                child_path = f"{current_path}.{name}" if current_path else name
+                if not _is_safe_object_field_name(name):
+                    return child_path
+                stack.append((child, child_path, depth + 1))
+        elif isinstance(current, list):
+            stack.extend(
+                (item, f"{current_path}[{index}]", depth + 1)
+                for index, item in reversed(list(enumerate(current)))
+            )
+    return None
+
+
+def _declared_parameter_fields(parameter: Any) -> list[dict[str, Any]]:
     fields = _parameter_value(parameter, "fields", [])
-    return (
-        [field for field in fields if isinstance(field, dict)] if isinstance(fields, list) else []
+    if not isinstance(fields, list):
+        return []
+    return [field for field in fields if isinstance(field, dict)]
+
+
+def _raw_parameter_fields(parameter: Any) -> list[dict[str, Any]]:
+    return [
+        field
+        for field in _declared_parameter_fields(parameter)
+        if _is_safe_object_field_name(field.get("name", ""))
+    ]
+
+
+def _duplicate_parameter_field_names(parameter: Any) -> set[str]:
+    names = [str(field.get("name")) for field in _declared_parameter_fields(parameter)]
+    return {name for name in names if names.count(name) > 1}
+
+
+def _validate_parameter_metadata(
+    parameter: Any,
+    *,
+    path: str,
+    depth: int = 0,
+    _seen: set[int] | None = None,
+) -> str | None:
+    """Reject ambiguous or prototype-dangerous parameter metadata recursively."""
+    if depth > 16:
+        return f"{path} 子字段嵌套过深"
+    seen = _seen if _seen is not None else set()
+    if isinstance(parameter, (dict, list)) or hasattr(parameter, "__dict__"):
+        parameter_id = id(parameter)
+        if parameter_id in seen:
+            return f"{path} 子字段包含循环或共享引用"
+        seen.add(parameter_id)
+    fields = _parameter_value(parameter, "fields", None)
+    if fields is None:
+        return None
+    if not isinstance(fields, list):
+        return f"{path}.fields 必须是字段列表"
+    names: list[str] = []
+    for index, field in enumerate(fields):
+        field_path = f"{path}.fields[{index}]"
+        if not isinstance(field, dict):
+            return f"{field_path} 必须是对象"
+        raw_name = field.get("name")
+        if not isinstance(raw_name, str) or not raw_name:
+            return f"{field_path}.name 不能为空"
+        if not _is_safe_object_field_name(raw_name):
+            return f"{field_path}.name 使用了不安全名称：{raw_name}"
+        if "identity" in field:
+            identity = field.get("identity")
+            field_type = str(_parameter_value(field, "type", "str")).casefold()
+            scalar_types = {
+                "str",
+                "string",
+                "model",
+                "int",
+                "float",
+                "number",
+                "bool",
+                "boolean",
+            }
+            if type(identity) is not bool:
+                return f"{field_path}.identity 必须是布尔值"
+            if identity and (
+                field_type not in scalar_types or _is_secret_parameter(raw_name, None, field)
+            ):
+                return f"{field_path}.identity 只能声明在非密钥标量字段上"
+        names.append(raw_name)
+        error = _validate_parameter_metadata(
+            field,
+            path=f"{path}.{raw_name}",
+            depth=depth + 1,
+            _seen=seen,
+        )
+        if error:
+            return error
+    duplicates = {name for name in names if names.count(name) > 1}
+    if duplicates:
+        return f"{path} 子字段声明包含重复名称：{sorted(duplicates)[0]}"
+    return None
+
+
+def _parameter_contains_secret(
+    parameter: Any,
+    *,
+    depth: int = 0,
+    seen: set[int] | None = None,
+) -> bool:
+    if depth > _SECRET_TREE_MAX_DEPTH:
+        return True
+    visited = seen if seen is not None else set()
+    if isinstance(parameter, (dict, list)) or hasattr(parameter, "__dict__"):
+        parameter_id = id(parameter)
+        if parameter_id in visited:
+            return True
+        visited.add(parameter_id)
+    name = _parameter_value(parameter, "name", "")
+    return _is_secret_parameter(name, None, parameter) or any(
+        _parameter_contains_secret(field, depth=depth + 1, seen=visited)
+        for field in _declared_parameter_fields(parameter)
     )
 
 
+def _parameter_fields(parameter: Any) -> list[dict[str, Any]]:
+    """Return unique safe child metadata, preferring a secret declaration.
+
+    Malformed third-party metadata is rejected by schema validation.  GET/mask
+    paths still need a fail-closed view before that rejection, so a duplicate
+    name is represented once and any secret declaration wins over a non-secret
+    duplicate rather than allowing plaintext serialization.
+    """
+    result: dict[str, dict[str, Any]] = {}
+    for field in _raw_parameter_fields(parameter):
+        name = str(field.get("name"))
+        previous = result.get(name)
+        if previous is None or (
+            _is_secret_parameter(name, None, field)
+            and not _is_secret_parameter(name, None, previous)
+        ):
+            result[name] = field
+    return list(result.values())
+
+
 def _secret_field_names(parameter: Any, definition: PluginDefinition | None) -> set[str]:
-    """Return declared nested secret fields for an object-array parameter."""
+    """Return declared immediate secret fields for an object-array parameter."""
     return {
         str(field.get("name"))
         for field in _parameter_fields(parameter)
@@ -199,20 +407,112 @@ def _secret_field_names(parameter: Any, definition: PluginDefinition | None) -> 
     }
 
 
+def _value_contains_retained_secret(
+    value: Any,
+    parameter: Any,
+    *,
+    depth: int = 0,
+    seen: set[int] | None = None,
+) -> bool:
+    """Return whether an existing value contains secret material at any depth."""
+    if depth > _SECRET_TREE_MAX_DEPTH:
+        return True
+    visited = seen if seen is not None else set()
+    if isinstance(value, (dict, list)):
+        value_id = id(value)
+        if value_id in visited:
+            return True
+        visited.add(value_id)
+    name = _parameter_value(parameter, "name", "")
+    if _is_secret_parameter(name, None, parameter):
+        return bool(value)
+    if _url_contains_plaintext_secret(value):
+        return True
+    if isinstance(value, dict):
+        fields = {
+            str(field.get("name")): field
+            for field in _parameter_fields(parameter)
+            if field.get("name")
+        }
+        for key, child in value.items():
+            if not _is_safe_object_field_name(key):
+                return True
+            field = fields.get(str(key))
+            if _is_secret_parameter(key, None, field) and bool(child):
+                return True
+            if _value_contains_retained_secret(
+                child,
+                field,
+                depth=depth + 1,
+                seen=visited,
+            ):
+                return True
+        return False
+    if isinstance(value, list):
+        return any(
+            _value_contains_retained_secret(
+                item,
+                parameter,
+                depth=depth + 1,
+                seen=visited,
+            )
+            for item in value
+        )
+    return False
+
+
 _OBJECT_IDENTITY_PART = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$")
 
 
-def _stable_secret_row_identity(item: Any) -> tuple[str, ...] | None:
-    """Return a non-secret, stable identity suitable for retaining a secret.
+def _stable_secret_row_identity(
+    item: Any,
+    parameter: Any = None,
+) -> tuple[str, ...] | None:
+    """Return a declared non-secret identity suitable for retaining a secret.
 
-    Generic repository-like rows use a normalized ``owner/repo`` pair rather
-    than display text or list position.  A partial or malformed pair has no
-    fallback identity: retaining a secret for it would be an unsafe guess.
-    Other object-array schemas can use an id, UUID, slug, name, URL, or host.
+    Repository rows retain their historical owner/repo identity.  Generic
+    schemas may mark fields with ``identity: true``; otherwise required scalar
+    non-secret fields form a conservative composite identity.  A schema with
+    one scalar non-secret field can use that field as a final safe fallback.
+    List position is never an identity.
     """
     if not isinstance(item, dict):
         return None
 
+    raw_fields = _declared_parameter_fields(parameter)
+    explicit_declarations = [field for field in raw_fields if "identity" in field]
+    if any(type(field.get("identity")) is not bool for field in explicit_declarations):
+        return None
+    declared_fields = _parameter_fields(parameter)
+    scalar_fields = [
+        field
+        for field in declared_fields
+        if not _is_secret_parameter(field.get("name", ""), None, field)
+        and str(_parameter_value(field, "type", "str")).casefold()
+        in {"str", "string", "model", "int", "float", "number", "bool", "boolean"}
+    ]
+    explicit = [field for field in scalar_fields if field.get("identity") is True]
+    requested_explicit = any(field.get("identity") is True for field in raw_fields)
+    if requested_explicit and not explicit:
+        return None
+    required = [field for field in scalar_fields if bool(field.get("required", False))]
+    candidates = explicit or required or (scalar_fields if len(scalar_fields) == 1 else [])
+    if candidates:
+        names = tuple(str(field.get("name")) for field in candidates)
+        values: list[str] = []
+        for name in names:
+            raw = item.get(name)
+            if raw is None or isinstance(raw, (dict, list)):
+                return None
+            text = str(raw).strip()
+            if not text or len(text) > 256 or any(ord(char) < 32 for char in text):
+                return None
+            values.append(text.casefold())
+        return ("declared", *names, *values)
+
+    # Legacy schemas without usable child metadata retain historical
+    # repository and built-in identities. Declared schema identities always
+    # take precedence and never fall back when one is invalid or omitted.
     if "owner" in item or "repo" in item:
         owner = item.get("owner")
         repo = item.get("repo")
@@ -220,29 +520,92 @@ def _stable_secret_row_identity(item: Any) -> tuple[str, ...] | None:
             return None
         owner_text = owner.strip()
         repo_text = repo.strip()
-        # Validate before normalizing: the GitHub identity grammar is ASCII;
-        # Unicode case-folding must not turn an invalid source identifier into
-        # a valid-looking secret lookup key.
         if not _OBJECT_IDENTITY_PART.fullmatch(owner_text) or not _OBJECT_IDENTITY_PART.fullmatch(
             repo_text
         ):
             return None
         return ("repository", owner_text.casefold(), repo_text.casefold())
-
     for fields in (("id",), ("uuid",), ("slug",), ("name",), ("url",), ("host",)):
-        values = tuple(str(item.get(field, "")).strip() for field in fields)
-        if all(values):
-            return fields + values
+        identity_values = tuple(str(item.get(field, "")).strip() for field in fields)
+        if all(identity_values):
+            return fields + identity_values
     return None
 
 
-def _row_has_explicit_masked_secret(item: Any, secret_fields: set[str]) -> bool:
-    """Return whether a row explicitly asks to retain a hidden old secret."""
-    explicit_masks = _MASKED_SECRET_VALUES - {""}
-    return isinstance(item, dict) and any(
-        field in item and isinstance(item[field], str) and item[field].strip() in explicit_masks
-        for field in secret_fields
-    )
+def _value_has_explicit_masked_secret(
+    value: Any,
+    parameter: Any,
+    *,
+    depth: int = 0,
+    seen: set[int] | None = None,
+) -> bool:
+    """Return whether a bounded settings value asks to retain a secret."""
+    if depth > _SECRET_TREE_MAX_DEPTH:
+        return True
+    visited = seen if seen is not None else set()
+    if isinstance(value, (dict, list)):
+        value_id = id(value)
+        if value_id in visited:
+            return True
+        visited.add(value_id)
+    name = _parameter_value(parameter, "name", "")
+    if _is_secret_parameter(name, None, parameter):
+        return _is_explicit_secret_mask(value)
+    if isinstance(value, dict):
+        fields = {
+            str(field.get("name")): field
+            for field in _parameter_fields(parameter)
+            if field.get("name")
+        }
+        return any(
+            _value_has_explicit_masked_secret(
+                child,
+                fields.get(str(key)),
+                depth=depth + 1,
+                seen=visited,
+            )
+            for key, child in value.items()
+            if _is_safe_object_field_name(key)
+        )
+    if isinstance(value, list):
+        return any(
+            _value_has_explicit_masked_secret(
+                item,
+                parameter,
+                depth=depth + 1,
+                seen=visited,
+            )
+            for item in value
+        )
+    return False
+
+
+def _tree_contains_explicit_mask(
+    value: Any,
+    *,
+    depth: int = 0,
+    seen: set[int] | None = None,
+) -> bool:
+    if depth > _SECRET_TREE_MAX_DEPTH:
+        return True
+    if _is_explicit_secret_mask(value):
+        return True
+    visited = seen if seen is not None else set()
+    if isinstance(value, (dict, list)):
+        value_id = id(value)
+        if value_id in visited:
+            return True
+        visited.add(value_id)
+    if isinstance(value, dict):
+        return any(
+            _tree_contains_explicit_mask(child, depth=depth + 1, seen=visited)
+            for child in value.values()
+        )
+    if isinstance(value, list):
+        return any(
+            _tree_contains_explicit_mask(item, depth=depth + 1, seen=visited) for item in value
+        )
+    return False
 
 
 def _is_secret_parameter(
@@ -251,7 +614,11 @@ def _is_secret_parameter(
     parameter: Any = None,
 ) -> bool:
     parameter_type = str(_parameter_value(parameter, "type", "")).casefold()
-    return parameter_type in {"password", "secret"} or _is_secret_setting_key(key, definition)
+    if parameter_type in {"password", "secret"}:
+        return True
+    if parameter_type in {"object", "json", "object_array"}:
+        return False
+    return _is_secret_setting_key(key, definition)
 
 
 def _mask_secret_value(
@@ -260,10 +627,26 @@ def _mask_secret_value(
     key: Any = "",
     definition: PluginDefinition | None = None,
     parameter: Any = None,
+    _depth: int = 0,
+    _seen: set[int] | None = None,
+    _nodes: list[int] | None = None,
 ) -> Any:
-    parameter = parameter or _parameter_for(definition, key)
-    if _is_secret_parameter(key, definition, parameter):
+    """Mask a settings tree defensively, including malformed in-memory trees."""
+    if _depth > _SECRET_TREE_MAX_DEPTH:
         return _SECRET_MASK
+    nodes = _nodes if _nodes is not None else [0]
+    nodes[0] += 1
+    if nodes[0] > _SECRET_TREE_MAX_NODES:
+        return _SECRET_MASK
+    parameter = parameter or _parameter_for(definition, key)
+    if _is_secret_parameter(key, definition, parameter) or _url_contains_plaintext_secret(value):
+        return _SECRET_MASK
+    seen = _seen if _seen is not None else set()
+    if isinstance(value, (dict, list)):
+        value_id = id(value)
+        if value_id in seen:
+            return _SECRET_MASK
+        seen.add(value_id)
     if isinstance(value, dict):
         field_parameters = {
             str(field.get("name")): field
@@ -276,15 +659,95 @@ def _mask_secret_value(
                 key=child_key,
                 definition=definition,
                 parameter=field_parameters.get(str(child_key)),
+                _depth=_depth + 1,
+                _seen=seen,
+                _nodes=nodes,
             )
             for child_key, child_value in value.items()
+            if _is_safe_object_field_name(child_key)
         }
     if isinstance(value, list):
         return [
-            _mask_secret_value(item, key=key, definition=definition, parameter=parameter)
+            _mask_secret_value(
+                item,
+                key=key,
+                definition=definition,
+                parameter=parameter,
+                _depth=_depth + 1,
+                _seen=seen,
+                _nodes=nodes,
+            )
             for item in value
         ]
     return value
+
+
+def _parameter_default_without_secrets(
+    value: Any,
+    parameter: Any,
+    *,
+    _depth: int = 0,
+    _seen: set[int] | None = None,
+    _nodes: list[int] | None = None,
+) -> Any:
+    """Copy a parameter default while removing secrets and bounding recursion."""
+    if _depth > _SECRET_TREE_MAX_DEPTH:
+        return _MISSING
+    nodes = _nodes if _nodes is not None else [0]
+    nodes[0] += 1
+    if nodes[0] > _SECRET_TREE_MAX_NODES:
+        return _MISSING
+    if _is_secret_parameter(
+        _parameter_value(parameter, "name", ""), None, parameter
+    ) or _url_contains_plaintext_secret(value):
+        return _MISSING
+    seen = _seen if _seen is not None else set()
+    if isinstance(value, (dict, list)):
+        value_id = id(value)
+        if value_id in seen:
+            return _MISSING
+        seen.add(value_id)
+    if isinstance(value, dict):
+        fields_by_name = {
+            str(field.get("name")): field
+            for field in _parameter_fields(parameter)
+            if field.get("name")
+        }
+        result: dict[str, Any] = {}
+        for key, child in value.items():
+            name = str(key)
+            if not _is_safe_object_field_name(name):
+                continue
+            field = fields_by_name.get(name)
+            if _is_secret_parameter(name, None, field):
+                continue
+            safe_child = _parameter_default_without_secrets(
+                child,
+                field,
+                _depth=_depth + 1,
+                _seen=seen,
+                _nodes=nodes,
+            )
+            if safe_child is not _MISSING:
+                result[name] = safe_child
+        return result
+    if isinstance(value, list):
+        result_items: list[Any] = []
+        for item in value:
+            safe_item = _parameter_default_without_secrets(
+                item,
+                parameter,
+                _depth=_depth + 1,
+                _seen=seen,
+                _nodes=nodes,
+            )
+            if safe_item is not _MISSING:
+                result_items.append(safe_item)
+        return result_items
+    try:
+        return copy.deepcopy(value)
+    except (TypeError, ValueError, RecursionError, MemoryError):
+        return _MISSING
 
 
 def _settings_update_without_masked_secrets(
@@ -292,11 +755,19 @@ def _settings_update_without_masked_secrets(
     definition: PluginDefinition | None = None,
     existing: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Drop masked secrets while preserving their existing nested values."""
+    """Apply a full-form update while retaining fields the browser cannot edit.
+
+    Ordinary omitted settings keep replacement semantics. Declared top-level
+    secrets and object/JSON settings are retained from the existing config when
+    the browser omits them entirely.
+    """
 
     def merge(value: Any, old_value: Any, *, key: Any, parameter: Any = None) -> Any:
         parameter = parameter or _parameter_for(definition, key)
-        if _is_secret_parameter(key, definition, parameter) and _is_masked_secret_value(value):
+        preserve_masked = _is_secret_parameter(key, definition, parameter) or (
+            old_value is not _MISSING and _url_contains_plaintext_secret(old_value)
+        )
+        if preserve_masked and _is_masked_secret_value(value):
             return old_value if old_value is not _MISSING else _MISSING
         if isinstance(value, dict):
             old_mapping = old_value if isinstance(old_value, dict) else {}
@@ -307,19 +778,31 @@ def _settings_update_without_masked_secrets(
                 if field.get("name")
             }
             for child_key, child_value in value.items():
+                child_name = str(child_key)
+                if not _is_safe_object_field_name(child_name):
+                    continue
                 merged = merge(
                     child_value,
-                    old_mapping.get(child_key, _MISSING),
-                    key=child_key,
-                    parameter=fields_by_name.get(str(child_key)),
+                    old_mapping.get(child_name, _MISSING),
+                    key=child_name,
+                    parameter=fields_by_name.get(child_name),
                 )
                 if merged is not _MISSING:
-                    result[str(child_key)] = merged
-            # Browser forms deliberately omit environment-managed secret fields.
-            # Retain them only from the already matched row, never by position.
-            for secret_field in _secret_field_names(parameter, definition):
-                if secret_field not in result and secret_field in old_mapping:
-                    result[secret_field] = old_mapping[secret_field]
+                    result[child_name] = merged
+            # Browser forms deliberately omit secret fields. Preserve only
+            # secret-bearing omitted children from the already matched object;
+            # object-array rows are matched by stable identity, never position.
+            for old_child_name, old_child_value in old_mapping.items():
+                child_name = str(old_child_name)
+                if child_name in result or not _is_safe_object_field_name(child_name):
+                    continue
+                child_parameter = fields_by_name.get(child_name)
+                if _is_secret_parameter(
+                    child_name,
+                    definition,
+                    child_parameter,
+                ) or _value_contains_retained_secret(old_child_value, child_parameter):
+                    result[child_name] = copy.deepcopy(old_child_value)
             return result
         if isinstance(value, list):
             old_items = old_value if isinstance(old_value, list) else []
@@ -336,23 +819,43 @@ def _settings_update_without_masked_secrets(
                 }
             old_by_identity: dict[tuple[str, ...], Any] = {}
             ambiguous_identities: set[tuple[str, ...]] = set()
-            if secret_fields:
+            secret_bearing_old_items = [
+                old_item
+                for old_item in old_items
+                if _value_contains_retained_secret(old_item, parameter)
+            ]
+            requires_identity = (
+                bool(secret_fields)
+                or _parameter_contains_secret(parameter)
+                or bool(secret_bearing_old_items)
+            )
+            if requires_identity:
+                identity_counts: dict[tuple[str, ...], int] = {}
                 for old_item in old_items:
-                    identity = _stable_secret_row_identity(old_item)
+                    identity = _stable_secret_row_identity(old_item, parameter)
+                    if identity is not None:
+                        identity_counts[identity] = identity_counts.get(identity, 0) + 1
+                ambiguous_identities = {
+                    identity for identity, count in identity_counts.items() if count > 1
+                }
+                for old_item in secret_bearing_old_items:
+                    identity = _stable_secret_row_identity(old_item, parameter)
                     if identity is None:
-                        continue
-                    if identity in old_by_identity:
-                        ambiguous_identities.add(identity)
-                    else:
-                        old_by_identity[identity] = old_item
+                        raise MaskedSecretUpdateError(
+                            "现有对象包含密钥但没有声明稳定标识；请为字段声明 identity: true 后再保存"
+                        )
+                    old_by_identity[identity] = old_item
 
             result_items: list[Any] = []
             seen_new_identities: set[tuple[str, ...]] = set()
             for item in value:
                 matched_old_item: Any = _MISSING
-                identity = _stable_secret_row_identity(item)
-                wants_secret_retention = _row_has_explicit_masked_secret(item, secret_fields)
-                if secret_fields and identity is not None:
+                identity = _stable_secret_row_identity(item, parameter)
+                wants_secret_retention = _value_has_explicit_masked_secret(
+                    item,
+                    parameter,
+                ) or (requires_identity and _tree_contains_explicit_mask(item))
+                if requires_identity and identity is not None:
                     if identity in seen_new_identities:
                         raise MaskedSecretUpdateError("对象列表包含重复的稳定标识；请先消除重复仓库后再保留密钥")
                     seen_new_identities.add(identity)
@@ -376,41 +879,68 @@ def _settings_update_without_masked_secrets(
     result: dict[str, Any] = {}
     old_settings = existing if isinstance(existing, dict) else {}
     for key, value in settings.items():
-        merged = merge(value, old_settings.get(key, _MISSING), key=key)
+        name = str(key)
+        if not _is_safe_object_field_name(name):
+            continue
+        merged = merge(value, old_settings.get(name, _MISSING), key=name)
         if merged is not _MISSING:
-            result[str(key)] = merged
+            result[name] = merged
+
+    if definition is not None:
+        for parameter in definition.parameters:
+            name = parameter.name
+            parameter_type = parameter.type.casefold()
+            browser_omits = _is_secret_parameter(name, definition, parameter) or parameter_type in {
+                "object",
+                "json",
+            }
+            if browser_omits and name not in settings and name in old_settings:
+                result[name] = copy.deepcopy(old_settings[name])
     return result
 
 
-def _masked_parameter(parameter: Any) -> dict[str, Any]:
-    """Serialize a parameter without exposing secret defaults or child fields."""
+def _masked_parameter(parameter: Any, *, nested: bool = False) -> dict[str, Any]:
+    """Serialize parameter metadata recursively without exposing secrets."""
     parameter_type = str(_parameter_value(parameter, "type", ""))
-    result = {
-        "name": _parameter_value(parameter, "name", ""),
+    parameter_name = _parameter_value(parameter, "name", "")
+    if not _is_safe_object_field_name(parameter_name) or _validate_parameter_metadata(
+        parameter,
+        path=str(parameter_name or "parameter"),
+    ):
+        return {"name": "", "type": "invalid", "fields": None}
+    is_secret = _is_secret_parameter(parameter_name, None, parameter)
+    safe_choices = _parameter_default_without_secrets(
+        _parameter_value(parameter, "choices"),
+        parameter,
+    )
+    result: dict[str, Any] = {
+        "name": parameter_name,
         "type": parameter_type,
         "description": _parameter_value(parameter, "description", ""),
         "required": _parameter_value(parameter, "required", False),
-        "default": _parameter_value(parameter, "default"),
-        "choices": _parameter_value(parameter, "choices"),
-        "fields": _parameter_fields(parameter) or None,
+        "choices": None if safe_choices is _MISSING else safe_choices,
+        "fields": None,
         "minimum": _parameter_value(parameter, "minimum"),
         "maximum": _parameter_value(parameter, "maximum"),
         "group": _parameter_value(parameter, "group", ""),
     }
-    if _is_secret_parameter(result["name"], None, parameter):
+    parameter_default = _parameter_default_without_secrets(
+        _parameter_value(parameter, "default"),
+        parameter,
+    )
+    if is_secret and not nested:
         result["default"] = _SECRET_MASK
-    if _parameter_fields(parameter):
-        result["fields"] = [
-            {
-                **field,
-                "default": (
-                    _SECRET_MASK
-                    if _is_secret_parameter(field.get("name", ""), None, field)
-                    else field.get("default")
-                ),
-            }
-            for field in _parameter_fields(parameter)
-        ]
+    elif parameter_default is not _MISSING:
+        result["default"] = parameter_default
+
+    if nested:
+        for metadata_key in ("identity", "position"):
+            metadata_value = _parameter_value(parameter, metadata_key, _MISSING)
+            if metadata_value is not _MISSING:
+                result[metadata_key] = copy.deepcopy(metadata_value)
+    fields = _parameter_fields(parameter)
+    if fields:
+        result["fields"] = [_masked_parameter(field, nested=True) for field in fields]
     return result
 
 
@@ -419,6 +949,8 @@ def _masked_settings(
     definition: PluginDefinition | None = None,
 ) -> dict[str, Any]:
     if not isinstance(settings, dict):
+        return {}
+    if definition is not None and _validate_definition_metadata(definition):
         return {}
     declared = (
         {parameter.name for parameter in definition.parameters} if definition is not None else None
@@ -479,6 +1011,9 @@ def _effective_permissions(
 
 def _validate_parameter_value(value: Any, parameter: Any, *, path: str) -> str | None:
     """Validate a JSON setting against the declared Plugin parameter contract."""
+    unsafe_path = _unsafe_object_path(value, path=path)
+    if unsafe_path:
+        return f"{unsafe_path} 使用了不安全字段名称"
     parameter_type = str(_parameter_value(parameter, "type", "str")).casefold()
     required = bool(_parameter_value(parameter, "required", False))
     if required and value in (None, "", [], {}):
@@ -502,6 +1037,24 @@ def _validate_parameter_value(value: Any, parameter: Any, *, path: str) -> str |
     elif parameter_type in {"list", "array", "checkbox_group"}:
         if not isinstance(value, list):
             return f"{path} 必须是列表"
+        if any(not isinstance(item, str) or not item.strip() for item in value):
+            return f"{path} 必须是非空字符串列表"
+    elif parameter_type == "schedule":
+        if not isinstance(value, list):
+            return f"{path} 必须是定时列表"
+        for index, item in enumerate(value):
+            item_path = f"{path}[{index}]"
+            if not isinstance(item, dict):
+                return f"{item_path} 必须是对象"
+            time_value = item.get("time", "")
+            duration_value = item.get("duration")
+            if (
+                not isinstance(time_value, str)
+                or re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", time_value) is None
+            ):
+                return f"{item_path}.time 必须是 HH:MM 时间"
+            if type(duration_value) is not int or not 1 <= duration_value <= 10080:
+                return f"{item_path}.duration 必须是 1-10080 的整数"
     elif parameter_type in {"object", "json"}:
         if not isinstance(value, dict):
             return f"{path} 必须是对象"
@@ -540,17 +1093,26 @@ def _validate_parameter_value(value: Any, parameter: Any, *, path: str) -> str |
     for item_path, item in objects:
         if not isinstance(item, dict):
             return f"{item_path} 必须是对象"
-        unknown = set(item) - set(fields)
+        unknown = {
+            str(field_name) for field_name in item if _is_safe_object_field_name(field_name)
+        } - set(fields)
         if unknown:
             return f"{item_path} 包含未声明字段：{sorted(unknown)[0]}"
         for field_name, field in fields.items():
-            if bool(_parameter_value(field, "required", False)) and field_name not in item:
+            if (
+                bool(_parameter_value(field, "required", False))
+                and field_name not in item
+                and not _is_secret_parameter(field_name, None, field)
+            ):
                 return f"{item_path}.{field_name} 不能为空"
         for field_name, field_value in item.items():
+            name = str(field_name)
+            if not _is_safe_object_field_name(name):
+                continue
             error = _validate_parameter_value(
                 field_value,
-                fields[field_name],
-                path=f"{item_path}.{field_name}",
+                fields[name],
+                path=f"{item_path}.{name}",
             )
             if error:
                 return error
@@ -565,16 +1127,58 @@ def _validate_parameter_value(value: Any, parameter: Any, *, path: str) -> str |
     return None
 
 
+def _safe_plugin_ui_schema(definition: PluginDefinition) -> dict[str, Any]:
+    """Return valid presentation metadata, or an empty schema for generic UI."""
+    try:
+        return normalize_plugin_ui_schema(definition.ui_schema, definition.parameters)
+    except (TypeError, ValueError, OverflowError, RecursionError) as exc:
+        LOG.warning("忽略插件 %s 的无效 ui_schema，回退通用表单: %s", definition.name, exc)
+        return {}
+
+
+def _validate_definition_metadata(definition: PluginDefinition) -> str | None:
+    """Validate the executable parameter contract, not optional presentation metadata."""
+    if not definition.parameter_contract_is_intact():
+        return "插件参数契约在加载后发生变化或超出安全上限"
+    top_names = [parameter.name for parameter in definition.parameters]
+    if len(top_names) != len(set(top_names)):
+        return "插件参数声明包含重复名称"
+    if any(not _is_safe_object_field_name(name) for name in top_names):
+        return "插件参数声明包含不安全名称"
+    for parameter in definition.parameters:
+        metadata_error = _validate_parameter_metadata(
+            parameter,
+            path=parameter.name,
+        )
+        if metadata_error:
+            return metadata_error
+    # ui_schema is presentation-only. If it is malformed after loading (for
+    # example, because a third-party manager mutated it in memory), the API
+    # still serves the authoritative parameter contract and the browser uses
+    # its generic form.
+    return None
+
+
 def _validate_settings_schema(
     settings: dict[str, Any],
     definition: PluginDefinition,
+    existing: dict[str, Any] | None = None,
 ) -> str | None:
-    """Reject undeclared, incomplete, or wrongly typed settings before persistence."""
+    """Reject undeclared, incomplete, wrongly typed, or ambiguous metadata."""
+    metadata_error = _validate_definition_metadata(definition)
+    if metadata_error:
+        return metadata_error
     parameters = {parameter.name: parameter for parameter in definition.parameters}
+    existing_settings = existing if isinstance(existing, dict) else {}
     for parameter in definition.parameters:
+        parameter_type = parameter.type.casefold()
+        browser_omits = _is_secret_parameter(
+            parameter.name, definition, parameter
+        ) or parameter_type in {"object", "json"}
         if (
             parameter.required
             and parameter.name not in settings
+            and not (browser_omits and parameter.name in existing_settings)
             and not _is_secret_parameter(parameter.name, definition, parameter)
         ):
             return f"{parameter.name} 不能为空"
@@ -705,6 +1309,10 @@ async def api_plugins_get(request: web.Request, manager: Any) -> web.Response:
 
     plugins: list[dict[str, Any]] = []
     for d in definitions:
+        metadata_error = _validate_definition_metadata(d)
+        if metadata_error:
+            LOG.warning("忽略参数元数据无效的插件 %s: %s", d.name, metadata_error)
+            continue
         plugin_config = config_manager.get_config(d.name)
         source_file = _find_source_file(d.source_path) if d.source_path else None
 
@@ -739,6 +1347,7 @@ async def api_plugins_get(request: web.Request, manager: Any) -> web.Response:
                     for e in d.events
                 ],
                 "parameters": [_masked_parameter(p) for p in d.parameters],
+                "ui_schema": _safe_plugin_ui_schema(d),
                 "nl_examples": d.natural_language.examples if d.natural_language else [],
                 "source_file": source_file,
                 "has_source": source_file is not None,
@@ -782,6 +1391,9 @@ async def api_plugin_detail_get(request: web.Request, manager: Any) -> web.Respo
     definition = next((d for d in definitions if d.name == plugin_name), None)
     if definition is None:
         return _json_response({"error": f"插件 {plugin_name} 不存在"}, 404)
+    metadata_error = _validate_definition_metadata(definition)
+    if metadata_error:
+        return _json_response({"error": metadata_error}, 400)
 
     plugin_config = config_manager.get_config(plugin_name)
     effective_permissions = _effective_permissions(
@@ -837,6 +1449,7 @@ async def api_plugin_detail_get(request: web.Request, manager: Any) -> web.Respo
                 for e in definition.events
             ],
             "parameters": [_masked_parameter(p) for p in definition.parameters],
+            "ui_schema": _safe_plugin_ui_schema(definition),
             "nl_examples": (
                 definition.natural_language.examples if definition.natural_language else []
             ),
@@ -996,6 +1609,9 @@ async def api_plugin_settings_get(request: web.Request, manager: Any) -> web.Res
     definition = _definition_for(manager, plugin_name)
     if definition is None:
         return _json_response({"error": f"插件 {plugin_name} 不存在"}, 404)
+    metadata_error = _validate_definition_metadata(definition)
+    if metadata_error:
+        return _json_response({"error": metadata_error}, 400)
     settings = config_manager.get_settings(plugin_name)
 
     return _json_response(
@@ -1028,15 +1644,15 @@ async def api_plugin_settings_post(request: web.Request, manager: Any) -> web.Re
     definition = _definition_for(manager, plugin_name)
     if definition is None:
         return _json_response({"error": f"插件 {plugin_name} 不存在"}, 404)
-    schema_error = _validate_settings_schema(settings, definition)
-    if schema_error:
-        return _json_response({"error": schema_error}, 400)
     if _contains_plaintext_secret(settings, definition=definition):
         return _json_response(
             {"error": "敏感配置必须通过环境变量或受支持的 Secret 管理器提供"},
             400,
         )
     existing_settings = config_manager.get_settings(plugin_name)
+    schema_error = _validate_settings_schema(settings, definition, existing_settings)
+    if schema_error:
+        return _json_response({"error": schema_error}, 400)
     try:
         safe_settings = _settings_update_without_masked_secrets(
             settings,
@@ -1082,6 +1698,9 @@ async def api_plugin_setting_post(request: web.Request, manager: Any) -> web.Res
     definition = _definition_for(manager, plugin_name)
     if definition is None:
         return _json_response({"error": f"插件 {plugin_name} 不存在"}, 404)
+    metadata_error = _validate_definition_metadata(definition)
+    if metadata_error:
+        return _json_response({"error": metadata_error}, 400)
     parameter = _parameter_for(definition, key)
     if parameter is None:
         return _json_response({"error": f"未声明的插件设置：{key}"}, 400)

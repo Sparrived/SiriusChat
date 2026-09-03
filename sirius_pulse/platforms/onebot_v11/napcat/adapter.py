@@ -19,6 +19,7 @@ import logging
 import os
 import shutil
 import time
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import quote, unquote, urlparse
@@ -35,7 +36,7 @@ except ImportError:
         WebSocketClientProtocol,
     )
 
-from sirius_pulse.adapters.base import BaseAdapter
+from sirius_pulse.adapters.base import BaseAdapter, DeliveryUncertainError
 from sirius_pulse.adapters.models import (
     AtSegment,
     FileSegment,
@@ -54,8 +55,17 @@ from sirius_pulse.tools.builtin._internal._markdown_image import to_image_refere
 
 LOG = logging.getLogger("sirius.platforms.napcat")
 _DISPATCH_EVENT_TIME_BUCKET_SECONDS = 5
+_ATOMIC_PROACTIVE_SEND: ContextVar[bool] = ContextVar("atomic_proactive_send", default=False)
+_PROACTIVE_DELIVERY_START: ContextVar[Callable[[], bool] | None] = ContextVar(
+    "proactive_delivery_start",
+    default=None,
+)
 
 EventHandler = Callable[[dict[str, Any]], Any]
+
+
+class _OneBotDeliveryUncertain(DeliveryUncertainError):
+    """The request reached the WebSocket but its OneBot result was not observed."""
 
 
 def _is_ws_closed(ws: Any) -> bool:
@@ -77,8 +87,13 @@ def _safe_download_name(file_name: str) -> str:
 
 
 def _download_url(url: str, destination: Path) -> int:
+    parsed = urlparse(str(url or ""))
+    if parsed.scheme.casefold() not in {"http", "https"} or not parsed.netloc:
+        raise RuntimeError("NapCat 群文件下载链接必须是有效的 HTTP(S) URL")
     request = Request(url, headers={"User-Agent": "SiriusChat/1.1"})
-    with urlopen(request, timeout=300) as response, destination.open("wb") as output:
+    # The scheme and authority are validated immediately above. NapCat supplies
+    # this URL for a user-authorized group-file download; file/custom schemes are rejected.
+    with urlopen(request, timeout=300) as response, destination.open("wb") as output:  # nosec B310
         shutil.copyfileobj(response, output, length=1024 * 1024)
     return destination.stat().st_size
 
@@ -165,6 +180,8 @@ class NapCatAdapter(BaseAdapter):
         self._dispatch_leases: dict[str, str] = {}
         self._dispatch_delivery_active: set[str] = set()
         self._dispatch_retry_tasks: dict[str, asyncio.Task] = {}
+        self._proactive_event_locks: dict[str, asyncio.Lock] = {}
+        self._proactive_event_results: dict[str, float] = {}
         # Keep fire-and-forget event handlers so stop/rebind can cancel work
         # that still owns an old engine.
         self._event_handler_tasks: set[asyncio.Task[Any]] = set()
@@ -478,6 +495,15 @@ class NapCatAdapter(BaseAdapter):
     def _is_send_action(action: str) -> bool:
         return action in ("send_group_msg", "send_private_msg")
 
+    @staticmethod
+    def _is_irreversible_action(action: str) -> bool:
+        return action in (
+            "send_group_msg",
+            "send_private_msg",
+            "group_poke",
+            "friend_poke",
+        )
+
     def _send_channel_key(self, action: str, params: dict[str, Any]) -> str:
         if action == "send_group_msg":
             return f"group_{params.get('group_id', '')}"
@@ -515,21 +541,45 @@ class NapCatAdapter(BaseAdapter):
         self._pending[echo] = future
 
         payload = {"action": action, "params": params, "echo": echo}
+        atomic_irreversible = self._is_irreversible_action(action) and _ATOMIC_PROACTIVE_SEND.get()
         try:
-            await self.ws.send(json.dumps(payload))
-        except Exception as exc:
-            self._pending.pop(echo, None)
-            raise RuntimeError(f"Failed to send API request: {exc}") from exc
+            delivery_start = _PROACTIVE_DELIVERY_START.get()
+            if atomic_irreversible and callable(delivery_start):
+                if not delivery_start():
+                    raise RuntimeError("proactive delivery lease expired before platform I/O")
+            try:
+                await self.ws.send(json.dumps(payload))
+            except asyncio.CancelledError as exc:
+                if atomic_irreversible:
+                    raise _OneBotDeliveryUncertain(
+                        f"WebSocket send was cancelled with unknown outcome: {action}"
+                    ) from exc
+                raise
+            except Exception as exc:
+                if atomic_irreversible:
+                    raise _OneBotDeliveryUncertain(
+                        f"WebSocket send outcome is unknown: {action}"
+                    ) from exc
+                raise RuntimeError(f"Failed to send API request: {exc}") from exc
 
-        try:
-            resp = await asyncio.wait_for(future, timeout=self.api_timeout)
-        except asyncio.TimeoutError:
-            self._pending.pop(echo, None)
-            raise RuntimeError(f"API timeout: {action}")
+            try:
+                resp = await asyncio.wait_for(future, timeout=self.api_timeout)
+            except asyncio.CancelledError as exc:
+                if atomic_irreversible:
+                    raise _OneBotDeliveryUncertain(
+                        f"API acknowledgement wait was cancelled: {action}"
+                    ) from exc
+                raise
+            except asyncio.TimeoutError as exc:
+                if atomic_irreversible:
+                    raise _OneBotDeliveryUncertain(f"API timeout after send: {action}") from exc
+                raise RuntimeError(f"API timeout: {action}") from exc
         finally:
             self._pending.pop(echo, None)
+            if not future.done():
+                future.cancel()
 
-        if resp.get("status") != "ok":
+        if resp.get("status") not in {"ok", "async"}:
             retcode = resp.get("retcode", -1)
             wording = resp.get("wording", "unknown error")
             raise RuntimeError(f"API error: {action} retcode={retcode} {wording}")
@@ -1752,6 +1802,94 @@ class NapCatAdapter(BaseAdapter):
                 LOG.warning("事件总线监听异常: %s", exc)
                 await asyncio.sleep(1)
 
+    async def _keep_dispatch_lease_alive(
+        self,
+        dispatcher: GroupDispatcher,
+        lease_id: str,
+    ) -> None:
+        """Renew a delivery lease while OneBot I/O is still pending."""
+        interval = max(0.25, min(30.0, dispatcher.lease_seconds / 3.0))
+        while True:
+            await asyncio.sleep(interval)
+            if not dispatcher.renew(lease_id):
+                return
+
+    async def _deliver_proactive_payload(
+        self,
+        *,
+        group_id: str,
+        reply: str,
+        reply_refs: Any,
+        image_path: str,
+        sticker_names: Any,
+        poke_user_ids: Any,
+    ) -> bool:
+        """Deliver required text first; optional media never masks text failure."""
+        private = group_id.startswith("private_")
+        target_id = group_id.removeprefix("private_").removeprefix("qq_") if private else group_id
+        atomic_token = _ATOMIC_PROACTIVE_SEND.set(True)
+        try:
+            if reply:
+                if private:
+                    text_sent = await self._send_private_text(target_id, reply, reply_refs)
+                else:
+                    text_sent = await self._send_group_text(group_id, reply, reply_refs)
+                if not text_sent:
+                    return False
+                # Text is authoritative for plugin notifications.  Images and
+                # interaction effects are optional enhancements after it succeeds.
+                if image_path:
+                    if private:
+                        await self._send_private_image(target_id, image_path)
+                    else:
+                        await self._send_group_image(group_id, image_path)
+                effect_group_id = f"private_{target_id}" if private else group_id
+                await self._send_stickers_after_reply(effect_group_id, sticker_names)
+                await self._send_pokes_after_reply(effect_group_id, poke_user_ids)
+                return True
+
+            sent = False
+            if image_path:
+                if private:
+                    sent = await self._send_private_image(target_id, image_path)
+                else:
+                    sent = await self._send_group_image(group_id, image_path)
+            effect_group_id = f"private_{target_id}" if private else group_id
+            sticker_sent = await self._send_stickers_after_reply(effect_group_id, sticker_names)
+            poke_sent = await self._send_pokes_after_reply(effect_group_id, poke_user_ids)
+            return bool(sent or sticker_sent or poke_sent)
+        finally:
+            _ATOMIC_PROACTIVE_SEND.reset(atomic_token)
+
+    def _prune_local_proactive_events(self) -> None:
+        """Bound fallback reminder receipts and per-event asyncio locks."""
+        cutoff = time.monotonic() - 30 * 86400.0
+        keep = sorted(
+            (
+                (key, seen_at)
+                for key, seen_at in self._proactive_event_results.items()
+                if seen_at >= cutoff
+            ),
+            key=lambda item: item[1],
+            reverse=True,
+        )[:4096]
+        self._proactive_event_results = dict(keep)
+        if len(self._proactive_event_locks) <= 8192:
+            return
+        retained_results = set(self._proactive_event_results)
+        for key, lock in list(self._proactive_event_locks.items()):
+            if len(self._proactive_event_locks) <= 8192:
+                break
+            waiters = getattr(lock, "_waiters", None)
+            has_waiters = any(not waiter.done() for waiter in (waiters or ()))
+            if key not in retained_results and not lock.locked() and not has_waiters:
+                self._proactive_event_locks.pop(key, None)
+
+    def _remember_local_proactive_event(self, event_key: str) -> None:
+        """Bound same-process fallback reminder deduplication to thirty days."""
+        self._proactive_event_results[event_key] = time.monotonic()
+        self._prune_local_proactive_events()
+
     def _ack_proactive_delivery(self, event: SessionEvent, accepted: bool) -> None:
         """Resolve an in-memory receipt attached by the proactive dispatcher."""
         receipt = event.data.get("_delivery_ack")
@@ -1945,6 +2083,9 @@ class NapCatAdapter(BaseAdapter):
                 sticker_names = event.data.get("sticker_names", [])
                 poke_user_ids = event.data.get("poke_user_ids", [])
                 target_types = event.data.get("adapter_types", [])
+                adapter_route_id = str(event.data.get("adapter_route_id", "") or "").strip()
+                if adapter_route_id and adapter_route_id != self.adapter_route_id:
+                    return
                 if isinstance(target_types, str):
                     target_types = [target_types]
                 if not isinstance(target_types, (list, tuple, set)):
@@ -1981,67 +2122,132 @@ class NapCatAdapter(BaseAdapter):
                     and adapter_matches
                     and destination_allowed
                 ):
-                    dispatcher = self._get_dispatcher() if not gid.startswith("private_") else None
-                    dispatch_lease_id = ""
-                    dispatch_sent = False
-                    if dispatcher is not None:
-                        reminder_id = str(
-                            event.data.get("reminder_id", "") or event.data.get("id", "")
+                    reminder_id = str(event.data.get("reminder_id", "") or event.data.get("id", ""))
+                    if not reminder_id:
+                        fallback_id = json.dumps(
+                            {
+                                "group_id": gid,
+                                "reply": reply,
+                                "image_path": image_path,
+                                "reply_references": reply_refs,
+                                "sticker_names": sticker_names,
+                                "poke_user_ids": poke_user_ids,
+                            },
+                            ensure_ascii=False,
+                            sort_keys=True,
+                            separators=(",", ":"),
                         )
-                        if not reminder_id:
-                            fallback_id = json.dumps(
-                                {
-                                    "group_id": gid,
-                                    "reply": reply,
-                                    "image_path": image_path,
-                                    "reply_references": reply_refs,
-                                    "sticker_names": sticker_names,
-                                    "poke_user_ids": poke_user_ids,
-                                },
-                                ensure_ascii=False,
-                                sort_keys=True,
-                                separators=(",", ":"),
-                            )
-                            reminder_id = hashlib.sha256(fallback_id.encode("utf-8")).hexdigest()[
-                                :24
-                            ]
-                        decision = dispatcher.admit(
-                            event_id=f"reminder:{gid}:{reminder_id}",
-                            group_id=gid,
-                            sender_type="system",
-                            preferred_worker_id=dispatcher.worker_id,
-                        )
-                        if not decision.granted:
-                            self._ack_proactive_delivery(event, False)
+                        reminder_id = hashlib.sha256(fallback_id.encode("utf-8")).hexdigest()[:24]
+                    # Canonicalize equivalent private IDs before deriving a
+                    # durable stable-event namespace.  Helpers selects one
+                    # concrete route when multiple same-type adapters are
+                    # eligible, so the namespace must represent the logical
+                    # destination rather than the local adapter instance.
+                    private_target = (
+                        gid.removeprefix("private_").removeprefix("qq_")
+                        if gid.startswith("private_")
+                        else ""
+                    )
+                    dispatch_group_id = f"private:{private_target}" if private_target else gid
+                    dispatch_event_id = f"reminder:{dispatch_group_id}:{reminder_id}"
+                    local_event_key = f"{self.adapter_route_id}:{dispatch_event_id}"
+                    self._prune_local_proactive_events()
+                    event_lock = self._proactive_event_locks.setdefault(
+                        local_event_key, asyncio.Lock()
+                    )
+                    async with event_lock:
+                        if local_event_key in self._proactive_event_results:
+                            self._ack_proactive_delivery(event, True)
                             return
-                        dispatch_lease_id = decision.lease_id
-                    try:
-                        if gid.startswith("private_"):
-                            uid = gid.replace("private_", "").replace("qq_", "")
-                            if reply:
-                                dispatch_sent = await self._send_private_text(
-                                    uid, reply, reply_refs
+                        dispatcher = self._get_dispatcher()
+                        dispatch_lease_id = ""
+                        heartbeat: asyncio.Task[Any] | None = None
+                        accepted = False
+                        delivery_started = False
+                        delivery_uncertain = False
+                        if dispatcher is not None:
+                            decision = dispatcher.admit(
+                                event_id=dispatch_event_id,
+                                group_id=dispatch_group_id,
+                                sender_type="system",
+                                preferred_worker_id=dispatcher.worker_id,
+                            )
+                            if not decision.granted:
+                                terminal = decision.reason in {
+                                    "event_sent",
+                                    "event_uncertain",
+                                }
+                                self._ack_proactive_delivery(event, terminal)
+                                if terminal:
+                                    self._remember_local_proactive_event(local_event_key)
+                                return
+                            dispatch_lease_id = decision.lease_id
+
+                        def start_delivery() -> bool:
+                            """Fence the event immediately before irreversible OneBot I/O."""
+                            nonlocal delivery_started, heartbeat
+                            if delivery_started:
+                                return True
+                            if dispatcher is not None and not dispatcher.begin_delivery(
+                                dispatch_lease_id
+                            ):
+                                return False
+                            delivery_started = True
+                            if dispatcher is not None:
+                                heartbeat = asyncio.create_task(
+                                    self._keep_dispatch_lease_alive(
+                                        dispatcher,
+                                        dispatch_lease_id,
+                                    )
                                 )
-                            if image_path:
-                                image_sent = await self._send_private_image(uid, image_path)
-                                dispatch_sent = image_sent or dispatch_sent
-                        elif destination_allowed:
-                            if reply:
-                                dispatch_sent = await self._send_group_text(gid, reply, reply_refs)
-                            if image_path:
-                                image_sent = await self._send_group_image(gid, image_path)
-                                dispatch_sent = image_sent or dispatch_sent
-                        sticker_sent = await self._send_stickers_after_reply(gid, sticker_names)
-                        poke_sent = await self._send_pokes_after_reply(gid, poke_user_ids)
-                        dispatch_sent = sticker_sent or poke_sent or dispatch_sent
-                    finally:
-                        self._ack_proactive_delivery(event, dispatch_sent)
-                        if dispatch_lease_id and dispatcher is not None:
-                            dispatcher.finish(dispatch_lease_id, sent=dispatch_sent)
+                            return True
+
+                        delivery_token = _PROACTIVE_DELIVERY_START.set(start_delivery)
+                        try:
+                            accepted = await self._deliver_proactive_payload(
+                                group_id=gid,
+                                reply=reply,
+                                reply_refs=reply_refs,
+                                image_path=image_path,
+                                sticker_names=sticker_names,
+                                poke_user_ids=poke_user_ids,
+                            )
+                        except DeliveryUncertainError as exc:
+                            # A request crossed the irreversible-I/O fence but
+                            # its platform result was not observed.  Replaying a
+                            # stable ID could duplicate a visible side effect.
+                            delivery_uncertain = True
+                            LOG.warning("主动消息平台确认丢失，禁止重放: %s", exc)
+                        except asyncio.CancelledError:
+                            # Lock/rate-limit waits happen before start_delivery
+                            # and are safe to retry.  Cancellation after the fence
+                            # is terminal because platform I/O may have started.
+                            delivery_uncertain = delivery_started
+                            raise
+                        finally:
+                            _PROACTIVE_DELIVERY_START.reset(delivery_token)
+                            if heartbeat is not None:
+                                heartbeat.cancel()
+                                await asyncio.gather(heartbeat, return_exceptions=True)
+                            terminal = accepted or delivery_uncertain
+                            if terminal:
+                                # Keep a same-process guard even if durable
+                                # finalization itself encounters storage trouble.
+                                self._remember_local_proactive_event(local_event_key)
+                            if dispatch_lease_id and dispatcher is not None:
+                                dispatcher.finish(
+                                    dispatch_lease_id,
+                                    sent=accepted,
+                                    uncertain=delivery_uncertain,
+                                )
+                            # Do not describe a lost platform ACK as a confirmed
+                            # current attempt.  The next stable-ID retry observes
+                            # the terminal uncertain marker without resending.
+                            self._ack_proactive_delivery(event, accepted)
         except Exception as exc:
             if event.type == SessionEventType.REMINDER_TRIGGERED:
                 self._ack_proactive_delivery(event, False)
-            LOG.warning("事件处理异常: %s", exc)
+            LOG.warning("事件处理异常: %s", exc, exc_info=True)
 
     # ─── 消息发送（引擎回调） ─────────────────────────────
 
@@ -2080,11 +2286,17 @@ class NapCatAdapter(BaseAdapter):
         self._begin_reply_send(key)
         try:
             async with self._get_reply_lock(key):
+                if _ATOMIC_PROACTIVE_SEND.get():
+                    return await self._send_group_text_single_locked(
+                        group_id,
+                        text,
+                        reply_refs,
+                    )
                 # 最终兜底：按换行符拆分为多条消息，仅首条携带引用
                 lines = [line for line in text.splitlines() if line.strip()]
                 if len(lines) > 1:
                     first = True
-                    for idx, line in enumerate(lines):
+                    for line in lines:
                         if not first:
                             await self._sleep_before_reply_part(line)
                         refs = reply_refs if first else None
@@ -2145,6 +2357,8 @@ class NapCatAdapter(BaseAdapter):
                 await self.send_group_msg(group_id, self._group_text_to_segments(group_id, text))
                 LOG.info("回复群 %s: %s", group_id, text[:120])
             return True
+        except _OneBotDeliveryUncertain:
+            raise
         except Exception as exc:
             LOG.warning("发送群消息失败: %s", exc)
             return False
@@ -2220,11 +2434,13 @@ class NapCatAdapter(BaseAdapter):
         self._begin_reply_send(key)
         try:
             async with self._get_reply_lock(key):
+                if _ATOMIC_PROACTIVE_SEND.get():
+                    return await self._send_private_text_single_locked(user_id, text)
                 # 最终兜底：按换行符拆分为多条消息
                 lines = [line for line in text.splitlines() if line.strip()]
                 if len(lines) > 1:
                     first = True
-                    for idx, line in enumerate(lines):
+                    for line in lines:
                         if not first:
                             await self._sleep_before_reply_part(line)
                         ok = await self._send_private_text_single_locked(user_id, line)
@@ -2251,6 +2467,8 @@ class NapCatAdapter(BaseAdapter):
             await self.send_private_msg(user_id, text)
             LOG.info("回复私聊 %s: %s", user_id, text[:120])
             return True
+        except _OneBotDeliveryUncertain:
+            raise
         except Exception as exc:
             LOG.warning("发送私聊消息失败: %s", exc)
             return False
@@ -2265,7 +2483,11 @@ class NapCatAdapter(BaseAdapter):
         if not sticker_names:
             return False
         try:
-            result = await self._engine._send_stickers_by_names(group_id, sticker_names)
+            result = await self._engine._send_stickers_by_names(
+                group_id,
+                sticker_names,
+                adapter=self,
+            )
             if not isinstance(result, dict) or result.get("success") is not True:
                 LOG.warning(
                     "发送回复后的表情包失败: group=%s names=%s result=%s",
@@ -2275,6 +2497,8 @@ class NapCatAdapter(BaseAdapter):
                 )
                 return False
             return True
+        except DeliveryUncertainError:
+            raise
         except Exception as exc:
             LOG.warning("发送回复后的表情包失败: %s", exc)
             return False
@@ -2290,7 +2514,10 @@ class NapCatAdapter(BaseAdapter):
         for user_id in dict.fromkeys(poke_user_ids):
             try:
                 result = await self.send_poke(user_id, group_id)
-                if not isinstance(result, dict) or result.get("status") != "ok":
+                if not isinstance(result, dict) or result.get("status") not in {
+                    "ok",
+                    "async",
+                }:
                     LOG.warning(
                         "发送回复后的戳一戳失败: group=%s user=%s result=%s",
                         group_id,
@@ -2299,6 +2526,8 @@ class NapCatAdapter(BaseAdapter):
                     )
                     continue
                 sent_any = True
+            except DeliveryUncertainError:
+                raise
             except Exception as exc:
                 LOG.warning("发送回复后的戳一戳失败: group=%s user=%s error=%s", group_id, user_id, exc)
         return sent_any
@@ -2312,6 +2541,8 @@ class NapCatAdapter(BaseAdapter):
                 await self.send_group_msg(group_id, segment)
                 LOG.info("回复群 %s 图片: %s", group_id, image_path)
                 return True
+            except _OneBotDeliveryUncertain:
+                raise
             except Exception as exc:
                 LOG.warning("发送群图片失败: %s", exc)
                 return False
@@ -2325,6 +2556,8 @@ class NapCatAdapter(BaseAdapter):
                 await self.send_private_msg(user_id, segment)
                 LOG.info("回复私聊 %s 图片: %s", user_id, image_path)
                 return True
+            except _OneBotDeliveryUncertain:
+                raise
             except Exception as exc:
                 LOG.warning("发送私聊图片失败: %s", exc)
                 return False

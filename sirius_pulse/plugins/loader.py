@@ -22,13 +22,15 @@ from importlib.metadata import version as distribution_version
 from pathlib import Path
 from typing import Any
 
-from sirius_pulse.plugins.models import PluginDefinition
+from sirius_pulse.plugins.models import PluginDefinition, normalize_plugin_ui_schema
 
 logger = logging.getLogger(__name__)
 
 # The project currently publishes stable semantic versions.  Keep comparison
 # dependency-free so PluginLoader remains usable in minimal installations.
 _VERSION_PREFIX = re.compile(r"^\s*(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:[+\-].*)?\s*$")
+_MAX_PLUGIN_METADATA_SOURCE_BYTES = 4 * 1024 * 1024
+_MAX_PLUGIN_MANIFEST_BYTES = 1024 * 1024
 
 
 def _numeric_version(value: object) -> tuple[int, int, int] | None:
@@ -50,6 +52,39 @@ def _installed_framework_version() -> str | None:
         # Source-tree development can intentionally run without an installed
         # distribution.  Do not make that mode claim a fictitious version.
         return None
+
+
+def _literal_dict_has_duplicate_key(node: ast.AST) -> bool:
+    """Return whether any literal dictionary below *node* repeats a key."""
+    for child in ast.walk(node):
+        if not isinstance(child, ast.Dict):
+            continue
+        seen: set[Any] = set()
+        for key_node in child.keys:
+            if key_node is None:
+                continue
+            try:
+                key = ast.literal_eval(key_node)
+                hash(key)
+                if key in seen:
+                    return True
+                seen.add(key)
+            except (TypeError, ValueError, SyntaxError, MemoryError):
+                # ``ast.literal_eval`` below remains the authority for whether
+                # the complete declaration is static. This helper only closes
+                # Python's otherwise silent duplicate-key overwrite behavior.
+                continue
+    return False
+
+
+def _json_object_without_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """Build a JSON object while rejecting ambiguous duplicate keys."""
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"JSON 对象包含重复字段：{key}")
+        result[key] = value
+    return result
 
 
 class PluginLoadError(Exception):
@@ -252,6 +287,21 @@ class PluginLoader:
                     definition.events = ast_definition.events
                 if not definition.prompt_inject:
                     definition.prompt_inject = ast_definition.prompt_inject
+                if not definition.ui_schema:
+                    definition.ui_schema = ast_definition.ui_schema
+                try:
+                    definition.seal_parameter_contract()
+                    definition.ui_schema = normalize_plugin_ui_schema(
+                        definition.ui_schema,
+                        definition.parameters,
+                    )
+                except (TypeError, ValueError, OverflowError, RecursionError) as exc:
+                    logger.warning(
+                        "插件 [%s] 的合并 ui_schema 无效，回退通用表单: %s",
+                        plugin_path.name,
+                        exc,
+                    )
+                    definition.ui_schema = {}
         else:
             definition = self._load_definition_from_ast(plugin_path)
         if definition is not None:
@@ -283,6 +333,8 @@ class PluginLoader:
                     continue
                 if not decorator.args:
                     raise PluginLoadError(plugin_path, "@command 必须声明字面量命令名")
+                if _literal_dict_has_duplicate_key(decorator):
+                    raise PluginLoadError(plugin_path, "@command 元数据包含重复字段")
                 try:
                     command_name = ast.literal_eval(decorator.args[0])
                     keyword_values = {
@@ -305,6 +357,8 @@ class PluginLoader:
                     or any(not isinstance(pattern, str) for pattern in patterns)
                 ):
                     raise PluginLoadError(plugin_path, "@command prefix/patterns 声明无效")
+                if any(not pattern.strip() for pattern in patterns):
+                    raise PluginLoadError(plugin_path, "@command pattern 不能为空或仅包含空白")
                 commands.append(
                     {
                         "name": command_name,
@@ -332,6 +386,7 @@ class PluginLoader:
             "_plugin_dependencies": "dependencies",
             "_plugin_prompt_inject": "prompt_inject",
             "_plugin_parameters": "parameters",
+            "_plugin_ui_schema": "ui_schema",
             "_plugin_permissions": "permissions",
             "_plugin_events": "events",
         }
@@ -344,7 +399,14 @@ class PluginLoader:
             if py_file.name.startswith("_") and py_file.name != "__init__.py":
                 continue
             try:
+                if py_file.stat().st_size > _MAX_PLUGIN_METADATA_SOURCE_BYTES:
+                    raise PluginLoadError(
+                        plugin_path,
+                        f"Plugin 元数据源码超过 4 MiB 安全上限: {py_file.name}",
+                    )
                 tree = ast.parse(py_file.read_text(encoding="utf-8"))
+            except PluginLoadError:
+                raise
             except (OSError, UnicodeError, SyntaxError) as exc:
                 raise PluginLoadError(
                     plugin_path, f"无法解析 Plugin 元数据: {type(exc).__name__}"
@@ -353,6 +415,7 @@ class PluginLoader:
                 if not isinstance(node, ast.ClassDef):
                     continue
                 class_values: dict[str, Any] = {}
+                declared_targets: set[str] = set()
                 for child in node.body:
                     target_name = ""
                     value_node: ast.expr | None = None
@@ -366,6 +429,17 @@ class PluginLoader:
                         value_node = child.value
                     if target_name not in supported or value_node is None:
                         continue
+                    if target_name in declared_targets:
+                        raise PluginLoadError(
+                            plugin_path,
+                            f"Plugin 元数据 {target_name} 在同一类中重复声明",
+                        )
+                    declared_targets.add(target_name)
+                    if _literal_dict_has_duplicate_key(value_node):
+                        raise PluginLoadError(
+                            plugin_path,
+                            f"Plugin 元数据 {target_name} 包含重复字段",
+                        )
                     try:
                         class_values[supported[target_name]] = ast.literal_eval(value_node)
                     except (ValueError, TypeError, SyntaxError, MemoryError) as exc:
@@ -410,12 +484,19 @@ class PluginLoader:
                 parameter_name = raw_parameter.get("name")
                 if not isinstance(parameter_name, str) or not parameter_name.strip():
                     raise PluginLoadError(plugin_path, "Plugin 参数缺少有效名称")
+                if parameter_name in parameter_map:
+                    raise PluginLoadError(
+                        plugin_path,
+                        f"Plugin 参数声明包含重复名称：{parameter_name}",
+                    )
                 parameter_map[parameter_name] = {
                     key: value for key, value in raw_parameter.items() if key != "name"
                 }
             data["parameters"] = parameter_map
         elif raw_parameters is not None:
             raise PluginLoadError(plugin_path, "_plugin_parameters 必须是对象列表")
+        if "ui_schema" in metadata:
+            data["ui_schema"] = metadata["ui_schema"]
         if "permissions" in metadata:
             data["permissions"] = metadata["permissions"]
         commands = metadata.get("commands", [])
@@ -464,15 +545,23 @@ class PluginLoader:
         """从 plugin.json 加载定义（兼容旧格式）。"""
         config_file = self._safe_manifest_path(plugin_path)
         try:
+            if config_file.stat().st_size > _MAX_PLUGIN_MANIFEST_BYTES:
+                raise PluginLoadError(plugin_path, "plugin.json 超过 1 MiB 安全上限")
             raw_text = config_file.read_text(encoding="utf-8")
-            data = json.loads(raw_text)
-        except json.JSONDecodeError as exc:
+            data = json.loads(
+                raw_text,
+                object_pairs_hook=_json_object_without_duplicate_keys,
+            )
+        except (json.JSONDecodeError, ValueError) as exc:
             raise PluginLoadError(plugin_path, f"plugin.json 格式错误: {exc}") from exc
 
         if not isinstance(data, dict):
             raise PluginLoadError(plugin_path, "plugin.json 必须是 JSON 对象")
 
-        return PluginDefinition.from_dict(data, source_path=plugin_path)
+        try:
+            return PluginDefinition.from_dict(data, source_path=plugin_path)
+        except (AttributeError, TypeError, ValueError) as exc:
+            raise PluginLoadError(plugin_path, "Plugin 元数据结构无效") from exc
 
     def import_plugin_class(self, plugin_path: Path) -> type | None:
         """从插件目录的 .py 文件中导入 PluginBase 子类。

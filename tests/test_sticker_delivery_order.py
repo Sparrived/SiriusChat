@@ -18,7 +18,8 @@ async def test_napcat_delayed_delivery_sends_text_before_sticker():
         order.append("text")
         return {"ok": True}
 
-    async def fake_send_stickers(group_id, names):
+    async def fake_send_stickers(group_id, names, *, adapter=None):
+        assert adapter is not None
         order.append("sticker")
         return {"ok": True}
 
@@ -51,3 +52,27 @@ async def test_napcat_delayed_delivery_sends_text_before_sticker():
     )
 
     assert order == ["text", "sticker", "poke"]
+
+
+@pytest.mark.asyncio
+async def test_napcat_private_qq_sticker_effect_uses_canonical_private_target():
+    adapter = NapCatAdapter("ws://example.invalid")
+    targets: list[str] = []
+
+    async def fake_send_stickers(group_id, names, *, adapter=None):
+        targets.append(str(group_id))
+        return {"success": True}
+
+    adapter._engine = SimpleNamespace(_send_stickers_by_names=fake_send_stickers)
+
+    accepted = await adapter._deliver_proactive_payload(
+        group_id="private_qq_200",
+        reply="",
+        reply_refs=[],
+        image_path="",
+        sticker_names=["开心"],
+        poke_user_ids=[],
+    )
+
+    assert accepted is True
+    assert targets == ["private_200"]

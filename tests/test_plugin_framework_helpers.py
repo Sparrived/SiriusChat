@@ -235,6 +235,37 @@ async def test_plugin_context_when_bound_then_dispatches_proactive_message_throu
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("handler_result", "expected"),
+    [
+        (True, True),
+        (False, False),
+        ("accepted", False),
+        (1, False),
+        ({"accepted": True}, False),
+        (None, False),
+    ],
+)
+async def test_plugin_proactive_dispatch_only_accepts_explicit_true(
+    handler_result,
+    expected,
+):
+    class Engine:
+        identity_resolver = None
+        user_manager = None
+
+        async def dispatch_proactive_message(self, **_kwargs):
+            return handler_result
+
+    proxy = EngineProxy()
+    proxy._bind(Engine(), "demo")
+
+    accepted = await proxy.dispatch_proactive_message(group_id="g1", text="monitor update")
+
+    assert accepted is expected
+
+
+@pytest.mark.asyncio
 async def test_engine_proxy_emit_event_is_awaitable_and_reports_bus_availability():
     events = []
 

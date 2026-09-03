@@ -19,6 +19,33 @@ from sirius_pulse.plugins.models import ArgNode, CommandAST, PluginCommandDef, P
 
 logger = logging.getLogger(__name__)
 
+_EXPLICIT_COMMAND_PREFIXES = frozenset({"/", "#", "!"})
+
+
+def _is_explicit_prefix_pattern(pattern: str) -> bool:
+    """Return whether a pattern declares an explicit chat-command prefix."""
+    return bool(pattern) and pattern[0] in _EXPLICIT_COMMAND_PREFIXES
+
+
+def _is_well_formed_explicit_pattern(pattern: str) -> bool:
+    """Return whether an explicit prefix is followed by a command head."""
+    return (
+        _is_explicit_prefix_pattern(pattern)
+        and len(pattern) > 1
+        and (pattern[1].isalnum() or pattern[1] == "_")
+    )
+
+
+def _prefix_pattern_matches(text: str, pattern: str) -> bool:
+    """Match a prefix while enforcing command-token boundaries."""
+    if not pattern or not text.startswith(pattern):
+        return False
+    if not _is_explicit_prefix_pattern(pattern):
+        return True
+    if not _is_well_formed_explicit_pattern(pattern):
+        return False
+    return len(text) == len(pattern) or text[len(pattern)].isspace()
+
 
 # ═══════════════════════════════════════════════════════════════════════
 # Token 定义
@@ -428,28 +455,49 @@ class PluginMatcher:
         """
         text_stripped = text.strip()
 
+        # Explicit commands are unambiguous user intent. Select the most specific
+        # matching command path before considering registration order.
+        explicit_matches = [
+            (pattern, cmd)
+            for cmd in commands
+            if cmd.pattern_type == "prefix"
+            for pattern in cmd.patterns
+            if _is_explicit_prefix_pattern(pattern)
+            and _prefix_pattern_matches(text_stripped, pattern)
+        ]
+        if explicit_matches:
+            pattern, cmd = max(explicit_matches, key=lambda item: len(item[0]))
+            lexed = None
+            if lexer:
+                tokens = lexer.tokenize(text_stripped)
+                lexed = lexer.lex(tokens, raw_text=text_stripped)
+            return MatchResult(
+                plugin_name=plugin_name,
+                command_name=cmd.name,
+                pattern=pattern,
+                pattern_type="prefix",
+                confidence=1.0,
+                lexed=lexed,
+            )
+
         for cmd in commands:
             for pattern in cmd.patterns:
                 if cmd.pattern_type == "prefix":
-                    if text_stripped.startswith(pattern):
-                        # 精确指令：尝试词法解析
+                    # Preserve legacy startswith semantics for non-explicit triggers.
+                    if not _is_explicit_prefix_pattern(pattern) and _prefix_pattern_matches(
+                        text_stripped, pattern
+                    ):
+                        lexed = None
                         if lexer:
                             tokens = lexer.tokenize(text_stripped)
                             lexed = lexer.lex(tokens, raw_text=text_stripped)
-                            return MatchResult(
-                                plugin_name=plugin_name,
-                                command_name=cmd.name,
-                                pattern=pattern,
-                                pattern_type="prefix",
-                                confidence=1.0,
-                                lexed=lexed,
-                            )
                         return MatchResult(
                             plugin_name=plugin_name,
                             command_name=cmd.name,
                             pattern=pattern,
                             pattern_type="prefix",
                             confidence=1.0,
+                            lexed=lexed,
                         )
 
                 elif cmd.pattern_type == "keyword":

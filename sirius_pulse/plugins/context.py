@@ -111,7 +111,7 @@ class EngineProxy:
                 sticker_names=sticker_names,
                 poke_user_ids=poke_user_ids,
             )
-            return bool(result)
+            return result is True
         return False
 
     def get_active_groups(self) -> list[str]:

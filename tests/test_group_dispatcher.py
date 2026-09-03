@@ -53,6 +53,249 @@ def test_group_dispatcher_selects_one_worker_and_releases_turn(tmp_path: Path):
     assert next_turn.worker_id == "beta"
 
 
+def test_group_dispatcher_retries_failed_reminders_but_deduplicates_sent_ones(
+    tmp_path: Path,
+):
+    clock = _Clock()
+    dispatcher = _dispatcher(tmp_path / "dispatcher.db", clock, "alpha", "100")
+    event_id = "reminder:g1:sub2api-event"
+
+    first = dispatcher.admit(
+        event_id=event_id,
+        group_id="g1",
+        sender_type="system",
+        preferred_worker_id="alpha",
+    )
+    assert first.granted
+    in_flight_duplicate = dispatcher.admit(
+        event_id=event_id,
+        group_id="g1",
+        sender_type="system",
+        preferred_worker_id="alpha",
+    )
+    assert not in_flight_duplicate.granted
+    assert in_flight_duplicate.reason == "event_granted"
+    assert dispatcher.finish(first.lease_id, sent=False)
+
+    retry = dispatcher.admit(
+        event_id=event_id,
+        group_id="g1",
+        sender_type="system",
+        preferred_worker_id="alpha",
+    )
+    assert retry.granted
+    assert retry.lease_id != first.lease_id
+    assert dispatcher.finish(retry.lease_id, sent=True)
+
+    duplicate = dispatcher.admit(
+        event_id=event_id,
+        group_id="g1",
+        sender_type="system",
+        preferred_worker_id="alpha",
+    )
+    assert not duplicate.granted
+    assert duplicate.reason == "event_sent"
+
+
+def test_dispatcher_close_preserves_event_until_normal_lease_expiry(tmp_path: Path):
+    clock = _Clock()
+    db_path = tmp_path / "dispatcher.db"
+    dispatcher = _dispatcher(db_path, clock, "alpha", "100", lease_seconds=5)
+
+    granted = dispatcher.admit(
+        event_id="reminder:g1:close-before-send",
+        group_id="g1",
+        sender_type="system",
+        preferred_worker_id="alpha",
+    )
+    assert granted.granted
+
+    dispatcher.close()
+    before_expiry = dispatcher.admit(
+        event_id="reminder:g1:close-before-send",
+        group_id="g1",
+        sender_type="system",
+        preferred_worker_id="alpha",
+    )
+    assert before_expiry.granted is False
+    assert before_expiry.reason == "event_granted"
+
+    clock.value += 6
+    retry = dispatcher.admit(
+        event_id="reminder:g1:close-before-send",
+        group_id="g1",
+        sender_type="system",
+        preferred_worker_id="alpha",
+    )
+    assert retry.granted
+    assert retry.lease_id != granted.lease_id
+
+
+def test_reminder_lease_expiry_retries_only_before_platform_delivery_starts(
+    tmp_path: Path,
+):
+    clock = _Clock()
+    db_path = tmp_path / "dispatcher.db"
+    dispatcher = _dispatcher(db_path, clock, "alpha", "100", lease_seconds=5)
+
+    safe = dispatcher.admit(
+        event_id="reminder:g1:not-started",
+        group_id="g1",
+        sender_type="system",
+        preferred_worker_id="alpha",
+    )
+    assert safe.granted
+    clock.value += 6
+    safe_retry = dispatcher.admit(
+        event_id="reminder:g1:not-started",
+        group_id="g1",
+        sender_type="system",
+        preferred_worker_id="alpha",
+    )
+    assert safe_retry.granted
+    assert safe_retry.lease_id != safe.lease_id
+    assert dispatcher.finish(safe_retry.lease_id, sent=True)
+
+    started = dispatcher.admit(
+        event_id="reminder:g2:started",
+        group_id="g2",
+        sender_type="system",
+        preferred_worker_id="alpha",
+    )
+    assert started.granted
+    assert dispatcher.begin_delivery(started.lease_id)
+    clock.value += 6
+    blocked_replay = dispatcher.admit(
+        event_id="reminder:g2:started",
+        group_id="g2",
+        sender_type="system",
+        preferred_worker_id="alpha",
+    )
+    assert not blocked_replay.granted
+    assert blocked_replay.reason == "event_uncertain"
+    assert not dispatcher.finish(started.lease_id, sent=True)
+
+
+def test_expired_sending_is_made_uncertain_before_another_group_prunes_events(
+    tmp_path: Path,
+):
+    clock = _Clock()
+    dispatcher = _dispatcher(
+        tmp_path / "dispatcher.db",
+        clock,
+        "alpha",
+        "100",
+        lease_seconds=5,
+    )
+    event_id = "reminder:g1:cross-group-prune"
+    started = dispatcher.admit(
+        event_id=event_id,
+        group_id="g1",
+        sender_type="system",
+        preferred_worker_id="alpha",
+    )
+    assert started.granted
+    assert dispatcher.begin_delivery(started.lease_id)
+
+    clock.value += 86400 + 10
+    other_group = dispatcher.admit(event_id="ordinary:g2", group_id="g2")
+    assert other_group.granted
+
+    blocked_replay = dispatcher.admit(
+        event_id=event_id,
+        group_id="g1",
+        sender_type="system",
+        preferred_worker_id="alpha",
+    )
+    assert blocked_replay.granted is False
+    assert blocked_replay.reason == "event_uncertain"
+
+
+def test_terminal_reminder_receipt_survives_event_age_and_volume_pruning(tmp_path: Path):
+    clock = _Clock()
+    dispatcher = _dispatcher(tmp_path / "dispatcher.db", clock, "alpha", "100")
+    event_id = "reminder:g1:durable-receipt"
+    decision = dispatcher.admit(
+        event_id=event_id,
+        group_id="g1",
+        sender_type="system",
+        preferred_worker_id="alpha",
+    )
+    assert decision.granted
+    assert dispatcher.finish(decision.lease_id, sent=True)
+
+    with dispatcher._connect() as conn:
+        conn.executemany(
+            """
+            INSERT INTO dispatcher_events(
+                event_id, group_id, worker_id, lease_id, status, reason,
+                created_at, updated_at
+            ) VALUES (?, 'volume', 'alpha', '', 'sent', '', ?, ?)
+            """,
+            [
+                (f"ordinary-volume-{index}", clock.value + index + 1, clock.value + index + 1)
+                for index in range(65_537)
+            ],
+        )
+
+    clock.value += 65_540
+    volume_trigger = dispatcher.admit(event_id="ordinary:volume-trigger", group_id="volume")
+    assert volume_trigger.granted
+    assert dispatcher.finish(volume_trigger.lease_id, sent=False)
+    volume_duplicate = dispatcher.admit(
+        event_id=event_id,
+        group_id="g1",
+        sender_type="system",
+        preferred_worker_id="alpha",
+    )
+    assert volume_duplicate.reason == "event_sent"
+
+    clock.value += 31 * 86400
+    age_trigger = dispatcher.admit(event_id="ordinary:age-trigger", group_id="age")
+    assert age_trigger.granted
+    age_duplicate = dispatcher.admit(
+        event_id=event_id,
+        group_id="g1",
+        sender_type="system",
+        preferred_worker_id="alpha",
+    )
+    assert age_duplicate.granted is False
+    assert age_duplicate.reason == "event_sent"
+
+
+def test_reminder_delivery_lease_can_be_renewed_during_slow_io(tmp_path: Path):
+    clock = _Clock()
+    dispatcher = _dispatcher(
+        tmp_path / "dispatcher.db",
+        clock,
+        "alpha",
+        "100",
+        lease_seconds=5,
+    )
+    event_id = "reminder:g1:slow-delivery"
+    decision = dispatcher.admit(
+        event_id=event_id,
+        group_id="g1",
+        sender_type="system",
+        preferred_worker_id="alpha",
+    )
+    assert decision.granted
+    assert dispatcher.begin_delivery(decision.lease_id)
+
+    clock.value += 4
+    assert dispatcher.renew(decision.lease_id)
+    clock.value += 4
+    duplicate = dispatcher.admit(
+        event_id=event_id,
+        group_id="g1",
+        sender_type="system",
+        preferred_worker_id="alpha",
+    )
+    assert not duplicate.granted
+    assert duplicate.reason == "event_sending"
+    assert dispatcher.finish(decision.lease_id, sent=True)
+
+
 def test_group_dispatcher_targeted_account_wins_and_bypasses_cooldown(tmp_path: Path):
     clock = _Clock()
     db_path = tmp_path / "dispatcher.db"

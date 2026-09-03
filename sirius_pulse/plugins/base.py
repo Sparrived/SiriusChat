@@ -47,11 +47,13 @@ class PluginBase:
         _plugin_version: str        — 版本号
         _plugin_author: str         — 作者
         _plugin_events: list[dict]  — 事件触发器定义
-        _plugin_schedule: list[dict] — 声明式定时（自动转为 _plugin_events），格式 [{"time": "HH:MM", "duration": 1440}, ...]
+        _plugin_schedule: list[dict] — 声明式定时（自动转为 _plugin_events），格式为
+            [{"time": "HH:MM", "duration": 1440}, ...]
         _plugin_permissions: dict   — 权限配置
         _plugin_nl_examples: list[str] — 自然语言触发示例
         _plugin_nl_slots: dict      — 自然语言槽位定义
         _plugin_parameters: list[dict] — 参数定义列表（v1.3+）
+        _plugin_ui_schema: dict       — WebUI 可视化元数据（仅影响文案与布局）
         _plugin_dependencies: list[str] — pip 依赖
     """
 
@@ -71,6 +73,7 @@ class PluginBase:
     _plugin_parameters: list[
         dict[str, Any]
     ] = []  # 参数定义列表（v1.3+），由 from_class() 自动解析为 PluginParameterDef
+    _plugin_ui_schema: dict[str, Any] = {}  # WebUI 可视化元数据；不得改变数据契约
     _plugin_dependencies: list[str] = []
     _plugin_prompt_inject: str = ""  # 注入到人格 prompt 的额外提示词（v1.3+）
 

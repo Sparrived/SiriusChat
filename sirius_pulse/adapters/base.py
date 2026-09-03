@@ -16,6 +16,10 @@ from sirius_pulse.adapters.models import MessageGroup, ParsedEvent
 logger = logging.getLogger(__name__)
 
 
+class DeliveryUncertainError(RuntimeError):
+    """A platform request may have produced an irreversible side effect."""
+
+
 class BaseAdapter(ABC):
     """平台适配器抽象基类。
 
@@ -59,7 +63,11 @@ class BaseAdapter(ABC):
         if not url.startswith(("http://", "https://")):
             return url
 
-        cache_dir = self._sticker_cache_dir if is_sticker else self._image_cache_dir  # type: ignore[attr-defined]
+        cache_dir = (
+            self._sticker_cache_dir  # type: ignore[attr-defined]
+            if is_sticker
+            else self._image_cache_dir  # type: ignore[attr-defined]
+        )
         cache_dir.mkdir(parents=True, exist_ok=True)
         ext = Path(url.split("?")[0]).suffix or ".jpg"
         try:
@@ -71,7 +79,9 @@ class BaseAdapter(ABC):
                         if len(data) > 10 * 1024 * 1024:
                             logger.warning("图片过大(%d bytes)，跳过缓存: %s", len(data), url[:80])
                             return url
-                        content_hash = hashlib.md5(data).hexdigest()
+                        # MD5 is used only as a deterministic cache key, never
+                        # for integrity, authentication, or another security decision.
+                        content_hash = hashlib.md5(data, usedforsecurity=False).hexdigest()
                         cache_path = cache_dir / f"{content_hash}{ext}"
                         if cache_path.exists():
                             return str(cache_path)
