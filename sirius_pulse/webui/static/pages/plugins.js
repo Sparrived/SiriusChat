@@ -518,14 +518,14 @@ class SafeDynamicConfigForm extends DynamicConfigForm {
     let fieldHtml = '';
 
     if (isSecretConfigField(param)) {
-      fieldHtml = this._renderPassword(key, label, value, defaultVal, desc, required);
+      fieldHtml = this._renderPassword(key, label, value, defaultVal, desc, required, param);
     } else if (type === 'model') {
       const modelValue = value || defaultVal || '';
       fieldHtml = this.modelChoices?.length
         ? this._renderModelSelect(key, label, modelValue, desc, required)
         : this._renderText(key, label, modelValue, defaultVal, desc, required, presentation);
     } else if (type === 'password' || type === 'secret') {
-      fieldHtml = this._renderPassword(key, label, value, defaultVal, desc, required);
+      fieldHtml = this._renderPassword(key, label, value, defaultVal, desc, required, param);
     } else if (type === 'boolean' || type === 'bool') {
       fieldHtml = this._renderCheckbox(key, label, value, defaultVal, desc, presentation);
     } else if (type === 'int' || type === 'float' || type === 'number') {
@@ -742,7 +742,21 @@ class SafeDynamicConfigForm extends DynamicConfigForm {
     `;
   }
 
-  _renderPassword(key, label, value, defaultVal, desc, required) {
+  _renderPassword(key, label, value, defaultVal, desc, required, param = null) {
+    const persistSecret = Boolean(param && param.persist_secret);
+    if (persistSecret) {
+      // 插件显式声明该 secret 可通过 WebUI 持久化：渲染密码输入框。
+      const inputId = safeDomId(key, 'plugin_secret_');
+      return `
+        <div class="config-field">
+          <div class="config-field-header">
+            <label class="config-field-label" for="${escapeHtml(inputId)}">${escapeHtml(label)}${required ? '<span class="config-required">*</span>' : ''}</label>
+            ${desc ? `<span class="config-field-desc">${escapeHtml(desc)}</span>` : ''}
+          </div>
+          <input type="password" id="${escapeHtml(inputId)}" data-setting-key="${escapeHtml(key)}" value="" placeholder="已保存（留空保持不变）" class="config-input" autocomplete="new-password">
+        </div>
+      `;
+    }
     // Plugin secrets are deliberately environment/secret-manager only. Never
     // render a stored value or offer an editor that the API will reject.
     return `
@@ -944,6 +958,12 @@ class SafeDynamicConfigForm extends DynamicConfigForm {
       ? fieldValue
       : (field?.default !== undefined ? field.default : (fieldType === 'object' ? {} : null));
     if (isSecretConfigField(field)) {
+      if (field.persist_secret) {
+        // 插件显式声明该 secret 可通过 WebUI 持久化：渲染密码输入框。
+        // 留空 = 保留已存值（后端将空字符串视为“未修改”）。
+        const common = `id="${escapeHtml(inputId)}" data-obj-array-key="${escapedKey}" data-obj-idx="${index}"${rowData} data-obj-field="${escapedFieldName}" placeholder="${escapeHtml(fieldName === 'password' ? '已保存（留空保持不变）' : fieldName)}" class="config-input"`;
+        return `<input type="password" ${common} autocomplete="new-password">`;
+      }
       return `<div class="plugin-secret-note" role="note">由环境变量或 Secret 管理器提供，WebUI 不读取或保存该值。</div>`;
     }
     if (fieldType === 'checkbox_group' && Array.isArray(field?.choices) && field.choices.length) {

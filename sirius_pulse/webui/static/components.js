@@ -192,12 +192,14 @@ export function createObjectArrayItem(fields, source = null) {
   const sourceObject = source && typeof source === 'object' && !Array.isArray(source) ? source : null;
   fields.forEach(field => {
     const name = String(field?.name ?? '');
-    if (!isSafeConfigFieldName(name) || isSecretConfigField(field)) return;
+    if (!isSafeConfigFieldName(name)) return;
+    const secret = isSecretConfigField(field);
+    if (secret && !field.persist_secret) return;
     const type = String(field?.type ?? '').toLowerCase();
     const hasSourceValue = sourceObject && Object.prototype.hasOwnProperty.call(sourceObject, name);
     const hasDefault = field && Object.prototype.hasOwnProperty.call(field, 'default') &&
       field.default !== undefined && field.default !== null;
-    if (hasSourceValue) {
+    if (hasSourceValue && !secret) {
       item[name] = cloneSafeConfigValue(sourceObject[name]);
     } else if (hasDefault) {
       item[name] = cloneSafeConfigValue(field.default);

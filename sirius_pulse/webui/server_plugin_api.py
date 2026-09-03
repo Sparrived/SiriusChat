@@ -166,6 +166,11 @@ def _contains_plaintext_secret(
         return True
     parameter = parameter or _parameter_for(definition, key)
     if _is_secret_parameter(key, definition, parameter):
+        # 插件作者在字段声明中显式允许（persist_secret: true）时，该 secret
+        # 可通过 WebUI 持久化到 _config.json；否则仍按默认安全策略要求
+        # 环境变量或受支持的 Secret 管理器提供。
+        if _parameter_value(parameter, "persist_secret", False):
+            return False
         return bool(value) and not _is_masked_secret_value(value)
     if _url_contains_plaintext_secret(value):
         return True
