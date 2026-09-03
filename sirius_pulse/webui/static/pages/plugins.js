@@ -1148,7 +1148,7 @@ class SafeDynamicConfigForm extends DynamicConfigForm {
                 )).join('')}
               </div></div>
             </div>
-          `).join('')}
+          `}).join('')}
         </div>
         <button type="button" class="btn btn-sm btn-ghost plugin-add-inline" data-obj-array-add="${escapedKey}">＋ 添加</button>
       </div>
